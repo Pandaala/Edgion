@@ -101,7 +101,7 @@ impl RadixRouteMatchEngine {
                     if let Some(radix_path) = self.radix_paths.get(path_idx) {
                         println!("    Checking: original='{}', radix_key='{}', is_prefix={}, route_idx={}",
                                  radix_path.original, radix_path.radix_key, radix_path.is_prefix_match, radix_path.route_idx);
-                        if !radix_path.matches(&path, &mut HashMap::new()) {
+                        if !radix_path.matches(&path) {
                             println!("    FAIL pattern match failed");
                             continue;
                         }
@@ -136,7 +136,7 @@ impl RadixRouteMatchEngine {
                     if let Some(radix_path) = self.radix_paths.get(path_idx) {
                         println!("      Testing: original='{}', radix_key='{}', is_prefix={}, route_idx={}",
                                  radix_path.original, radix_path.radix_key, radix_path.is_prefix_match, radix_path.route_idx);
-                        if radix_path.matches(&path, &mut HashMap::new()) {
+                        if radix_path.matches(&path) {
                             println!("      OK pattern matched");
                             matched_paths.push(path_idx);
                         } else {
@@ -174,7 +174,7 @@ impl RadixRouteMatchEngine {
         Err(RouteNotFound())
     }
 
-    pub fn initialize(&mut self, route_runtimes: &[HttpRouteRuntime]) -> Result<(), EdError> {
+    pub fn initialize(&mut self, route_runtimes: Vec<Arc<HttpRouteRuntime>>) -> Result<(), EdError> {
         println!("\n========== RadixRouteMatchEngine Initialize ==========");
         println!("Total route runtimes to compile: {}", route_runtimes.len());
 
@@ -234,9 +234,8 @@ impl RadixRouteMatchEngine {
             }
 
             // Wrap HttpRouteRuntime in Arc and create RadixRouteRuntime
-            let route_runtime = Arc::new(runtime.clone());
             let radix_route = RadixRouteRuntime {
-                runtime: route_runtime,
+                runtime: runtime.clone(),
             };
 
             self.routes.push(radix_route);

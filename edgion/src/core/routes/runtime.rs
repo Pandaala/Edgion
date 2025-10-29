@@ -34,8 +34,11 @@ impl HttpRouteRuntime {
         paths
     }
 
+    pub fn identifier(&self) -> String {
+        format!("{}/{}", self.namespace, self.name)
+    }
+
     pub fn deep_match(&self, _session: &Session) -> Result<bool, EdError> {
-        unimplemented!(); // todo need implement
         Ok(true)
     }
 }
