@@ -1,0 +1,70 @@
+[package]
+name = "edgion"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "edgion"
+path = "src/lib.rs"
+
+[[bin]]
+name = "main"
+path = "src/bin/main.rs"
+
+[features]
+# Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
+legacy_route_tests = []
+
+# Default feature
+default = []
+
+[dependencies]
+# Core async runtime and error handling
+tokio.workspace = true
+tokio-stream.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+
+# Serialization/Deserialization
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+
+# Kubernetes client and types
+kube.workspace = true
+k8s-openapi.workspace = true
+schemars.workspace = true
+
+# gRPC (config sync)
+tonic.workspace = true
+tonic-reflection.workspace = true
+prost.workspace = true
+
+# File system monitoring
+notify.workspace = true
+
+# Route matching
+radix_route_matcher.workspace = true
+
+# Utilities
+bytes.workspace = true
+base64.workspace = true
+chrono.workspace = true
+once_cell.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+
+# Pingora
+pingora-core.workspace = true
+pingora-http.workspace = true
+pingora-load-balancing.workspace = true
+pingora-proxy.workspace = true
+
+# CLI
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true

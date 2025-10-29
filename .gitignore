@@ -1,0 +1,23 @@
+# Rust generated files
+target/
+Cargo.lock
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+

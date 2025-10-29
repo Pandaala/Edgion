@@ -1,0 +1,17 @@
+[package]
+name = "radix_route_matcher"
+version.workspace = true
+edition.workspace = true
+authors = ["ChadCao"]
+description = "A high-performance route matching library based on Radix Tree"
+license = "MIT"
+
+[lib]
+name = "radix_route_matcher"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libc = "0.2"
+
+[build-dependencies]
+cc = "1.0"
