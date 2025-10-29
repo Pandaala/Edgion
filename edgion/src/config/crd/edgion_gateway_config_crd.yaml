@@ -1,0 +1,313 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ztracegatewayclassconfigs.example.com
+spec:
+  group: example.com
+  names:
+    kind: ZtraceGatewayConfig
+    listKind: ZtraceGatewayConfigList
+    plural: ztracegatewayclassconfigs
+    singular: ztracegatewayclassconfig
+    shortNames:
+      - zgwcfg
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                # ============================================
+                # Listener Defaults Configuration
+                # ============================================
+                listenerDefaults:
+                  type: object
+                  description: "Default configuration for all listeners in gateways using this class"
+                  properties:
+                    defaultTLSMode:
+                      type: string
+                      description: "Default TLS termination mode"
+                      enum:
+                        - Terminate
+                        - Passthrough
+                      default: Terminate
+                    allowInsecure:
+                      type: boolean
+                      description: "Whether to allow insecure (HTTP) connections"
+                      default: false
+                    sniMatchingPolicy:
+                      type: string
+                      description: "SNI matching behavior"
+                      enum:
+                        - Strict
+                        - Loose
+                      default: Strict
+
+                # ============================================
+                # Load Balancing Configuration
+                # ============================================
+                loadBalancing:
+                  type: object
+                  description: "Default load balancing configuration"
+                  properties:
+                    defaultLBPolicy:
+                      type: string
+                      description: "Default load balancing algorithm"
+                      enum:
+                        - round-robin
+                        - least-connections
+                        - random
+                        - ip-hash
+                        - weighted-round-robin
+                      default: round-robin
+                    healthCheck:
+                      type: object
+                      description: "Default health check configuration"
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: true
+                        interval:
+                          type: string
+                          description: "Health check interval (e.g., '30s', '1m')"
+                          default: "30s"
+                        timeout:
+                          type: string
+                          description: "Health check timeout"
+                          default: "5s"
+                        unhealthyThreshold:
+                          type: integer
+                          description: "Number of failures before marking unhealthy"
+                          default: 3
+                        healthyThreshold:
+                          type: integer
+                          description: "Number of successes before marking healthy"
+                          default: 2
+
+                # ============================================
+                # Access Log Configuration
+                # ============================================
+                accessLog:
+                  type: object
+                  description: "Access log configuration"
+                  properties:
+                    enabled:
+                      type: boolean
+                      description: "Enable access logging"
+                      default: true
+                    format:
+                      type: string
+                      description: "Log format"
+                      enum:
+                        - json
+                        - text
+                        - custom
+                      default: json
+                    logPath:
+                      type: string
+                      description: "Path to log file"
+                      default: "/var/log/ztrace/access.log"
+                    samplingRate:
+                      type: number
+                      description: "Sampling rate (0.0-1.0)"
+                      minimum: 0.0
+                      maximum: 1.0
+                      default: 1.0
+                    includeHeaders:
+                      type: array
+                      description: "Headers to include in logs"
+                      items:
+                        type: string
+                      default:
+                        - "User-Agent"
+                        - "Referer"
+                    excludePaths:
+                      type: array
+                      description: "Paths to exclude from logging (e.g., health checks)"
+                      items:
+                        type: string
+                      default:
+                        - "/health"
+                        - "/readiness"
+
+                # ============================================
+                # Security Policies
+                # ============================================
+                security:
+                  type: object
+                  description: "Security policies"
+                  properties:
+                    tls:
+                      type: object
+                      properties:
+                        minTLSVersion:
+                          type: string
+                          description: "Minimum TLS version"
+                          enum:
+                            - "1.0"
+                            - "1.1"
+                            - "1.2"
+                            - "1.3"
+                          default: "1.2"
+                        maxTLSVersion:
+                          type: string
+                          description: "Maximum TLS version"
+                          enum:
+                            - "1.2"
+                            - "1.3"
+                          default: "1.3"
+                        allowedCiphers:
+                          type: array
+                          description: "Allowed TLS cipher suites"
+                          items:
+                            type: string
+                          default:
+                            - "TLS_AES_128_GCM_SHA256"
+                            - "TLS_AES_256_GCM_SHA384"
+                            - "TLS_CHACHA20_POLY1305_SHA256"
+                            - "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+                            - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+                            - "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+                            - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+
+                # ============================================
+                # Resource Limits
+                # ============================================
+                limits:
+                  type: object
+                  description: "Resource and performance limits"
+                  properties:
+                    maxConnections:
+                      type: integer
+                      description: "Maximum concurrent connections per instance"
+                      default: 10000
+                      minimum: 1
+                    maxRequestsPerConnection:
+                      type: integer
+                      description: "Maximum requests per connection (HTTP/1.1)"
+                      default: 1000
+                    connectionTimeout:
+                      type: string
+                      description: "Connection timeout"
+                      default: "60s"
+                    requestTimeout:
+                      type: string
+                      description: "Request timeout"
+                      default: "30s"
+                    idleTimeout:
+                      type: string
+                      description: "Idle connection timeout"
+                      default: "300s"
+                    maxRequestHeaderSize:
+                      type: string
+                      description: "Maximum request header size"
+                      default: "8KB"
+                    maxRequestBodySize:
+                      type: string
+                      description: "Maximum request body size"
+                      default: "10MB"
+                    readBufferSize:
+                      type: string
+                      description: "Read buffer size"
+                      default: "4KB"
+                    writeBufferSize:
+                      type: string
+                      description: "Write buffer size"
+                      default: "4KB"
+
+                # ============================================
+                # Observability Configuration
+                # ============================================
+                observability:
+                  type: object
+                  description: "Observability configuration"
+                  properties:
+                    metrics:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: true
+                        endpoint:
+                          type: string
+                          description: "Metrics endpoint path"
+                          default: "/metrics"
+                        port:
+                          type: integer
+                          description: "Metrics server port"
+                          default: 9090
+                        format:
+                          type: string
+                          enum:
+                            - prometheus
+                            - openmetrics
+                          default: prometheus
+                    tracing:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: false
+                        provider:
+                          type: string
+                          enum:
+                            - jaeger
+                            - zipkin
+                            - otlp
+                          default: otlp
+                        endpoint:
+                          type: string
+                          description: "Tracing collector endpoint"
+                        samplingRate:
+                          type: number
+                          description: "Trace sampling rate (0.0-1.0)"
+                          minimum: 0.0
+                          maximum: 1.0
+                          default: 0.1
+                    logging:
+                      type: object
+                      properties:
+                        level:
+                          type: string
+                          enum:
+                            - trace
+                            - debug
+                            - info
+                            - warn
+                            - error
+                          default: info
+                        format:
+                          type: string
+                          enum:
+                            - json
+                            - text
+                          default: json
+
+            status:
+              type: object
+              description: "Status of the gateway config"
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
