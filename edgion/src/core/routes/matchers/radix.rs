@@ -301,7 +301,201 @@ unsafe impl Sync for RadixRouteMatchEngine {}
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use radix_route_matcher::RadixTree;
+    use std::sync::Arc;
+
+    // Mock RouteRuntime for testing
+    #[derive(Clone)]
+    struct MockRoute {
+        name: String,
+        paths: Vec<(String, bool)>,
+        should_match: bool,
+    }
+
+    impl MockRoute {
+        fn new(name: &str, paths: Vec<(&str, bool)>) -> Self {
+            Self {
+                name: name.to_string(),
+                paths: paths
+                    .iter()
+                    .map(|(p, is_prefix)| (p.to_string(), *is_prefix))
+                    .collect(),
+                should_match: true,
+            }
+        }
+
+        #[allow(dead_code)]
+        fn with_match_result(mut self, should_match: bool) -> Self {
+            self.should_match = should_match;
+            self
+        }
+    }
+
+    impl RouteRuntime for MockRoute {
+        fn extract_paths(&self) -> Vec<(String, bool)> {
+            self.paths.clone()
+        }
+
+        fn identifier(&self) -> String {
+            self.name.clone()
+        }
+
+        fn deep_match(&self, _session: &Session) -> Result<bool, EdError> {
+            Ok(self.should_match)
+        }
+    }
+
+    // Helper to create a mock session (for future use)
+    #[allow(dead_code)]
+    fn create_mock_session(_path: &str) -> Session {
+        // This is a simplified mock - in real tests you'd need proper session setup
+        // For now, we'll focus on testing initialization and internal logic
+        unimplemented!("Mock session creation - focus on initialization tests")
+    }
+
+    #[test]
+    fn test_engine_initialization_single_route() {
+        let mut engine = RadixRouteMatchEngine::new();
+
+        let route = MockRoute::new("test-route", vec![("/api", false)]);
+        let routes: Vec<Arc<dyn RouteRuntime>> = vec![Arc::new(route)];
+
+        let result = engine.initialize(routes);
+        assert!(result.is_ok());
+
+        assert_eq!(engine.route_count(), 1);
+        assert_eq!(engine.radix_paths.len(), 1);
+        assert_eq!(engine.tree_idx_to_path_idx.len(), 1);
+    }
+
+    #[test]
+    fn test_engine_initialization_multiple_routes() {
+        let mut engine = RadixRouteMatchEngine::new();
+
+        let routes: Vec<Arc<dyn RouteRuntime>> = vec![
+            Arc::new(MockRoute::new("route1", vec![("/api", false)])),
+            Arc::new(MockRoute::new("route2", vec![("/users", true)])),
+            Arc::new(MockRoute::new("route3", vec![("/posts/{id}", false)])),
+        ];
+
+        let result = engine.initialize(routes);
+        assert!(result.is_ok());
+
+        assert_eq!(engine.route_count(), 3);
+        assert_eq!(engine.radix_paths.len(), 3);
+    }
+
+    #[test]
+    fn test_engine_multiple_paths_per_route() {
+        let mut engine = RadixRouteMatchEngine::new();
+
+        let route = MockRoute::new(
+            "multi-path-route",
+            vec![("/api/v1", false), ("/api/v2", false)],
+        );
+
+        let routes: Vec<Arc<dyn RouteRuntime>> = vec![Arc::new(route)];
+        let result = engine.initialize(routes);
+        assert!(result.is_ok());
+
+        assert_eq!(engine.route_count(), 1);
+        assert_eq!(engine.radix_paths.len(), 2);
+    }
+
+    #[test]
+    fn test_engine_shared_radix_key() {
+        let mut engine = RadixRouteMatchEngine::new();
+
+        // Two routes with same prefix but different suffixes
+        let routes: Vec<Arc<dyn RouteRuntime>> = vec![
+            Arc::new(MockRoute::new("route1", vec![("/api/users", false)])),
+            Arc::new(MockRoute::new("route2", vec![("/api/posts", false)])),
+        ];
+
+        let result = engine.initialize(routes);
+        assert!(result.is_ok());
+
+        // Both paths share the same radix_key "/api/"
+        // So we should have 2 routes, 2 paths, but potentially shared tree nodes
+        assert_eq!(engine.route_count(), 2);
+        assert_eq!(engine.radix_paths.len(), 2);
+    }
+
+    #[test]
+    fn test_engine_priority_ordering() {
+        let mut engine = RadixRouteMatchEngine::new();
+
+        let routes: Vec<Arc<dyn RouteRuntime>> = vec![
+            Arc::new(MockRoute::new("prefix", vec![("/api", true)])),
+            Arc::new(MockRoute::new("exact", vec![("/api", false)])),
+        ];
+
+        let result = engine.initialize(routes);
+        assert!(result.is_ok());
+
+        // Exact match should have higher priority
+        let exact_path = &engine.radix_paths[1];
+        let prefix_path = &engine.radix_paths[0];
+
+        assert!(exact_path.priority_weight > prefix_path.priority_weight);
+    }
+
+    #[test]
+    fn test_engine_empty_initialization() {
+        let mut engine = RadixRouteMatchEngine::new();
+
+        let routes: Vec<Arc<dyn RouteRuntime>> = vec![];
+        let result = engine.initialize(routes);
+        assert!(result.is_ok());
+
+        assert_eq!(engine.route_count(), 0);
+        assert_eq!(engine.radix_paths.len(), 0);
+    }
+
+    #[test]
+    fn test_engine_tree_access() {
+        let mut engine = RadixRouteMatchEngine::new();
+
+        let route = MockRoute::new("test", vec![("/api", false)]);
+        let routes: Vec<Arc<dyn RouteRuntime>> = vec![Arc::new(route)];
+        engine.initialize(routes).unwrap();
+
+        // Can access the underlying tree
+        let tree = engine.tree();
+        assert_eq!(tree.find_exact("/api"), Some(1));
+    }
+
+    #[test]
+    fn test_engine_radix_key_reuse() {
+        let mut engine = RadixRouteMatchEngine::new();
+
+        // Multiple paths with same radix_key should reuse tree_idx
+        let routes: Vec<Arc<dyn RouteRuntime>> = vec![
+            Arc::new(MockRoute::new("r1", vec![("/api/{v1}", false)])),
+            Arc::new(MockRoute::new("r2", vec![("/api/{v2}", false)])),
+        ];
+
+        let result = engine.initialize(routes);
+        assert!(result.is_ok());
+
+        // Both have radix_key "/api/"
+        assert_eq!(engine.radix_paths[0].radix_key, "/api/");
+        assert_eq!(engine.radix_paths[1].radix_key, "/api/");
+
+        // Should share the same tree_idx
+        let tree_idx_1 = engine.tree().find_exact("/api/").unwrap();
+        let paths_at_idx = engine.tree_idx_to_path_idx.get(&tree_idx_1).unwrap();
+        assert_eq!(paths_at_idx.len(), 2);
+    }
+
+    #[test]
+    fn test_engine_default_trait() {
+        let engine = RadixRouteMatchEngine::default();
+        assert_eq!(engine.route_count(), 0);
+    }
+
+    // Original RadixTree tests (keep for tree-level verification)
 
     #[test]
     fn test_exact_match() {
