@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 #[derive(Debug, Clone, PartialEq)]
 enum RawSegment {
     Slash,
@@ -23,7 +21,6 @@ pub struct RadixPath {
     pub route_idx: usize,
 }
 
-
 impl RadixPath {
     pub fn new(path: &str, route_idx: usize, is_prefix: bool) -> Self {
         let original = path.to_string();
@@ -34,7 +31,7 @@ impl RadixPath {
 
         let process_segment = |segment: String, raw_segment: &mut Vec<RawSegment>| {
             if segment.is_empty() {
-                return ;
+                return;
             }
             if segment.starts_with('{') && segment.ends_with('}') {
                 let param_name = &segment[1..segment.len() - 1];
@@ -64,7 +61,10 @@ impl RadixPath {
         let mut radix_key = String::new();
         let mut radix_key_set = false;
 
-        let flush_literal = |accumulated: String, radix_key: &mut String, radix_key_set: &mut bool, match_segments: &mut Vec<MatchSegment>| {
+        let flush_literal = |accumulated: String,
+                             radix_key: &mut String,
+                             radix_key_set: &mut bool,
+                             match_segments: &mut Vec<MatchSegment>| {
             if accumulated.is_empty() {
                 return;
             }
@@ -80,22 +80,36 @@ impl RadixPath {
 
         for raw_seg in raw_segments {
             match raw_seg {
-                RawSegment::Slash => { accumulated_literal.push('/'); },
-                RawSegment::Literal(s) => { accumulated_literal.push_str(&s); },
+                RawSegment::Slash => {
+                    accumulated_literal.push('/');
+                }
+                RawSegment::Literal(s) => {
+                    accumulated_literal.push_str(&s);
+                }
                 RawSegment::Param(param) => {
-                    flush_literal(accumulated_literal.clone(), &mut radix_key, &mut radix_key_set, &mut match_segments);
+                    flush_literal(
+                        accumulated_literal.clone(),
+                        &mut radix_key,
+                        &mut radix_key_set,
+                        &mut match_segments,
+                    );
                     accumulated_literal.clear();
                     match_segments.push(MatchSegment::Param(param));
-                },
+                }
             }
         }
-        flush_literal(accumulated_literal, &mut radix_key, &mut radix_key_set, &mut match_segments);
+        flush_literal(
+            accumulated_literal,
+            &mut radix_key,
+            &mut radix_key_set,
+            &mut match_segments,
+        );
 
         if radix_key.is_empty() {
             radix_key = "/".to_string();
         }
 
-        let priority_weight = if  is_prefix_match {
+        let priority_weight = if is_prefix_match {
             raw_segments_len * 2
         } else {
             raw_segments_len * 2 + 1
@@ -111,8 +125,7 @@ impl RadixPath {
         }
     }
 
-
-    pub fn matches(&self, request_path: &str) -> bool{
+    pub fn matches(&self, request_path: &str) -> bool {
         let remaining_path = &request_path[self.radix_key.len()..];
 
         if self.match_segments.is_empty() {
@@ -120,7 +133,7 @@ impl RadixPath {
                 true
             } else {
                 remaining_path.is_empty()
-            }
+            };
         }
 
         let mut path_cursor = 0;
@@ -138,7 +151,7 @@ impl RadixPath {
                     }
                     path_cursor += literal.len();
                 }
-                MatchSegment::Param(param) => {
+                MatchSegment::Param(_param) => {
                     let segment_path = &remaining_path[path_cursor..];
                     let param_end = segment_path.find('/').unwrap_or(segment_path.len());
                     if param_end == 0 {
@@ -149,7 +162,13 @@ impl RadixPath {
             }
         }
 
-        debug_assert_eq!(path_cursor >= remaining_path.len(), true, "Bug: path_cursor ({}) exceeds remaining_path length ({})", path_cursor, remaining_path.len());
+        debug_assert_eq!(
+            path_cursor >= remaining_path.len(),
+            true,
+            "Bug: path_cursor ({}) exceeds remaining_path length ({})",
+            path_cursor,
+            remaining_path.len()
+        );
 
         if path_cursor == remaining_path.len() {
             true
@@ -159,7 +178,10 @@ impl RadixPath {
     }
 
     pub fn match_type_str(&self) -> &str {
-        let has_param = self.match_segments.iter().any(|s|matches!(s, MatchSegment::Param(_)));
+        let has_param = self
+            .match_segments
+            .iter()
+            .any(|s| matches!(s, MatchSegment::Param(_)));
         match (self.is_prefix_match, has_param) {
             (true, true) => "ParamPrefix",
             (true, false) => "Prefix",
@@ -167,5 +189,4 @@ impl RadixPath {
             (false, false) => "Exact",
         }
     }
-
 }
