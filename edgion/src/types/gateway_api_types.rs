@@ -249,11 +249,11 @@ pub struct HTTPRouteMatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<HTTPPathMatch>,
 
-    /// Headers specifies HTTP request header matchers
+    /// Headers specifies HTTP request header match
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<Vec<HTTPHeaderMatch>>,
 
-    /// QueryParams specifies HTTP query parameter matchers
+    /// QueryParams specifies HTTP query parameter match
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_params: Option<Vec<HTTPQueryParamMatch>>,
 
