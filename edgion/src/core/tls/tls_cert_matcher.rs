@@ -2,23 +2,22 @@ use crate::core::host_match::HashHost;
 use crate::types::err::EdError;
 use crate::types::EdgionTls;
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use k8s_openapi::api::core::v1::Secret;
-use parking_lot::RwLock;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug, Clone)]
 pub struct TlsWithSecret {
-    pub tls: Arc<EdgionTls>,
-    pub secret: Arc<Secret>,
+    pub tls: EdgionTls,
+    pub secret: Secret,
 }
 
 impl TlsWithSecret {
-    pub fn new(tls: Arc<EdgionTls>, secret: Arc<Secret>) -> Self {
+    pub fn new(tls: EdgionTls, secret: Secret) -> Self {
         Self { tls, secret }
     }
 
-    pub fn cert_pem(&self) -> Result<String> {
+    pub fn cert(&self) -> Result<String> {
         let data = self
             .secret
             .data
@@ -30,7 +29,7 @@ impl TlsWithSecret {
         String::from_utf8(cert_pem.0.clone()).map_err(|e| anyhow::anyhow!(e))
     }
 
-    pub fn key_pen(&self) -> Result<String> {
+    pub fn key(&self) -> Result<String> {
         let data = self
             .secret
             .data
@@ -44,70 +43,27 @@ impl TlsWithSecret {
 }
 
 pub struct TlsCertMatcher {
-    matcher: Arc<RwLock<HashHost<Vec<Arc<TlsWithSecret>>>>>,
-    tls_secret_map: HashMap<String, TlsWithSecret>,
+    matcher: ArcSwap<HashHost<Vec<Arc<TlsWithSecret>>>>,
 }
 
 impl TlsCertMatcher {
     pub fn new() -> Self {
         Self {
-            matcher: Arc::new(RwLock::new(HashHost::new())),
-            tls_secret_map: HashMap::new(),
+            matcher: ArcSwap::from_pointee(HashHost::new()),
         }
     }
 
-    pub fn add(&self, tls: Arc<TlsWithSecret>) -> Result<()> {
-        let mut matcher = self.matcher.write();
-
-        for host in tls.tls.spec.hosts.iter() {
-            // Try to get a mutable reference
-            if let Some(tls_list) = matcher.get_mut(host) {
-                // If exists, add to the front of the list (higher priority)
-                tls_list.insert(0, tls.clone());
-            } else {
-                // If not exists, create new list and insert
-                let tls_list = vec![tls.clone()];
-                matcher.insert(host, tls_list);
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn remove(&self, tls: &EdgionTls) -> Result<()> {
-        let mut matcher = self.matcher.write();
-
-        let target_namespace = tls.metadata.namespace.as_deref();
-        let target_name = tls.metadata.name.as_deref();
-
-        let mut hosts_to_remove = Vec::new();
-
-        for host in tls.spec.hosts.iter() {
-            if let Some(tls_list) = matcher.get_mut(host) {
-                tls_list.retain(|item| {
-                    let item_namespace = item.tls.metadata.namespace.as_deref();
-                    let item_name = item.tls.metadata.name.as_deref();
-                    // Keep if namespace or name doesn't match
-                    item_namespace != target_namespace || item_name != target_name
-                });
-
-                // Mark for removal if list is empty
-                if tls_list.is_empty() {
-                    hosts_to_remove.push(host.clone());
-                }
-            }
-        }
-
-        // Remove empty host entries
-        for host in hosts_to_remove {
-            matcher.remove(&host);
-        }
-
-        Ok(())
+    /// Set the entire certificate matcher
+    /// This replaces all existing certificates with the provided matcher
+    pub fn set(&self, matcher: HashHost<Vec<Arc<TlsWithSecret>>>) {
+        self.matcher.store(Arc::new(matcher));
     }
 
     pub fn match_sni(&self, sni: &str) -> Result<Arc<TlsWithSecret>, EdError> {
-        let tls_list = self.matcher.read().get(sni).cloned().unwrap_or_default();
+        // Lock-free read: just load the Arc pointer atomically
+        let snapshot = self.matcher.load();
+        let tls_list = snapshot.get(sni).cloned().unwrap_or_default();
+
         if tls_list.is_empty() {
             return Err(EdError::SniNotMatch(sni.to_string()));
         }
@@ -117,4 +73,32 @@ impl TlsCertMatcher {
             Err(EdError::SniNotMatch(sni.to_string()))
         }
     }
+}
+
+pub static TLS_CERT_MATCHER: OnceLock<TlsCertMatcher> = OnceLock::new();
+
+pub fn init_tls_cert_matcher() -> Result<()> {
+    let tls_cert_matcher = TlsCertMatcher::new();
+    TLS_CERT_MATCHER
+        .set(tls_cert_matcher)
+        .map_err(|_| anyhow::anyhow!("TLS cert matcher already initialized"))?;
+    Ok(())
+}
+
+pub fn get_tls_cert_matcher() -> Result<&'static TlsCertMatcher> {
+    TLS_CERT_MATCHER
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("TLS cert matcher not initialized"))
+}
+
+pub fn set_tls_cert_matcher(matcher: HashHost<Vec<Arc<TlsWithSecret>>>) -> Result<()> {
+    let tls_cert_matcher = get_tls_cert_matcher()?;
+    tls_cert_matcher.set(matcher);
+    Ok(())
+}
+
+pub fn match_sni(sni: &str) -> Result<Arc<TlsWithSecret>, EdError> {
+    let tls_cert_matcher =
+        get_tls_cert_matcher().map_err(|e| EdError::InternalError(e.to_string()))?;
+    tls_cert_matcher.match_sni(sni)
 }

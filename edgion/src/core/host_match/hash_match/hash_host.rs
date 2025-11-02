@@ -1,6 +1,7 @@
 use crate::types::schema::is_valid_domain;
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct HashHost<T> {
     map: HashMap<String, T>,
 }
