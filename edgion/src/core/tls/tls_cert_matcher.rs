@@ -4,7 +4,7 @@ use crate::types::EdgionTls;
 use anyhow::Result;
 use k8s_openapi::api::core::v1::Secret;
 use parking_lot::RwLock;
-use std::collections::{HashMap, LinkedList};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -44,7 +44,7 @@ impl TlsWithSecret {
 }
 
 pub struct TlsCertMatcher {
-    matcher: Arc<RwLock<HashHost<LinkedList<Arc<TlsWithSecret>>>>>,
+    matcher: Arc<RwLock<HashHost<Vec<Arc<TlsWithSecret>>>>>,
     tls_secret_map: HashMap<String, TlsWithSecret>,
 }
 
@@ -62,12 +62,11 @@ impl TlsCertMatcher {
         for host in tls.tls.spec.hosts.iter() {
             // Try to get a mutable reference
             if let Some(tls_list) = matcher.get_mut(host) {
-                // If exists, add to the front of the list
-                tls_list.push_front(tls.clone());
+                // If exists, add to the front of the list (higher priority)
+                tls_list.insert(0, tls.clone());
             } else {
                 // If not exists, create new list and insert
-                let mut tls_list = LinkedList::new();
-                tls_list.push_front(tls.clone());
+                let tls_list = vec![tls.clone()];
                 matcher.insert(host, tls_list);
             }
         }
@@ -84,22 +83,13 @@ impl TlsCertMatcher {
         let mut hosts_to_remove = Vec::new();
 
         for host in tls.spec.hosts.iter() {
-            // Try to get mutable reference to the list
             if let Some(tls_list) = matcher.get_mut(host) {
-                // Remove matching items from the LinkedList
-                let mut temp_list = LinkedList::new();
-                while let Some(item) = tls_list.pop_front() {
+                tls_list.retain(|item| {
                     let item_namespace = item.tls.metadata.namespace.as_deref();
                     let item_name = item.tls.metadata.name.as_deref();
-
                     // Keep if namespace or name doesn't match
-                    if item_namespace != target_namespace || item_name != target_name {
-                        temp_list.push_back(item);
-                    }
-                }
-
-                // Put back the remaining items
-                *tls_list = temp_list;
+                    item_namespace != target_namespace || item_name != target_name
+                });
 
                 // Mark for removal if list is empty
                 if tls_list.is_empty() {
@@ -121,7 +111,7 @@ impl TlsCertMatcher {
         if tls_list.is_empty() {
             return Err(EdError::SniNotMatch(sni.to_string()));
         }
-        if let Some(t) = tls_list.front() {
+        if let Some(t) = tls_list.first() {
             Ok(t.clone())
         } else {
             Err(EdError::SniNotMatch(sni.to_string()))
