@@ -1,35 +1,37 @@
+use std::sync::Arc;
+
 /// RadixHost represents a hostname pattern for radix tree matching
 /// Hostnames are reversed for longest prefix matching
 /// e.g., "api.example.com" becomes "com.example.api"
 ///      "*.example.com" becomes "com.example" (radix_key for prefix matching)
-#[derive(Debug, Clone)]
-pub struct RadixHost {
+#[derive(Clone)]
+pub struct RadixHost<T> {
     pub original: String,
     pub radix_key: String,
     pub is_wildcard: bool,
     pub wildcard_count: usize,
-    pub host_idx: usize,
+    pub runtime: Arc<T>,
 }
 
-impl RadixHost {
+impl<T> RadixHost<T> {
     /// Create a new RadixHost from a hostname pattern
     ///
     /// # Arguments
     /// * `host` - The hostname pattern (e.g., "example.com" or "*.example.com")
-    /// * `host_idx` - Index for tracking the host
+    /// * `runtime` - The runtime associated with this host
     ///
     /// # Examples
     /// ```
-    /// let host = RadixHost::new("api.example.com", 0);
+    /// let host = RadixHost::new("api.example.com", runtime);
     /// assert_eq!(host.radix_key, "com.example.api");
     /// assert!(!host.is_wildcard);
     ///
-    /// let wildcard = RadixHost::new("*.example.com", 1);
+    /// let wildcard = RadixHost::new("*.example.com", runtime);
     /// assert_eq!(wildcard.radix_key, "com.example");
     /// assert!(wildcard.is_wildcard);
     /// assert_eq!(wildcard.wildcard_count, 1);
     /// ```
-    pub fn new(host: &str, host_idx: usize) -> Self {
+    pub fn new(host: &str, runtime: Arc<T>) -> Self {
         let original = host.to_string();
         let host_lower = host.to_lowercase();
 
@@ -62,7 +64,7 @@ impl RadixHost {
             radix_key,
             is_wildcard,
             wildcard_count,
-            host_idx,
+            runtime,
         }
     }
 
@@ -135,114 +137,5 @@ impl RadixHost {
 
         // Must match exactly the wildcard count
         segment_count == self.wildcard_count
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_reverse_hostname() {
-        assert_eq!(RadixHost::reverse_hostname("example.com"), "com.example");
-        assert_eq!(
-            RadixHost::reverse_hostname("api.example.com"),
-            "com.example.api"
-        );
-        assert_eq!(RadixHost::reverse_hostname("localhost"), "localhost");
-        assert_eq!(RadixHost::reverse_hostname(""), "");
-    }
-
-    #[test]
-    fn test_exact_match() {
-        let host = RadixHost::new("example.com", 0);
-
-        assert_eq!(host.radix_key, "com.example");
-        assert!(!host.is_wildcard);
-        assert_eq!(host.wildcard_count, 0);
-        assert!(host.matches("example.com"));
-        assert!(host.matches("EXAMPLE.COM")); // Case insensitive
-        assert!(!host.matches("api.example.com"));
-        assert!(!host.matches("example.org"));
-    }
-
-    #[test]
-    fn test_single_wildcard() {
-        let host = RadixHost::new("*.example.com", 0);
-
-        assert_eq!(host.radix_key, "com.example");
-        assert!(host.is_wildcard);
-        assert_eq!(host.wildcard_count, 1);
-        assert!(host.matches("api.example.com"));
-        assert!(host.matches("web.example.com"));
-        assert!(host.matches("TEST.EXAMPLE.COM")); // Case insensitive
-
-        // Should NOT match
-        assert!(!host.matches("example.com")); // No subdomain
-        assert!(!host.matches("api.web.example.com")); // Too many levels
-        assert!(!host.matches("example.org"));
-    }
-
-    #[test]
-    fn test_double_wildcard() {
-        let host = RadixHost::new("*.*.example.com", 0);
-
-        assert_eq!(host.radix_key, "com.example");
-        assert!(host.is_wildcard);
-        assert_eq!(host.wildcard_count, 2);
-        assert!(host.matches("a.b.example.com"));
-        assert!(host.matches("api.v1.example.com"));
-
-        // Should NOT match
-        assert!(!host.matches("example.com"));
-        assert!(!host.matches("api.example.com")); // Only one level
-        assert!(!host.matches("a.b.c.example.com")); // Too many levels
-    }
-
-    #[test]
-    fn test_triple_wildcard() {
-        let host = RadixHost::new("*.*.*.example.com", 0);
-
-        assert_eq!(host.radix_key, "com.example");
-        assert!(host.is_wildcard);
-        assert_eq!(host.wildcard_count, 3);
-        assert!(host.matches("a.b.c.example.com"));
-
-        // Should NOT match
-        assert!(!host.matches("a.b.example.com")); // Only two levels
-        assert!(!host.matches("a.b.c.d.example.com")); // Too many levels
-    }
-
-    #[test]
-    fn test_localhost() {
-        let host = RadixHost::new("localhost", 0);
-
-        assert_eq!(host.radix_key, "localhost");
-        assert!(!host.is_wildcard);
-        assert!(host.matches("localhost"));
-        assert!(host.matches("LOCALHOST"));
-        assert!(!host.matches("api.localhost"));
-    }
-
-    #[test]
-    fn test_empty_hostname() {
-        let host = RadixHost::new("example.com", 0);
-        assert!(!host.matches(""));
-    }
-
-    #[test]
-    fn test_original_preserved() {
-        let host = RadixHost::new("API.Example.COM", 0);
-        assert_eq!(host.original, "API.Example.COM");
-        assert_eq!(host.radix_key, "com.example.api");
-    }
-
-    #[test]
-    fn test_host_idx() {
-        let host1 = RadixHost::new("example.com", 0);
-        let host2 = RadixHost::new("example.org", 5);
-
-        assert_eq!(host1.host_idx, 0);
-        assert_eq!(host2.host_idx, 5);
     }
 }

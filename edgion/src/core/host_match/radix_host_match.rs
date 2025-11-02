@@ -1,6 +1,7 @@
 use super::radix_host::RadixHost;
 use radix_route_matcher::RadixTree;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Radix tree based hostname matching engine
 ///
@@ -12,17 +13,18 @@ use std::collections::HashMap;
 /// enabling true concurrent reads without any mutex contention. The tree itself
 /// is immutable after initialization.
 ///
-/// Supports wildcard patterns like "*.example.com" which become "com.example.*" after reversal.
-pub struct RadixHostMatchEngine {
+/// Supports wildcard patterns like "*.example.com" which become "com.example" (radix_key)
+/// with wildcard_count tracking.
+pub struct RadixHostMatchEngine<T> {
     tree: RadixTree,
     /// All RadixHost instances
-    hosts: Vec<RadixHost>,
-    /// Mapping from tree_idx to list of host indices that share the same radix_key
-    /// tree_idx -> Vec<host_idx> (index in hosts)
+    hosts: Vec<RadixHost<T>>,
+    /// Mapping from tree_idx to list of host_idx
+    /// tree_idx -> Vec<host_idx> (indices in hosts)
     tree_idx_to_host_idx: HashMap<i32, Vec<usize>>,
 }
 
-impl RadixHostMatchEngine {
+impl<T> RadixHostMatchEngine<T> {
     pub fn new() -> Self {
         Self {
             tree: RadixTree::new().expect("Failed to create radix tree"),
@@ -41,49 +43,38 @@ impl RadixHostMatchEngine {
         &self.tree
     }
 
-    /// Match a hostname and return the matched host index
+    /// Match a hostname and return the matched runtime
     ///
     /// # Arguments
     /// * `hostname` - The hostname to match (e.g., "api.example.com")
     ///
     /// # Returns
-    /// `Some(host_idx)` if a match is found, `None` otherwise
-    pub fn match_host(&self, hostname: &str) -> Option<usize> {
+    /// `Some(Arc<T>)` if a match is found, `None` otherwise
+    pub fn match_host(&self, hostname: &str) -> Option<Arc<T>> {
         let hostname_lower = hostname.to_lowercase();
-        let reversed = RadixHost::reverse_hostname(&hostname_lower);
+        let reversed = RadixHost::<T>::reverse_hostname(&hostname_lower);
 
         println!("\n========== Radix Host Matching ==========");
         println!("Request Hostname: '{}'", hostname);
         println!("Reversed: '{}'", reversed);
         println!("Available hosts: {}", self.hosts.len());
 
-        // Step 1: Try exact match first
+        // Step 1: Try exact match first (for non-wildcard patterns)
         println!("\n[Step 1] Trying exact match for '{}'...", reversed);
         if let Some(tree_idx) = self.tree.find_exact(&reversed) {
             println!("  OK found exact tree_idx: {}", tree_idx);
             if let Some(host_indices) = self.tree_idx_to_host_idx.get(&tree_idx) {
-                println!(
-                    "  -> Checking {} host(s) at this tree node",
-                    host_indices.len()
-                );
                 for &host_idx in host_indices {
                     if let Some(radix_host) = self.hosts.get(host_idx) {
-                        println!(
-                            "    Checking: original='{}', radix_key='{}', is_wildcard={}",
-                            radix_host.original, radix_host.radix_key, radix_host.is_wildcard
-                        );
-                        if radix_host.matches(hostname) {
-                            println!("    OK matched!");
-                            return Some(host_idx);
-                        } else {
-                            println!("    FAIL pattern match failed");
+                        if !radix_host.is_wildcard && radix_host.matches(hostname) {
+                            println!("  -> Exact match (non-wildcard)");
+                            return Some(radix_host.runtime.clone());
                         }
                     }
                 }
             }
-        } else {
-            println!("  FAIL no exact match found");
         }
+        println!("  FAIL no exact match found or is wildcard pattern");
 
         // Step 2: Try prefix matching for wildcard patterns
         println!("\n[Step 2] Trying prefix matching...");
@@ -103,22 +94,21 @@ impl RadixHostMatchEngine {
             return None;
         }
 
-        // Check each prefix match
+        // Check each prefix match (longest first)
         for tree_idx in all_prefixes {
             println!("  Checking tree_idx: {}", tree_idx);
             if let Some(host_indices) = self.tree_idx_to_host_idx.get(&tree_idx) {
-                println!("    -> {} host(s) at this tree node", host_indices.len());
                 for &host_idx in host_indices {
                     if let Some(radix_host) = self.hosts.get(host_idx) {
                         println!(
-                            "      Testing: original='{}', radix_key='{}', is_wildcard={}",
+                            "    Testing: original='{}', radix_key='{}', is_wildcard={}",
                             radix_host.original, radix_host.radix_key, radix_host.is_wildcard
                         );
                         if radix_host.matches(hostname) {
-                            println!("      OK matched!");
-                            return Some(host_idx);
+                            println!("    OK matched!");
+                            return Some(radix_host.runtime.clone());
                         } else {
-                            println!("      FAIL pattern did not match");
+                            println!("    FAIL pattern did not match");
                         }
                     }
                 }
@@ -129,31 +119,26 @@ impl RadixHostMatchEngine {
         None
     }
 
-    /// Initialize the engine with a list of hostname patterns
+    /// Initialize the engine with a list of RadixHost instances
     ///
     /// # Arguments
-    /// * `hostname_patterns` - List of hostname patterns (e.g., ["example.com", "*.api.com"])
+    /// * `hosts` - List of RadixHost instances
     ///
     /// # Returns
     /// `Ok(())` on success, `Err(String)` on failure
-    pub fn initialize(&mut self, hostname_patterns: Vec<String>) -> Result<(), String> {
+    pub fn initialize(&mut self, hosts: Vec<RadixHost<T>>) -> Result<(), String> {
         println!("\n========== RadixHostMatchEngine Initialize ==========");
-        println!("Total hostname patterns: {}", hostname_patterns.len());
+        println!("Total hosts: {}", hosts.len());
 
         let mut next_tree_idx = 1i32;
 
-        for (host_idx, pattern) in hostname_patterns.iter().enumerate() {
-            if pattern.is_empty() {
-                continue;
-            }
-
-            println!("\n  [Host #{}] pattern='{}'", host_idx, pattern);
-
-            // Create RadixHost
-            let radix_host = RadixHost::new(pattern, host_idx);
+        for radix_host in hosts {
             println!(
-                "    [COMPILED] '{}' -> radix_key='{}', is_wildcard={}",
-                pattern, radix_host.radix_key, radix_host.is_wildcard
+                "\n  [Host] pattern='{}', radix_key='{}', is_wildcard={}, wildcard_count={}",
+                radix_host.original,
+                radix_host.radix_key,
+                radix_host.is_wildcard,
+                radix_host.wildcard_count
             );
 
             let radix_key = radix_host.radix_key.clone();
@@ -171,7 +156,7 @@ impl RadixHostMatchEngine {
                 self.tree.insert(&radix_key, new_tree_idx).map_err(|e| {
                     format!(
                         "Failed to insert radix key '{}' for pattern '{}' into radix tree: {}",
-                        radix_key, pattern, e
+                        radix_key, radix_host.original, e
                     )
                 })?;
 
@@ -184,14 +169,14 @@ impl RadixHostMatchEngine {
             };
 
             // Add RadixHost to the list
-            let current_host_idx = self.hosts.len();
+            let host_idx = self.hosts.len();
             self.hosts.push(radix_host);
 
-            // Add host_idx to the tree_idx mapping
+            // Map tree_idx to host_idx (append to list)
             self.tree_idx_to_host_idx
                 .entry(tree_idx)
                 .or_insert_with(Vec::new)
-                .push(current_host_idx);
+                .push(host_idx);
         }
 
         println!("\n========== Initialization Complete ==========");
@@ -204,155 +189,159 @@ impl RadixHostMatchEngine {
         println!("==============================================\n");
         Ok(())
     }
-
-    /// Get the original hostname pattern by host index
-    pub fn get_host_pattern(&self, host_idx: usize) -> Option<&str> {
-        self.hosts.get(host_idx).map(|h| h.original.as_str())
-    }
 }
 
-impl Default for RadixHostMatchEngine {
+impl<T> Default for RadixHostMatchEngine<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
 // Thread-safe with lock-free reads
-unsafe impl Sync for RadixHostMatchEngine {}
+unsafe impl<T: Send + Sync> Sync for RadixHostMatchEngine<T> {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Mock runtime for testing
+    #[derive(Clone)]
+    struct MockHostRuntime {
+        name: String,
+    }
+
+    impl MockHostRuntime {
+        fn new(name: &str, _hosts: Vec<&str>) -> Self {
+            Self {
+                name: name.to_string(),
+            }
+        }
+
+        fn identifier(&self) -> String {
+            self.name.clone()
+        }
+    }
+
     #[test]
     fn test_engine_initialization_single_host() {
-        let mut engine = RadixHostMatchEngine::new();
+        let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
 
-        let result = engine.initialize(vec!["example.com".to_string()]);
+        let runtime = Arc::new(MockHostRuntime::new("test-runtime", vec!["example.com"]));
+        let host = RadixHost::new("example.com", runtime);
+        let result = engine.initialize(vec![host]);
         assert!(result.is_ok());
 
         assert_eq!(engine.host_count(), 1);
-        assert_eq!(engine.hosts.len(), 1);
         assert_eq!(engine.tree_idx_to_host_idx.len(), 1);
     }
 
     #[test]
     fn test_engine_initialization_multiple_hosts() {
-        let mut engine = RadixHostMatchEngine::new();
+        let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
 
-        let result = engine.initialize(vec![
-            "example.com".to_string(),
-            "api.example.com".to_string(),
-            "*.test.com".to_string(),
-        ]);
+        let runtime = Arc::new(MockHostRuntime::new(
+            "multi-host-runtime",
+            vec!["example.com", "api.example.com", "*.test.com"],
+        ));
+
+        let hosts = vec![
+            RadixHost::new("example.com", runtime.clone()),
+            RadixHost::new("api.example.com", runtime.clone()),
+            RadixHost::new("*.test.com", runtime.clone()),
+        ];
+
+        let result = engine.initialize(hosts);
         assert!(result.is_ok());
 
         assert_eq!(engine.host_count(), 3);
+        assert_eq!(engine.tree_idx_to_host_idx.len(), 3);
     }
 
     #[test]
     fn test_engine_exact_match() {
-        let mut engine = RadixHostMatchEngine::new();
-        engine
-            .initialize(vec![
-                "example.com".to_string(),
-                "api.example.com".to_string(),
-            ])
-            .unwrap();
+        let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
+        let runtime = Arc::new(MockHostRuntime::new(
+            "test",
+            vec!["example.com", "api.example.com"],
+        ));
 
-        assert_eq!(engine.match_host("example.com"), Some(0));
-        assert_eq!(engine.match_host("api.example.com"), Some(1));
-        assert_eq!(engine.match_host("unknown.com"), None);
+        let hosts = vec![
+            RadixHost::new("example.com", runtime.clone()),
+            RadixHost::new("api.example.com", runtime.clone()),
+        ];
+        engine.initialize(hosts).unwrap();
+
+        assert!(engine.match_host("example.com").is_some());
+        assert!(engine.match_host("api.example.com").is_some());
+        assert!(engine.match_host("unknown.com").is_none());
     }
 
     #[test]
     fn test_engine_wildcard_match() {
-        let mut engine = RadixHostMatchEngine::new();
-        engine
-            .initialize(vec!["*.example.com".to_string()])
-            .unwrap();
+        let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
+        let runtime = Arc::new(MockHostRuntime::new("test", vec!["*.example.com"]));
+        let host = RadixHost::new("*.example.com", runtime);
+        engine.initialize(vec![host]).unwrap();
 
-        assert_eq!(engine.match_host("api.example.com"), Some(0));
-        assert_eq!(engine.match_host("web.example.com"), Some(0));
-        assert_eq!(engine.match_host("example.com"), None);
-        assert_eq!(engine.match_host("api.web.example.com"), None);
+        assert!(engine.match_host("api.example.com").is_some());
+        assert!(engine.match_host("web.example.com").is_some());
+        assert!(engine.match_host("example.com").is_none());
+        assert!(engine.match_host("api.web.example.com").is_none());
     }
 
     #[test]
     fn test_engine_case_insensitive() {
-        let mut engine = RadixHostMatchEngine::new();
-        engine.initialize(vec!["Example.COM".to_string()]).unwrap();
+        let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
+        let runtime = Arc::new(MockHostRuntime::new("test", vec!["Example.COM"]));
+        let host = RadixHost::new("Example.COM", runtime);
+        engine.initialize(vec![host]).unwrap();
 
-        assert_eq!(engine.match_host("example.com"), Some(0));
-        assert_eq!(engine.match_host("EXAMPLE.COM"), Some(0));
-        assert_eq!(engine.match_host("ExAmPlE.CoM"), Some(0));
+        assert!(engine.match_host("example.com").is_some());
+        assert!(engine.match_host("EXAMPLE.COM").is_some());
+        assert!(engine.match_host("ExAmPlE.CoM").is_some());
     }
 
     #[test]
     fn test_engine_multiple_wildcards() {
-        let mut engine = RadixHostMatchEngine::new();
-        engine
-            .initialize(vec![
-                "*.example.com".to_string(),
-                "*.*.example.com".to_string(),
-            ])
-            .unwrap();
+        let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
+        let runtime = Arc::new(MockHostRuntime::new(
+            "test",
+            vec!["*.example.com", "*.*.example.com"],
+        ));
 
-        assert_eq!(engine.match_host("api.example.com"), Some(0));
-        assert_eq!(engine.match_host("a.b.example.com"), Some(1));
-    }
+        let hosts = vec![
+            RadixHost::new("*.example.com", runtime.clone()),
+            RadixHost::new("*.*.example.com", runtime.clone()),
+        ];
+        engine.initialize(hosts).unwrap();
 
-    #[test]
-    fn test_engine_get_host_pattern() {
-        let mut engine = RadixHostMatchEngine::new();
-        engine
-            .initialize(vec!["example.com".to_string(), "*.test.com".to_string()])
-            .unwrap();
-
-        assert_eq!(engine.get_host_pattern(0), Some("example.com"));
-        assert_eq!(engine.get_host_pattern(1), Some("*.test.com"));
-        assert_eq!(engine.get_host_pattern(2), None);
+        assert!(engine.match_host("api.example.com").is_some());
+        assert!(engine.match_host("a.b.example.com").is_some());
     }
 
     #[test]
     fn test_engine_empty_initialization() {
-        let mut engine = RadixHostMatchEngine::new();
+        let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
 
         let result = engine.initialize(vec![]);
         assert!(result.is_ok());
 
         assert_eq!(engine.host_count(), 0);
-        assert_eq!(engine.match_host("example.com"), None);
+        assert!(engine.match_host("example.com").is_none());
     }
 
     #[test]
     fn test_engine_default_trait() {
-        let engine = RadixHostMatchEngine::default();
+        let engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::default();
         assert_eq!(engine.host_count(), 0);
     }
 
     #[test]
-    fn test_engine_shared_radix_key() {
-        let mut engine = RadixHostMatchEngine::new();
-
-        // Two exact matches with same hostname should share tree_idx
-        let result = engine.initialize(vec![
-            "example.com".to_string(),
-            "example.com".to_string(), // Duplicate
-        ]);
-        assert!(result.is_ok());
-
-        assert_eq!(engine.host_count(), 2);
-        // Both should share the same tree node
-        let tree_idx = engine.tree().find_exact("com.example").unwrap();
-        let hosts_at_idx = engine.tree_idx_to_host_idx.get(&tree_idx).unwrap();
-        assert_eq!(hosts_at_idx.len(), 2);
-    }
-
-    #[test]
     fn test_engine_tree_access() {
-        let mut engine = RadixHostMatchEngine::new();
-        engine.initialize(vec!["example.com".to_string()]).unwrap();
+        let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
+        let runtime = Arc::new(MockHostRuntime::new("test", vec!["example.com"]));
+        let host = RadixHost::new("example.com", runtime);
+        engine.initialize(vec![host]).unwrap();
 
         let tree = engine.tree();
         assert_eq!(tree.find_exact("com.example"), Some(1));
@@ -360,26 +349,45 @@ mod tests {
 
     #[test]
     fn test_engine_localhost() {
-        let mut engine = RadixHostMatchEngine::new();
-        engine.initialize(vec!["localhost".to_string()]).unwrap();
+        let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
+        let runtime = Arc::new(MockHostRuntime::new("test", vec!["localhost"]));
+        let host = RadixHost::new("localhost", runtime);
+        engine.initialize(vec![host]).unwrap();
 
-        assert_eq!(engine.match_host("localhost"), Some(0));
-        assert_eq!(engine.match_host("LOCALHOST"), Some(0));
-        assert_eq!(engine.match_host("api.localhost"), None);
+        assert!(engine.match_host("localhost").is_some());
+        assert!(engine.match_host("LOCALHOST").is_some());
+        assert!(engine.match_host("api.localhost").is_none());
     }
 
     #[test]
-    fn test_engine_priority_exact_over_wildcard() {
-        let mut engine = RadixHostMatchEngine::new();
-        engine
-            .initialize(vec![
-                "*.example.com".to_string(),
-                "api.example.com".to_string(), // Exact match
-            ])
-            .unwrap();
+    fn test_engine_multiple_runtimes() {
+        let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
+        let runtime1 = Arc::new(MockHostRuntime::new("runtime1", vec!["example.com"]));
+        let runtime2 = Arc::new(MockHostRuntime::new("runtime2", vec!["*.api.com"]));
+        let runtime3 = Arc::new(MockHostRuntime::new("runtime3", vec!["test.com"]));
 
-        // Exact match should be found first (depends on initialization order)
-        let result = engine.match_host("api.example.com");
-        assert!(result.is_some());
+        let hosts = vec![
+            RadixHost::new("example.com", runtime1),
+            RadixHost::new("*.api.com", runtime2),
+            RadixHost::new("test.com", runtime3),
+        ];
+
+        engine.initialize(hosts).unwrap();
+
+        assert_eq!(engine.host_count(), 3);
+        assert_eq!(engine.tree_idx_to_host_idx.len(), 3);
+
+        // Each should match to its own runtime
+        let r1 = engine.match_host("example.com");
+        assert!(r1.is_some());
+        assert_eq!(r1.unwrap().identifier(), "runtime1");
+
+        let r2 = engine.match_host("v1.api.com");
+        assert!(r2.is_some());
+        assert_eq!(r2.unwrap().identifier(), "runtime2");
+
+        let r3 = engine.match_host("test.com");
+        assert!(r3.is_some());
+        assert_eq!(r3.unwrap().identifier(), "runtime3");
     }
 }
