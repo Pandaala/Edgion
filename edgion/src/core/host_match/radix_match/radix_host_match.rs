@@ -1,7 +1,7 @@
-use super::radix_host::RadixHost;
 use radix_route_matcher::RadixTree;
 use std::collections::HashMap;
 use std::sync::Arc;
+use super::radix_host::RadixHost;
 
 /// Radix tree based hostname matching engine
 ///
