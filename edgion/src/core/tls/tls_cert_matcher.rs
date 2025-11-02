@@ -17,7 +17,7 @@ impl TlsWithSecret {
         Self { tls, secret }
     }
 
-    pub fn cert(&self) -> Result<String> {
+    pub fn cert_pem(&self) -> Result<String> {
         let data = self
             .secret
             .data
@@ -29,7 +29,7 @@ impl TlsWithSecret {
         String::from_utf8(cert_pem.0.clone()).map_err(|e| anyhow::anyhow!(e))
     }
 
-    pub fn key(&self) -> Result<String> {
+    pub fn key_pem(&self) -> Result<String> {
         let data = self
             .secret
             .data
@@ -55,6 +55,9 @@ impl TlsCertMatcher {
 
     /// Set the entire certificate matcher
     /// This replaces all existing certificates with the provided matcher
+    ///
+    /// # Warning
+    /// Do not call this method frequently. Maintain at least 100ms interval between calls.
     pub fn set(&self, matcher: HashHost<Vec<Arc<TlsWithSecret>>>) {
         self.matcher.store(Arc::new(matcher));
     }
