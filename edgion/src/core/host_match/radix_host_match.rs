@@ -59,25 +59,7 @@ impl<T> RadixHostMatchEngine<T> {
         println!("Reversed: '{}'", reversed);
         println!("Available hosts: {}", self.hosts.len());
 
-        // Step 1: Try exact match first (for non-wildcard patterns)
-        println!("\n[Step 1] Trying exact match for '{}'...", reversed);
-        if let Some(tree_idx) = self.tree.find_exact(&reversed) {
-            println!("  OK found exact tree_idx: {}", tree_idx);
-            if let Some(host_indices) = self.tree_idx_to_host_idx.get(&tree_idx) {
-                for &host_idx in host_indices {
-                    if let Some(radix_host) = self.hosts.get(host_idx) {
-                        if !radix_host.is_wildcard && radix_host.matches(hostname) {
-                            println!("  -> Exact match (non-wildcard)");
-                            return Some(radix_host.runtime.clone());
-                        }
-                    }
-                }
-            }
-        }
-        println!("  FAIL no exact match found or is wildcard pattern");
-
-        // Step 2: Try prefix matching for wildcard patterns
-        println!("\n[Step 2] Trying prefix matching...");
+        // Create iterator
         let iter = match self.tree.create_iter() {
             Ok(iter) => iter,
             Err(e) => {
@@ -86,36 +68,59 @@ impl<T> RadixHostMatchEngine<T> {
             }
         };
 
-        let all_prefixes = self.tree.find_all_prefixes(&iter, &reversed);
-        println!("  Found {} prefix(es) in radix tree", all_prefixes.len());
-
-        if all_prefixes.is_empty() {
-            println!("FAIL no host matched (no prefixes found)\n");
+        // Use search to initialize iterator, then iterate from longest to shortest using next_prefix
+        println!("\n[Step 1] Searching in radix tree...");
+        if !self.tree.search(&iter, &reversed) {
+            println!("FAIL no match found in radix tree\n");
             return None;
         }
 
-        // Check each prefix match (longest first)
-        for tree_idx in all_prefixes {
-            println!("  Checking tree_idx: {}", tree_idx);
+        println!("  OK found matches, iterating from longest to shortest...");
+
+        // Get the first match (longest)
+        let mut match_count = 0;
+        loop {
+            let tree_idx = if match_count == 0 {
+                // First iteration: get current position from search
+                match self.tree.next_prefix(&iter, &reversed) {
+                    Some(idx) => idx,
+                    None => break,
+                }
+            } else {
+                // Subsequent iterations: move up to shorter prefixes
+                match self.tree.next_prefix(&iter, &reversed) {
+                    Some(idx) => idx,
+                    None => break,
+                }
+            };
+
+            match_count += 1;
+            println!("  [Match #{}] Checking tree_idx: {}", match_count, tree_idx);
+
             if let Some(host_indices) = self.tree_idx_to_host_idx.get(&tree_idx) {
+                println!("    -> {} host(s) at this tree node", host_indices.len());
                 for &host_idx in host_indices {
                     if let Some(radix_host) = self.hosts.get(host_idx) {
                         println!(
-                            "    Testing: original='{}', radix_key='{}', is_wildcard={}",
+                            "      Testing: original='{}', radix_key='{}', is_wildcard={}",
                             radix_host.original, radix_host.radix_key, radix_host.is_wildcard
                         );
                         if radix_host.matches(hostname) {
-                            println!("    OK matched!");
+                            println!("      OK matched!");
                             return Some(radix_host.runtime.clone());
                         } else {
-                            println!("    FAIL pattern did not match");
+                            println!("      FAIL pattern did not match");
                         }
                     }
                 }
             }
         }
 
-        println!("FAIL no host matched\n");
+        if match_count == 0 {
+            println!("FAIL no matches found\n");
+        } else {
+            println!("FAIL checked {} match(es), none matched\n", match_count);
+        }
         None
     }
 
@@ -365,29 +370,47 @@ mod tests {
         let runtime1 = Arc::new(MockHostRuntime::new("runtime1", vec!["example.com"]));
         let runtime2 = Arc::new(MockHostRuntime::new("runtime2", vec!["*.api.com"]));
         let runtime3 = Arc::new(MockHostRuntime::new("runtime3", vec!["test.com"]));
+        let runtime4 = Arc::new(MockHostRuntime::new("runtime4", vec!["*.example.com"]));
 
         let hosts = vec![
-            RadixHost::new("example.com", runtime1),
-            RadixHost::new("*.api.com", runtime2),
-            RadixHost::new("test.com", runtime3),
+            RadixHost::new("example.com", runtime1.clone()),
+            RadixHost::new("*.api.com", runtime2.clone()),
+            RadixHost::new("test.com", runtime3.clone()),
+            RadixHost::new("*.example.com", runtime4.clone()),
         ];
 
         engine.initialize(hosts).unwrap();
 
-        assert_eq!(engine.host_count(), 3);
-        assert_eq!(engine.tree_idx_to_host_idx.len(), 3);
+        assert_eq!(engine.host_count(), 4);
+        assert_eq!(engine.tree_idx_to_host_idx.len(), 3); // example.com and *.example.com share same radix_key
 
-        // Each should match to its own runtime
+        // Test exact match for example.com (should match runtime1, not wildcard runtime4)
         let r1 = engine.match_host("example.com");
         assert!(r1.is_some());
         assert_eq!(r1.unwrap().identifier(), "runtime1");
 
+        // Test wildcard match for *.example.com (should match runtime4)
+        let r4 = engine.match_host("api.example.com");
+        assert!(r4.is_some());
+        assert_eq!(r4.unwrap().identifier(), "runtime4");
+
+        // Test another subdomain for *.example.com
+        let r4_2 = engine.match_host("web.example.com");
+        assert!(r4_2.is_some());
+        assert_eq!(r4_2.unwrap().identifier(), "runtime4");
+
+        // Test *.api.com wildcard
         let r2 = engine.match_host("v1.api.com");
         assert!(r2.is_some());
         assert_eq!(r2.unwrap().identifier(), "runtime2");
 
+        // Test exact match for test.com
         let r3 = engine.match_host("test.com");
         assert!(r3.is_some());
         assert_eq!(r3.unwrap().identifier(), "runtime3");
+
+        // Test that *.example.com doesn't match too many levels
+        let r_none = engine.match_host("sub.api.example.com");
+        assert!(r_none.is_none());
     }
 }
