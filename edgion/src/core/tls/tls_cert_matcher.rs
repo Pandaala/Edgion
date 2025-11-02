@@ -75,6 +75,47 @@ impl TlsCertMatcher {
         Ok(())
     }
 
+    pub fn remove(&self, tls: &EdgionTls) -> Result<()> {
+        let mut matcher = self.matcher.write();
+
+        let target_namespace = tls.metadata.namespace.as_deref();
+        let target_name = tls.metadata.name.as_deref();
+
+        let mut hosts_to_remove = Vec::new();
+
+        for host in tls.spec.hosts.iter() {
+            // Try to get mutable reference to the list
+            if let Some(tls_list) = matcher.get_mut(host) {
+                // Remove matching items from the LinkedList
+                let mut temp_list = LinkedList::new();
+                while let Some(item) = tls_list.pop_front() {
+                    let item_namespace = item.tls.metadata.namespace.as_deref();
+                    let item_name = item.tls.metadata.name.as_deref();
+
+                    // Keep if namespace or name doesn't match
+                    if item_namespace != target_namespace || item_name != target_name {
+                        temp_list.push_back(item);
+                    }
+                }
+
+                // Put back the remaining items
+                *tls_list = temp_list;
+
+                // Mark for removal if list is empty
+                if tls_list.is_empty() {
+                    hosts_to_remove.push(host.clone());
+                }
+            }
+        }
+
+        // Remove empty host entries
+        for host in hosts_to_remove {
+            matcher.remove(&host);
+        }
+
+        Ok(())
+    }
+
     pub fn match_sni(&self, sni: &str) -> Result<Arc<TlsWithSecret>, EdError> {
         let tls_list = self.matcher.read().get(sni).cloned().unwrap_or_default();
         if tls_list.is_empty() {

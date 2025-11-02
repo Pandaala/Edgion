@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod radix_match;
 
 mod hash_match;
