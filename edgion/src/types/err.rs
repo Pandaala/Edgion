@@ -19,4 +19,7 @@ pub enum EdError {
 
     #[error("Upstream error {0}")]
     UpstreamError(String),
+
+    #[error("Sni not match: {0}")]
+    SniNotMatch(String),
 }

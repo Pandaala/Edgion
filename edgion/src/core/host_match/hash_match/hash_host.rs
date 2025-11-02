@@ -55,6 +55,30 @@ impl<T> HashHost<T> {
         None
     }
 
+    pub fn get_mut(&mut self, k: &str) -> Option<&mut T> {
+        // Validate the input domain first
+        if !is_valid_domain(k) {
+            return None;
+        }
+
+        // Step 1: Try exact match
+        if self.map.contains_key(k) {
+            return self.map.get_mut(k);
+        }
+
+        // Step 2: Try wildcard match
+        if let Some(first_dot_pos) = k.find('.') {
+            let wildcard_key = &k[first_dot_pos..];
+            // Validate the wildcard key part (without the first label)
+            // e.g., for "api.example.com", validate "example.com"
+            if is_valid_domain(&wildcard_key[1..]) {
+                return self.map.get_mut(wildcard_key);
+            }
+        }
+
+        None
+    }
+
     pub fn remove(&mut self, k: &str) -> Option<T> {
         self.map.remove(k)
     }
