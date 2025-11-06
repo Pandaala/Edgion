@@ -1,4 +1,4 @@
-use crate::types::ParentReference;
+use crate::types::{ParentReference, SecretObjectReference};
 use k8s_openapi::api::core::v1::SecretReference;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
@@ -21,6 +21,11 @@ pub struct EdgionTlsSpec {
     pub parent_refs: Option<Vec<ParentReference>>,
     pub hosts: Vec<String>,
     pub secret_ref: SecretReference,
+    
+    // todo, replace secret_refer
+    /// CertificateRefs contains references to Kubernetes objects
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_refs: Option<Vec<SecretObjectReference>>,
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
