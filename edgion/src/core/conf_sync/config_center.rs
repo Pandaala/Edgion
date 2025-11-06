@@ -466,6 +466,93 @@ impl ConfigCenter {
             .get_mut(key)
             .map(|cache| cache.watch(client_id, client_name, from_version))
     }
+
+    /// Print all configuration for a specific gateway class key
+    pub fn print_config(&self, key: &GatewayClassKey) {
+        println!("=== ConfigCenter Config for GatewayClassKey: {} ===", key);
+        
+        // Gateway Classes
+        if let Some(list_data) = self.list_gateway_classes(key) {
+            println!("GatewayClasses (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            for (idx, gc) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, serde_json::to_string(gc).unwrap_or_else(|_| "serialization error".to_string()));
+            }
+        } else {
+            println!("GatewayClasses: not found");
+        }
+
+        // Gateway Class Specs
+        if let Some(list_data) = self.list_gateway_class_specs(key) {
+            println!("GatewayClassSpecs (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            for (idx, spec) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, serde_json::to_string(spec).unwrap_or_else(|_| "serialization error".to_string()));
+            }
+        } else {
+            println!("GatewayClassSpecs: not found");
+        }
+
+        // Gateways
+        if let Some(list_data) = self.list_gateways(key) {
+            println!("Gateways (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            for (idx, gw) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, serde_json::to_string(gw).unwrap_or_else(|_| "serialization error".to_string()));
+            }
+        } else {
+            println!("Gateways: not found");
+        }
+
+        // HTTP Routes
+        if let Some(list_data) = self.list_routes(key) {
+            println!("HTTPRoutes (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            for (idx, route) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, serde_json::to_string(route).unwrap_or_else(|_| "serialization error".to_string()));
+            }
+        } else {
+            println!("HTTPRoutes: not found");
+        }
+
+        // Services
+        if let Some(list_data) = self.list_services(key) {
+            println!("Services (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            for (idx, svc) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, serde_json::to_string(svc).unwrap_or_else(|_| "serialization error".to_string()));
+            }
+        } else {
+            println!("Services: not found");
+        }
+
+        // Endpoint Slices
+        if let Some(list_data) = self.list_endpoint_slices(key) {
+            println!("EndpointSlices (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            for (idx, es) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, serde_json::to_string(es).unwrap_or_else(|_| "serialization error".to_string()));
+            }
+        } else {
+            println!("EndpointSlices: not found");
+        }
+
+        // Edgion TLS
+        if let Some(list_data) = self.list_edgion_tls(key) {
+            println!("EdgionTls (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            for (idx, tls) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, serde_json::to_string(tls).unwrap_or_else(|_| "serialization error".to_string()));
+            }
+        } else {
+            println!("EdgionTls: not found");
+        }
+
+        // Secrets
+        if let Some(list_data) = self.list_secrets(key) {
+            println!("Secrets (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            for (idx, secret) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, serde_json::to_string(secret).unwrap_or_else(|_| "serialization error".to_string()));
+            }
+        } else {
+            println!("Secrets: not found");
+        }
+
+        println!("=== End ConfigCenter Config ===\n");
+    }
 }
 
 impl Default for ConfigCenter {

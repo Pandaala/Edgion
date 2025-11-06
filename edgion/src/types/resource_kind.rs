@@ -1,5 +1,5 @@
 /// Resource kind enumeration for different Kubernetes resource types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
     GatewayClass,
     GatewayClassSpec,

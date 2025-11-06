@@ -146,6 +146,135 @@ impl ConfigHub {
     pub fn list_secrets(&self) -> ListData<&Secret> {
         self.secrets.list()
     }
+
+    /// Print all configuration for the gateway class key
+    /// Format is identical to ConfigCenter::print_config
+    pub fn print_config(&self) {
+        let key = &self.gateway_class_key;
+        println!("=== ConfigHub Config for GatewayClassKey: {} ===", key);
+
+        // Gateway Classes
+        let list_data = self.list_gateway_classes();
+        println!(
+            "GatewayClasses (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, gc) in list_data.data.iter().enumerate() {
+            println!(
+                "  [{}] {}",
+                idx,
+                serde_json::to_string(gc).unwrap_or_else(|_| "serialization error".to_string())
+            );
+        }
+
+        // Gateway Class Specs
+        let list_data = self.list_gateway_class_specs();
+        println!(
+            "GatewayClassSpecs (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, spec) in list_data.data.iter().enumerate() {
+            println!(
+                "  [{}] {}",
+                idx,
+                serde_json::to_string(spec).unwrap_or_else(|_| "serialization error".to_string())
+            );
+        }
+
+        // Gateways
+        let list_data = self.list_gateways();
+        println!(
+            "Gateways (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, gw) in list_data.data.iter().enumerate() {
+            println!(
+                "  [{}] {}",
+                idx,
+                serde_json::to_string(gw).unwrap_or_else(|_| "serialization error".to_string())
+            );
+        }
+
+        // HTTP Routes
+        let list_data = self.list_routes();
+        println!(
+            "HTTPRoutes (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, route) in list_data.data.iter().enumerate() {
+            println!(
+                "  [{}] {}",
+                idx,
+                serde_json::to_string(route).unwrap_or_else(|_| "serialization error".to_string())
+            );
+        }
+
+        // Services
+        let list_data = self.list_services();
+        println!(
+            "Services (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, svc) in list_data.data.iter().enumerate() {
+            println!(
+                "  [{}] {}",
+                idx,
+                serde_json::to_string(svc).unwrap_or_else(|_| "serialization error".to_string())
+            );
+        }
+
+        // Endpoint Slices
+        let list_data = self.list_endpoint_slices();
+        println!(
+            "EndpointSlices (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, es) in list_data.data.iter().enumerate() {
+            println!(
+                "  [{}] {}",
+                idx,
+                serde_json::to_string(es).unwrap_or_else(|_| "serialization error".to_string())
+            );
+        }
+
+        // Edgion TLS
+        let list_data = self.list_edgion_tls();
+        println!(
+            "EdgionTls (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, tls) in list_data.data.iter().enumerate() {
+            println!(
+                "  [{}] {}",
+                idx,
+                serde_json::to_string(tls).unwrap_or_else(|_| "serialization error".to_string())
+            );
+        }
+
+        // Secrets
+        let list_data = self.list_secrets();
+        println!(
+            "Secrets (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, secret) in list_data.data.iter().enumerate() {
+            println!(
+                "  [{}] {}",
+                idx,
+                serde_json::to_string(secret).unwrap_or_else(|_| "serialization error".to_string())
+            );
+        }
+
+        println!("=== End ConfigHub Config ===\n");
+    }
 }
 
 pub struct ListDataSimple {

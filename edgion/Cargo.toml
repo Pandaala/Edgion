@@ -11,6 +11,10 @@ path = "src/lib.rs"
 name = "main"
 path = "src/bin/main.rs"
 
+[[bin]]
+name = "config_sync_test"
+path = "src/tests/config_sync_test.rs"
+
 [features]
 # Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
 legacy_route_tests = []
@@ -56,6 +60,7 @@ parking_lot.workspace = true
 uuid.workspace = true
 arc-swap.workspace = true
 regex.workspace = true
+rand.workspace = true
 
 # Pingora
 pingora-core.workspace = true
