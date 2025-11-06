@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tokio::sync::mpsc;
 
 /// Watcher client information
 #[derive(Debug, Clone)]
@@ -34,6 +35,29 @@ impl<T> ListData<T> {
     }
 }
 
+/// Watch response structure containing events and current version
+#[derive(Debug, Clone)]
+pub struct WatchResponse<T> {
+    pub events: Vec<WatcherEvent<T>>,
+    pub resource_version: u64,
+}
+
+impl<T> WatchResponse<T> {
+    pub fn new(events: Vec<WatcherEvent<T>>, resource_version: u64) -> Self {
+        Self {
+            events,
+            resource_version,
+        }
+    }
+}
+
+/// Pending watch request waiting for notification
+pub struct PendingWatch {
+    pub client_id: String,
+    pub from_version: u64,
+    pub sender: tokio::sync::mpsc::UnboundedSender<()>,
+}
+
 /// Trait for resources that have a version
 pub trait Versionable {
     /// Get the resource version
@@ -58,16 +82,18 @@ pub trait EventDispatch<T> {
     fn event_del(&mut self, resource: T);
 }
 
+#[derive(Debug, Clone)]
 pub enum EventType {
     Update,
     Delete,
     Add,
 }
 
+#[derive(Debug, Clone)]
 pub struct WatcherEvent<T> {
     pub event_type: EventType,
-    resource_version: u64,
-    data: T,
+    pub resource_version: u64,
+    pub data: T,
 }
 
 pub struct WatcherCache<T> {
@@ -82,8 +108,8 @@ pub struct WatcherCache<T> {
     resource_version: u64,
     ready: bool,
 
-    // watcher clients
-    clients: HashMap<String, WatcherClient>,
+    // pending watch requests
+    watchers: Vec<PendingWatch>,
 }
 
 impl<T: Versionable> WatcherCache<T> {
@@ -96,47 +122,12 @@ impl<T: Versionable> WatcherCache<T> {
             resource_version: 0,
             ready: false,
             data: HashMap::new(),
-            clients: HashMap::new(),
+            watchers: Vec::new(),
         }
     }
 
     pub fn is_ready(&self) -> bool {
         self.ready
-    }
-
-    /// Add a new watcher client
-    pub fn add_client(&mut self, client: WatcherClient) {
-        self.clients.insert(client.client_id.clone(), client);
-    }
-
-    /// Remove a watcher client by client_id
-    pub fn remove_client(&mut self, client_id: &str) -> Option<WatcherClient> {
-        self.clients.remove(client_id)
-    }
-
-    /// Get a watcher client by client_id
-    pub fn get_client(&self, client_id: &str) -> Option<&WatcherClient> {
-        self.clients.get(client_id)
-    }
-
-    /// Get a mutable reference to a watcher client by client_id
-    pub fn get_client_mut(&mut self, client_id: &str) -> Option<&mut WatcherClient> {
-        self.clients.get_mut(client_id)
-    }
-
-    /// Get all clients
-    pub fn get_all_clients(&self) -> Vec<&WatcherClient> {
-        self.clients.values().collect()
-    }
-
-    /// Update client's current resource version
-    pub fn update_client_version(&mut self, client_id: &str, version: u64) -> bool {
-        if let Some(client) = self.clients.get_mut(client_id) {
-            client.current_resource_version = version;
-            true
-        } else {
-            false
-        }
     }
 
     /// List all data - returns all resources in the cache with resource version
@@ -156,8 +147,96 @@ impl<T: Versionable> WatcherCache<T> {
         ListData::new(data, self.resource_version)
     }
 
+    /// Get all events since a specific version from the cache
+    /// Returns events where resource_version > from_version
+    fn get_events_since(&self, from_version: u64) -> Vec<WatcherEvent<T>>
+    where
+        T: Clone,
+    {
+        let mut events = Vec::new();
+
+        // Calculate the number of events in the circular queue
+        let count = if (self.cache.len() as u32) < self.capacity {
+            self.cache.len() as u32
+        } else {
+            self.capacity
+        };
+
+        // Iterate through the circular queue
+        for i in 0..count {
+            let index = ((self.start_index + i) % self.capacity) as usize;
+            if index < self.cache.len() {
+                let event = &self.cache[index];
+                if event.resource_version > from_version {
+                    events.push(event.clone());
+                }
+            }
+        }
+
+        events
+    }
+
+    /// Notify all pending watchers (non-blocking)
+    /// Only sends a signal, watchers will read data themselves
+    fn notify_watchers(&mut self) {
+        // Keep only watchers that are still connected
+        self.watchers.retain(|watcher| {
+            // Try to send notification signal (non-blocking)
+            // If send fails, the receiver has been dropped, so we remove it
+            watcher.sender.send(()).is_ok()
+        });
+    }
+
+    /// Register a watcher and return a receiver for notifications
+    /// The caller should loop on the receiver and read data when notified
+    pub fn register_watcher(
+        &mut self,
+        client_id: String,
+        from_version: u64,
+    ) -> mpsc::UnboundedReceiver<()> {
+        let (sender, receiver) = mpsc::unbounded_channel();
+
+        let pending_watch = PendingWatch {
+            client_id,
+            from_version,
+            sender,
+        };
+
+        self.watchers.push(pending_watch);
+        receiver
+    }
+
+    /// Watch for changes starting from a specific version
+    /// Returns a stream-like interface where the caller can continuously receive updates
+    pub async fn watch(&mut self, client_id: String, from_version: u64) -> WatchResponse<T>
+    where
+        T: Clone,
+    {
+        if from_version < self.resource_version {
+            // Client is behind, return all events since their version
+            let events = self.get_events_since(from_version);
+            WatchResponse::new(events, self.resource_version)
+        } else {
+            // Client is up to date, register and wait for notification
+            let mut receiver = self.register_watcher(client_id, from_version);
+
+            // Wait for notification signal
+            if receiver.recv().await.is_some() {
+                // Got notification, read latest events
+                let events = self.get_events_since(from_version);
+                WatchResponse::new(events, self.resource_version)
+            } else {
+                // Channel closed, return empty response
+                WatchResponse::new(Vec::new(), self.resource_version)
+            }
+        }
+    }
+
     /// Add event to the circular queue
-    fn add_event(&mut self, event_type: EventType, resource: T) {
+    fn add_event(&mut self, event_type: EventType, resource: T)
+    where
+        T: Clone,
+    {
         let version = resource.get_version();
         self.resource_version = version;
 
@@ -169,17 +248,22 @@ impl<T: Versionable> WatcherCache<T> {
 
         // Add to circular queue
         if (self.cache.len() as u32) < self.capacity {
-            self.cache.push(event);
+            self.cache.push(event.clone());
             self.end_index = self.cache.len() as u32;
         } else {
             let index = (self.end_index % self.capacity) as usize;
-            self.cache[index] = event;
+            self.cache[index] = event.clone();
             self.end_index = self.end_index.wrapping_add(1);
 
             // Update start_index if we've overwritten the oldest event
             if self.end_index.wrapping_sub(self.start_index) > self.capacity {
                 self.start_index = self.end_index.wrapping_sub(self.capacity);
             }
+        }
+
+        // Notify all pending watchers (non-blocking)
+        if !self.watchers.is_empty() {
+            self.notify_watchers();
         }
     }
 }
