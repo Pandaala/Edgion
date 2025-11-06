@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 use crate::core::conf_sync::watcher_cache::{ListData, WatchResponse, WatcherCache};
-use crate::types::{EdgionTls, Gateway, GatewayClassSpec, HTTPRoute};
+use crate::types::{EdgionTls, Gateway, GatewayClass, GatewayClassSpec, HTTPRoute};
 
-pub type GatewayClass = String;
+pub type GatewayClassKey = String;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ResourceType {
@@ -20,19 +20,21 @@ pub enum ResourceType {
 }
 
 pub struct WatcherMgr {
-    gateway_classes: HashMap<GatewayClass, WatcherCache<GatewayClass>>,
+    gateway_classes: HashMap<GatewayClassKey, WatcherCache<GatewayClass>>,
+    gateway_class_specs: HashMap<GatewayClassKey, WatcherCache<GatewayClassSpec>>,
     gateways: HashMap<String, WatcherCache<Gateway>>,
-    routes: HashMap<GatewayClass, WatcherCache<HTTPRoute>>,
-    services: HashMap<GatewayClass, WatcherCache<Service>>,
-    endpoint_slices: HashMap<GatewayClass, WatcherCache<EndpointSlice>>,
-    edgion_tls: HashMap<GatewayClass, WatcherCache<EdgionTls>>,
-    secrets: HashMap<GatewayClass, WatcherCache<Secret>>,
+    routes: HashMap<GatewayClassKey, WatcherCache<HTTPRoute>>,
+    services: HashMap<GatewayClassKey, WatcherCache<Service>>,
+    endpoint_slices: HashMap<GatewayClassKey, WatcherCache<EndpointSlice>>,
+    edgion_tls: HashMap<GatewayClassKey, WatcherCache<EdgionTls>>,
+    secrets: HashMap<GatewayClassKey, WatcherCache<Secret>>,
 }
 
 impl WatcherMgr {
     pub fn new() -> Self {
         Self {
             gateway_classes: HashMap::new(),
+            gateway_class_specs: HashMap::new(),
             gateways: HashMap::new(),
             routes: HashMap::new(),
             services: HashMap::new(),
@@ -45,6 +47,11 @@ impl WatcherMgr {
     /// List gateway classes
     pub fn list_gateway_classes(&self, key: &str) -> Option<ListData<&GatewayClass>> {
         self.gateway_classes.get(key).map(|cache| cache.list())
+    }
+
+    /// List gateway class specs
+    pub fn list_gateway_class_specs(&self, key: &str) -> Option<ListData<&GatewayClassSpec>> {
+        self.gateway_class_specs.get(key).map(|cache| cache.list())
     }
 
     /// List gateways
@@ -86,6 +93,19 @@ impl WatcherMgr {
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<GatewayClass>>> {
         self.gateway_classes
+            .get_mut(key)
+            .map(|cache| cache.watch(client_id, client_name, from_version))
+    }
+
+    /// Watch gateway class specs
+    pub fn watch_gateway_class_specs(
+        &mut self,
+        key: &str,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> Option<mpsc::Receiver<WatchResponse<GatewayClassSpec>>> {
+        self.gateway_class_specs
             .get_mut(key)
             .map(|cache| cache.watch(client_id, client_name, from_version))
     }

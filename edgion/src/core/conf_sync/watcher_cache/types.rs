@@ -52,7 +52,7 @@ impl<T> WatchResponse<T> {
 
 /// Pending watch request waiting for notification
 #[derive(Clone)]
-pub struct PendingWatch<T> {
+pub struct WatchClient<T> {
     pub client_id: String,
     pub client_name: String,
     pub from_version: u64,

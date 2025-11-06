@@ -4,8 +4,8 @@ use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
 use super::store::CacheStore;
-use super::traits::{EventDispatch, Versionable};
-use super::types::{EventType, ListData, PendingWatch, WatchResponse, WatcherEvent};
+use super::types::{EventType, ListData, WatchClient, WatchResponse, WatcherEvent};
+use crate::core::conf_sync::traits::{EventDispatch, Versionable};
 
 pub struct WatcherCache<T> {
     // data
@@ -16,7 +16,7 @@ pub struct WatcherCache<T> {
     store: Arc<tokio::sync::RwLock<CacheStore<T>>>,
 
     // pending watch requests
-    watchers: Vec<PendingWatch<T>>,
+    watchers: Vec<WatchClient<T>>,
 
     // shared notify for broadcasting events to all watchers
     notify: Arc<Notify>,
@@ -81,7 +81,7 @@ impl<T: Versionable> WatcherCache<T> {
     pub fn start_watcher_task(
         store: Arc<tokio::sync::RwLock<CacheStore<T>>>,
         notify: Arc<Notify>,
-        watcher: PendingWatch<T>,
+        watcher: WatchClient<T>,
     ) where
         T: Clone + Send + Sync + 'static,
     {
@@ -150,7 +150,7 @@ impl<T: Versionable> WatcherCache<T> {
         let notify = self.get_notify();
         let store = self.get_store();
 
-        let watcher = PendingWatch {
+        let watcher = WatchClient {
             client_id,
             client_name,
             from_version,
