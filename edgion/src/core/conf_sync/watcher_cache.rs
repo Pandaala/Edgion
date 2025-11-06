@@ -18,6 +18,22 @@ impl WatcherClient {
     }
 }
 
+/// List data response structure
+#[derive(Debug, Clone)]
+pub struct ListData<T> {
+    pub data: Vec<T>,
+    pub resource_version: u64,
+}
+
+impl<T> ListData<T> {
+    pub fn new(data: Vec<T>, resource_version: u64) -> Self {
+        Self {
+            data,
+            resource_version,
+        }
+    }
+}
+
 /// Trait for resources that have a version
 pub trait Versionable {
     /// Get the resource version
@@ -121,6 +137,23 @@ impl<T: Versionable> WatcherCache<T> {
         } else {
             false
         }
+    }
+
+    /// List all data - returns all resources in the cache with resource version
+    /// This is typically called by clients to get the full snapshot of data
+    pub fn list(&self) -> ListData<&T> {
+        let data: Vec<&T> = self.data.values().collect();
+        ListData::new(data, self.resource_version)
+    }
+
+    /// List all data as owned values (cloned)
+    /// Useful when clients need owned data instead of references
+    pub fn list_owned(&self) -> ListData<T>
+    where
+        T: Clone,
+    {
+        let data: Vec<T> = self.data.values().cloned().collect();
+        ListData::new(data, self.resource_version)
     }
 
     /// Add event to the circular queue
