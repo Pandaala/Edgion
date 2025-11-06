@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::{mpsc, Notify};
 
 /// Watcher client information
 #[derive(Debug, Clone)]
@@ -55,7 +56,7 @@ impl<T> WatchResponse<T> {
 pub struct PendingWatch<T> {
     pub client_id: String,
     pub from_version: u64,
-    pub sender: mpsc::UnboundedSender<WatchResponse<T>>,
+    pub sender: mpsc::Sender<WatchResponse<T>>, // Bounded for data
 }
 
 /// Trait for resources that have a version
@@ -110,6 +111,9 @@ pub struct WatcherCache<T> {
 
     // pending watch requests
     watchers: Vec<PendingWatch<T>>,
+
+    // shared notify for broadcasting events to all watchers
+    notify: Arc<Notify>,
 }
 
 impl<T: Versionable> WatcherCache<T> {
@@ -123,7 +127,13 @@ impl<T: Versionable> WatcherCache<T> {
             ready: false,
             data: HashMap::new(),
             watchers: Vec::new(),
+            notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Get a clone of the shared notify for watchers
+    pub fn get_notify(&self) -> Arc<Notify> {
+        self.notify.clone()
     }
 
     pub fn is_ready(&self) -> bool {
@@ -176,52 +186,101 @@ impl<T: Versionable> WatcherCache<T> {
         events
     }
 
-    /// Notify all pending watchers with the latest event (non-blocking)
-    /// Sends complete WatchResponse to all watchers
-    fn notify_watchers(&mut self, event: WatcherEvent<T>)
-    where
-        T: Clone,
-    {
-        // Prepare response with the new event
-        let response = WatchResponse::new(vec![event], self.resource_version);
+    /// Notify all pending watchers (non-blocking)
+    /// Uses shared Notify to broadcast to all watchers at once
+    fn notify_watchers(&mut self) {
+        // Notify all waiting tasks at once - much more efficient!
+        self.notify.notify_waiters();
+    }
 
-        // Send to all watchers, keep only those still connected
-        self.watchers.retain(|watcher| {
-            // Try to send WatchResponse (non-blocking)
-            // If send fails, the receiver has been dropped, so we remove it
-            watcher.sender.send(response.clone()).is_ok()
+    /// Start a watcher task that listens for notifications and sends data
+    /// Requires Arc<RwLock<WatcherCache>> to access cache from the spawned task
+    pub fn start_watcher_task(
+        cache: std::sync::Arc<tokio::sync::RwLock<Self>>,
+        notify: Arc<Notify>,
+        sender: mpsc::Sender<WatchResponse<T>>,
+        _client_id: String,
+        mut from_version: u64,
+    ) where
+        T: Clone + Send + Sync + 'static,
+    {
+        tokio::spawn(async move {
+            // First check if client is behind
+            {
+                let cache_guard = cache.read().await;
+                if from_version < cache_guard.resource_version {
+                    let events = cache_guard.get_events_since(from_version);
+                    let current_version = cache_guard.resource_version;
+                    from_version = current_version;
+
+                    let response = WatchResponse::new(events, current_version);
+                    if sender.send(response).await.is_err() {
+                        // Client disconnected
+                        return;
+                    }
+                }
+            }
+
+            // Then loop waiting for notifications
+            loop {
+                // Wait for notification from shared Notify
+                notify.notified().await;
+
+                // Got notification, read latest data
+                let response = {
+                    let cache_guard = cache.read().await;
+                    let events = cache_guard.get_events_since(from_version);
+                    let current_version = cache_guard.resource_version;
+
+                    // Update from_version for next iteration
+                    from_version = current_version;
+
+                    WatchResponse::new(events, current_version)
+                };
+
+                // Send response to client
+                if sender.send(response).await.is_err() {
+                    // Client disconnected, exit loop
+                    break;
+                }
+            }
         });
     }
 
     /// Watch for changes starting from a specific version
     /// Returns a receiver that continuously receives WatchResponse updates
+    ///
+    /// This method will automatically start a watcher task that:
+    /// 1. First checks if client is behind and sends initial data
+    /// 2. Then loops waiting for notifications and sends updates
     pub fn watch(
-        &mut self,
+        cache: std::sync::Arc<tokio::sync::RwLock<Self>>,
         client_id: String,
         from_version: u64,
-    ) -> mpsc::UnboundedReceiver<WatchResponse<T>>
+    ) -> mpsc::Receiver<WatchResponse<T>>
     where
-        T: Clone,
+        T: Clone + Send + Sync + 'static,
     {
-        let (tx, rx) = mpsc::unbounded_channel();
+        // Use bounded channel for data to provide backpressure
+        let (data_tx, data_rx) = mpsc::channel(100);
 
-        // If client version is behind, send initial data immediately
-        if from_version < self.resource_version {
-            let events = self.get_events_since(from_version);
-            let response = WatchResponse::new(events, self.resource_version);
-            // Ignore send error - if it fails, the receiver is already dropped
-            let _ = tx.send(response);
-        }
-
-        // Register watcher for future updates
-        let pending_watch = PendingWatch {
-            client_id,
-            from_version,
-            sender: tx,
+        // Get the shared notify and register watcher
+        let notify = {
+            let mut cache_guard = cache.blocking_write();
+            let notify = cache_guard.get_notify();
+            let pending_watch = PendingWatch {
+                client_id: client_id.clone(),
+                from_version,
+                sender: data_tx.clone(),
+            };
+            cache_guard.watchers.push(pending_watch);
+            notify
         };
-        self.watchers.push(pending_watch);
 
-        rx
+        // Start the watcher task with shared notify
+        Self::start_watcher_task(cache, notify, data_tx, client_id, from_version);
+
+        data_rx
     }
 
     /// Add event to the circular queue
@@ -253,9 +312,9 @@ impl<T: Versionable> WatcherCache<T> {
             }
         }
 
-        // Notify all pending watchers with the new event (non-blocking)
+        // Notify all pending watchers (non-blocking)
         if !self.watchers.is_empty() {
-            self.notify_watchers(event);
+            self.notify_watchers();
         }
     }
 }
