@@ -3,162 +3,9 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
-/// List data response structure
-#[derive(Debug, Clone)]
-pub struct ListData<T> {
-    pub data: Vec<T>,
-    pub resource_version: u64,
-}
-
-impl<T> ListData<T> {
-    pub fn new(data: Vec<T>, resource_version: u64) -> Self {
-        Self {
-            data,
-            resource_version,
-        }
-    }
-}
-
-/// Watch response structure containing events and current version
-#[derive(Debug, Clone)]
-pub struct WatchResponse<T> {
-    pub events: Vec<WatcherEvent<T>>,
-    pub resource_version: u64,
-}
-
-impl<T> WatchResponse<T> {
-    pub fn new(events: Vec<WatcherEvent<T>>, resource_version: u64) -> Self {
-        Self {
-            events,
-            resource_version,
-        }
-    }
-}
-
-/// Pending watch request waiting for notification
-#[derive(Clone)]
-pub struct PendingWatch<T> {
-    pub client_id: String,
-    pub client_name: String,
-    pub from_version: u64,
-    pub sender: mpsc::Sender<WatchResponse<T>>,
-    pub watch_start_time: SystemTime,
-    pub send_count: Arc<std::sync::atomic::AtomicU64>,
-    pub last_send_time: Arc<std::sync::RwLock<Option<SystemTime>>>,
-}
-
-/// Trait for resources that have a version
-pub trait Versionable {
-    /// Get the resource version
-    fn get_version(&self) -> u64;
-}
-
-/// Trait for handling resource events
-pub trait EventDispatch<T> {
-    /// Initialize by adding a resource
-    fn init_add(&mut self, resource: T);
-
-    /// Set the dispatcher as ready
-    fn set_ready(&mut self);
-
-    /// Handle add event
-    fn event_add(&mut self, resource: T);
-
-    /// Handle update event
-    fn event_update(&mut self, resource: T);
-
-    /// Handle delete event
-    fn event_del(&mut self, resource: T);
-}
-
-#[derive(Debug, Clone)]
-pub enum EventType {
-    Update,
-    Delete,
-    Add,
-}
-
-#[derive(Debug, Clone)]
-pub struct WatcherEvent<T> {
-    pub event_type: EventType,
-    pub resource_version: u64,
-    pub data: T,
-}
-
-/// Event storage - circular queue
-pub struct CacheStore<T> {
-    capacity: u32,
-    cache: Vec<WatcherEvent<T>>,
-    start_index: u32,
-    end_index: u32,
-    resource_version: u64,
-}
-
-impl<T: Clone> CacheStore<T> {
-    pub fn new(capacity: u32) -> Self {
-        Self {
-            capacity,
-            cache: Vec::with_capacity(capacity as usize),
-            start_index: 0,
-            end_index: 0,
-            resource_version: 0,
-        }
-    }
-
-    /// Add new event to circular queue
-    pub fn mut_update(&mut self, event: WatcherEvent<T>) {
-        self.resource_version = event.resource_version;
-
-        if (self.cache.len() as u32) < self.capacity {
-            self.cache.push(event);
-            self.end_index = self.cache.len() as u32;
-        } else {
-            let index = (self.end_index % self.capacity) as usize;
-            self.cache[index] = event;
-            self.end_index = self.end_index.wrapping_add(1);
-
-            if self.end_index.wrapping_sub(self.start_index) > self.capacity {
-                self.start_index = self.end_index.wrapping_sub(self.capacity);
-            }
-        }
-    }
-
-    /// Get events starting from specified version
-    pub fn get_events_from_resource_version(
-        &self,
-        from_version: u64,
-    ) -> (Vec<WatcherEvent<T>>, u64) {
-        let mut events = Vec::new();
-
-        let count = if (self.cache.len() as u32) < self.capacity {
-            self.cache.len() as u32
-        } else {
-            self.capacity
-        };
-
-        for i in 0..count {
-            let index = ((self.start_index + i) % self.capacity) as usize;
-            if index < self.cache.len() {
-                let event = &self.cache[index];
-                if event.resource_version > from_version {
-                    events.push(event.clone());
-                }
-            }
-        }
-
-        (events, self.resource_version)
-    }
-
-    /// Get current resource version
-    pub fn get_current_version(&self) -> u64 {
-        self.resource_version
-    }
-
-    /// Set current resource version
-    pub fn set_current_version(&mut self, version: u64) {
-        self.resource_version = version;
-    }
-}
+use super::store::CacheStore;
+use super::traits::{EventDispatch, Versionable};
+use super::types::{EventType, ListData, PendingWatch, WatchResponse, WatcherEvent};
 
 pub struct WatcherCache<T> {
     // data
@@ -207,7 +54,7 @@ impl<T: Versionable> WatcherCache<T> {
     /// This is typically called by clients to get the full snapshot of data
     pub fn list(&self) -> ListData<&T> {
         let data: Vec<&T> = self.data.values().collect();
-        let resource_version = self.store.blocking_read().resource_version;
+        let resource_version = self.store.blocking_read().get_current_version();
         ListData::new(data, resource_version)
     }
 
@@ -218,7 +65,7 @@ impl<T: Versionable> WatcherCache<T> {
         T: Clone,
     {
         let data: Vec<T> = self.data.values().cloned().collect();
-        let resource_version = self.store.blocking_read().resource_version;
+        let resource_version = self.store.blocking_read().get_current_version();
         ListData::new(data, resource_version)
     }
 
