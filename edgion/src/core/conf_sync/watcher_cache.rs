@@ -1,5 +1,23 @@
 use std::collections::HashMap;
 
+/// Watcher client information
+#[derive(Debug, Clone)]
+pub struct WatcherClient {
+    pub client_id: String,
+    pub client_name: String,
+    pub current_resource_version: u64,
+}
+
+impl WatcherClient {
+    pub fn new(client_id: String, client_name: String) -> Self {
+        Self {
+            client_id,
+            client_name,
+            current_resource_version: 0,
+        }
+    }
+}
+
 /// Trait for resources that have a version
 pub trait Versionable {
     /// Get the resource version
@@ -47,6 +65,9 @@ pub struct WatcherCache<T> {
     end_index: u32,
     resource_version: u64,
     ready: bool,
+
+    // watcher clients
+    clients: HashMap<String, WatcherClient>,
 }
 
 impl<T: Versionable> WatcherCache<T> {
@@ -59,11 +80,47 @@ impl<T: Versionable> WatcherCache<T> {
             resource_version: 0,
             ready: false,
             data: HashMap::new(),
+            clients: HashMap::new(),
         }
     }
 
     pub fn is_ready(&self) -> bool {
         self.ready
+    }
+
+    /// Add a new watcher client
+    pub fn add_client(&mut self, client: WatcherClient) {
+        self.clients.insert(client.client_id.clone(), client);
+    }
+
+    /// Remove a watcher client by client_id
+    pub fn remove_client(&mut self, client_id: &str) -> Option<WatcherClient> {
+        self.clients.remove(client_id)
+    }
+
+    /// Get a watcher client by client_id
+    pub fn get_client(&self, client_id: &str) -> Option<&WatcherClient> {
+        self.clients.get(client_id)
+    }
+
+    /// Get a mutable reference to a watcher client by client_id
+    pub fn get_client_mut(&mut self, client_id: &str) -> Option<&mut WatcherClient> {
+        self.clients.get_mut(client_id)
+    }
+
+    /// Get all clients
+    pub fn get_all_clients(&self) -> Vec<&WatcherClient> {
+        self.clients.values().collect()
+    }
+
+    /// Update client's current resource version
+    pub fn update_client_version(&mut self, client_id: &str, version: u64) -> bool {
+        if let Some(client) = self.clients.get_mut(client_id) {
+            client.current_resource_version = version;
+            true
+        } else {
+            false
+        }
     }
 
     /// Add event to the circular queue
