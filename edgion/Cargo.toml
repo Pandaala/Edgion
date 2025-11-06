@@ -55,6 +55,7 @@ once_cell.workspace = true
 parking_lot.workspace = true
 uuid.workspace = true
 arc-swap.workspace = true
+regex.workspace = true
 
 # Pingora
 pingora-core.workspace = true

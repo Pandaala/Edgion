@@ -19,7 +19,8 @@ impl<T> ListData<T> {
 }
 
 /// Event type enumeration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum EventType {
     Update,
     Delete,
@@ -27,8 +28,9 @@ pub enum EventType {
 }
 
 /// Watcher event structure
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct WatcherEvent<T> {
+    #[serde(rename = "type")]
     pub event_type: EventType,
     pub resource_version: u64,
     pub data: T,

@@ -5,20 +5,10 @@ use tokio::sync::mpsc;
 
 use crate::core::conf_sync::traits::EventDispatcher;
 use crate::core::conf_sync::watcher_cache::{EventDispatch, ListData, WatchResponse, WatcherCache};
-use crate::types::{EdgionTls, Gateway, GatewayClass, GatewayClassSpec, HTTPRoute};
+use crate::types::{EdgionTls, Gateway, GatewayClass, GatewayClassSpec, HTTPRoute, ResourceKind};
+use anyhow::Result;
 
 pub type GatewayClassKey = String;
-
-#[derive(Debug, Clone, Copy)]
-pub enum ResourceType {
-    GatewayClass,
-    Gateway,
-    HTTPRoute,
-    Service,
-    EndpointSlice,
-    EdgionTls,
-    Secret,
-}
 
 pub struct WatcherMgr {
     gateway_classes: HashMap<GatewayClassKey, WatcherCache<GatewayClass>>,
@@ -29,6 +19,16 @@ pub struct WatcherMgr {
     endpoint_slices: HashMap<GatewayClassKey, WatcherCache<EndpointSlice>>,
     edgion_tls: HashMap<GatewayClassKey, WatcherCache<EdgionTls>>,
     secrets: HashMap<GatewayClassKey, WatcherCache<Secret>>,
+}
+
+pub struct ListDataSimple {
+    pub data: String,
+    pub resource_version: u64,
+}
+
+pub struct EventDataSimple {
+    pub data: String,
+    pub resource_version: u64,
 }
 
 impl WatcherMgr {
@@ -43,6 +43,284 @@ impl WatcherMgr {
             edgion_tls: HashMap::new(),
             secrets: HashMap::new(),
         }
+    }
+
+    pub fn list(
+        &self,
+        key: &GatewayClassKey,
+        kind: &ResourceKind,
+    ) -> Result<ListDataSimple, String> {
+        let (data_json, resource_version) = match kind {
+            ResourceKind::GatewayClass => {
+                let list_data = self
+                    .list_gateway_classes(key)
+                    .ok_or_else(|| format!("GatewayClass cache not found for key: {}", key))?;
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize GatewayClass data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::GatewayClassSpec => {
+                let list_data = self
+                    .list_gateway_class_specs(key)
+                    .ok_or_else(|| format!("GatewayClassSpec cache not found for key: {}", key))?;
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize GatewayClassSpec data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::Gateway => {
+                let list_data = self
+                    .list_gateways(key)
+                    .ok_or_else(|| format!("Gateway cache not found for key: {}", key))?;
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize Gateway data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::HTTPRoute => {
+                let list_data = self
+                    .list_routes(key)
+                    .ok_or_else(|| format!("HTTPRoute cache not found for key: {}", key))?;
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize HTTPRoute data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::Service => {
+                let list_data = self
+                    .list_services(key)
+                    .ok_or_else(|| format!("Service cache not found for key: {}", key))?;
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize Service data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::EndpointSlice => {
+                let list_data = self
+                    .list_endpoint_slices(key)
+                    .ok_or_else(|| format!("EndpointSlice cache not found for key: {}", key))?;
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize EndpointSlice data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::EdgionTls => {
+                let list_data = self
+                    .list_edgion_tls(key)
+                    .ok_or_else(|| format!("EdgionTls cache not found for key: {}", key))?;
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize EdgionTls data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::Secret => {
+                let list_data = self
+                    .list_secrets(key)
+                    .ok_or_else(|| format!("Secret cache not found for key: {}", key))?;
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize Secret data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+        };
+
+        Ok(ListDataSimple {
+            data: data_json,
+            resource_version,
+        })
+    }
+
+    pub fn watch(
+        &mut self,
+        key: &GatewayClassKey,
+        kind: &ResourceKind,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> Result<mpsc::Receiver<EventDataSimple>, String> {
+        let (tx, rx) = mpsc::channel(100);
+
+        match kind {
+            ResourceKind::GatewayClass => {
+                let mut receiver = self
+                    .watch_gateway_classes(key, client_id, client_name, from_version)
+                    .ok_or_else(|| format!("GatewayClass cache not found for key: {}", key))?;
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let events_json = match serde_json::to_string(&response.events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize GatewayClass events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version: response.resource_version,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::GatewayClassSpec => {
+                let mut receiver = self
+                    .watch_gateway_class_specs(key, client_id, client_name, from_version)
+                    .ok_or_else(|| format!("GatewayClassSpec cache not found for key: {}", key))?;
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let events_json = match serde_json::to_string(&response.events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize GatewayClassSpec events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version: response.resource_version,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::Gateway => {
+                let mut receiver = self
+                    .watch_gateways(key, client_id, client_name, from_version)
+                    .ok_or_else(|| format!("Gateway cache not found for key: {}", key))?;
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let events_json = match serde_json::to_string(&response.events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize Gateway events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version: response.resource_version,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::HTTPRoute => {
+                let mut receiver = self
+                    .watch_routes(key, client_id, client_name, from_version)
+                    .ok_or_else(|| format!("HTTPRoute cache not found for key: {}", key))?;
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let events_json = match serde_json::to_string(&response.events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize HTTPRoute events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version: response.resource_version,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::Service => {
+                let mut receiver = self
+                    .watch_services(key, client_id, client_name, from_version)
+                    .ok_or_else(|| format!("Service cache not found for key: {}", key))?;
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let events_json = match serde_json::to_string(&response.events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize Service events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version: response.resource_version,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::EndpointSlice => {
+                let mut receiver = self
+                    .watch_endpoint_slices(key, client_id, client_name, from_version)
+                    .ok_or_else(|| format!("EndpointSlice cache not found for key: {}", key))?;
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let events_json = match serde_json::to_string(&response.events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize EndpointSlice events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version: response.resource_version,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::EdgionTls => {
+                let mut receiver = self
+                    .watch_edgion_tls(key, client_id, client_name, from_version)
+                    .ok_or_else(|| format!("EdgionTls cache not found for key: {}", key))?;
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let events_json = match serde_json::to_string(&response.events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize EdgionTls events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version: response.resource_version,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::Secret => {
+                let mut receiver = self
+                    .watch_secrets(key, client_id, client_name, from_version)
+                    .ok_or_else(|| format!("Secret cache not found for key: {}", key))?;
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let events_json = match serde_json::to_string(&response.events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize Secret events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version: response.resource_version,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        }
+
+        Ok(rx)
     }
 
     /// List gateway classes
@@ -197,9 +475,19 @@ impl Default for WatcherMgr {
 }
 
 impl EventDispatcher for WatcherMgr {
-    fn init_add(&mut self, resource_type: &str, data: String, resource_version: Option<u64>) {
+    fn init_add(
+        &mut self,
+        resource_type: Option<ResourceKind>,
+        data: String,
+        resource_version: Option<u64>,
+    ) {
+        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
+        let Some(resource_type) = resource_type else {
+            return;
+        };
+
         match resource_type {
-            "GatewayClass" => {
+            ResourceKind::GatewayClass => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
                     if let Some(key) = resource.metadata.name.clone() {
                         let cache = self
@@ -210,7 +498,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "GatewayClassSpec" => {
+            ResourceKind::GatewayClassSpec => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
                     let key = "default".to_string();
                     let cache = self
@@ -220,7 +508,7 @@ impl EventDispatcher for WatcherMgr {
                     cache.init_add(resource, resource_version);
                 }
             }
-            "Gateway" => {
+            ResourceKind::Gateway => {
                 if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
                     let key = resource.spec.gateway_class_name.clone();
                     let cache = self
@@ -230,7 +518,7 @@ impl EventDispatcher for WatcherMgr {
                     cache.init_add(resource, resource_version);
                 }
             }
-            "HTTPRoute" => {
+            ResourceKind::HTTPRoute => {
                 if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
                     if let Some(key) = resource
                         .spec
@@ -247,7 +535,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "Service" => {
+            ResourceKind::Service => {
                 if let Ok(resource) = serde_json::from_str::<Service>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -264,7 +552,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "EndpointSlice" => {
+            ResourceKind::EndpointSlice => {
                 if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -281,7 +569,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "EdgionTls" => {
+            ResourceKind::EdgionTls => {
                 if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -298,7 +586,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "Secret" => {
+            ResourceKind::Secret => {
                 if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -346,9 +634,19 @@ impl EventDispatcher for WatcherMgr {
         }
     }
 
-    fn event_add(&mut self, resource_type: &str, data: String, resource_version: Option<u64>) {
+    fn event_add(
+        &mut self,
+        resource_type: Option<ResourceKind>,
+        data: String,
+        resource_version: Option<u64>,
+    ) {
+        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
+        let Some(resource_type) = resource_type else {
+            return;
+        };
+
         match resource_type {
-            "GatewayClass" => {
+            ResourceKind::GatewayClass => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
                     if let Some(key) = resource.metadata.name.clone() {
                         let cache = self
@@ -359,7 +657,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "GatewayClassSpec" => {
+            ResourceKind::GatewayClassSpec => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
                     let key = "default".to_string();
                     let cache = self
@@ -369,7 +667,7 @@ impl EventDispatcher for WatcherMgr {
                     cache.event_add(resource, resource_version);
                 }
             }
-            "Gateway" => {
+            ResourceKind::Gateway => {
                 if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
                     let key = resource.spec.gateway_class_name.clone();
                     let cache = self
@@ -379,7 +677,7 @@ impl EventDispatcher for WatcherMgr {
                     cache.event_add(resource, resource_version);
                 }
             }
-            "HTTPRoute" => {
+            ResourceKind::HTTPRoute => {
                 if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
                     if let Some(key) = resource
                         .spec
@@ -396,7 +694,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "Service" => {
+            ResourceKind::Service => {
                 if let Ok(resource) = serde_json::from_str::<Service>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -413,7 +711,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "EndpointSlice" => {
+            ResourceKind::EndpointSlice => {
                 if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -430,7 +728,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "EdgionTls" => {
+            ResourceKind::EdgionTls => {
                 if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -447,7 +745,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "Secret" => {
+            ResourceKind::Secret => {
                 if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -468,9 +766,19 @@ impl EventDispatcher for WatcherMgr {
         }
     }
 
-    fn event_update(&mut self, resource_type: &str, data: String, resource_version: Option<u64>) {
+    fn event_update(
+        &mut self,
+        resource_type: Option<ResourceKind>,
+        data: String,
+        resource_version: Option<u64>,
+    ) {
+        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
+        let Some(resource_type) = resource_type else {
+            return;
+        };
+
         match resource_type {
-            "GatewayClass" => {
+            ResourceKind::GatewayClass => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
                     if let Some(key) = resource.metadata.name.clone() {
                         if let Some(cache) = self.gateway_classes.get_mut(&key) {
@@ -479,7 +787,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "GatewayClassSpec" => {
+            ResourceKind::GatewayClassSpec => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
                     let key = "default".to_string();
                     if let Some(cache) = self.gateway_class_specs.get_mut(&key) {
@@ -487,7 +795,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "Gateway" => {
+            ResourceKind::Gateway => {
                 if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
                     let key = resource.spec.gateway_class_name.clone();
                     if let Some(cache) = self.gateways.get_mut(&key) {
@@ -495,7 +803,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "HTTPRoute" => {
+            ResourceKind::HTTPRoute => {
                 if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
                     if let Some(key) = resource
                         .spec
@@ -510,7 +818,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "Service" => {
+            ResourceKind::Service => {
                 if let Ok(resource) = serde_json::from_str::<Service>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -525,7 +833,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "EndpointSlice" => {
+            ResourceKind::EndpointSlice => {
                 if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -540,7 +848,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "EdgionTls" => {
+            ResourceKind::EdgionTls => {
                 if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -555,7 +863,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "Secret" => {
+            ResourceKind::Secret => {
                 if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -574,9 +882,19 @@ impl EventDispatcher for WatcherMgr {
         }
     }
 
-    fn event_del(&mut self, resource_type: &str, data: String, resource_version: Option<u64>) {
+    fn event_del(
+        &mut self,
+        resource_type: Option<ResourceKind>,
+        data: String,
+        resource_version: Option<u64>,
+    ) {
+        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
+        let Some(resource_type) = resource_type else {
+            return;
+        };
+
         match resource_type {
-            "GatewayClass" => {
+            ResourceKind::GatewayClass => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
                     if let Some(key) = resource.metadata.name.clone() {
                         if let Some(cache) = self.gateway_classes.get_mut(&key) {
@@ -585,7 +903,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "GatewayClassSpec" => {
+            ResourceKind::GatewayClassSpec => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
                     let key = "default".to_string();
                     if let Some(cache) = self.gateway_class_specs.get_mut(&key) {
@@ -593,7 +911,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "Gateway" => {
+            ResourceKind::Gateway => {
                 if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
                     let key = resource.spec.gateway_class_name.clone();
                     if let Some(cache) = self.gateways.get_mut(&key) {
@@ -601,7 +919,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "HTTPRoute" => {
+            ResourceKind::HTTPRoute => {
                 if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
                     if let Some(key) = resource
                         .spec
@@ -616,7 +934,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "Service" => {
+            ResourceKind::Service => {
                 if let Ok(resource) = serde_json::from_str::<Service>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -631,7 +949,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "EndpointSlice" => {
+            ResourceKind::EndpointSlice => {
                 if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -646,7 +964,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "EdgionTls" => {
+            ResourceKind::EdgionTls => {
                 if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
@@ -661,7 +979,7 @@ impl EventDispatcher for WatcherMgr {
                     }
                 }
             }
-            "Secret" => {
+            ResourceKind::Secret => {
                 if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
                     if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
                         resource
