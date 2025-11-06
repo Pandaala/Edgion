@@ -1,7 +1,7 @@
 use super::types::{EventType, WatcherEvent};
 
 /// Event storage - circular queue
-pub struct CacheStore<T> {
+pub struct EventStore<T> {
     capacity: u32,
     cache: Vec<WatcherEvent<T>>,
     start_index: u32,
@@ -9,7 +9,7 @@ pub struct CacheStore<T> {
     resource_version: u64,
 }
 
-impl<T> CacheStore<T> {
+impl<T> EventStore<T> {
     /// Get current resource version
     pub fn get_current_version(&self) -> u64 {
         self.resource_version
@@ -21,7 +21,7 @@ impl<T> CacheStore<T> {
     }
 }
 
-impl<T: Clone> CacheStore<T> {
+impl<T: Clone> EventStore<T> {
     pub fn new(capacity: u32) -> Self {
         Self {
             capacity,

@@ -4,21 +4,21 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 use crate::core::conf_sync::traits::EventDispatcher;
-use crate::core::conf_sync::watcher_cache::{EventDispatch, ListData, WatchResponse, WatcherCache};
+use crate::core::conf_sync::center_cache::{EventDispatch, ListData, WatchResponse, CenterCache};
 use crate::types::{EdgionTls, Gateway, GatewayClass, GatewayClassSpec, HTTPRoute, ResourceKind};
 use anyhow::Result;
 
 pub type GatewayClassKey = String;
 
-pub struct WatcherMgr {
-    gateway_classes: HashMap<GatewayClassKey, WatcherCache<GatewayClass>>,
-    gateway_class_specs: HashMap<GatewayClassKey, WatcherCache<GatewayClassSpec>>,
-    gateways: HashMap<String, WatcherCache<Gateway>>,
-    routes: HashMap<GatewayClassKey, WatcherCache<HTTPRoute>>,
-    services: HashMap<GatewayClassKey, WatcherCache<Service>>,
-    endpoint_slices: HashMap<GatewayClassKey, WatcherCache<EndpointSlice>>,
-    edgion_tls: HashMap<GatewayClassKey, WatcherCache<EdgionTls>>,
-    secrets: HashMap<GatewayClassKey, WatcherCache<Secret>>,
+pub struct ConfigCenter {
+    gateway_classes: HashMap<GatewayClassKey, CenterCache<GatewayClass>>,
+    gateway_class_specs: HashMap<GatewayClassKey, CenterCache<GatewayClassSpec>>,
+    gateways: HashMap<String, CenterCache<Gateway>>,
+    routes: HashMap<GatewayClassKey, CenterCache<HTTPRoute>>,
+    services: HashMap<GatewayClassKey, CenterCache<Service>>,
+    endpoint_slices: HashMap<GatewayClassKey, CenterCache<EndpointSlice>>,
+    edgion_tls: HashMap<GatewayClassKey, CenterCache<EdgionTls>>,
+    secrets: HashMap<GatewayClassKey, CenterCache<Secret>>,
 }
 
 pub struct ListDataSimple {
@@ -31,7 +31,7 @@ pub struct EventDataSimple {
     pub resource_version: u64,
 }
 
-impl WatcherMgr {
+impl ConfigCenter {
     pub fn new() -> Self {
         Self {
             gateway_classes: HashMap::new(),
@@ -468,13 +468,13 @@ impl WatcherMgr {
     }
 }
 
-impl Default for WatcherMgr {
+impl Default for ConfigCenter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl EventDispatcher for WatcherMgr {
+impl EventDispatcher for ConfigCenter {
     fn init_add(
         &mut self,
         resource_type: Option<ResourceKind>,
@@ -493,7 +493,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .gateway_classes
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.init_add(resource, resource_version);
                     }
                 }
@@ -504,7 +504,7 @@ impl EventDispatcher for WatcherMgr {
                     let cache = self
                         .gateway_class_specs
                         .entry(key)
-                        .or_insert_with(|| WatcherCache::new(1000));
+                        .or_insert_with(|| CenterCache::new(1000));
                     cache.init_add(resource, resource_version);
                 }
             }
@@ -514,7 +514,7 @@ impl EventDispatcher for WatcherMgr {
                     let cache = self
                         .gateways
                         .entry(key)
-                        .or_insert_with(|| WatcherCache::new(1000));
+                        .or_insert_with(|| CenterCache::new(1000));
                     cache.init_add(resource, resource_version);
                 }
             }
@@ -530,7 +530,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .routes
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.init_add(resource, resource_version);
                     }
                 }
@@ -547,7 +547,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .services
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.init_add(resource, resource_version);
                     }
                 }
@@ -564,7 +564,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .endpoint_slices
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.init_add(resource, resource_version);
                     }
                 }
@@ -581,7 +581,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .edgion_tls
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.init_add(resource, resource_version);
                     }
                 }
@@ -598,7 +598,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .secrets
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.init_add(resource, resource_version);
                     }
                 }
@@ -652,7 +652,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .gateway_classes
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.event_add(resource, resource_version);
                     }
                 }
@@ -663,7 +663,7 @@ impl EventDispatcher for WatcherMgr {
                     let cache = self
                         .gateway_class_specs
                         .entry(key)
-                        .or_insert_with(|| WatcherCache::new(1000));
+                        .or_insert_with(|| CenterCache::new(1000));
                     cache.event_add(resource, resource_version);
                 }
             }
@@ -673,7 +673,7 @@ impl EventDispatcher for WatcherMgr {
                     let cache = self
                         .gateways
                         .entry(key)
-                        .or_insert_with(|| WatcherCache::new(1000));
+                        .or_insert_with(|| CenterCache::new(1000));
                     cache.event_add(resource, resource_version);
                 }
             }
@@ -689,7 +689,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .routes
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.event_add(resource, resource_version);
                     }
                 }
@@ -706,7 +706,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .services
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.event_add(resource, resource_version);
                     }
                 }
@@ -723,7 +723,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .endpoint_slices
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.event_add(resource, resource_version);
                     }
                 }
@@ -740,7 +740,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .edgion_tls
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.event_add(resource, resource_version);
                     }
                 }
@@ -757,7 +757,7 @@ impl EventDispatcher for WatcherMgr {
                         let cache = self
                             .secrets
                             .entry(key)
-                            .or_insert_with(|| WatcherCache::new(1000));
+                            .or_insert_with(|| CenterCache::new(1000));
                         cache.event_add(resource, resource_version);
                     }
                 }

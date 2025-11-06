@@ -6,18 +6,18 @@ use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
     ListRequest, ListResponse, ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
 };
-use crate::core::conf_sync::watcher_mgr::WatcherMgr;
+use crate::core::conf_sync::config_center::ConfigCenter;
 use crate::types::ResourceKind;
 
 /// Server wrapper for WatcherMgr
 pub struct ConfigSyncServer {
-    watcher_mgr: Arc<Mutex<WatcherMgr>>,
+    config_center: Arc<Mutex<ConfigCenter>>,
 }
 
 impl ConfigSyncServer {
-    pub fn new(watcher_mgr: WatcherMgr) -> Self {
+    pub fn new(watcher_mgr: ConfigCenter) -> Self {
         Self {
-            watcher_mgr: Arc::new(Mutex::new(watcher_mgr)),
+            config_center: Arc::new(Mutex::new(watcher_mgr)),
         }
     }
 
@@ -69,7 +69,7 @@ impl ConfigSync for ConfigSyncServer {
             .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
         // Get WatcherMgr and call list
-        let watcher_mgr = self.watcher_mgr.lock().await;
+        let watcher_mgr = self.config_center.lock().await;
         let list_data = watcher_mgr
             .list(&req.key, &resource_kind)
             .map_err(|e| Status::internal(format!("Failed to list resources: {}", e)))?;
@@ -95,7 +95,7 @@ impl ConfigSync for ConfigSyncServer {
             .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
         // Get WatcherMgr and call watch
-        let mut watcher_mgr = self.watcher_mgr.lock().await;
+        let mut watcher_mgr = self.config_center.lock().await;
         let receiver = watcher_mgr
             .watch(
                 &req.key,

@@ -1,7 +1,9 @@
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tonic::transport::Channel;
-
+use crate::core::conf_sync::config_hub::ConfigHub;
+use crate::core::conf_sync::ConfigCenter;
 use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, ListRequest, ListResponse,
     ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
@@ -11,6 +13,7 @@ use crate::types::ResourceKind;
 /// gRPC client for ConfigSync service
 pub struct ConfigSyncClient {
     client: ConfigSyncClientService<Channel>,
+    config_center: Arc<Mutex<ConfigHub>>,
 }
 
 impl ConfigSyncClient {

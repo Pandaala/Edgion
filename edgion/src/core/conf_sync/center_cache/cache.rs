@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
-use super::store::CacheStore;
+use super::store::EventStore;
 use super::traits::{EventDispatch, Versionable};
 use super::types::{EventType, ListData, WatchClient, WatchResponse, WatcherEvent};
 
-pub struct WatcherCache<T> {
+pub struct CenterCache<T> {
     // data
     data: HashMap<String, T>,
 
@@ -15,7 +15,7 @@ pub struct WatcherCache<T> {
     ready: bool,
 
     // Event storage
-    store: Arc<tokio::sync::RwLock<CacheStore<T>>>,
+    store: Arc<tokio::sync::RwLock<EventStore<T>>>,
 
     // pending watch requests
     watchers: Vec<WatchClient<T>>,
@@ -24,7 +24,7 @@ pub struct WatcherCache<T> {
     notify: Arc<Notify>,
 }
 
-impl<T: Versionable> WatcherCache<T> {
+impl<T: Versionable> CenterCache<T> {
     pub fn new(capacity: u32) -> Self
     where
         T: Clone,
@@ -32,7 +32,7 @@ impl<T: Versionable> WatcherCache<T> {
         Self {
             data: HashMap::new(),
             ready: false,
-            store: Arc::new(tokio::sync::RwLock::new(CacheStore::new(capacity))),
+            store: Arc::new(tokio::sync::RwLock::new(EventStore::new(capacity))),
             watchers: Vec::new(),
             notify: Arc::new(Notify::new()),
         }
@@ -44,7 +44,7 @@ impl<T: Versionable> WatcherCache<T> {
     }
 
     /// Get a clone of the store for watchers
-    pub fn get_store(&self) -> Arc<tokio::sync::RwLock<CacheStore<T>>> {
+    pub fn get_store(&self) -> Arc<tokio::sync::RwLock<EventStore<T>>> {
         self.store.clone()
     }
 
@@ -81,7 +81,7 @@ impl<T: Versionable> WatcherCache<T> {
     /// Start a watcher task that listens for notifications and sends data
     /// Only needs the store to access data
     pub fn start_watcher_task(
-        store: Arc<tokio::sync::RwLock<CacheStore<T>>>,
+        store: Arc<tokio::sync::RwLock<EventStore<T>>>,
         notify: Arc<Notify>,
         watcher: WatchClient<T>,
     ) where
@@ -193,7 +193,7 @@ impl<T: Versionable> WatcherCache<T> {
     }
 }
 
-impl<T: Versionable + Clone> EventDispatch<T> for WatcherCache<T> {
+impl<T: Versionable + Clone> EventDispatch<T> for CenterCache<T> {
     fn init_add(&mut self, resource: T, resource_version: Option<u64>) {
         let version = resource_version.unwrap_or_else(|| resource.get_version());
         self.data.insert(version.to_string(), resource);
