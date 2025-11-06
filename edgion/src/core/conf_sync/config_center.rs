@@ -3,8 +3,8 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+use crate::core::conf_sync::center_cache::{CenterCache, EventDispatch, ListData, WatchResponse};
 use crate::core::conf_sync::traits::EventDispatcher;
-use crate::core::conf_sync::center_cache::{EventDispatch, ListData, WatchResponse, CenterCache};
 use crate::types::{EdgionTls, Gateway, GatewayClass, GatewayClassSpec, HTTPRoute, ResourceKind};
 use anyhow::Result;
 
@@ -510,12 +510,20 @@ impl ConfigCenter {
     /// Print all configuration for a specific gateway class key
     pub async fn print_config(&self, key: &GatewayClassKey) {
         println!("=== ConfigCenter Config for GatewayClassKey: {} ===", key);
-        
+
         // Gateway Classes
         if let Some(list_data) = self.list_gateway_classes(key).await {
-            println!("GatewayClasses (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            println!(
+                "GatewayClasses (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
             for (idx, gc) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, serde_json::to_string(gc).unwrap_or_else(|_| "serialization error".to_string()));
+                println!(
+                    "  [{}] {}",
+                    idx,
+                    serde_json::to_string(gc).unwrap_or_else(|_| "serialization error".to_string())
+                );
             }
         } else {
             println!("GatewayClasses: not found");
@@ -523,9 +531,18 @@ impl ConfigCenter {
 
         // Gateway Class Specs
         if let Some(list_data) = self.list_gateway_class_specs(key).await {
-            println!("GatewayClassSpecs (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            println!(
+                "GatewayClassSpecs (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
             for (idx, spec) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, serde_json::to_string(spec).unwrap_or_else(|_| "serialization error".to_string()));
+                println!(
+                    "  [{}] {}",
+                    idx,
+                    serde_json::to_string(spec)
+                        .unwrap_or_else(|_| "serialization error".to_string())
+                );
             }
         } else {
             println!("GatewayClassSpecs: not found");
@@ -533,9 +550,17 @@ impl ConfigCenter {
 
         // Gateways
         if let Some(list_data) = self.list_gateways(key).await {
-            println!("Gateways (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            println!(
+                "Gateways (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
             for (idx, gw) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, serde_json::to_string(gw).unwrap_or_else(|_| "serialization error".to_string()));
+                println!(
+                    "  [{}] {}",
+                    idx,
+                    serde_json::to_string(gw).unwrap_or_else(|_| "serialization error".to_string())
+                );
             }
         } else {
             println!("Gateways: not found");
@@ -543,9 +568,18 @@ impl ConfigCenter {
 
         // HTTP Routes
         if let Some(list_data) = self.list_routes(key).await {
-            println!("HTTPRoutes (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            println!(
+                "HTTPRoutes (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
             for (idx, route) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, serde_json::to_string(route).unwrap_or_else(|_| "serialization error".to_string()));
+                println!(
+                    "  [{}] {}",
+                    idx,
+                    serde_json::to_string(route)
+                        .unwrap_or_else(|_| "serialization error".to_string())
+                );
             }
         } else {
             println!("HTTPRoutes: not found");
@@ -553,9 +587,18 @@ impl ConfigCenter {
 
         // Services
         if let Some(list_data) = self.list_services(key).await {
-            println!("Services (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            println!(
+                "Services (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
             for (idx, svc) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, serde_json::to_string(svc).unwrap_or_else(|_| "serialization error".to_string()));
+                println!(
+                    "  [{}] {}",
+                    idx,
+                    serde_json::to_string(svc)
+                        .unwrap_or_else(|_| "serialization error".to_string())
+                );
             }
         } else {
             println!("Services: not found");
@@ -563,9 +606,17 @@ impl ConfigCenter {
 
         // Endpoint Slices
         if let Some(list_data) = self.list_endpoint_slices(key).await {
-            println!("EndpointSlices (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            println!(
+                "EndpointSlices (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
             for (idx, es) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, serde_json::to_string(es).unwrap_or_else(|_| "serialization error".to_string()));
+                println!(
+                    "  [{}] {}",
+                    idx,
+                    serde_json::to_string(es).unwrap_or_else(|_| "serialization error".to_string())
+                );
             }
         } else {
             println!("EndpointSlices: not found");
@@ -573,9 +624,18 @@ impl ConfigCenter {
 
         // Edgion TLS
         if let Some(list_data) = self.list_edgion_tls(key).await {
-            println!("EdgionTls (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            println!(
+                "EdgionTls (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
             for (idx, tls) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, serde_json::to_string(tls).unwrap_or_else(|_| "serialization error".to_string()));
+                println!(
+                    "  [{}] {}",
+                    idx,
+                    serde_json::to_string(tls)
+                        .unwrap_or_else(|_| "serialization error".to_string())
+                );
             }
         } else {
             println!("EdgionTls: not found");
@@ -583,9 +643,18 @@ impl ConfigCenter {
 
         // Secrets
         if let Some(list_data) = self.list_secrets(key).await {
-            println!("Secrets (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
+            println!(
+                "Secrets (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
             for (idx, secret) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, serde_json::to_string(secret).unwrap_or_else(|_| "serialization error".to_string()));
+                println!(
+                    "  [{}] {}",
+                    idx,
+                    serde_json::to_string(secret)
+                        .unwrap_or_else(|_| "serialization error".to_string())
+                );
             }
         } else {
             println!("Secrets: not found");
