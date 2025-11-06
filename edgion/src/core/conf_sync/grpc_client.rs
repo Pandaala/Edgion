@@ -1,31 +1,46 @@
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
-use tonic::transport::Channel;
 use crate::core::conf_sync::config_hub::ConfigHub;
-use crate::core::conf_sync::ConfigCenter;
 use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, ListRequest, ListResponse,
     ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
 };
+use crate::core::conf_sync::traits::EventDispatcher;
 use crate::types::ResourceKind;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{mpsc, Mutex};
+use tonic::transport::Channel;
+use uuid::Uuid;
 
 /// gRPC client for ConfigSync service
 pub struct ConfigSyncClient {
     client: ConfigSyncClientService<Channel>,
-    config_center: Arc<Mutex<ConfigHub>>,
+    config_hub: Arc<Mutex<ConfigHub>>,
+    client_id: String,
+    client_name: String,
 }
 
 impl ConfigSyncClient {
     /// Create a new ConfigSync client connected to the given address
-    pub async fn connect(addr: String) -> Result<Self, tonic::transport::Error> {
+    pub async fn connect(
+        addr: String,
+        gateway_class_key: String,
+    ) -> Result<Self, tonic::transport::Error> {
         let client = ConfigSyncClientService::connect(addr).await?;
-        Ok(Self { client })
+        let config_hub = Arc::new(Mutex::new(ConfigHub::new(gateway_class_key)));
+        let client_id = Uuid::new_v4().to_string();
+        let client_name = "config-sync-client".to_string();
+        Ok(Self {
+            client,
+            config_hub,
+            client_id,
+            client_name,
+        })
     }
 
     /// Create a new ConfigSync client with custom timeout
     pub async fn connect_with_timeout(
         addr: String,
+        gateway_class_key: String,
         timeout: Duration,
     ) -> Result<Self, tonic::transport::Error> {
         let endpoint = tonic::transport::Endpoint::from_shared(addr)?
@@ -33,7 +48,184 @@ impl ConfigSyncClient {
             .connect_timeout(timeout);
         let channel = endpoint.connect().await?;
         let client = ConfigSyncClientService::new(channel);
-        Ok(Self { client })
+        let config_hub = Arc::new(Mutex::new(ConfigHub::new(gateway_class_key)));
+        let client_id = Uuid::new_v4().to_string();
+        let client_name = "config-sync-client".to_string();
+        Ok(Self {
+            client,
+            config_hub,
+            client_id,
+            client_name,
+        })
+    }
+
+    /// Get a reference to the ConfigHub
+    pub fn get_config_hub(&self) -> Arc<Mutex<ConfigHub>> {
+        self.config_hub.clone()
+    }
+
+    /// Sync all resources of a specific kind from server
+    pub async fn sync_resource(
+        &mut self,
+        key: String,
+        kind: ResourceKind,
+    ) -> Result<(), tonic::Status> {
+        let list_response = self.list(key.clone(), kind).await?;
+
+        // Parse the JSON data - list returns an array of resources
+        let resources: Vec<serde_json::Value> =
+            serde_json::from_str(&list_response.data).map_err(|e| {
+                tonic::Status::internal(format!("Failed to parse list response: {}", e))
+            })?;
+
+        let mut hub = self.config_hub.lock().await;
+        for resource in resources {
+            // Each resource in the list should be added/updated
+            let data_str = serde_json::to_string(&resource).map_err(|e| {
+                tonic::Status::internal(format!("Failed to serialize resource: {}", e))
+            })?;
+            hub.init_add(Some(kind), data_str, Some(list_response.resource_version));
+        }
+
+        Ok(())
+    }
+
+    /// Start watching a specific resource kind and automatically sync to ConfigHub
+    pub async fn start_watch_sync(
+        &mut self,
+        key: String,
+        kind: ResourceKind,
+    ) -> Result<(), tonic::Status> {
+        let hub = self.config_hub.lock().await;
+        let from_version = match kind {
+            ResourceKind::GatewayClass => hub.list_gateway_classes().resource_version,
+            ResourceKind::GatewayClassSpec => hub.list_gateway_class_specs().resource_version,
+            ResourceKind::Gateway => hub.list_gateways().resource_version,
+            ResourceKind::HTTPRoute => hub.list_routes().resource_version,
+            ResourceKind::Service => hub.list_services().resource_version,
+            ResourceKind::EndpointSlice => hub.list_endpoint_slices().resource_version,
+            ResourceKind::EdgionTls => hub.list_edgion_tls().resource_version,
+            ResourceKind::Secret => hub.list_secrets().resource_version,
+        };
+        drop(hub);
+
+        let mut receiver = self
+            .watch(
+                key.clone(),
+                kind,
+                self.client_id.clone(),
+                self.client_name.clone(),
+                from_version,
+            )
+            .await?;
+
+        let hub_clone = self.config_hub.clone();
+        let kind_clone = kind;
+
+        tokio::spawn(async move {
+            while let Some(watch_response) = receiver.recv().await {
+                // Parse the events from the watch response
+                // Watch response contains a JSON array of events with type, data, and resource_version
+                let events: Vec<serde_json::Value> =
+                    match serde_json::from_str(&watch_response.data) {
+                        Ok(events) => events,
+                        Err(e) => {
+                            eprintln!("Failed to parse watch response events: {}", e);
+                            continue;
+                        }
+                    };
+
+                let mut hub = hub_clone.lock().await;
+                for event in events {
+                    if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                        let data_str = match serde_json::to_string(
+                            &event.get("data").unwrap_or(&serde_json::Value::Null),
+                        ) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                eprintln!("Failed to serialize event data: {}", e);
+                                continue;
+                            }
+                        };
+                        let resource_version = event
+                            .get("resource_version")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(watch_response.resource_version);
+
+                        match event_type {
+                            "add" => {
+                                hub.event_add(Some(kind_clone), data_str, Some(resource_version));
+                            }
+                            "update" => {
+                                hub.event_update(
+                                    Some(kind_clone),
+                                    data_str,
+                                    Some(resource_version),
+                                );
+                            }
+                            "delete" => {
+                                hub.event_del(Some(kind_clone), data_str, Some(resource_version));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Sync all resource types from server
+    pub async fn sync_all(&mut self) -> Result<(), tonic::Status> {
+        let hub = self.config_hub.lock().await;
+        let key = hub.get_gateway_class_key().clone();
+        drop(hub);
+
+        let resource_kinds = vec![
+            ResourceKind::GatewayClass,
+            ResourceKind::GatewayClassSpec,
+            ResourceKind::Gateway,
+            ResourceKind::HTTPRoute,
+            ResourceKind::Service,
+            ResourceKind::EndpointSlice,
+            ResourceKind::EdgionTls,
+            ResourceKind::Secret,
+        ];
+
+        for kind in resource_kinds {
+            if let Err(e) = self.sync_resource(key.clone(), kind).await {
+                eprintln!("Failed to sync {:?}: {}", kind, e);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Start watching all resource types and automatically sync to ConfigHub
+    pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
+        let hub = self.config_hub.lock().await;
+        let key = hub.get_gateway_class_key().clone();
+        drop(hub);
+
+        let resource_kinds = vec![
+            ResourceKind::GatewayClass,
+            ResourceKind::GatewayClassSpec,
+            ResourceKind::Gateway,
+            ResourceKind::HTTPRoute,
+            ResourceKind::Service,
+            ResourceKind::EndpointSlice,
+            ResourceKind::EdgionTls,
+            ResourceKind::Secret,
+        ];
+
+        for kind in resource_kinds {
+            if let Err(e) = self.start_watch_sync(key.clone(), kind).await {
+                eprintln!("Failed to start watch for {:?}: {}", kind, e);
+            }
+        }
+
+        Ok(())
     }
 
     /// List resources of a specific kind
