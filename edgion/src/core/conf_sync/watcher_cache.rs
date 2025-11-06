@@ -196,7 +196,7 @@ impl<T: Versionable> WatcherCache<T> {
     /// Start a watcher task that listens for notifications and sends data
     /// Requires Arc<RwLock<WatcherCache>> to access cache from the spawned task
     pub fn start_watcher_task(
-        cache: std::sync::Arc<tokio::sync::RwLock<Self>>,
+        cache: Arc<tokio::sync::RwLock<Self>>,
         notify: Arc<Notify>,
         sender: mpsc::Sender<WatchResponse<T>>,
         _client_id: String,
@@ -205,44 +205,35 @@ impl<T: Versionable> WatcherCache<T> {
         T: Clone + Send + Sync + 'static,
     {
         tokio::spawn(async move {
-            // First check if client is behind
-            {
-                let cache_guard = cache.read().await;
-                if from_version < cache_guard.resource_version {
-                    let events = cache_guard.get_events_since(from_version);
-                    let current_version = cache_guard.resource_version;
-                    from_version = current_version;
-
-                    let response = WatchResponse::new(events, current_version);
-                    if sender.send(response).await.is_err() {
-                        // Client disconnected
-                        return;
-                    }
-                }
-            }
-
-            // Then loop waiting for notifications
             loop {
-                // Wait for notification from shared Notify
-                notify.notified().await;
-
-                // Got notification, read latest data
+                // Check if there are new events since from_version
                 let response = {
                     let cache_guard = cache.read().await;
-                    let events = cache_guard.get_events_since(from_version);
+
+                    // Get latest version
                     let current_version = cache_guard.resource_version;
 
-                    // Update from_version for next iteration
-                    from_version = current_version;
-
-                    WatchResponse::new(events, current_version)
+                    // If client is behind, get events
+                    if from_version < current_version {
+                        let events = cache_guard.get_events_since(from_version);
+                        from_version = current_version;
+                        Some(WatchResponse::new(events, current_version))
+                    } else {
+                        // Client is up-to-date, no events to send
+                        None
+                    }
                 };
 
-                // Send response to client
-                if sender.send(response).await.is_err() {
-                    // Client disconnected, exit loop
-                    break;
+                // Send response if there are events
+                if let Some(resp) = response {
+                    if sender.send(resp).await.is_err() {
+                        // Client disconnected, exit loop
+                        break;
+                    }
                 }
+
+                // Wait for next notification
+                notify.notified().await;
             }
         });
     }
