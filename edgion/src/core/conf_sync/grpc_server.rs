@@ -2,11 +2,11 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-use crate::core::conf_sync::watcher_mgr::WatcherMgr;
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
     ListRequest, ListResponse, ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
 };
+use crate::core::conf_sync::watcher_mgr::WatcherMgr;
 use crate::types::ResourceKind;
 
 /// Server wrapper for WatcherMgr
@@ -26,10 +26,7 @@ impl ConfigSyncServer {
     }
 
     /// Start the gRPC server on the given address
-    pub async fn serve(
-        self,
-        addr: std::net::SocketAddr,
-    ) -> Result<(), tonic::transport::Error> {
+    pub async fn serve(self, addr: std::net::SocketAddr) -> Result<(), tonic::transport::Error> {
         let service = self.into_service();
         let server = tonic::transport::Server::builder()
             .add_service(service)
@@ -48,7 +45,7 @@ impl ConfigSyncServer {
             .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!(
                 "config_sync_descriptor"
             ))
-            .build()?;
+            .build_v1()?;
 
         let server = tonic::transport::Server::builder()
             .add_service(service)
@@ -62,12 +59,9 @@ impl ConfigSyncServer {
 
 #[tonic::async_trait]
 impl ConfigSync for ConfigSyncServer {
-    async fn list(
-        &self,
-        request: Request<ListRequest>,
-    ) -> Result<Response<ListResponse>, Status> {
+    async fn list(&self, request: Request<ListRequest>) -> Result<Response<ListResponse>, Status> {
         let req = request.into_inner();
-        
+
         // Convert proto ResourceKind to our ResourceKind
         let proto_kind = ProtoResourceKind::from_i32(req.kind)
             .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
@@ -114,36 +108,38 @@ impl ConfigSync for ConfigSyncServer {
 
         // Convert EventDataSimple receiver to WatchResponse stream
         let (tx, rx) = tokio::sync::mpsc::channel(100);
-        
+
         tokio::spawn(async move {
+            let mut receiver = receiver;
             while let Some(event_data) = receiver.recv().await {
                 let response = WatchResponse {
                     data: event_data.data,
                     resource_version: event_data.resource_version,
                 };
-                
+
                 if tx.send(Ok(response)).await.is_err() {
                     break;
                 }
             }
         });
 
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            rx,
+        )))
     }
 }
 
 /// Convert proto ResourceKind to our ResourceKind
 fn proto_to_resource_kind(kind: ProtoResourceKind) -> Option<ResourceKind> {
     match kind {
-        ProtoResourceKind::ResourceKindUnspecified => None,
-        ProtoResourceKind::ResourceKindGatewayClass => Some(ResourceKind::GatewayClass),
-        ProtoResourceKind::ResourceKindGatewayClassSpec => Some(ResourceKind::GatewayClassSpec),
-        ProtoResourceKind::ResourceKindGateway => Some(ResourceKind::Gateway),
-        ProtoResourceKind::ResourceKindHttpRoute => Some(ResourceKind::HTTPRoute),
-        ProtoResourceKind::ResourceKindService => Some(ResourceKind::Service),
-        ProtoResourceKind::ResourceKindEndpointSlice => Some(ResourceKind::EndpointSlice),
-        ProtoResourceKind::ResourceKindEdgionTls => Some(ResourceKind::EdgionTls),
-        ProtoResourceKind::ResourceKindSecret => Some(ResourceKind::Secret),
+        ProtoResourceKind::Unspecified => None,
+        ProtoResourceKind::GatewayClass => Some(ResourceKind::GatewayClass),
+        ProtoResourceKind::GatewayClassSpec => Some(ResourceKind::GatewayClassSpec),
+        ProtoResourceKind::Gateway => Some(ResourceKind::Gateway),
+        ProtoResourceKind::HttpRoute => Some(ResourceKind::HTTPRoute),
+        ProtoResourceKind::Service => Some(ResourceKind::Service),
+        ProtoResourceKind::EndpointSlice => Some(ResourceKind::EndpointSlice),
+        ProtoResourceKind::EdgionTls => Some(ResourceKind::EdgionTls),
+        ProtoResourceKind::Secret => Some(ResourceKind::Secret),
     }
 }
-

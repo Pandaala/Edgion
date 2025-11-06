@@ -93,13 +93,13 @@ impl ConfigSyncClient {
 /// Convert our ResourceKind to proto ResourceKind
 fn resource_kind_to_proto(kind: ResourceKind) -> ProtoResourceKind {
     match kind {
-        ResourceKind::GatewayClass => ProtoResourceKind::ResourceKindGatewayClass,
-        ResourceKind::GatewayClassSpec => ProtoResourceKind::ResourceKindGatewayClassSpec,
-        ResourceKind::Gateway => ProtoResourceKind::ResourceKindGateway,
-        ResourceKind::HTTPRoute => ProtoResourceKind::ResourceKindHttpRoute,
-        ResourceKind::Service => ProtoResourceKind::ResourceKindService,
-        ResourceKind::EndpointSlice => ProtoResourceKind::ResourceKindEndpointSlice,
-        ResourceKind::EdgionTls => ProtoResourceKind::ResourceKindEdgionTls,
-        ResourceKind::Secret => ProtoResourceKind::ResourceKindSecret,
+        ResourceKind::GatewayClass => ProtoResourceKind::GatewayClass,
+        ResourceKind::GatewayClassSpec => ProtoResourceKind::GatewayClassSpec,
+        ResourceKind::Gateway => ProtoResourceKind::Gateway,
+        ResourceKind::HTTPRoute => ProtoResourceKind::HttpRoute,
+        ResourceKind::Service => ProtoResourceKind::Service,
+        ResourceKind::EndpointSlice => ProtoResourceKind::EndpointSlice,
+        ResourceKind::EdgionTls => ProtoResourceKind::EdgionTls,
+        ResourceKind::Secret => ProtoResourceKind::Secret,
     }
 }
