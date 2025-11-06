@@ -1,24 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
-
-/// Watcher client information
-#[derive(Debug, Clone)]
-pub struct WatcherClient {
-    pub client_id: String,
-    pub client_name: String,
-    pub current_resource_version: u64,
-}
-
-impl WatcherClient {
-    pub fn new(client_id: String, client_name: String) -> Self {
-        Self {
-            client_id,
-            client_name,
-            current_resource_version: 0,
-        }
-    }
-}
 
 /// List data response structure
 #[derive(Debug, Clone)]
@@ -56,8 +39,12 @@ impl<T> WatchResponse<T> {
 #[derive(Clone)]
 pub struct PendingWatch<T> {
     pub client_id: String,
+    pub client_name: String,
     pub from_version: u64,
     pub sender: mpsc::Sender<WatchResponse<T>>, // Bounded for data
+    pub watch_start_time: SystemTime,           // Watch 开始时间
+    pub send_count: Arc<std::sync::atomic::AtomicU64>, // 发送计数（使用 Arc 以便在协程中更新）
+    pub last_send_time: Arc<std::sync::RwLock<Option<SystemTime>>>, // 上次发送时间（使用 Arc 以便在协程中更新）
 }
 
 /// Trait for resources that have a version
@@ -244,6 +231,8 @@ impl<T: Versionable> WatcherCache<T> {
         tokio::spawn(async move {
             let mut from_version = watcher.from_version;
             let sender = watcher.sender;
+            let send_count = watcher.send_count;
+            let last_send_time = watcher.last_send_time;
 
             loop {
                 // 简单的调用
@@ -259,6 +248,12 @@ impl<T: Versionable> WatcherCache<T> {
                     if sender.send(response).await.is_err() {
                         // Client disconnected, exit loop
                         break;
+                    }
+
+                    // 更新发送计数和时间
+                    send_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Ok(mut last_time) = last_send_time.write() {
+                        *last_time = Some(SystemTime::now());
                     }
                 }
 
@@ -277,6 +272,7 @@ impl<T: Versionable> WatcherCache<T> {
     pub fn watch(
         &mut self,
         client_id: String,
+        client_name: String,
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<T>>
     where
@@ -291,8 +287,12 @@ impl<T: Versionable> WatcherCache<T> {
 
         let watcher = PendingWatch {
             client_id,
+            client_name,
             from_version,
             sender: data_tx,
+            watch_start_time: SystemTime::now(),
+            send_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            last_send_time: Arc::new(std::sync::RwLock::new(None)),
         };
         self.watchers.push(watcher.clone());
 
