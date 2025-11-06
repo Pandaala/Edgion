@@ -53,6 +53,7 @@ impl<T> WatchResponse<T> {
 }
 
 /// Pending watch request waiting for notification
+#[derive(Clone)]
 pub struct PendingWatch<T> {
     pub client_id: String,
     pub from_version: u64,
@@ -97,26 +98,16 @@ pub struct WatcherEvent<T> {
     pub data: T,
 }
 
-pub struct WatcherCache<T> {
-    // data
-    data: HashMap<String, T>,
-
-    // event queue
+/// 事件存储 - 循环队列
+pub struct CacheStore<T> {
     capacity: u32,
     cache: Vec<WatcherEvent<T>>,
     start_index: u32,
     end_index: u32,
     resource_version: u64,
-    ready: bool,
-
-    // pending watch requests
-    watchers: Vec<PendingWatch<T>>,
-
-    // shared notify for broadcasting events to all watchers
-    notify: Arc<Notify>,
 }
 
-impl<T: Versionable> WatcherCache<T> {
+impl<T: Clone> CacheStore<T> {
     pub fn new(capacity: u32) -> Self {
         Self {
             capacity,
@@ -124,55 +115,40 @@ impl<T: Versionable> WatcherCache<T> {
             start_index: 0,
             end_index: 0,
             resource_version: 0,
-            ready: false,
-            data: HashMap::new(),
-            watchers: Vec::new(),
-            notify: Arc::new(Notify::new()),
         }
     }
 
-    /// Get a clone of the shared notify for watchers
-    pub fn get_notify(&self) -> Arc<Notify> {
-        self.notify.clone()
+    /// 更新：添加新事件到循环队列
+    pub fn mut_update(&mut self, event: WatcherEvent<T>) {
+        self.resource_version = event.resource_version;
+
+        if (self.cache.len() as u32) < self.capacity {
+            self.cache.push(event);
+            self.end_index = self.cache.len() as u32;
+        } else {
+            let index = (self.end_index % self.capacity) as usize;
+            self.cache[index] = event;
+            self.end_index = self.end_index.wrapping_add(1);
+
+            if self.end_index.wrapping_sub(self.start_index) > self.capacity {
+                self.start_index = self.end_index.wrapping_sub(self.capacity);
+            }
+        }
     }
 
-    pub fn is_ready(&self) -> bool {
-        self.ready
-    }
-
-    /// List all data - returns all resources in the cache with resource version
-    /// This is typically called by clients to get the full snapshot of data
-    pub fn list(&self) -> ListData<&T> {
-        let data: Vec<&T> = self.data.values().collect();
-        ListData::new(data, self.resource_version)
-    }
-
-    /// List all data as owned values (cloned)
-    /// Useful when clients need owned data instead of references
-    pub fn list_owned(&self) -> ListData<T>
-    where
-        T: Clone,
-    {
-        let data: Vec<T> = self.data.values().cloned().collect();
-        ListData::new(data, self.resource_version)
-    }
-
-    /// Get all events since a specific version from the cache
-    /// Returns events where resource_version > from_version
-    fn get_events_since(&self, from_version: u64) -> Vec<WatcherEvent<T>>
-    where
-        T: Clone,
-    {
+    /// 查询：获取从指定版本开始的事件
+    pub fn get_events_from_resource_version(
+        &self,
+        from_version: u64,
+    ) -> (Vec<WatcherEvent<T>>, u64) {
         let mut events = Vec::new();
 
-        // Calculate the number of events in the circular queue
         let count = if (self.cache.len() as u32) < self.capacity {
             self.cache.len() as u32
         } else {
             self.capacity
         };
 
-        // Iterate through the circular queue
         for i in 0..count {
             let index = ((self.start_index + i) % self.capacity) as usize;
             if index < self.cache.len() {
@@ -183,7 +159,70 @@ impl<T: Versionable> WatcherCache<T> {
             }
         }
 
-        events
+        (events, self.resource_version)
+    }
+}
+
+pub struct WatcherCache<T> {
+    // data
+    data: HashMap<String, T>,
+    ready: bool,
+
+    // 使用 CacheStore 替代原来的字段
+    store: Arc<tokio::sync::RwLock<CacheStore<T>>>,
+
+    // pending watch requests
+    watchers: Vec<PendingWatch<T>>,
+
+    // shared notify for broadcasting events to all watchers
+    notify: Arc<Notify>,
+}
+
+impl<T: Versionable> WatcherCache<T> {
+    pub fn new(capacity: u32) -> Self
+    where
+        T: Clone,
+    {
+        Self {
+            data: HashMap::new(),
+            ready: false,
+            store: Arc::new(tokio::sync::RwLock::new(CacheStore::new(capacity))),
+            watchers: Vec::new(),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Get a clone of the shared notify for watchers
+    pub fn get_notify(&self) -> Arc<Notify> {
+        self.notify.clone()
+    }
+
+    /// Get a clone of the store for watchers
+    pub fn get_store(&self) -> Arc<tokio::sync::RwLock<CacheStore<T>>> {
+        self.store.clone()
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.ready
+    }
+
+    /// List all data - returns all resources in the cache with resource version
+    /// This is typically called by clients to get the full snapshot of data
+    pub fn list(&self) -> ListData<&T> {
+        let data: Vec<&T> = self.data.values().collect();
+        let resource_version = self.store.blocking_read().resource_version;
+        ListData::new(data, resource_version)
+    }
+
+    /// List all data as owned values (cloned)
+    /// Useful when clients need owned data instead of references
+    pub fn list_owned(&self) -> ListData<T>
+    where
+        T: Clone,
+    {
+        let data: Vec<T> = self.data.values().cloned().collect();
+        let resource_version = self.store.blocking_read().resource_version;
+        ListData::new(data, resource_version)
     }
 
     /// Notify all pending watchers (non-blocking)
@@ -194,39 +233,30 @@ impl<T: Versionable> WatcherCache<T> {
     }
 
     /// Start a watcher task that listens for notifications and sends data
-    /// Requires Arc<RwLock<WatcherCache>> to access cache from the spawned task
+    /// Only needs the store to access data
     pub fn start_watcher_task(
-        cache: Arc<tokio::sync::RwLock<Self>>,
+        store: Arc<tokio::sync::RwLock<CacheStore<T>>>,
         notify: Arc<Notify>,
-        sender: mpsc::Sender<WatchResponse<T>>,
-        _client_id: String,
-        mut from_version: u64,
+        watcher: PendingWatch<T>,
     ) where
         T: Clone + Send + Sync + 'static,
     {
         tokio::spawn(async move {
+            let mut from_version = watcher.from_version;
+            let sender = watcher.sender;
+
             loop {
-                // Check if there are new events since from_version
-                let response = {
-                    let cache_guard = cache.read().await;
-
-                    // Get latest version
-                    let current_version = cache_guard.resource_version;
-
-                    // If client is behind, get events
-                    if from_version < current_version {
-                        let events = cache_guard.get_events_since(from_version);
-                        from_version = current_version;
-                        Some(WatchResponse::new(events, current_version))
-                    } else {
-                        // Client is up-to-date, no events to send
-                        None
-                    }
+                // 简单的调用
+                let (events, current_version) = {
+                    let store_guard = store.read().await;
+                    store_guard.get_events_from_resource_version(from_version)
                 };
 
-                // Send response if there are events
-                if let Some(resp) = response {
-                    if sender.send(resp).await.is_err() {
+                if !events.is_empty() {
+                    from_version = current_version;
+                    let response = WatchResponse::new(events, current_version);
+
+                    if sender.send(response).await.is_err() {
                         // Client disconnected, exit loop
                         break;
                     }
@@ -245,7 +275,7 @@ impl<T: Versionable> WatcherCache<T> {
     /// 1. First checks if client is behind and sends initial data
     /// 2. Then loops waiting for notifications and sends updates
     pub fn watch(
-        cache: std::sync::Arc<tokio::sync::RwLock<Self>>,
+        &mut self,
         client_id: String,
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<T>>
@@ -255,21 +285,19 @@ impl<T: Versionable> WatcherCache<T> {
         // Use bounded channel for data to provide backpressure
         let (data_tx, data_rx) = mpsc::channel(100);
 
-        // Get the shared notify and register watcher
-        let notify = {
-            let mut cache_guard = cache.blocking_write();
-            let notify = cache_guard.get_notify();
-            let pending_watch = PendingWatch {
-                client_id: client_id.clone(),
-                from_version,
-                sender: data_tx.clone(),
-            };
-            cache_guard.watchers.push(pending_watch);
-            notify
-        };
+        // Get the shared notify and store
+        let notify = self.get_notify();
+        let store = self.get_store();
 
-        // Start the watcher task with shared notify
-        Self::start_watcher_task(cache, notify, data_tx, client_id, from_version);
+        let watcher = PendingWatch {
+            client_id,
+            from_version,
+            sender: data_tx,
+        };
+        self.watchers.push(watcher.clone());
+
+        // Start the watcher task - only needs store
+        Self::start_watcher_task(store, notify, watcher);
 
         data_rx
     }
@@ -280,7 +308,6 @@ impl<T: Versionable> WatcherCache<T> {
         T: Clone,
     {
         let version = resource.get_version();
-        self.resource_version = version;
 
         let event = WatcherEvent {
             event_type,
@@ -288,20 +315,10 @@ impl<T: Versionable> WatcherCache<T> {
             data: resource,
         };
 
-        // Add to circular queue
-        if (self.cache.len() as u32) < self.capacity {
-            self.cache.push(event.clone());
-            self.end_index = self.cache.len() as u32;
-        } else {
-            let index = (self.end_index % self.capacity) as usize;
-            self.cache[index] = event.clone();
-            self.end_index = self.end_index.wrapping_add(1);
-
-            // Update start_index if we've overwritten the oldest event
-            if self.end_index.wrapping_sub(self.start_index) > self.capacity {
-                self.start_index = self.end_index.wrapping_sub(self.capacity);
-            }
-        }
+        // 使用 mut_update
+        let mut store_guard = self.store.blocking_write();
+        store_guard.mut_update(event);
+        drop(store_guard);
 
         // Notify all pending watchers (non-blocking)
         if !self.watchers.is_empty() {
