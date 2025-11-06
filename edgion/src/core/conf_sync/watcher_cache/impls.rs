@@ -2,7 +2,7 @@ use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::core::ObjectMeta;
 
-use crate::core::conf_sync::traits::Versionable;
+use super::traits::Versionable;
 use crate::types::{EdgionTls, Gateway, GatewayClass, GatewayClassSpec, HTTPRoute};
 
 /// Helper function to extract version from Kubernetes resource_version string

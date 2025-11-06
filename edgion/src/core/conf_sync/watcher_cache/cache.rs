@@ -4,8 +4,8 @@ use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
 use super::store::CacheStore;
+use super::traits::{EventDispatch, Versionable};
 use super::types::{EventType, ListData, WatchClient, WatchResponse, WatcherEvent};
-use crate::core::conf_sync::traits::{EventDispatch, Versionable};
 
 pub struct WatcherCache<T> {
     // data
