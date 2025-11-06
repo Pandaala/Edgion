@@ -52,10 +52,10 @@ impl<T> WatchResponse<T> {
 }
 
 /// Pending watch request waiting for notification
-pub struct PendingWatch {
+pub struct PendingWatch<T> {
     pub client_id: String,
     pub from_version: u64,
-    pub sender: tokio::sync::mpsc::UnboundedSender<()>,
+    pub sender: mpsc::UnboundedSender<WatchResponse<T>>,
 }
 
 /// Trait for resources that have a version
@@ -109,7 +109,7 @@ pub struct WatcherCache<T> {
     ready: bool,
 
     // pending watch requests
-    watchers: Vec<PendingWatch>,
+    watchers: Vec<PendingWatch<T>>,
 }
 
 impl<T: Versionable> WatcherCache<T> {
@@ -176,60 +176,52 @@ impl<T: Versionable> WatcherCache<T> {
         events
     }
 
-    /// Notify all pending watchers (non-blocking)
-    /// Only sends a signal, watchers will read data themselves
-    fn notify_watchers(&mut self) {
-        // Keep only watchers that are still connected
-        self.watchers.retain(|watcher| {
-            // Try to send notification signal (non-blocking)
-            // If send fails, the receiver has been dropped, so we remove it
-            watcher.sender.send(()).is_ok()
-        });
-    }
-
-    /// Register a watcher and return a receiver for notifications
-    /// The caller should loop on the receiver and read data when notified
-    pub fn register_watcher(
-        &mut self,
-        client_id: String,
-        from_version: u64,
-    ) -> mpsc::UnboundedReceiver<()> {
-        let (sender, receiver) = mpsc::unbounded_channel();
-
-        let pending_watch = PendingWatch {
-            client_id,
-            from_version,
-            sender,
-        };
-
-        self.watchers.push(pending_watch);
-        receiver
-    }
-
-    /// Watch for changes starting from a specific version
-    /// Returns a stream-like interface where the caller can continuously receive updates
-    pub async fn watch(&mut self, client_id: String, from_version: u64) -> WatchResponse<T>
+    /// Notify all pending watchers with the latest event (non-blocking)
+    /// Sends complete WatchResponse to all watchers
+    fn notify_watchers(&mut self, event: WatcherEvent<T>)
     where
         T: Clone,
     {
-        if from_version < self.resource_version {
-            // Client is behind, return all events since their version
-            let events = self.get_events_since(from_version);
-            WatchResponse::new(events, self.resource_version)
-        } else {
-            // Client is up to date, register and wait for notification
-            let mut receiver = self.register_watcher(client_id, from_version);
+        // Prepare response with the new event
+        let response = WatchResponse::new(vec![event], self.resource_version);
 
-            // Wait for notification signal
-            if receiver.recv().await.is_some() {
-                // Got notification, read latest events
-                let events = self.get_events_since(from_version);
-                WatchResponse::new(events, self.resource_version)
-            } else {
-                // Channel closed, return empty response
-                WatchResponse::new(Vec::new(), self.resource_version)
-            }
+        // Send to all watchers, keep only those still connected
+        self.watchers.retain(|watcher| {
+            // Try to send WatchResponse (non-blocking)
+            // If send fails, the receiver has been dropped, so we remove it
+            watcher.sender.send(response.clone()).is_ok()
+        });
+    }
+
+    /// Watch for changes starting from a specific version
+    /// Returns a receiver that continuously receives WatchResponse updates
+    pub fn watch(
+        &mut self,
+        client_id: String,
+        from_version: u64,
+    ) -> mpsc::UnboundedReceiver<WatchResponse<T>>
+    where
+        T: Clone,
+    {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        // If client version is behind, send initial data immediately
+        if from_version < self.resource_version {
+            let events = self.get_events_since(from_version);
+            let response = WatchResponse::new(events, self.resource_version);
+            // Ignore send error - if it fails, the receiver is already dropped
+            let _ = tx.send(response);
         }
+
+        // Register watcher for future updates
+        let pending_watch = PendingWatch {
+            client_id,
+            from_version,
+            sender: tx,
+        };
+        self.watchers.push(pending_watch);
+
+        rx
     }
 
     /// Add event to the circular queue
@@ -261,9 +253,9 @@ impl<T: Versionable> WatcherCache<T> {
             }
         }
 
-        // Notify all pending watchers (non-blocking)
+        // Notify all pending watchers with the new event (non-blocking)
         if !self.watchers.is_empty() {
-            self.notify_watchers();
+            self.notify_watchers(event);
         }
     }
 }
