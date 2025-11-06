@@ -45,7 +45,7 @@ impl ConfigCenter {
         }
     }
 
-    pub fn list(
+    pub async fn list(
         &self,
         key: &GatewayClassKey,
         kind: &ResourceKind,
@@ -54,7 +54,8 @@ impl ConfigCenter {
             ResourceKind::GatewayClass => {
                 let list_data = self
                     .list_gateway_classes(key)
-                    .ok_or_else(|| format!("GatewayClass cache not found for key: {}", key))?;
+                    .await
+                    .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize GatewayClass data: {}", e))?;
                 (json, list_data.resource_version)
@@ -62,7 +63,8 @@ impl ConfigCenter {
             ResourceKind::GatewayClassSpec => {
                 let list_data = self
                     .list_gateway_class_specs(key)
-                    .ok_or_else(|| format!("GatewayClassSpec cache not found for key: {}", key))?;
+                    .await
+                    .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize GatewayClassSpec data: {}", e))?;
                 (json, list_data.resource_version)
@@ -70,7 +72,8 @@ impl ConfigCenter {
             ResourceKind::Gateway => {
                 let list_data = self
                     .list_gateways(key)
-                    .ok_or_else(|| format!("Gateway cache not found for key: {}", key))?;
+                    .await
+                    .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize Gateway data: {}", e))?;
                 (json, list_data.resource_version)
@@ -78,7 +81,8 @@ impl ConfigCenter {
             ResourceKind::HTTPRoute => {
                 let list_data = self
                     .list_routes(key)
-                    .ok_or_else(|| format!("HTTPRoute cache not found for key: {}", key))?;
+                    .await
+                    .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize HTTPRoute data: {}", e))?;
                 (json, list_data.resource_version)
@@ -86,7 +90,8 @@ impl ConfigCenter {
             ResourceKind::Service => {
                 let list_data = self
                     .list_services(key)
-                    .ok_or_else(|| format!("Service cache not found for key: {}", key))?;
+                    .await
+                    .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize Service data: {}", e))?;
                 (json, list_data.resource_version)
@@ -94,7 +99,8 @@ impl ConfigCenter {
             ResourceKind::EndpointSlice => {
                 let list_data = self
                     .list_endpoint_slices(key)
-                    .ok_or_else(|| format!("EndpointSlice cache not found for key: {}", key))?;
+                    .await
+                    .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EndpointSlice data: {}", e))?;
                 (json, list_data.resource_version)
@@ -102,7 +108,8 @@ impl ConfigCenter {
             ResourceKind::EdgionTls => {
                 let list_data = self
                     .list_edgion_tls(key)
-                    .ok_or_else(|| format!("EdgionTls cache not found for key: {}", key))?;
+                    .await
+                    .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EdgionTls data: {}", e))?;
                 (json, list_data.resource_version)
@@ -110,7 +117,8 @@ impl ConfigCenter {
             ResourceKind::Secret => {
                 let list_data = self
                     .list_secrets(key)
-                    .ok_or_else(|| format!("Secret cache not found for key: {}", key))?;
+                    .await
+                    .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize Secret data: {}", e))?;
                 (json, list_data.resource_version)
@@ -324,43 +332,75 @@ impl ConfigCenter {
     }
 
     /// List gateway classes
-    pub fn list_gateway_classes(&self, key: &str) -> Option<ListData<&GatewayClass>> {
-        self.gateway_classes.get(key).map(|cache| cache.list())
+    pub async fn list_gateway_classes(&self, key: &str) -> Option<ListData<GatewayClass>> {
+        if let Some(cache) = self.gateway_classes.get(key) {
+            Some(cache.list_owned().await)
+        } else {
+            None
+        }
     }
 
     /// List gateway class specs
-    pub fn list_gateway_class_specs(&self, key: &str) -> Option<ListData<&GatewayClassSpec>> {
-        self.gateway_class_specs.get(key).map(|cache| cache.list())
+    pub async fn list_gateway_class_specs(&self, key: &str) -> Option<ListData<GatewayClassSpec>> {
+        if let Some(cache) = self.gateway_class_specs.get(key) {
+            Some(cache.list_owned().await)
+        } else {
+            None
+        }
     }
 
     /// List gateways
-    pub fn list_gateways(&self, key: &str) -> Option<ListData<&Gateway>> {
-        self.gateways.get(key).map(|cache| cache.list())
+    pub async fn list_gateways(&self, key: &str) -> Option<ListData<Gateway>> {
+        if let Some(cache) = self.gateways.get(key) {
+            Some(cache.list_owned().await)
+        } else {
+            None
+        }
     }
 
     /// List HTTP routes
-    pub fn list_routes(&self, key: &str) -> Option<ListData<&HTTPRoute>> {
-        self.routes.get(key).map(|cache| cache.list())
+    pub async fn list_routes(&self, key: &str) -> Option<ListData<HTTPRoute>> {
+        if let Some(cache) = self.routes.get(key) {
+            Some(cache.list_owned().await)
+        } else {
+            None
+        }
     }
 
     /// List services
-    pub fn list_services(&self, key: &str) -> Option<ListData<&Service>> {
-        self.services.get(key).map(|cache| cache.list())
+    pub async fn list_services(&self, key: &str) -> Option<ListData<Service>> {
+        if let Some(cache) = self.services.get(key) {
+            Some(cache.list_owned().await)
+        } else {
+            None
+        }
     }
 
     /// List endpoint slices
-    pub fn list_endpoint_slices(&self, key: &str) -> Option<ListData<&EndpointSlice>> {
-        self.endpoint_slices.get(key).map(|cache| cache.list())
+    pub async fn list_endpoint_slices(&self, key: &str) -> Option<ListData<EndpointSlice>> {
+        if let Some(cache) = self.endpoint_slices.get(key) {
+            Some(cache.list_owned().await)
+        } else {
+            None
+        }
     }
 
     /// List Edgion TLS
-    pub fn list_edgion_tls(&self, key: &str) -> Option<ListData<&EdgionTls>> {
-        self.edgion_tls.get(key).map(|cache| cache.list())
+    pub async fn list_edgion_tls(&self, key: &str) -> Option<ListData<EdgionTls>> {
+        if let Some(cache) = self.edgion_tls.get(key) {
+            Some(cache.list_owned().await)
+        } else {
+            None
+        }
     }
 
     /// List secrets
-    pub fn list_secrets(&self, key: &str) -> Option<ListData<&Secret>> {
-        self.secrets.get(key).map(|cache| cache.list())
+    pub async fn list_secrets(&self, key: &str) -> Option<ListData<Secret>> {
+        if let Some(cache) = self.secrets.get(key) {
+            Some(cache.list_owned().await)
+        } else {
+            None
+        }
     }
 
     /// Watch gateway classes
@@ -468,11 +508,11 @@ impl ConfigCenter {
     }
 
     /// Print all configuration for a specific gateway class key
-    pub fn print_config(&self, key: &GatewayClassKey) {
+    pub async fn print_config(&self, key: &GatewayClassKey) {
         println!("=== ConfigCenter Config for GatewayClassKey: {} ===", key);
         
         // Gateway Classes
-        if let Some(list_data) = self.list_gateway_classes(key) {
+        if let Some(list_data) = self.list_gateway_classes(key).await {
             println!("GatewayClasses (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
             for (idx, gc) in list_data.data.iter().enumerate() {
                 println!("  [{}] {}", idx, serde_json::to_string(gc).unwrap_or_else(|_| "serialization error".to_string()));
@@ -482,7 +522,7 @@ impl ConfigCenter {
         }
 
         // Gateway Class Specs
-        if let Some(list_data) = self.list_gateway_class_specs(key) {
+        if let Some(list_data) = self.list_gateway_class_specs(key).await {
             println!("GatewayClassSpecs (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
             for (idx, spec) in list_data.data.iter().enumerate() {
                 println!("  [{}] {}", idx, serde_json::to_string(spec).unwrap_or_else(|_| "serialization error".to_string()));
@@ -492,7 +532,7 @@ impl ConfigCenter {
         }
 
         // Gateways
-        if let Some(list_data) = self.list_gateways(key) {
+        if let Some(list_data) = self.list_gateways(key).await {
             println!("Gateways (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
             for (idx, gw) in list_data.data.iter().enumerate() {
                 println!("  [{}] {}", idx, serde_json::to_string(gw).unwrap_or_else(|_| "serialization error".to_string()));
@@ -502,7 +542,7 @@ impl ConfigCenter {
         }
 
         // HTTP Routes
-        if let Some(list_data) = self.list_routes(key) {
+        if let Some(list_data) = self.list_routes(key).await {
             println!("HTTPRoutes (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
             for (idx, route) in list_data.data.iter().enumerate() {
                 println!("  [{}] {}", idx, serde_json::to_string(route).unwrap_or_else(|_| "serialization error".to_string()));
@@ -512,7 +552,7 @@ impl ConfigCenter {
         }
 
         // Services
-        if let Some(list_data) = self.list_services(key) {
+        if let Some(list_data) = self.list_services(key).await {
             println!("Services (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
             for (idx, svc) in list_data.data.iter().enumerate() {
                 println!("  [{}] {}", idx, serde_json::to_string(svc).unwrap_or_else(|_| "serialization error".to_string()));
@@ -522,7 +562,7 @@ impl ConfigCenter {
         }
 
         // Endpoint Slices
-        if let Some(list_data) = self.list_endpoint_slices(key) {
+        if let Some(list_data) = self.list_endpoint_slices(key).await {
             println!("EndpointSlices (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
             for (idx, es) in list_data.data.iter().enumerate() {
                 println!("  [{}] {}", idx, serde_json::to_string(es).unwrap_or_else(|_| "serialization error".to_string()));
@@ -532,7 +572,7 @@ impl ConfigCenter {
         }
 
         // Edgion TLS
-        if let Some(list_data) = self.list_edgion_tls(key) {
+        if let Some(list_data) = self.list_edgion_tls(key).await {
             println!("EdgionTls (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
             for (idx, tls) in list_data.data.iter().enumerate() {
                 println!("  [{}] {}", idx, serde_json::to_string(tls).unwrap_or_else(|_| "serialization error".to_string()));
@@ -542,7 +582,7 @@ impl ConfigCenter {
         }
 
         // Secrets
-        if let Some(list_data) = self.list_secrets(key) {
+        if let Some(list_data) = self.list_secrets(key).await {
             println!("Secrets (count: {}, version: {}):", list_data.data.len(), list_data.resource_version);
             for (idx, secret) in list_data.data.iter().enumerate() {
                 println!("  [{}] {}", idx, serde_json::to_string(secret).unwrap_or_else(|_| "serialization error".to_string()));

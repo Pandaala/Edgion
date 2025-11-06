@@ -76,7 +76,10 @@ impl<T: Versionable + Clone> EventDispatch<T> for HubCache<T> {
         // HubCache doesn't need ready state, but we keep the method for trait compatibility
     }
 
-    fn event_add(&mut self, resource: T, resource_version: Option<u64>) {
+    fn event_add(&mut self, resource: T, resource_version: Option<u64>)
+    where
+        T: Send + 'static,
+    {
         let version = resource_version.unwrap_or_else(|| resource.get_version());
         self.data.insert(version.to_string(), resource);
         if version > self.resource_version {
@@ -84,7 +87,10 @@ impl<T: Versionable + Clone> EventDispatch<T> for HubCache<T> {
         }
     }
 
-    fn event_update(&mut self, resource: T, resource_version: Option<u64>) {
+    fn event_update(&mut self, resource: T, resource_version: Option<u64>)
+    where
+        T: Send + 'static,
+    {
         let version = resource_version.unwrap_or_else(|| resource.get_version());
         self.data.insert(version.to_string(), resource);
         if version > self.resource_version {
@@ -92,7 +98,10 @@ impl<T: Versionable + Clone> EventDispatch<T> for HubCache<T> {
         }
     }
 
-    fn event_del(&mut self, resource: T, resource_version: Option<u64>) {
+    fn event_del(&mut self, resource: T, resource_version: Option<u64>)
+    where
+        T: Send + 'static,
+    {
         let version = resource_version.unwrap_or_else(|| resource.get_version());
         self.data.remove(&version.to_string());
         if version > self.resource_version {

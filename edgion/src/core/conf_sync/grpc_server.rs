@@ -82,6 +82,7 @@ impl ConfigSync for ConfigSyncServer {
         let watcher_mgr = self.config_center.lock().await;
         let list_data = watcher_mgr
             .list(&req.key, &resource_kind)
+            .await
             .map_err(|e| Status::internal(format!("Failed to list resources: {}", e)))?;
 
         Ok(Response::new(ListResponse {

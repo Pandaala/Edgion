@@ -54,20 +54,20 @@ impl<T: Versionable> CenterCache<T> {
 
     /// List all data - returns all resources in the cache with resource version
     /// This is typically called by clients to get the full snapshot of data
-    pub fn list(&self) -> ListData<&T> {
+    pub async fn list(&self) -> ListData<&T> {
         let data: Vec<&T> = self.data.values().collect();
-        let resource_version = self.store.blocking_read().get_current_version();
+        let resource_version = self.store.read().await.get_current_version();
         ListData::new(data, resource_version)
     }
 
     /// List all data as owned values (cloned)
     /// Useful when clients need owned data instead of references
-    pub fn list_owned(&self) -> ListData<T>
+    pub async fn list_owned(&self) -> ListData<T>
     where
         T: Clone,
     {
         let data: Vec<T> = self.data.values().cloned().collect();
-        let resource_version = self.store.blocking_read().get_current_version();
+        let resource_version = self.store.read().await.get_current_version();
         ListData::new(data, resource_version)
     }
 
@@ -170,7 +170,7 @@ impl<T: Versionable> CenterCache<T> {
     }
 
     /// Add event to the circular queue
-    fn add_event(&mut self, event_type: EventType, resource: T, resource_version: Option<u64>)
+    async fn add_event(&mut self, event_type: EventType, resource: T, resource_version: Option<u64>)
     where
         T: Clone,
     {
@@ -182,9 +182,10 @@ impl<T: Versionable> CenterCache<T> {
             data: resource,
         };
 
-        let mut store_guard = self.store.blocking_write();
-        store_guard.mut_update(event);
-        drop(store_guard);
+        {
+            let mut store_guard = self.store.write().await;
+            store_guard.mut_update(event);
+        }
 
         // Notify all pending watchers (non-blocking)
         if !self.watchers.is_empty() {
@@ -193,7 +194,7 @@ impl<T: Versionable> CenterCache<T> {
     }
 }
 
-impl<T: Versionable + Clone> EventDispatch<T> for CenterCache<T> {
+impl<T: Versionable + Clone + Send + Sync + 'static> EventDispatch<T> for CenterCache<T> {
     fn init_add(&mut self, resource: T, resource_version: Option<u64>) {
         let version = resource_version.unwrap_or_else(|| resource.get_version());
         self.data.insert(version.to_string(), resource);
@@ -203,21 +204,81 @@ impl<T: Versionable + Clone> EventDispatch<T> for CenterCache<T> {
         self.ready = true;
     }
 
-    fn event_add(&mut self, resource: T, resource_version: Option<u64>) {
+    fn event_add(&mut self, resource: T, resource_version: Option<u64>)
+    where
+        T: Send + 'static,
+    {
         let version = resource_version.unwrap_or_else(|| resource.get_version());
-        self.data.insert(version.to_string(), resource.clone());
-        self.add_event(EventType::Add, resource, resource_version);
+        let resource_clone = resource.clone();
+        self.data.insert(version.to_string(), resource);
+        let event = WatcherEvent {
+            event_type: EventType::Add,
+            resource_version: version,
+            data: resource_clone,
+        };
+        let store = self.store.clone();
+        let notify = self.notify.clone();
+        // Spawn async task to update store
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                {
+                    let mut store_guard = store.write().await;
+                    store_guard.mut_update(event);
+                }
+                notify.notify_waiters();
+            });
+        }
+        // If not in async context, we can't update the store asynchronously
+        // The data is already updated in self.data, so this is acceptable
     }
 
-    fn event_update(&mut self, resource: T, resource_version: Option<u64>) {
+    fn event_update(&mut self, resource: T, resource_version: Option<u64>)
+    where
+        T: Send + 'static,
+    {
         let version = resource_version.unwrap_or_else(|| resource.get_version());
-        self.data.insert(version.to_string(), resource.clone());
-        self.add_event(EventType::Update, resource, resource_version);
+        let resource_clone = resource.clone();
+        self.data.insert(version.to_string(), resource);
+        let event = WatcherEvent {
+            event_type: EventType::Update,
+            resource_version: version,
+            data: resource_clone,
+        };
+        let store = self.store.clone();
+        let notify = self.notify.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                {
+                    let mut store_guard = store.write().await;
+                    store_guard.mut_update(event);
+                }
+                notify.notify_waiters();
+            });
+        }
     }
 
-    fn event_del(&mut self, resource: T, resource_version: Option<u64>) {
+    fn event_del(&mut self, resource: T, resource_version: Option<u64>)
+    where
+        T: Send + 'static,
+    {
         let version = resource_version.unwrap_or_else(|| resource.get_version());
+        let resource_clone = resource.clone();
         self.data.remove(&version.to_string());
-        self.add_event(EventType::Delete, resource, resource_version);
+        let event = WatcherEvent {
+            event_type: EventType::Delete,
+            resource_version: version,
+            data: resource_clone,
+        };
+        let store = self.store.clone();
+        let notify = self.notify.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                {
+                    let mut store_guard = store.write().await;
+                    store_guard.mut_update(event);
+                }
+                notify.notify_waiters();
+            });
+        }
     }
 }

@@ -197,13 +197,13 @@ async fn generate_random_configs(config_center: Arc<Mutex<ConfigCenter>>, durati
 }
 
 /// Compare ConfigCenter and ConfigHub configurations
-fn compare_configs(center: &ConfigCenter, hub: &ConfigHub, key: &String) -> bool {
+async fn compare_configs(center: &ConfigCenter, hub: &ConfigHub, key: &String) -> bool {
     println!("\n[COMPARE] Comparing configurations for key: {}", key);
 
     let mut all_match = true;
 
     // Compare GatewayClasses
-    let center_gc = center.list_gateway_classes(key);
+    let center_gc = center.list_gateway_classes(key).await;
     let hub_gc = hub.list_gateway_classes();
     if center_gc.as_ref().map(|d| d.data.len()) != Some(hub_gc.data.len()) {
         println!(
@@ -220,7 +220,7 @@ fn compare_configs(center: &ConfigCenter, hub: &ConfigHub, key: &String) -> bool
     }
 
     // Compare GatewayClassSpecs
-    let center_specs = center.list_gateway_class_specs(key);
+    let center_specs = center.list_gateway_class_specs(key).await;
     let hub_specs = hub.list_gateway_class_specs();
     if center_specs.as_ref().map(|d| d.data.len()) != Some(hub_specs.data.len()) {
         println!(
@@ -237,7 +237,7 @@ fn compare_configs(center: &ConfigCenter, hub: &ConfigHub, key: &String) -> bool
     }
 
     // Compare Gateways
-    let center_gw = center.list_gateways(key);
+    let center_gw = center.list_gateways(key).await;
     let hub_gw = hub.list_gateways();
     if center_gw.as_ref().map(|d| d.data.len()) != Some(hub_gw.data.len()) {
         println!(
@@ -251,7 +251,7 @@ fn compare_configs(center: &ConfigCenter, hub: &ConfigHub, key: &String) -> bool
     }
 
     // Compare HTTPRoutes
-    let center_routes = center.list_routes(key);
+    let center_routes = center.list_routes(key).await;
     let hub_routes = hub.list_routes();
     if center_routes.as_ref().map(|d| d.data.len()) != Some(hub_routes.data.len()) {
         println!(
@@ -268,7 +268,7 @@ fn compare_configs(center: &ConfigCenter, hub: &ConfigHub, key: &String) -> bool
     }
 
     // Compare Services
-    let center_svc = center.list_services(key);
+    let center_svc = center.list_services(key).await;
     let hub_svc = hub.list_services();
     if center_svc.as_ref().map(|d| d.data.len()) != Some(hub_svc.data.len()) {
         println!(
@@ -282,7 +282,7 @@ fn compare_configs(center: &ConfigCenter, hub: &ConfigHub, key: &String) -> bool
     }
 
     // Compare EndpointSlices
-    let center_es = center.list_endpoint_slices(key);
+    let center_es = center.list_endpoint_slices(key).await;
     let hub_es = hub.list_endpoint_slices();
     if center_es.as_ref().map(|d| d.data.len()) != Some(hub_es.data.len()) {
         println!(
@@ -299,7 +299,7 @@ fn compare_configs(center: &ConfigCenter, hub: &ConfigHub, key: &String) -> bool
     }
 
     // Compare EdgionTls
-    let center_tls = center.list_edgion_tls(key);
+    let center_tls = center.list_edgion_tls(key).await;
     let hub_tls = hub.list_edgion_tls();
     if center_tls.as_ref().map(|d| d.data.len()) != Some(hub_tls.data.len()) {
         println!(
@@ -313,7 +313,7 @@ fn compare_configs(center: &ConfigCenter, hub: &ConfigHub, key: &String) -> bool
     }
 
     // Compare Secrets
-    let center_secrets = center.list_secrets(key);
+    let center_secrets = center.list_secrets(key).await;
     let hub_secrets = hub.list_secrets();
     if center_secrets.as_ref().map(|d| d.data.len()) != Some(hub_secrets.data.len()) {
         println!(
@@ -334,7 +334,7 @@ fn compare_configs(center: &ConfigCenter, hub: &ConfigHub, key: &String) -> bool
     } else {
         println!("[COMPARE] ❌ Configuration mismatch detected!");
         println!("\n[COMPARE] ConfigCenter state:");
-        center.print_config(&key.to_string());
+        center.print_config(&key.to_string()).await;
         println!("\n[COMPARE] ConfigHub state:");
         hub.print_config();
     }
@@ -410,7 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hub_arc = client.get_config_hub();
     let hub = hub_arc.lock().await;
 
-    let matches = compare_configs(&center, &hub, &GATEWAY_CLASS_KEY.to_string());
+    let matches = compare_configs(&center, &hub, &GATEWAY_CLASS_KEY.to_string()).await;
 
     drop(center);
     drop(hub);
