@@ -291,51 +291,82 @@ impl EventDispatcher for ConfigHub {
     ) {
         let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
         let Some(resource_type) = resource_type else {
+            eprintln!(
+                "[HUB] init_add: Failed to determine resource type from data: {}",
+                &data[..data.len().min(200)]
+            );
             return;
         };
 
         match resource_type {
-            ResourceKind::GatewayClass => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
-                    self.gateway_classes.init_add(resource, resource_version);
-                }
-            }
+            ResourceKind::GatewayClass => match serde_json::from_str::<GatewayClass>(&data) {
+                Ok(resource) => self.gateway_classes.init_add(resource, resource_version),
+                Err(e) => eprintln!(
+                    "[HUB] init_add: Failed to parse GatewayClass: {} (data: {})",
+                    e,
+                    &data[..data.len().min(200)]
+                ),
+            },
             ResourceKind::GatewayClassSpec => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
-                    self.gateway_class_specs
-                        .init_add(resource, resource_version);
+                match serde_json::from_str::<GatewayClassSpec>(&data) {
+                    Ok(resource) => self
+                        .gateway_class_specs
+                        .init_add(resource, resource_version),
+                    Err(e) => eprintln!(
+                        "[HUB] init_add: Failed to parse GatewayClassSpec: {} (data: {})",
+                        e,
+                        &data[..data.len().min(200)]
+                    ),
                 }
             }
-            ResourceKind::Gateway => {
-                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
-                    self.gateways.init_add(resource, resource_version);
-                }
-            }
-            ResourceKind::HTTPRoute => {
-                if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
-                    self.routes.init_add(resource, resource_version);
-                }
-            }
-            ResourceKind::Service => {
-                if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    self.services.init_add(resource, resource_version);
-                }
-            }
-            ResourceKind::EndpointSlice => {
-                if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    self.endpoint_slices.init_add(resource, resource_version);
-                }
-            }
-            ResourceKind::EdgionTls => {
-                if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    self.edgion_tls.init_add(resource, resource_version);
-                }
-            }
-            ResourceKind::Secret => {
-                if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    self.secrets.init_add(resource, resource_version);
-                }
-            }
+            ResourceKind::Gateway => match serde_json::from_str::<Gateway>(&data) {
+                Ok(resource) => self.gateways.init_add(resource, resource_version),
+                Err(e) => eprintln!(
+                    "[HUB] init_add: Failed to parse Gateway: {} (data: {})",
+                    e,
+                    &data[..data.len().min(200)]
+                ),
+            },
+            ResourceKind::HTTPRoute => match serde_json::from_str::<HTTPRoute>(&data) {
+                Ok(resource) => self.routes.init_add(resource, resource_version),
+                Err(e) => eprintln!(
+                    "[HUB] init_add: Failed to parse HTTPRoute: {} (data: {})",
+                    e,
+                    &data[..data.len().min(200)]
+                ),
+            },
+            ResourceKind::Service => match serde_json::from_str::<Service>(&data) {
+                Ok(resource) => self.services.init_add(resource, resource_version),
+                Err(e) => eprintln!(
+                    "[HUB] init_add: Failed to parse Service: {} (data: {})",
+                    e,
+                    &data[..data.len().min(200)]
+                ),
+            },
+            ResourceKind::EndpointSlice => match serde_json::from_str::<EndpointSlice>(&data) {
+                Ok(resource) => self.endpoint_slices.init_add(resource, resource_version),
+                Err(e) => eprintln!(
+                    "[HUB] init_add: Failed to parse EndpointSlice: {} (data: {})",
+                    e,
+                    &data[..data.len().min(200)]
+                ),
+            },
+            ResourceKind::EdgionTls => match serde_json::from_str::<EdgionTls>(&data) {
+                Ok(resource) => self.edgion_tls.init_add(resource, resource_version),
+                Err(e) => eprintln!(
+                    "[HUB] init_add: Failed to parse EdgionTls: {} (data: {})",
+                    e,
+                    &data[..data.len().min(200)]
+                ),
+            },
+            ResourceKind::Secret => match serde_json::from_str::<Secret>(&data) {
+                Ok(resource) => self.secrets.init_add(resource, resource_version),
+                Err(e) => eprintln!(
+                    "[HUB] init_add: Failed to parse Secret: {} (data: {})",
+                    e,
+                    &data[..data.len().min(200)]
+                ),
+            },
         }
     }
 

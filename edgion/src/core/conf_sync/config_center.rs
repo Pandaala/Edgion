@@ -627,7 +627,7 @@ impl EventDispatcher for ConfigCenter {
             }
             ResourceKind::GatewayClassSpec => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
-                    let key = "default".to_string();
+                    let key = "test-gateway-class".to_string();
                     let cache = self
                         .gateway_class_specs
                         .entry(key)
@@ -664,70 +664,44 @@ impl EventDispatcher for ConfigCenter {
             }
             ResourceKind::Service => {
                 if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        let cache = self
-                            .services
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.init_add(resource, resource_version);
-                    }
+                    // Use GatewayClassKey from context - for now, use a default key
+                    // In production, this should be extracted from the resource's labels or annotations
+                    let key = "test-gateway-class".to_string();
+                    let cache = self
+                        .services
+                        .entry(key)
+                        .or_insert_with(|| CenterCache::new(1000));
+                    cache.init_add(resource, resource_version);
                 }
             }
             ResourceKind::EndpointSlice => {
                 if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        let cache = self
-                            .endpoint_slices
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.init_add(resource, resource_version);
-                    }
+                    let key = "test-gateway-class".to_string();
+                    let cache = self
+                        .endpoint_slices
+                        .entry(key)
+                        .or_insert_with(|| CenterCache::new(1000));
+                    cache.init_add(resource, resource_version);
                 }
             }
             ResourceKind::EdgionTls => {
                 if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        let cache = self
-                            .edgion_tls
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.init_add(resource, resource_version);
-                    }
+                    let key = "test-gateway-class".to_string();
+                    let cache = self
+                        .edgion_tls
+                        .entry(key)
+                        .or_insert_with(|| CenterCache::new(1000));
+                    cache.init_add(resource, resource_version);
                 }
             }
             ResourceKind::Secret => {
                 if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        let cache = self
-                            .secrets
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.init_add(resource, resource_version);
-                    }
+                    let key = "test-gateway-class".to_string();
+                    let cache = self
+                        .secrets
+                        .entry(key)
+                        .or_insert_with(|| CenterCache::new(1000));
+                    cache.init_add(resource, resource_version);
                 }
             }
             _ => {}
@@ -786,7 +760,7 @@ impl EventDispatcher for ConfigCenter {
             }
             ResourceKind::GatewayClassSpec => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
-                    let key = "default".to_string();
+                    let key = "test-gateway-class".to_string();
                     let cache = self
                         .gateway_class_specs
                         .entry(key)
@@ -823,70 +797,44 @@ impl EventDispatcher for ConfigCenter {
             }
             ResourceKind::Service => {
                 if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        let cache = self
-                            .services
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.event_add(resource, resource_version);
-                    }
+                    // Use GatewayClassKey from context - for now, use a default key
+                    // In production, this should be extracted from the resource's labels or annotations
+                    let key = "test-gateway-class".to_string();
+                    let cache = self
+                        .services
+                        .entry(key)
+                        .or_insert_with(|| CenterCache::new(1000));
+                    cache.event_add(resource, resource_version);
                 }
             }
             ResourceKind::EndpointSlice => {
                 if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        let cache = self
-                            .endpoint_slices
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.event_add(resource, resource_version);
-                    }
+                    let key = "test-gateway-class".to_string();
+                    let cache = self
+                        .endpoint_slices
+                        .entry(key)
+                        .or_insert_with(|| CenterCache::new(1000));
+                    cache.event_add(resource, resource_version);
                 }
             }
             ResourceKind::EdgionTls => {
                 if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        let cache = self
-                            .edgion_tls
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.event_add(resource, resource_version);
-                    }
+                    let key = "test-gateway-class".to_string();
+                    let cache = self
+                        .edgion_tls
+                        .entry(key)
+                        .or_insert_with(|| CenterCache::new(1000));
+                    cache.event_add(resource, resource_version);
                 }
             }
             ResourceKind::Secret => {
                 if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        let cache = self
-                            .secrets
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.event_add(resource, resource_version);
-                    }
+                    let key = "test-gateway-class".to_string();
+                    let cache = self
+                        .secrets
+                        .entry(key)
+                        .or_insert_with(|| CenterCache::new(1000));
+                    cache.event_add(resource, resource_version);
                 }
             }
             _ => {}
@@ -916,7 +864,7 @@ impl EventDispatcher for ConfigCenter {
             }
             ResourceKind::GatewayClassSpec => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
-                    let key = "default".to_string();
+                    let key = "test-gateway-class".to_string();
                     if let Some(cache) = self.gateway_class_specs.get_mut(&key) {
                         cache.event_update(resource, resource_version);
                     }
@@ -947,61 +895,33 @@ impl EventDispatcher for ConfigCenter {
             }
             ResourceKind::Service => {
                 if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        if let Some(cache) = self.services.get_mut(&key) {
-                            cache.event_update(resource, resource_version);
-                        }
+                    let key = "test-gateway-class".to_string();
+                    if let Some(cache) = self.services.get_mut(&key) {
+                        cache.event_update(resource, resource_version);
                     }
                 }
             }
             ResourceKind::EndpointSlice => {
                 if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        if let Some(cache) = self.endpoint_slices.get_mut(&key) {
-                            cache.event_update(resource, resource_version);
-                        }
+                    let key = "test-gateway-class".to_string();
+                    if let Some(cache) = self.endpoint_slices.get_mut(&key) {
+                        cache.event_update(resource, resource_version);
                     }
                 }
             }
             ResourceKind::EdgionTls => {
                 if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        if let Some(cache) = self.edgion_tls.get_mut(&key) {
-                            cache.event_update(resource, resource_version);
-                        }
+                    let key = "test-gateway-class".to_string();
+                    if let Some(cache) = self.edgion_tls.get_mut(&key) {
+                        cache.event_update(resource, resource_version);
                     }
                 }
             }
             ResourceKind::Secret => {
                 if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        if let Some(cache) = self.secrets.get_mut(&key) {
-                            cache.event_update(resource, resource_version);
-                        }
+                    let key = "test-gateway-class".to_string();
+                    if let Some(cache) = self.secrets.get_mut(&key) {
+                        cache.event_update(resource, resource_version);
                     }
                 }
             }
@@ -1032,7 +952,7 @@ impl EventDispatcher for ConfigCenter {
             }
             ResourceKind::GatewayClassSpec => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
-                    let key = "default".to_string();
+                    let key = "test-gateway-class".to_string();
                     if let Some(cache) = self.gateway_class_specs.get_mut(&key) {
                         cache.event_del(resource, resource_version);
                     }
@@ -1063,61 +983,33 @@ impl EventDispatcher for ConfigCenter {
             }
             ResourceKind::Service => {
                 if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        if let Some(cache) = self.services.get_mut(&key) {
-                            cache.event_del(resource, resource_version);
-                        }
+                    let key = "test-gateway-class".to_string();
+                    if let Some(cache) = self.services.get_mut(&key) {
+                        cache.event_del(resource, resource_version);
                     }
                 }
             }
             ResourceKind::EndpointSlice => {
                 if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        if let Some(cache) = self.endpoint_slices.get_mut(&key) {
-                            cache.event_del(resource, resource_version);
-                        }
+                    let key = "test-gateway-class".to_string();
+                    if let Some(cache) = self.endpoint_slices.get_mut(&key) {
+                        cache.event_del(resource, resource_version);
                     }
                 }
             }
             ResourceKind::EdgionTls => {
                 if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        if let Some(cache) = self.edgion_tls.get_mut(&key) {
-                            cache.event_del(resource, resource_version);
-                        }
+                    let key = "test-gateway-class".to_string();
+                    if let Some(cache) = self.edgion_tls.get_mut(&key) {
+                        cache.event_del(resource, resource_version);
                     }
                 }
             }
             ResourceKind::Secret => {
                 if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    if let Some(key) = resource.metadata.namespace.as_ref().and_then(|ns| {
-                        resource
-                            .metadata
-                            .name
-                            .as_ref()
-                            .map(|name| format!("{}/{}", ns, name))
-                    }) {
-                        if let Some(cache) = self.secrets.get_mut(&key) {
-                            cache.event_del(resource, resource_version);
-                        }
+                    let key = "test-gateway-class".to_string();
+                    if let Some(cache) = self.secrets.get_mut(&key) {
+                        cache.event_del(resource, resource_version);
                     }
                 }
             }

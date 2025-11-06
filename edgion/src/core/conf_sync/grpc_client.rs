@@ -72,21 +72,46 @@ impl ConfigSyncClient {
     ) -> Result<(), tonic::Status> {
         let list_response = self.list(key.clone(), kind).await?;
 
+        println!(
+            "[CLIENT] Syncing {:?}: received {} bytes, version {}",
+            kind,
+            list_response.data.len(),
+            list_response.resource_version
+        );
+
         // Parse the JSON data - list returns an array of resources
         let resources: Vec<serde_json::Value> =
             serde_json::from_str(&list_response.data).map_err(|e| {
+                eprintln!(
+                    "[CLIENT] Failed to parse list response for {:?}: {} (data: {})",
+                    kind,
+                    e,
+                    &list_response.data[..list_response.data.len().min(200)]
+                );
                 tonic::Status::internal(format!("Failed to parse list response: {}", e))
             })?;
 
+        println!(
+            "[CLIENT] Parsed {} resources for {:?}",
+            resources.len(),
+            kind
+        );
+
         let mut hub = self.config_hub.lock().await;
-        for resource in resources {
+        for (idx, resource) in resources.iter().enumerate() {
             // Each resource in the list should be added/updated
             let data_str = serde_json::to_string(&resource).map_err(|e| {
+                eprintln!(
+                    "[CLIENT] Failed to serialize resource {} for {:?}: {}",
+                    idx, kind, e
+                );
                 tonic::Status::internal(format!("Failed to serialize resource: {}", e))
             })?;
+
             hub.init_add(Some(kind), data_str, Some(list_response.resource_version));
         }
 
+        println!("[CLIENT] Finished syncing {:?}", kind);
         Ok(())
     }
 
