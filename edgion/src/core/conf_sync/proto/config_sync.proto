@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package conf_sync;
+
+// ConfigSync service for listing and watching resources
+service ConfigSync {
+    // List all resources of a specific kind
+    rpc List(ListRequest) returns (ListResponse);
+    
+    // Watch for changes to resources of a specific kind
+    rpc Watch(WatchRequest) returns (stream WatchResponse);
+}
+
+// Resource kind enumeration
+enum ResourceKind {
+    RESOURCE_KIND_UNSPECIFIED = 0;
+    RESOURCE_KIND_GATEWAY_CLASS = 1;
+    RESOURCE_KIND_GATEWAY_CLASS_SPEC = 2;
+    RESOURCE_KIND_GATEWAY = 3;
+    RESOURCE_KIND_HTTP_ROUTE = 4;
+    RESOURCE_KIND_SERVICE = 5;
+    RESOURCE_KIND_ENDPOINT_SLICE = 6;
+    RESOURCE_KIND_EDGION_TLS = 7;
+    RESOURCE_KIND_SECRET = 8;
+}
+
+// List request
+message ListRequest {
+    string key = 1;
+    ResourceKind kind = 2;
+}
+
+// List response
+message ListResponse {
+    string data = 1;
+    uint64 resource_version = 2;
+}
+
+// Watch request
+message WatchRequest {
+    string key = 1;
+    ResourceKind kind = 2;
+    string client_id = 3;
+    string client_name = 4;
+    uint64 from_version = 5;
+}
+
+// Watch response
+message WatchResponse {
+    string data = 1;
+    uint64 resource_version = 2;
+}
+
