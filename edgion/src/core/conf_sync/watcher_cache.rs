@@ -41,10 +41,10 @@ pub struct PendingWatch<T> {
     pub client_id: String,
     pub client_name: String,
     pub from_version: u64,
-    pub sender: mpsc::Sender<WatchResponse<T>>, // Bounded for data
-    pub watch_start_time: SystemTime,           // Watch 开始时间
-    pub send_count: Arc<std::sync::atomic::AtomicU64>, // 发送计数（使用 Arc 以便在协程中更新）
-    pub last_send_time: Arc<std::sync::RwLock<Option<SystemTime>>>, // 上次发送时间（使用 Arc 以便在协程中更新）
+    pub sender: mpsc::Sender<WatchResponse<T>>,
+    pub watch_start_time: SystemTime,
+    pub send_count: Arc<std::sync::atomic::AtomicU64>,
+    pub last_send_time: Arc<std::sync::RwLock<Option<SystemTime>>>,
 }
 
 /// Trait for resources that have a version
@@ -85,7 +85,7 @@ pub struct WatcherEvent<T> {
     pub data: T,
 }
 
-/// 事件存储 - 循环队列
+/// Event storage - circular queue
 pub struct CacheStore<T> {
     capacity: u32,
     cache: Vec<WatcherEvent<T>>,
@@ -105,7 +105,7 @@ impl<T: Clone> CacheStore<T> {
         }
     }
 
-    /// 更新：添加新事件到循环队列
+    /// Add new event to circular queue
     pub fn mut_update(&mut self, event: WatcherEvent<T>) {
         self.resource_version = event.resource_version;
 
@@ -123,7 +123,7 @@ impl<T: Clone> CacheStore<T> {
         }
     }
 
-    /// 查询：获取从指定版本开始的事件
+    /// Get events starting from specified version
     pub fn get_events_from_resource_version(
         &self,
         from_version: u64,
@@ -148,6 +148,16 @@ impl<T: Clone> CacheStore<T> {
 
         (events, self.resource_version)
     }
+
+    /// Get current resource version
+    pub fn get_current_version(&self) -> u64 {
+        self.resource_version
+    }
+
+    /// Set current resource version
+    pub fn set_current_version(&mut self, version: u64) {
+        self.resource_version = version;
+    }
 }
 
 pub struct WatcherCache<T> {
@@ -155,7 +165,7 @@ pub struct WatcherCache<T> {
     data: HashMap<String, T>,
     ready: bool,
 
-    // 使用 CacheStore 替代原来的字段
+    // Event storage
     store: Arc<tokio::sync::RwLock<CacheStore<T>>>,
 
     // pending watch requests
@@ -235,30 +245,38 @@ impl<T: Versionable> WatcherCache<T> {
             let last_send_time = watcher.last_send_time;
 
             loop {
-                // 简单的调用
-                let (events, current_version) = {
+                // First check if current version is different from client version
+                let current_version = {
                     let store_guard = store.read().await;
-                    store_guard.get_events_from_resource_version(from_version)
+                    store_guard.get_current_version()
                 };
 
-                if !events.is_empty() {
-                    from_version = current_version;
-                    let response = WatchResponse::new(events, current_version);
+                // Only fetch events if version has changed
+                if from_version < current_version {
+                    let (events, current_version) = {
+                        let store_guard = store.read().await;
+                        store_guard.get_events_from_resource_version(from_version)
+                    };
 
-                    if sender.send(response).await.is_err() {
-                        // Client disconnected, exit loop
-                        break;
-                    }
+                    if !events.is_empty() {
+                        from_version = current_version;
+                        let response = WatchResponse::new(events, current_version);
 
-                    // 更新发送计数和时间
-                    send_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if let Ok(mut last_time) = last_send_time.write() {
-                        *last_time = Some(SystemTime::now());
+                        if sender.send(response).await.is_err() {
+                            // Client disconnected, exit loop
+                            break;
+                        }
+
+                        // Update send count and time
+                        send_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if let Ok(mut last_time) = last_send_time.write() {
+                            *last_time = Some(SystemTime::now());
+                        }
                     }
+                } else {
+                    // Version is up-to-date, wait for next notification
+                    notify.notified().await;
                 }
-
-                // Wait for next notification
-                notify.notified().await;
             }
         });
     }
@@ -315,7 +333,6 @@ impl<T: Versionable> WatcherCache<T> {
             data: resource,
         };
 
-        // 使用 mut_update
         let mut store_guard = self.store.blocking_write();
         store_guard.mut_update(event);
         drop(store_guard);
