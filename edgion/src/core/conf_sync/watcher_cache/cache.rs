@@ -10,6 +10,8 @@ use super::types::{EventType, ListData, WatchClient, WatchResponse, WatcherEvent
 pub struct WatcherCache<T> {
     // data
     data: HashMap<String, T>,
+
+    // wait for init complete
     ready: bool,
 
     // Event storage
@@ -168,11 +170,11 @@ impl<T: Versionable> WatcherCache<T> {
     }
 
     /// Add event to the circular queue
-    fn add_event(&mut self, event_type: EventType, resource: T)
+    fn add_event(&mut self, event_type: EventType, resource: T, resource_version: Option<u64>)
     where
         T: Clone,
     {
-        let version = resource.get_version();
+        let version = resource_version.unwrap_or_else(|| resource.get_version());
 
         let event = WatcherEvent {
             event_type,
@@ -192,8 +194,8 @@ impl<T: Versionable> WatcherCache<T> {
 }
 
 impl<T: Versionable + Clone> EventDispatch<T> for WatcherCache<T> {
-    fn init_add(&mut self, resource: T) {
-        let version = resource.get_version();
+    fn init_add(&mut self, resource: T, resource_version: Option<u64>) {
+        let version = resource_version.unwrap_or_else(|| resource.get_version());
         self.data.insert(version.to_string(), resource);
     }
 
@@ -201,21 +203,21 @@ impl<T: Versionable + Clone> EventDispatch<T> for WatcherCache<T> {
         self.ready = true;
     }
 
-    fn event_add(&mut self, resource: T) {
-        let version = resource.get_version();
+    fn event_add(&mut self, resource: T, resource_version: Option<u64>) {
+        let version = resource_version.unwrap_or_else(|| resource.get_version());
         self.data.insert(version.to_string(), resource.clone());
-        self.add_event(EventType::Add, resource);
+        self.add_event(EventType::Add, resource, resource_version);
     }
 
-    fn event_update(&mut self, resource: T) {
-        let version = resource.get_version();
+    fn event_update(&mut self, resource: T, resource_version: Option<u64>) {
+        let version = resource_version.unwrap_or_else(|| resource.get_version());
         self.data.insert(version.to_string(), resource.clone());
-        self.add_event(EventType::Update, resource);
+        self.add_event(EventType::Update, resource, resource_version);
     }
 
-    fn event_del(&mut self, resource: T) {
-        let version = resource.get_version();
+    fn event_del(&mut self, resource: T, resource_version: Option<u64>) {
+        let version = resource_version.unwrap_or_else(|| resource.get_version());
         self.data.remove(&version.to_string());
-        self.add_event(EventType::Delete, resource);
+        self.add_event(EventType::Delete, resource, resource_version);
     }
 }

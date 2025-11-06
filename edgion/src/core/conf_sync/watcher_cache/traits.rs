@@ -7,17 +7,17 @@ pub trait Versionable {
 /// Trait for handling resource events
 pub trait EventDispatch<T> {
     /// Initialize by adding a resource
-    fn init_add(&mut self, resource: T);
+    fn init_add(&mut self, resource: T, resource_version: Option<u64>);
 
     /// Set the dispatcher as ready
     fn set_ready(&mut self);
 
     /// Handle add event
-    fn event_add(&mut self, resource: T);
+    fn event_add(&mut self, resource: T, resource_version: Option<u64>);
 
     /// Handle update event
-    fn event_update(&mut self, resource: T);
+    fn event_update(&mut self, resource: T, resource_version: Option<u64>);
 
     /// Handle delete event
-    fn event_del(&mut self, resource: T);
+    fn event_del(&mut self, resource: T, resource_version: Option<u64>);
 }
