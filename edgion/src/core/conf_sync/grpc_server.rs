@@ -1,3 +1,4 @@
+use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
@@ -73,8 +74,8 @@ impl ConfigSync for ConfigSyncServer {
         let req = request.into_inner();
 
         // Convert proto ResourceKind to our ResourceKind
-        let proto_kind = ProtoResourceKind::from_i32(req.kind)
-            .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
+        let proto_kind = ProtoResourceKind::try_from(req.kind)
+            .map_err(|_| Status::invalid_argument("Invalid resource kind"))?;
         let resource_kind = proto_to_resource_kind(proto_kind)
             .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
@@ -100,8 +101,8 @@ impl ConfigSync for ConfigSyncServer {
         let req = request.into_inner();
 
         // Convert proto ResourceKind to our ResourceKind
-        let proto_kind = ProtoResourceKind::from_i32(req.kind)
-            .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
+        let proto_kind = ProtoResourceKind::try_from(req.kind)
+            .map_err(|_| Status::invalid_argument("Invalid resource kind"))?;
         let resource_kind = proto_to_resource_kind(proto_kind)
             .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 

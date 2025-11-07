@@ -74,8 +74,10 @@ impl<T: Versionable> CenterCache<T> {
     /// Notify all pending watchers (non-blocking)
     /// Uses shared Notify to broadcast to all watchers at once
     fn notify_watchers(&mut self) {
-        // Notify all waiting tasks at once - much more efficient!
-        self.notify.notify_waiters();
+        if self.is_ready() {
+            // Notify all waiting tasks at once - much more efficient!
+            self.notify.notify_waiters();
+        }
     }
 
     /// Start a watcher task that listens for notifications and sends data
