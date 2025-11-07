@@ -147,6 +147,14 @@ impl<T: Versionable> CenterCache<T> {
     where
         T: Clone + Send + Sync + 'static,
     {
+        println!(
+            "[CenterCache] new watch request client_id={} client_name={} from_version={} ready={} pending_watchers={}",
+            client_id,
+            client_name,
+            from_version,
+            self.ready,
+            self.watchers.len()
+        );
         // Use bounded channel for data to provide backpressure
         let (data_tx, data_rx) = mpsc::channel(100);
 
@@ -164,6 +172,12 @@ impl<T: Versionable> CenterCache<T> {
             last_send_time: Arc::new(std::sync::RwLock::new(None)),
         };
         self.watchers.push(watcher.clone());
+
+        println!(
+            "[CenterCache] watcher registered client_id={} total_watchers={}",
+            watcher.client_id,
+            self.watchers.len()
+        );
 
         // Start the watcher task - only needs store
         Self::start_watcher_task(store, notify, watcher);

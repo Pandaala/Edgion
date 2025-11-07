@@ -106,17 +106,51 @@ impl ConfigSync for ConfigSyncServer {
         let resource_kind = proto_to_resource_kind(proto_kind)
             .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
+        let client_id_log = req.client_id.clone();
+        let client_name_log = req.client_name.clone();
+
+        println!(
+            "[ConfigSyncServer::watch] request key={} kind={:?} client_id={} client_name={} from_version={}",
+            req.key,
+            resource_kind,
+            client_id_log,
+            client_name_log,
+            req.from_version
+        );
+
         // Get WatcherMgr and call watch
         let mut watcher_mgr = self.config_center.lock().await;
-        let receiver = watcher_mgr
-            .watch(
-                &req.key,
-                &resource_kind,
-                req.client_id,
-                req.client_name,
-                req.from_version,
-            )
-            .map_err(|e| Status::internal(format!("Failed to start watch: {}", e)))?;
+        let watch_result = watcher_mgr.watch(
+            &req.key,
+            &resource_kind,
+            req.client_id,
+            req.client_name,
+            req.from_version,
+        );
+
+        let receiver = match watch_result {
+            Ok(receiver) => {
+                println!(
+                    "[ConfigSyncServer::watch] watch established key={} kind={:?} client_id={} client_name={}",
+                    req.key,
+                    resource_kind,
+                    client_id_log,
+                    client_name_log
+                );
+                receiver
+            }
+            Err(e) => {
+                println!(
+                    "[ConfigSyncServer::watch] watch failed key={} kind={:?} client_id={} client_name={} error={}",
+                    req.key,
+                    resource_kind,
+                    client_id_log,
+                    client_name_log,
+                    e
+                );
+                return Err(Status::internal(format!("Failed to start watch: {}", e)));
+            }
+        };
 
         // Convert EventDataSimple receiver to WatchResponse stream
         let (tx, rx) = tokio::sync::mpsc::channel(100);

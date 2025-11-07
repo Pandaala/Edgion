@@ -141,11 +141,51 @@ impl ConfigCenter {
     ) -> Result<mpsc::Receiver<EventDataSimple>, String> {
         let (tx, rx) = mpsc::channel(100);
 
+        println!(
+            "[ConfigCenter::watch] key={} kind={:?} client_id={} client_name={} from_version={}",
+            key, kind, client_id, client_name, from_version
+        );
+
         match kind {
             ResourceKind::GatewayClass => {
-                let mut receiver = self
-                    .watch_gateway_classes(key, client_id, client_name, from_version)
-                    .ok_or_else(|| format!("GatewayClass cache not found for key: {}", key))?;
+                let client_id_log = client_id.clone();
+                let client_name_log = client_name.clone();
+
+                let mut receiver = match self.watch_gateway_classes(
+                    key,
+                    client_id,
+                    client_name,
+                    from_version,
+                ) {
+                    Some(receiver) => {
+                        println!(
+                            "[ConfigCenter::watch] GatewayClass cache hit key={} client_id={} client_name={}",
+                            key,
+                            client_id_log,
+                            client_name_log
+                        );
+                        receiver
+                    }
+                    None => {
+                        let available_keys: Vec<_> = self.gateway_classes.keys().cloned().collect();
+                        println!(
+                            "[ConfigCenter::watch] GatewayClass cache miss key={} client_id={} client_name={} available_keys={:?}",
+                            key,
+                            client_id_log,
+                            client_name_log,
+                            available_keys
+                        );
+                        return Err(format!("GatewayClass cache not found for key: {}", key));
+                    }
+                };
+
+                println!(
+                    "[ConfigCenter::watch] GatewayClass watch established key={} client_id={} client_name={} from_version={}",
+                    key,
+                    client_id_log,
+                    client_name_log,
+                    from_version
+                );
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let events_json = match serde_json::to_string(&response.events) {
@@ -411,9 +451,15 @@ impl ConfigCenter {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<GatewayClass>>> {
-        self.gateway_classes
-            .get_mut(key)
-            .map(|cache| cache.watch(client_id, client_name, from_version))
+        let cache = self
+            .gateway_classes
+            .entry(key.to_string())
+            .or_insert_with(|| {
+                let mut cache = CenterCache::new(1000);
+                EventDispatch::set_ready(&mut cache);
+                cache
+            });
+        Some(cache.watch(client_id, client_name, from_version))
     }
 
     /// Watch gateway class specs
@@ -424,9 +470,15 @@ impl ConfigCenter {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<GatewayClassSpec>>> {
-        self.gateway_class_specs
-            .get_mut(key)
-            .map(|cache| cache.watch(client_id, client_name, from_version))
+        let cache = self
+            .gateway_class_specs
+            .entry(key.to_string())
+            .or_insert_with(|| {
+                let mut cache = CenterCache::new(1000);
+                EventDispatch::set_ready(&mut cache);
+                cache
+            });
+        Some(cache.watch(client_id, client_name, from_version))
     }
 
     /// Watch gateways
@@ -437,9 +489,12 @@ impl ConfigCenter {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<Gateway>>> {
-        self.gateways
-            .get_mut(key)
-            .map(|cache| cache.watch(client_id, client_name, from_version))
+        let cache = self.gateways.entry(key.to_string()).or_insert_with(|| {
+            let mut cache = CenterCache::new(1000);
+            EventDispatch::set_ready(&mut cache);
+            cache
+        });
+        Some(cache.watch(client_id, client_name, from_version))
     }
 
     /// Watch HTTP routes
@@ -450,9 +505,12 @@ impl ConfigCenter {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<HTTPRoute>>> {
-        self.routes
-            .get_mut(key)
-            .map(|cache| cache.watch(client_id, client_name, from_version))
+        let cache = self.routes.entry(key.to_string()).or_insert_with(|| {
+            let mut cache = CenterCache::new(1000);
+            EventDispatch::set_ready(&mut cache);
+            cache
+        });
+        Some(cache.watch(client_id, client_name, from_version))
     }
 
     /// Watch services
@@ -463,9 +521,12 @@ impl ConfigCenter {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<Service>>> {
-        self.services
-            .get_mut(key)
-            .map(|cache| cache.watch(client_id, client_name, from_version))
+        let cache = self.services.entry(key.to_string()).or_insert_with(|| {
+            let mut cache = CenterCache::new(1000);
+            EventDispatch::set_ready(&mut cache);
+            cache
+        });
+        Some(cache.watch(client_id, client_name, from_version))
     }
 
     /// Watch endpoint slices
@@ -476,9 +537,15 @@ impl ConfigCenter {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<EndpointSlice>>> {
-        self.endpoint_slices
-            .get_mut(key)
-            .map(|cache| cache.watch(client_id, client_name, from_version))
+        let cache = self
+            .endpoint_slices
+            .entry(key.to_string())
+            .or_insert_with(|| {
+                let mut cache = CenterCache::new(1000);
+                EventDispatch::set_ready(&mut cache);
+                cache
+            });
+        Some(cache.watch(client_id, client_name, from_version))
     }
 
     /// Watch Edgion TLS
@@ -489,9 +556,12 @@ impl ConfigCenter {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<EdgionTls>>> {
-        self.edgion_tls
-            .get_mut(key)
-            .map(|cache| cache.watch(client_id, client_name, from_version))
+        let cache = self.edgion_tls.entry(key.to_string()).or_insert_with(|| {
+            let mut cache = CenterCache::new(1000);
+            EventDispatch::set_ready(&mut cache);
+            cache
+        });
+        Some(cache.watch(client_id, client_name, from_version))
     }
 
     /// Watch secrets
@@ -502,9 +572,12 @@ impl ConfigCenter {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<Secret>>> {
-        self.secrets
-            .get_mut(key)
-            .map(|cache| cache.watch(client_id, client_name, from_version))
+        let cache = self.secrets.entry(key.to_string()).or_insert_with(|| {
+            let mut cache = CenterCache::new(1000);
+            EventDispatch::set_ready(&mut cache);
+            cache
+        });
+        Some(cache.watch(client_id, client_name, from_version))
     }
 
     /// Print all configuration for a specific gateway class key
