@@ -10,6 +10,7 @@ mod grpc_tests;
 mod hub_cache;
 mod proto;
 pub mod traits;
+mod config_center_rcv_changes;
 
 pub use center_cache::{CenterCache, EventDispatch, Versionable};
 pub use config_center::ConfigCenter;

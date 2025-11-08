@@ -3,7 +3,7 @@
 use crate::core::conf_sync::config_center::ConfigCenter;
 use crate::core::conf_sync::grpc_client::ConfigSyncClient;
 use crate::core::conf_sync::grpc_server::ConfigSyncServer;
-use crate::core::conf_sync::traits::EventDispatcher;
+use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::types::{
     EdgionGatewayConfig, EdgionGatewayConfigSpec, EdgionTls, EdgionTlsSpec, ResourceKind,
 };
@@ -207,7 +207,13 @@ async fn seed_all_resource_types(config_center: &Arc<Mutex<ConfigCenter>>) {
     let mut center = config_center.lock().await;
     for (kind, value, version) in resources {
         let data = serde_json::to_string(&value).expect("serialize resource");
-        <ConfigCenter as EventDispatcher>::event_add(&mut *center, Some(kind), data, Some(version));
+        <ConfigCenter as EventDispatcher>::apply_resource_change(
+            &mut *center,
+            ResourceChange::EventAdd,
+            Some(kind),
+            data,
+            Some(version),
+        );
     }
 }
 

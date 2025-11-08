@@ -3,7 +3,7 @@ use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, ListRequest, ListResponse,
     ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
 };
-use crate::core::conf_sync::traits::EventDispatcher;
+use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::types::ResourceKind;
 use std::sync::Arc;
 use std::time::Duration;
@@ -108,7 +108,12 @@ impl ConfigSyncClient {
                 tonic::Status::internal(format!("Failed to serialize resource: {}", e))
             })?;
 
-            hub.init_add(Some(kind), data_str, Some(list_response.resource_version));
+            hub.apply_resource_change(
+                ResourceChange::InitAdd,
+                Some(kind),
+                data_str,
+                Some(list_response.resource_version),
+            );
         }
 
         println!("[CLIENT] Finished syncing {:?}", kind);
@@ -178,19 +183,24 @@ impl ConfigSyncClient {
                             .unwrap_or(watch_response.resource_version);
 
                         match event_type {
-                            "add" => {
-                                hub.event_add(Some(kind_clone), data_str, Some(resource_version));
-                            }
-                            "update" => {
-                                hub.event_update(
-                                    Some(kind_clone),
-                                    data_str,
-                                    Some(resource_version),
-                                );
-                            }
-                            "delete" => {
-                                hub.event_del(Some(kind_clone), data_str, Some(resource_version));
-                            }
+                            "add" => hub.apply_resource_change(
+                                ResourceChange::EventAdd,
+                                Some(kind_clone),
+                                data_str,
+                                Some(resource_version),
+                            ),
+                            "update" => hub.apply_resource_change(
+                                ResourceChange::EventUpdate,
+                                Some(kind_clone),
+                                data_str,
+                                Some(resource_version),
+                            ),
+                            "delete" => hub.apply_resource_change(
+                                ResourceChange::EventDelete,
+                                Some(kind_clone),
+                                data_str,
+                                Some(resource_version),
+                            ),
                             _ => {}
                         }
                     }

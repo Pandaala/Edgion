@@ -3,24 +3,42 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-use crate::core::conf_sync::center_cache::{CenterCache, EventDispatch, ListData, WatchResponse};
-use crate::core::conf_sync::traits::EventDispatcher;
+use crate::core::conf_sync::center_cache::{
+    CenterCache, EventDispatch, ListData, Versionable, WatchResponse,
+};
+use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
 };
 use anyhow::Result;
 
+
 pub type GatewayClassKey = String;
 
+// internal key
+pub type NsNameKey = String;
+
+pub enum ResourceItem {
+    GatewayClass(GatewayClass),
+    EdgionGatewayConfig(EdgionGatewayConfig),
+    Gateway(Gateway),
+    HTTPRoute(HTTPRoute),
+    Service(Service),
+    EndpointSlice(EndpointSlice),
+    EdgionTls(EdgionTls),
+    Secret(Secret),
+}
+
+// todo, 所有的资源，都按照gatewayclass进行规制，对于多层映射的，后期可以通过添加filter的机制
 pub struct ConfigCenter {
-    gateway_classes: HashMap<GatewayClassKey, CenterCache<GatewayClass>>,
-    edgion_gateway_configs: HashMap<GatewayClassKey, CenterCache<EdgionGatewayConfig>>,
-    gateways: HashMap<String, CenterCache<Gateway>>,
-    routes: HashMap<GatewayClassKey, CenterCache<HTTPRoute>>,
-    services: HashMap<GatewayClassKey, CenterCache<Service>>,
-    endpoint_slices: HashMap<GatewayClassKey, CenterCache<EndpointSlice>>,
-    edgion_tls: HashMap<GatewayClassKey, CenterCache<EdgionTls>>,
-    secrets: HashMap<GatewayClassKey, CenterCache<Secret>>,
+    pub gateway_classes: HashMap<GatewayClassKey, CenterCache<GatewayClass>>,
+    pub edgion_gateway_configs: HashMap<GatewayClassKey, CenterCache<EdgionGatewayConfig>>,
+    pub gateways: HashMap<GatewayClassKey, CenterCache<Gateway>>,
+    pub routes: HashMap<GatewayClassKey, CenterCache<HTTPRoute>>,
+    pub services: HashMap<GatewayClassKey, CenterCache<Service>>,
+    pub endpoint_slices: HashMap<GatewayClassKey, CenterCache<EndpointSlice>>,
+    pub edgion_tls: HashMap<GatewayClassKey, CenterCache<EdgionTls>>,
+    pub secrets: HashMap<GatewayClassKey, CenterCache<Secret>>,
 }
 
 pub struct ListDataSimple {
@@ -34,6 +52,8 @@ pub struct EventDataSimple {
 }
 
 impl ConfigCenter {
+
+
     pub fn new() -> Self {
         Self {
             gateway_classes: HashMap::new(),
@@ -744,422 +764,5 @@ impl ConfigCenter {
 impl Default for ConfigCenter {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl EventDispatcher for ConfigCenter {
-    fn init_add(
-        &mut self,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        resource_version: Option<u64>,
-    ) {
-        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-        let Some(resource_type) = resource_type else {
-            return;
-        };
-
-        match resource_type {
-            ResourceKind::GatewayClass => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
-                    if let Some(key) = resource.metadata.name.clone() {
-                        let cache = self
-                            .gateway_classes
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.init_add(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::EdgionGatewayConfig => {
-                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    let cache = self
-                        .edgion_gateway_configs
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.init_add(resource, resource_version);
-                }
-            }
-            ResourceKind::Gateway => {
-                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
-                    let key = resource.spec.gateway_class_name.clone();
-                    let cache = self
-                        .gateways
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.init_add(resource, resource_version);
-                }
-            }
-            ResourceKind::HTTPRoute => {
-                if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
-                    if let Some(key) = resource
-                        .spec
-                        .parent_refs
-                        .as_ref()
-                        .and_then(|refs| refs.first())
-                        .map(|parent| parent.name.clone())
-                    {
-                        let cache = self
-                            .routes
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.init_add(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::Service => {
-                if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    // Use GatewayClassKey from context - for now, use a default key
-                    // In production, this should be extracted from the resource's labels or annotations
-                    let key = "test-gateway-class".to_string();
-                    let cache = self
-                        .services
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.init_add(resource, resource_version);
-                }
-            }
-            ResourceKind::EndpointSlice => {
-                if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    let cache = self
-                        .endpoint_slices
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.init_add(resource, resource_version);
-                }
-            }
-            ResourceKind::EdgionTls => {
-                if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    let cache = self
-                        .edgion_tls
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.init_add(resource, resource_version);
-                }
-            }
-            ResourceKind::Secret => {
-                if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    let cache = self
-                        .secrets
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.init_add(resource, resource_version);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn set_ready(&mut self) {
-        for cache in self.gateway_classes.values_mut() {
-            cache.set_ready();
-        }
-        for cache in self.edgion_gateway_configs.values_mut() {
-            cache.set_ready();
-        }
-        for cache in self.gateways.values_mut() {
-            cache.set_ready();
-        }
-        for cache in self.routes.values_mut() {
-            cache.set_ready();
-        }
-        for cache in self.services.values_mut() {
-            cache.set_ready();
-        }
-        for cache in self.endpoint_slices.values_mut() {
-            cache.set_ready();
-        }
-        for cache in self.edgion_tls.values_mut() {
-            cache.set_ready();
-        }
-        for cache in self.secrets.values_mut() {
-            cache.set_ready();
-        }
-    }
-
-    fn event_add(
-        &mut self,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        resource_version: Option<u64>,
-    ) {
-        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-        let Some(resource_type) = resource_type else {
-            return;
-        };
-
-        match resource_type {
-            ResourceKind::GatewayClass => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
-                    if let Some(key) = resource.metadata.name.clone() {
-                        let cache = self
-                            .gateway_classes
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.event_add(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::EdgionGatewayConfig => {
-                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    let cache = self
-                        .edgion_gateway_configs
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::Gateway => {
-                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
-                    let key = resource.spec.gateway_class_name.clone();
-                    let cache = self
-                        .gateways
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::HTTPRoute => {
-                if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
-                    if let Some(key) = resource
-                        .spec
-                        .parent_refs
-                        .as_ref()
-                        .and_then(|refs| refs.first())
-                        .map(|parent| parent.name.clone())
-                    {
-                        let cache = self
-                            .routes
-                            .entry(key)
-                            .or_insert_with(|| CenterCache::new(1000));
-                        cache.event_add(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::Service => {
-                if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    // Use GatewayClassKey from context - for now, use a default key
-                    // In production, this should be extracted from the resource's labels or annotations
-                    let key = "test-gateway-class".to_string();
-                    let cache = self
-                        .services
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::EndpointSlice => {
-                if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    let cache = self
-                        .endpoint_slices
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::EdgionTls => {
-                if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    let cache = self
-                        .edgion_tls
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::Secret => {
-                if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    let cache = self
-                        .secrets
-                        .entry(key)
-                        .or_insert_with(|| CenterCache::new(1000));
-                    cache.event_add(resource, resource_version);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn event_update(
-        &mut self,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        resource_version: Option<u64>,
-    ) {
-        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-        let Some(resource_type) = resource_type else {
-            return;
-        };
-
-        match resource_type {
-            ResourceKind::GatewayClass => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
-                    if let Some(key) = resource.metadata.name.clone() {
-                        if let Some(cache) = self.gateway_classes.get_mut(&key) {
-                            cache.event_update(resource, resource_version);
-                        }
-                    }
-                }
-            }
-            ResourceKind::EdgionGatewayConfig => {
-                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.edgion_gateway_configs.get_mut(&key) {
-                        cache.event_update(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::Gateway => {
-                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
-                    let key = resource.spec.gateway_class_name.clone();
-                    if let Some(cache) = self.gateways.get_mut(&key) {
-                        cache.event_update(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::HTTPRoute => {
-                if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
-                    if let Some(key) = resource
-                        .spec
-                        .parent_refs
-                        .as_ref()
-                        .and_then(|refs| refs.first())
-                        .map(|parent| parent.name.clone())
-                    {
-                        if let Some(cache) = self.routes.get_mut(&key) {
-                            cache.event_update(resource, resource_version);
-                        }
-                    }
-                }
-            }
-            ResourceKind::Service => {
-                if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.services.get_mut(&key) {
-                        cache.event_update(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::EndpointSlice => {
-                if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.endpoint_slices.get_mut(&key) {
-                        cache.event_update(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::EdgionTls => {
-                if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.edgion_tls.get_mut(&key) {
-                        cache.event_update(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::Secret => {
-                if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.secrets.get_mut(&key) {
-                        cache.event_update(resource, resource_version);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn event_del(
-        &mut self,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        resource_version: Option<u64>,
-    ) {
-        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-        let Some(resource_type) = resource_type else {
-            return;
-        };
-
-        match resource_type {
-            ResourceKind::GatewayClass => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
-                    if let Some(key) = resource.metadata.name.clone() {
-                        if let Some(cache) = self.gateway_classes.get_mut(&key) {
-                            cache.event_del(resource, resource_version);
-                        }
-                    }
-                }
-            }
-            ResourceKind::EdgionGatewayConfig => {
-                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.edgion_gateway_configs.get_mut(&key) {
-                        cache.event_del(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::Gateway => {
-                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
-                    let key = resource.spec.gateway_class_name.clone();
-                    if let Some(cache) = self.gateways.get_mut(&key) {
-                        cache.event_del(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::HTTPRoute => {
-                if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
-                    if let Some(key) = resource
-                        .spec
-                        .parent_refs
-                        .as_ref()
-                        .and_then(|refs| refs.first())
-                        .map(|parent| parent.name.clone())
-                    {
-                        if let Some(cache) = self.routes.get_mut(&key) {
-                            cache.event_del(resource, resource_version);
-                        }
-                    }
-                }
-            }
-            ResourceKind::Service => {
-                if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.services.get_mut(&key) {
-                        cache.event_del(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::EndpointSlice => {
-                if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.endpoint_slices.get_mut(&key) {
-                        cache.event_del(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::EdgionTls => {
-                if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.edgion_tls.get_mut(&key) {
-                        cache.event_del(resource, resource_version);
-                    }
-                }
-            }
-            ResourceKind::Secret => {
-                if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.secrets.get_mut(&key) {
-                        cache.event_del(resource, resource_version);
-                    }
-                }
-            }
-            _ => {}
-        }
     }
 }

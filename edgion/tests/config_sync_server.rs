@@ -15,7 +15,7 @@ use tokio::time::{interval, sleep};
 
 use edgion::core::conf_sync::config_center::{ConfigCenter, GatewayClassKey};
 use edgion::core::conf_sync::grpc_server::ConfigSyncServer;
-use edgion::core::conf_sync::traits::EventDispatcher;
+use edgion::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use edgion::types::ResourceKind;
 
 const DEFAULT_GATEWAY_CLASS_KEY: &str = "test-gateway-class";
@@ -232,24 +232,27 @@ async fn add_config(
 
     match operation {
         Operation::Add => {
-            <ConfigCenter as EventDispatcher>::event_add(
+            <ConfigCenter as EventDispatcher>::apply_resource_change(
                 &mut *center,
+                ResourceChange::EventAdd,
                 Some(kind),
                 data_str.clone(),
                 Some(version),
             );
         }
         Operation::Update => {
-            <ConfigCenter as EventDispatcher>::event_update(
+            <ConfigCenter as EventDispatcher>::apply_resource_change(
                 &mut *center,
+                ResourceChange::EventUpdate,
                 Some(kind),
                 data_str.clone(),
                 Some(version),
             );
         }
         Operation::Delete => {
-            <ConfigCenter as EventDispatcher>::event_del(
+            <ConfigCenter as EventDispatcher>::apply_resource_change(
                 &mut *center,
+                ResourceChange::EventDelete,
                 Some(kind),
                 data_str,
                 Some(version),

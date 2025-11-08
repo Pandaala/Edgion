@@ -2,7 +2,7 @@
 
 use crate::core::conf_sync::config_center::ConfigCenter;
 use crate::core::conf_sync::config_hub::ConfigHub;
-use crate::core::conf_sync::traits::EventDispatcher;
+use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::types::{
     EdgionGatewayConfig, EdgionGatewayConfigSpec, EdgionTls, EdgionTlsSpec, HTTPRoute, ResourceKind,
 };
@@ -177,7 +177,13 @@ fn resource_fixtures() -> Vec<(ResourceKind, Value, u64)> {
 fn seed_config_center(center: &mut ConfigCenter) {
     for (kind, value, version) in resource_fixtures() {
         let data = serde_json::to_string(&value).expect("serialize resource");
-        <ConfigCenter as EventDispatcher>::event_add(center, Some(kind), data, Some(version));
+        <ConfigCenter as EventDispatcher>::apply_resource_change(
+            center,
+            ResourceChange::EventAdd,
+            Some(kind),
+            data,
+            Some(version),
+        );
     }
 }
 
@@ -244,15 +250,17 @@ async fn exercise_http_route_lifecycle(center: &mut ConfigCenter, hub: &mut Conf
     // Add
     let add_route = http_route_value("example.com", version);
     let add_data = serde_json::to_string(&add_route).expect("serialize HTTPRoute add payload");
-    <ConfigCenter as EventDispatcher>::event_add(
+    <ConfigCenter as EventDispatcher>::apply_resource_change(
         center,
+        ResourceChange::EventAdd,
         Some(ResourceKind::HTTPRoute),
         add_data.clone(),
         Some(version),
     );
     sleep(Duration::from_secs(1)).await;
-    <ConfigHub as EventDispatcher>::event_add(
+    <ConfigHub as EventDispatcher>::apply_resource_change(
         hub,
+        ResourceChange::EventAdd,
         Some(ResourceKind::HTTPRoute),
         add_data.clone(),
         Some(version),
@@ -263,15 +271,17 @@ async fn exercise_http_route_lifecycle(center: &mut ConfigCenter, hub: &mut Conf
     let update_route = http_route_value("api.example.com", version);
     let update_data =
         serde_json::to_string(&update_route).expect("serialize HTTPRoute update payload");
-    <ConfigCenter as EventDispatcher>::event_update(
+    <ConfigCenter as EventDispatcher>::apply_resource_change(
         center,
+        ResourceChange::EventUpdate,
         Some(ResourceKind::HTTPRoute),
         update_data.clone(),
         Some(version),
     );
     sleep(Duration::from_secs(1)).await;
-    <ConfigHub as EventDispatcher>::event_update(
+    <ConfigHub as EventDispatcher>::apply_resource_change(
         hub,
+        ResourceChange::EventUpdate,
         Some(ResourceKind::HTTPRoute),
         update_data.clone(),
         Some(version),
@@ -279,15 +289,17 @@ async fn exercise_http_route_lifecycle(center: &mut ConfigCenter, hub: &mut Conf
     assert_http_route_state(center, hub, Some("api.example.com"), version, 1).await;
 
     // Delete
-    <ConfigCenter as EventDispatcher>::event_del(
+    <ConfigCenter as EventDispatcher>::apply_resource_change(
         center,
+        ResourceChange::EventDelete,
         Some(ResourceKind::HTTPRoute),
         update_data.clone(),
         Some(version),
     );
     sleep(Duration::from_secs(1)).await;
-    <ConfigHub as EventDispatcher>::event_del(
+    <ConfigHub as EventDispatcher>::apply_resource_change(
         hub,
+        ResourceChange::EventDelete,
         Some(ResourceKind::HTTPRoute),
         update_data,
         Some(version),
@@ -328,8 +340,9 @@ async fn config_center_data_syncs_into_config_hub() {
 
         for resource in resources {
             let data = serde_json::to_string(&resource).expect("serialize resource for hub");
-            <ConfigHub as EventDispatcher>::init_add(
+            <ConfigHub as EventDispatcher>::apply_resource_change(
                 &mut config_hub,
+                ResourceChange::InitAdd,
                 Some(kind),
                 data,
                 Some(list_response.resource_version),

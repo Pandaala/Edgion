@@ -1,7 +1,7 @@
-use crate::core::conf_sync::center_cache::{EventDispatch, ListData};
+use crate::core::conf_sync::center_cache::{EventDispatch, ListData, Versionable};
 use crate::core::conf_sync::config_center::GatewayClassKey;
 use crate::core::conf_sync::hub_cache::HubCache;
-use crate::core::conf_sync::traits::EventDispatcher;
+use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
 };
@@ -38,6 +38,22 @@ impl ConfigHub {
 
     pub fn get_gateway_class_key(&self) -> &GatewayClassKey {
         &self.gateway_class_key
+    }
+
+    fn apply_change_to_cache<T>(
+        cache: &mut HubCache<T>,
+        change: ResourceChange,
+        resource: T,
+        resource_version: Option<u64>,
+    ) where
+        T: Clone + Versionable + Send + 'static,
+    {
+        match change {
+            ResourceChange::InitAdd => cache.init_add(resource, resource_version),
+            ResourceChange::EventAdd => cache.event_add(resource, resource_version),
+            ResourceChange::EventUpdate => cache.event_update(resource, resource_version),
+            ResourceChange::EventDelete => cache.event_del(resource, resource_version),
+        }
     }
 
     pub fn list(
@@ -284,8 +300,9 @@ pub struct ListDataSimple {
 }
 
 impl EventDispatcher for ConfigHub {
-    fn init_add(
+    fn apply_resource_change(
         &mut self,
+        change: ResourceChange,
         resource_type: Option<ResourceKind>,
         data: String,
         resource_version: Option<u64>,
@@ -293,255 +310,102 @@ impl EventDispatcher for ConfigHub {
         let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
         let Some(resource_type) = resource_type else {
             eprintln!(
-                "[HUB] init_add: Failed to determine resource type from data: {}",
+                "[HUB] apply_resource_change {:?}: Failed to determine resource type from data: {}",
+                change,
                 &data[..data.len().min(200)]
             );
             return;
         };
 
+        let log_error = |kind: &str, err: &serde_json::Error| {
+            eprintln!(
+                "[HUB] apply_resource_change {:?}: Failed to parse {}: {} (data: {})",
+                change,
+                kind,
+                err,
+                &data[..data.len().min(200)]
+            );
+        };
+
         match resource_type {
             ResourceKind::GatewayClass => match serde_json::from_str::<GatewayClass>(&data) {
-                Ok(resource) => self.gateway_classes.init_add(resource, resource_version),
-                Err(e) => eprintln!(
-                    "[HUB] init_add: Failed to parse GatewayClass: {} (data: {})",
-                    e,
-                    &data[..data.len().min(200)]
+                Ok(resource) => Self::apply_change_to_cache(
+                    &mut self.gateway_classes,
+                    change,
+                    resource,
+                    resource_version,
                 ),
+                Err(e) => log_error("GatewayClass", &e),
             },
             ResourceKind::EdgionGatewayConfig => {
                 match serde_json::from_str::<EdgionGatewayConfig>(&data) {
-                    Ok(resource) => self
-                        .edgion_gateway_configs
-                        .init_add(resource, resource_version),
-                    Err(e) => eprintln!(
-                        "[HUB] init_add: Failed to parse EdgionGatewayConfig: {} (data: {})",
-                        e,
-                        &data[..data.len().min(200)]
+                    Ok(resource) => Self::apply_change_to_cache(
+                        &mut self.edgion_gateway_configs,
+                        change,
+                        resource,
+                        resource_version,
                     ),
+                    Err(e) => log_error("EdgionGatewayConfig", &e),
                 }
             }
             ResourceKind::Gateway => match serde_json::from_str::<Gateway>(&data) {
-                Ok(resource) => self.gateways.init_add(resource, resource_version),
-                Err(e) => eprintln!(
-                    "[HUB] init_add: Failed to parse Gateway: {} (data: {})",
-                    e,
-                    &data[..data.len().min(200)]
+                Ok(resource) => Self::apply_change_to_cache(
+                    &mut self.gateways,
+                    change,
+                    resource,
+                    resource_version,
                 ),
+                Err(e) => log_error("Gateway", &e),
             },
             ResourceKind::HTTPRoute => match serde_json::from_str::<HTTPRoute>(&data) {
-                Ok(resource) => self.routes.init_add(resource, resource_version),
-                Err(e) => eprintln!(
-                    "[HUB] init_add: Failed to parse HTTPRoute: {} (data: {})",
-                    e,
-                    &data[..data.len().min(200)]
+                Ok(resource) => Self::apply_change_to_cache(
+                    &mut self.routes,
+                    change,
+                    resource,
+                    resource_version,
                 ),
+                Err(e) => log_error("HTTPRoute", &e),
             },
             ResourceKind::Service => match serde_json::from_str::<Service>(&data) {
-                Ok(resource) => self.services.init_add(resource, resource_version),
-                Err(e) => eprintln!(
-                    "[HUB] init_add: Failed to parse Service: {} (data: {})",
-                    e,
-                    &data[..data.len().min(200)]
+                Ok(resource) => Self::apply_change_to_cache(
+                    &mut self.services,
+                    change,
+                    resource,
+                    resource_version,
                 ),
+                Err(e) => log_error("Service", &e),
             },
             ResourceKind::EndpointSlice => match serde_json::from_str::<EndpointSlice>(&data) {
-                Ok(resource) => self.endpoint_slices.init_add(resource, resource_version),
-                Err(e) => eprintln!(
-                    "[HUB] init_add: Failed to parse EndpointSlice: {} (data: {})",
-                    e,
-                    &data[..data.len().min(200)]
+                Ok(resource) => Self::apply_change_to_cache(
+                    &mut self.endpoint_slices,
+                    change,
+                    resource,
+                    resource_version,
                 ),
+                Err(e) => log_error("EndpointSlice", &e),
             },
             ResourceKind::EdgionTls => match serde_json::from_str::<EdgionTls>(&data) {
-                Ok(resource) => self.edgion_tls.init_add(resource, resource_version),
-                Err(e) => eprintln!(
-                    "[HUB] init_add: Failed to parse EdgionTls: {} (data: {})",
-                    e,
-                    &data[..data.len().min(200)]
+                Ok(resource) => Self::apply_change_to_cache(
+                    &mut self.edgion_tls,
+                    change,
+                    resource,
+                    resource_version,
                 ),
+                Err(e) => log_error("EdgionTls", &e),
             },
             ResourceKind::Secret => match serde_json::from_str::<Secret>(&data) {
-                Ok(resource) => self.secrets.init_add(resource, resource_version),
-                Err(e) => eprintln!(
-                    "[HUB] init_add: Failed to parse Secret: {} (data: {})",
-                    e,
-                    &data[..data.len().min(200)]
+                Ok(resource) => Self::apply_change_to_cache(
+                    &mut self.secrets,
+                    change,
+                    resource,
+                    resource_version,
                 ),
+                Err(e) => log_error("Secret", &e),
             },
         }
     }
 
     fn set_ready(&mut self) {
         // HubCache doesn't need ready state
-    }
-
-    fn event_add(
-        &mut self,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        resource_version: Option<u64>,
-    ) {
-        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-        let Some(resource_type) = resource_type else {
-            return;
-        };
-
-        match resource_type {
-            ResourceKind::GatewayClass => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
-                    self.gateway_classes.event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::EdgionGatewayConfig => {
-                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
-                    self.edgion_gateway_configs
-                        .event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::Gateway => {
-                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
-                    self.gateways.event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::HTTPRoute => {
-                if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
-                    self.routes.event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::Service => {
-                if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    self.services.event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::EndpointSlice => {
-                if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    self.endpoint_slices.event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::EdgionTls => {
-                if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    self.edgion_tls.event_add(resource, resource_version);
-                }
-            }
-            ResourceKind::Secret => {
-                if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    self.secrets.event_add(resource, resource_version);
-                }
-            }
-        }
-    }
-
-    fn event_update(
-        &mut self,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        resource_version: Option<u64>,
-    ) {
-        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-        let Some(resource_type) = resource_type else {
-            return;
-        };
-
-        match resource_type {
-            ResourceKind::GatewayClass => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
-                    self.gateway_classes
-                        .event_update(resource, resource_version);
-                }
-            }
-            ResourceKind::EdgionGatewayConfig => {
-                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
-                    self.edgion_gateway_configs
-                        .event_update(resource, resource_version);
-                }
-            }
-            ResourceKind::Gateway => {
-                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
-                    self.gateways.event_update(resource, resource_version);
-                }
-            }
-            ResourceKind::HTTPRoute => {
-                if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
-                    self.routes.event_update(resource, resource_version);
-                }
-            }
-            ResourceKind::Service => {
-                if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    self.services.event_update(resource, resource_version);
-                }
-            }
-            ResourceKind::EndpointSlice => {
-                if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    self.endpoint_slices
-                        .event_update(resource, resource_version);
-                }
-            }
-            ResourceKind::EdgionTls => {
-                if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    self.edgion_tls.event_update(resource, resource_version);
-                }
-            }
-            ResourceKind::Secret => {
-                if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    self.secrets.event_update(resource, resource_version);
-                }
-            }
-        }
-    }
-
-    fn event_del(
-        &mut self,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        resource_version: Option<u64>,
-    ) {
-        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-        let Some(resource_type) = resource_type else {
-            return;
-        };
-
-        match resource_type {
-            ResourceKind::GatewayClass => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
-                    self.gateway_classes.event_del(resource, resource_version);
-                }
-            }
-            ResourceKind::EdgionGatewayConfig => {
-                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
-                    self.edgion_gateway_configs
-                        .event_del(resource, resource_version);
-                }
-            }
-            ResourceKind::Gateway => {
-                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
-                    self.gateways.event_del(resource, resource_version);
-                }
-            }
-            ResourceKind::HTTPRoute => {
-                if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
-                    self.routes.event_del(resource, resource_version);
-                }
-            }
-            ResourceKind::Service => {
-                if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    self.services.event_del(resource, resource_version);
-                }
-            }
-            ResourceKind::EndpointSlice => {
-                if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    self.endpoint_slices.event_del(resource, resource_version);
-                }
-            }
-            ResourceKind::EdgionTls => {
-                if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    self.edgion_tls.event_del(resource, resource_version);
-                }
-            }
-            ResourceKind::Secret => {
-                if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    self.secrets.event_del(resource, resource_version);
-                }
-            }
-        }
     }
 }
