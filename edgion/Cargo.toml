@@ -15,6 +15,14 @@ path = "src/bin/main.rs"
 name = "config_sync_test"
 path = "src/tests/config_sync_test.rs"
 
+[[bin]]
+name = "config_sync_server"
+path = "src/bin/config_sync_server.rs"
+
+[[bin]]
+name = "config_sync_client"
+path = "src/bin/config_sync_client.rs"
+
 [features]
 # Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
 legacy_route_tests = []
@@ -47,6 +55,9 @@ prost.workspace = true
 
 # File system monitoring
 notify.workspace = true
+
+# HTTP server
+axum.workspace = true
 
 # Route matching
 radix_route_matcher.workspace = true
