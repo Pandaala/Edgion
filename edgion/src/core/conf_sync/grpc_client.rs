@@ -124,7 +124,7 @@ impl ConfigSyncClient {
         let hub = self.config_hub.lock().await;
         let from_version = match kind {
             ResourceKind::GatewayClass => hub.list_gateway_classes().resource_version,
-            ResourceKind::GatewayClassSpec => hub.list_gateway_class_specs().resource_version,
+            ResourceKind::EdgionGatewayConfig => hub.list_edgion_gateway_config().resource_version,
             ResourceKind::Gateway => hub.list_gateways().resource_version,
             ResourceKind::HTTPRoute => hub.list_routes().resource_version,
             ResourceKind::Service => hub.list_services().resource_version,
@@ -209,7 +209,7 @@ impl ConfigSyncClient {
 
         let resource_kinds = vec![
             ResourceKind::GatewayClass,
-            ResourceKind::GatewayClassSpec,
+            ResourceKind::EdgionGatewayConfig,
             ResourceKind::Gateway,
             ResourceKind::HTTPRoute,
             ResourceKind::Service,
@@ -235,7 +235,7 @@ impl ConfigSyncClient {
 
         let resource_kinds = vec![
             ResourceKind::GatewayClass,
-            ResourceKind::GatewayClassSpec,
+            ResourceKind::EdgionGatewayConfig,
             ResourceKind::Gateway,
             ResourceKind::HTTPRoute,
             ResourceKind::Service,
@@ -318,7 +318,7 @@ impl ConfigSyncClient {
 fn resource_kind_to_proto(kind: ResourceKind) -> ProtoResourceKind {
     match kind {
         ResourceKind::GatewayClass => ProtoResourceKind::GatewayClass,
-        ResourceKind::GatewayClassSpec => ProtoResourceKind::GatewayClassSpec,
+        ResourceKind::EdgionGatewayConfig => ProtoResourceKind::GatewayClassSpec,
         ResourceKind::Gateway => ProtoResourceKind::Gateway,
         ResourceKind::HTTPRoute => ProtoResourceKind::HttpRoute,
         ResourceKind::Service => ProtoResourceKind::Service,

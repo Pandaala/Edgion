@@ -2,7 +2,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
     GatewayClass,
-    GatewayClassSpec,
+    EdgionGatewayConfig,
     Gateway,
     HTTPRoute,
     Service,
@@ -21,7 +21,7 @@ impl ResourceKind {
 
         match kind_str {
             "GatewayClass" => Some(ResourceKind::GatewayClass),
-            "GatewayClassSpec" => Some(ResourceKind::GatewayClassSpec),
+            "EdgionGatewayConfig" => Some(ResourceKind::EdgionGatewayConfig),
             "Gateway" => Some(ResourceKind::Gateway),
             "HTTPRoute" => Some(ResourceKind::HTTPRoute),
             "Service" => Some(ResourceKind::Service),
@@ -36,7 +36,7 @@ impl ResourceKind {
     fn as_str(&self) -> &'static str {
         match self {
             ResourceKind::GatewayClass => "GatewayClass",
-            ResourceKind::GatewayClassSpec => "GatewayClassSpec",
+            ResourceKind::EdgionGatewayConfig => "GatewayClassSpec",
             ResourceKind::Gateway => "Gateway",
             ResourceKind::HTTPRoute => "HTTPRoute",
             ResourceKind::Service => "Service",

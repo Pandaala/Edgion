@@ -180,7 +180,7 @@ fn proto_to_resource_kind(kind: ProtoResourceKind) -> Option<ResourceKind> {
     match kind {
         ProtoResourceKind::Unspecified => None,
         ProtoResourceKind::GatewayClass => Some(ResourceKind::GatewayClass),
-        ProtoResourceKind::GatewayClassSpec => Some(ResourceKind::GatewayClassSpec),
+        ProtoResourceKind::GatewayClassSpec => Some(ResourceKind::EdgionGatewayConfig),
         ProtoResourceKind::Gateway => Some(ResourceKind::Gateway),
         ProtoResourceKind::HttpRoute => Some(ResourceKind::HTTPRoute),
         ProtoResourceKind::Service => Some(ResourceKind::Service),

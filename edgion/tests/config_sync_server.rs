@@ -278,7 +278,7 @@ async fn next_version(state: &ServerState, kind: ResourceKind) -> u64 {
 fn parse_kind(kind: &str) -> Option<ResourceKind> {
     match kind {
         "GatewayClass" => Some(ResourceKind::GatewayClass),
-        "GatewayClassSpec" => Some(ResourceKind::GatewayClassSpec),
+        "GatewayClassSpec" => Some(ResourceKind::EdgionGatewayConfig),
         "Gateway" => Some(ResourceKind::Gateway),
         "HTTPRoute" | "HttpRoute" => Some(ResourceKind::HTTPRoute),
         "Service" => Some(ResourceKind::Service),
@@ -305,7 +305,7 @@ async fn log_center_summary(center: &ConfigCenter, key: &str) {
         .map(|d| d.data.len())
         .unwrap_or(0);
     let spec_count = center
-        .list_gateway_class_specs(&key_string)
+        .list_edgion_gateway_configs(&key_string)
         .await
         .map(|d| d.data.len())
         .unwrap_or(0);

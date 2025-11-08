@@ -4,9 +4,11 @@ use crate::core::conf_sync::config_center::ConfigCenter;
 use crate::core::conf_sync::grpc_client::ConfigSyncClient;
 use crate::core::conf_sync::grpc_server::ConfigSyncServer;
 use crate::core::conf_sync::traits::EventDispatcher;
-use crate::types::{EdgionTls, EdgionTlsSpec, ResourceKind};
+use crate::types::{
+    EdgionGatewayConfig, EdgionGatewayConfigSpec, EdgionTls, EdgionTlsSpec, ResourceKind,
+};
 use k8s_openapi::api::core::v1::SecretReference;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
@@ -14,6 +16,20 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 
 const GATEWAY_CLASS_KEY: &str = "test-gateway-class";
+
+fn edgion_gateway_config_value(resource_version: u64) -> Value {
+    let spec = EdgionGatewayConfigSpec {
+        listener_defaults: None,
+        load_balancing: None,
+        access_log: None,
+        security: None,
+        limits: None,
+        observability: None,
+    };
+    let mut config = EdgionGatewayConfig::new(GATEWAY_CLASS_KEY, spec);
+    config.metadata.resource_version = Some(resource_version.to_string());
+    serde_json::to_value(&config).expect("serialize EdgionGatewayConfig")
+}
 
 async fn start_test_server(
     config_center: Arc<Mutex<ConfigCenter>>,
@@ -79,11 +95,8 @@ async fn seed_all_resource_types(config_center: &Arc<Mutex<ConfigCenter>>) {
             1_u64,
         ),
         (
-            ResourceKind::GatewayClassSpec,
-            json!({
-                "controllerName": "example.com/controller",
-                "description": "demo gateway class spec"
-            }),
+            ResourceKind::EdgionGatewayConfig,
+            edgion_gateway_config_value(2),
             2_u64,
         ),
         (
@@ -220,7 +233,7 @@ async fn grpc_server_client_syncs_all_resource_types() {
     let hub_guard = hub.lock().await;
 
     assert_eq!(hub_guard.list_gateway_classes().data.len(), 1);
-    assert_eq!(hub_guard.list_gateway_class_specs().data.len(), 1);
+    assert_eq!(hub_guard.list_edgion_gateway_config().data.len(), 1);
     assert_eq!(hub_guard.list_gateways().data.len(), 1);
     assert_eq!(hub_guard.list_routes().data.len(), 1);
     assert_eq!(hub_guard.list_services().data.len(), 1);

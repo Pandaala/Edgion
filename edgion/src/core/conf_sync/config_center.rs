@@ -5,14 +5,16 @@ use tokio::sync::mpsc;
 
 use crate::core::conf_sync::center_cache::{CenterCache, EventDispatch, ListData, WatchResponse};
 use crate::core::conf_sync::traits::EventDispatcher;
-use crate::types::{EdgionTls, Gateway, GatewayClass, GatewayClassSpec, HTTPRoute, ResourceKind};
+use crate::types::{
+    EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
+};
 use anyhow::Result;
 
 pub type GatewayClassKey = String;
 
 pub struct ConfigCenter {
     gateway_classes: HashMap<GatewayClassKey, CenterCache<GatewayClass>>,
-    gateway_class_specs: HashMap<GatewayClassKey, CenterCache<GatewayClassSpec>>,
+    edgion_gateway_configs: HashMap<GatewayClassKey, CenterCache<EdgionGatewayConfig>>,
     gateways: HashMap<String, CenterCache<Gateway>>,
     routes: HashMap<GatewayClassKey, CenterCache<HTTPRoute>>,
     services: HashMap<GatewayClassKey, CenterCache<Service>>,
@@ -35,7 +37,7 @@ impl ConfigCenter {
     pub fn new() -> Self {
         Self {
             gateway_classes: HashMap::new(),
-            gateway_class_specs: HashMap::new(),
+            edgion_gateway_configs: HashMap::new(),
             gateways: HashMap::new(),
             routes: HashMap::new(),
             services: HashMap::new(),
@@ -60,13 +62,13 @@ impl ConfigCenter {
                     .map_err(|e| format!("Failed to serialize GatewayClass data: {}", e))?;
                 (json, list_data.resource_version)
             }
-            ResourceKind::GatewayClassSpec => {
+            ResourceKind::EdgionGatewayConfig => {
                 let list_data = self
-                    .list_gateway_class_specs(key)
+                    .list_edgion_gateway_configs(key)
                     .await
                     .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize GatewayClassSpec data: {}", e))?;
+                    .map_err(|e| format!("Failed to serialize EdgionGatewayConfig data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::Gateway => {
@@ -205,16 +207,18 @@ impl ConfigCenter {
                     }
                 });
             }
-            ResourceKind::GatewayClassSpec => {
+            ResourceKind::EdgionGatewayConfig => {
                 let mut receiver = self
-                    .watch_gateway_class_specs(key, client_id, client_name, from_version)
-                    .ok_or_else(|| format!("GatewayClassSpec cache not found for key: {}", key))?;
+                    .watch_edgion_gateway_configs(key, client_id, client_name, from_version)
+                    .ok_or_else(|| {
+                        format!("EdgionGatewayConfig cache not found for key: {}", key)
+                    })?;
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let events_json = match serde_json::to_string(&response.events) {
                             Ok(json) => json,
                             Err(e) => {
-                                eprintln!("Failed to serialize GatewayClassSpec events: {}", e);
+                                eprintln!("Failed to serialize EdgionGatewayConfig events: {}", e);
                                 continue;
                             }
                         };
@@ -380,9 +384,11 @@ impl ConfigCenter {
         }
     }
 
-    /// List gateway class specs
-    pub async fn list_gateway_class_specs(&self, key: &str) -> Option<ListData<GatewayClassSpec>> {
-        if let Some(cache) = self.gateway_class_specs.get(key) {
+    pub async fn list_edgion_gateway_configs(
+        &self,
+        key: &str,
+    ) -> Option<ListData<EdgionGatewayConfig>> {
+        if let Some(cache) = self.edgion_gateway_configs.get(key) {
             Some(cache.list_owned().await)
         } else {
             None
@@ -462,16 +468,15 @@ impl ConfigCenter {
         Some(cache.watch(client_id, client_name, from_version))
     }
 
-    /// Watch gateway class specs
-    pub fn watch_gateway_class_specs(
+    pub fn watch_edgion_gateway_configs(
         &mut self,
         key: &str,
         client_id: String,
         client_name: String,
         from_version: u64,
-    ) -> Option<mpsc::Receiver<WatchResponse<GatewayClassSpec>>> {
+    ) -> Option<mpsc::Receiver<WatchResponse<EdgionGatewayConfig>>> {
         let cache = self
-            .gateway_class_specs
+            .edgion_gateway_configs
             .entry(key.to_string())
             .or_insert_with(|| {
                 let mut cache = CenterCache::new(1000);
@@ -602,23 +607,22 @@ impl ConfigCenter {
             println!("GatewayClasses: not found");
         }
 
-        // Gateway Class Specs
-        if let Some(list_data) = self.list_gateway_class_specs(key).await {
+        if let Some(list_data) = self.list_edgion_gateway_configs(key).await {
             println!(
-                "GatewayClassSpecs (count: {}, version: {}):",
+                "EdgionGatewayConfigs (count: {}, version: {}):",
                 list_data.data.len(),
                 list_data.resource_version
             );
-            for (idx, spec) in list_data.data.iter().enumerate() {
+            for (idx, egwc) in list_data.data.iter().enumerate() {
                 println!(
                     "  [{}] {}",
                     idx,
-                    serde_json::to_string(spec)
+                    serde_json::to_string(egwc)
                         .unwrap_or_else(|_| "serialization error".to_string())
                 );
             }
         } else {
-            println!("GatewayClassSpecs: not found");
+            println!("EdgionGatewayConfigs: not found");
         }
 
         // Gateways
@@ -767,11 +771,11 @@ impl EventDispatcher for ConfigCenter {
                     }
                 }
             }
-            ResourceKind::GatewayClassSpec => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
+            ResourceKind::EdgionGatewayConfig => {
+                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
                     let key = "test-gateway-class".to_string();
                     let cache = self
-                        .gateway_class_specs
+                        .edgion_gateway_configs
                         .entry(key)
                         .or_insert_with(|| CenterCache::new(1000));
                     cache.init_add(resource, resource_version);
@@ -854,7 +858,7 @@ impl EventDispatcher for ConfigCenter {
         for cache in self.gateway_classes.values_mut() {
             cache.set_ready();
         }
-        for cache in self.gateway_class_specs.values_mut() {
+        for cache in self.edgion_gateway_configs.values_mut() {
             cache.set_ready();
         }
         for cache in self.gateways.values_mut() {
@@ -900,11 +904,11 @@ impl EventDispatcher for ConfigCenter {
                     }
                 }
             }
-            ResourceKind::GatewayClassSpec => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
+            ResourceKind::EdgionGatewayConfig => {
+                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
                     let key = "test-gateway-class".to_string();
                     let cache = self
-                        .gateway_class_specs
+                        .edgion_gateway_configs
                         .entry(key)
                         .or_insert_with(|| CenterCache::new(1000));
                     cache.event_add(resource, resource_version);
@@ -1004,10 +1008,10 @@ impl EventDispatcher for ConfigCenter {
                     }
                 }
             }
-            ResourceKind::GatewayClassSpec => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
+            ResourceKind::EdgionGatewayConfig => {
+                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
                     let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.gateway_class_specs.get_mut(&key) {
+                    if let Some(cache) = self.edgion_gateway_configs.get_mut(&key) {
                         cache.event_update(resource, resource_version);
                     }
                 }
@@ -1092,10 +1096,10 @@ impl EventDispatcher for ConfigCenter {
                     }
                 }
             }
-            ResourceKind::GatewayClassSpec => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
+            ResourceKind::EdgionGatewayConfig => {
+                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
                     let key = "test-gateway-class".to_string();
-                    if let Some(cache) = self.gateway_class_specs.get_mut(&key) {
+                    if let Some(cache) = self.edgion_gateway_configs.get_mut(&key) {
                         cache.event_del(resource, resource_version);
                     }
                 }

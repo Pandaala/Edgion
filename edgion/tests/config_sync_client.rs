@@ -59,7 +59,7 @@ fn spawn_status_logger(hub: Arc<Mutex<ConfigHub>>) {
 
 fn log_hub_summary(hub: &ConfigHub) {
     let gc = hub.list_gateway_classes();
-    let specs = hub.list_gateway_class_specs();
+    let specs = hub.list_edgion_gateway_config();
     let gateways = hub.list_gateways();
     let routes = hub.list_routes();
     let services = hub.list_services();

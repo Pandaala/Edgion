@@ -3,7 +3,7 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::core::ObjectMeta;
 
 use super::traits::Versionable;
-use crate::types::{EdgionTls, Gateway, GatewayClass, GatewayClassSpec, HTTPRoute};
+use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute};
 
 /// Helper function to extract version from Kubernetes resource_version string
 /// Returns 0 if resource_version is None or cannot be parsed
@@ -21,9 +21,9 @@ impl Versionable for GatewayClass {
     }
 }
 
-impl Versionable for GatewayClassSpec {
+impl Versionable for EdgionGatewayConfig {
     fn get_version(&self) -> u64 {
-        // GatewayClassSpec doesn't have metadata, use a default version
+        // EdgionGatewayConfig doesn't have metadata-driven versions; default to 0
         // In practice, you might want to add a version field to this struct
         0
     }

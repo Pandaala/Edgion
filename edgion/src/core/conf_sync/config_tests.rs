@@ -3,7 +3,9 @@
 use crate::core::conf_sync::config_center::ConfigCenter;
 use crate::core::conf_sync::config_hub::ConfigHub;
 use crate::core::conf_sync::traits::EventDispatcher;
-use crate::types::{EdgionTls, EdgionTlsSpec, HTTPRoute, ResourceKind};
+use crate::types::{
+    EdgionGatewayConfig, EdgionGatewayConfigSpec, EdgionTls, EdgionTlsSpec, HTTPRoute, ResourceKind,
+};
 use k8s_openapi::api::core::v1::SecretReference;
 use serde_json::{json, Value};
 use tokio::task::yield_now;
@@ -32,6 +34,20 @@ fn http_route_value(hostname: &str, resource_version: u64) -> Value {
             "hostnames": [hostname]
         }
     })
+}
+
+fn edgion_gateway_config_value(resource_version: u64) -> Value {
+    let spec = EdgionGatewayConfigSpec {
+        listener_defaults: None,
+        load_balancing: None,
+        access_log: None,
+        security: None,
+        limits: None,
+        observability: None,
+    };
+    let mut config = EdgionGatewayConfig::new(GATEWAY_CLASS_KEY, spec);
+    config.metadata.resource_version = Some(resource_version.to_string());
+    serde_json::to_value(&config).expect("serialize EdgionGatewayConfig")
 }
 
 fn resource_fixtures() -> Vec<(ResourceKind, Value, u64)> {
@@ -67,11 +83,8 @@ fn resource_fixtures() -> Vec<(ResourceKind, Value, u64)> {
             1_u64,
         ),
         (
-            ResourceKind::GatewayClassSpec,
-            json!({
-                "controllerName": "example.com/controller",
-                "description": "demo gateway class spec"
-            }),
+            ResourceKind::EdgionGatewayConfig,
+            edgion_gateway_config_value(2),
             2_u64,
         ),
         (
@@ -295,7 +308,7 @@ async fn config_center_data_syncs_into_config_hub() {
     let key = GATEWAY_CLASS_KEY.to_string();
     let resource_kinds = [
         ResourceKind::GatewayClass,
-        ResourceKind::GatewayClassSpec,
+        ResourceKind::EdgionGatewayConfig,
         ResourceKind::Gateway,
         ResourceKind::HTTPRoute,
         ResourceKind::Service,
@@ -332,12 +345,16 @@ async fn config_center_data_syncs_into_config_hub() {
         Some(GATEWAY_CLASS_KEY)
     );
 
-    let class_specs = config_hub.list_gateway_class_specs();
-    assert_eq!(class_specs.data.len(), 1);
-    assert_eq!(class_specs.resource_version, 2);
+    let gateway_configs = config_hub.list_edgion_gateway_config();
+    assert_eq!(gateway_configs.data.len(), 1);
+    assert_eq!(gateway_configs.resource_version, 2);
     assert_eq!(
-        class_specs.data[0].controller_name,
-        "example.com/controller"
+        gateway_configs.data[0].metadata.name.as_deref(),
+        Some(GATEWAY_CLASS_KEY)
+    );
+    assert!(
+        gateway_configs.data[0].spec.listener_defaults.is_none(),
+        "expected listener_defaults to be None"
     );
 
     let gateways = config_hub.list_gateways();

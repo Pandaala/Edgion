@@ -1,26 +1,25 @@
-帮我分析一下这个文件是干什么用的
-//! ZtraceGatewayConfig CRD definition
-//! 
-//! This module defines the ZtraceGatewayConfig custom resource, which is used
+//! EdgionGatewayConfig CRD definition
+//!
+//! This module defines the EdgionGatewayConfig custom resource, which is used
 //! as parametersRef in GatewayClass to provide gateway-wide configuration.
 
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// ZtraceGatewayConfig is the configuration for a GatewayClass
+/// EdgionGatewayConfig is the configuration for a GatewayClass
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "example.com",
     version = "v1alpha1",
-    kind = "ZtraceGatewayConfig",
-    plural = "ztracegatewayclassconfigs",
-    shortname = "zgwcfg",
+    kind = "EdgionGatewayConfig",
+    plural = "Edgiongatewayclassconfigs",
+    shortname = "edgwcfg",
     namespaced = false,
-    status = "ZtraceGatewayConfigStatus"
+    status = "EdgionGatewayConfigStatus"
 )]
 #[serde(rename_all = "camelCase")]
-pub struct ZtraceGatewayConfigSpec {
+pub struct EdgionGatewayConfigSpec {
     /// Default configuration for all listeners in gateways using this class
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listener_defaults: Option<ListenerDefaults>,
@@ -199,7 +198,7 @@ fn default_log_format() -> LogFormat {
 }
 
 fn default_log_path() -> String {
-    "/var/log/ztrace/access.log".to_string()
+    "/var/log/Edgion/access.log".to_string()
 }
 
 fn default_sampling_rate() -> f64 {
@@ -475,7 +474,7 @@ fn default_logging_format() -> LoggingFormat {
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ZtraceGatewayConfigStatus {
+pub struct EdgionGatewayConfigStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<StatusCondition>>,
 }
@@ -502,7 +501,7 @@ mod tests {
     fn test_deserialize_gateway_config() {
         let yaml = r#"
 apiVersion: example.com/v1alpha1
-kind: ZtraceGatewayConfig
+kind: EdgionGatewayConfig
 metadata:
   name: test-config
 spec:
@@ -515,9 +514,9 @@ spec:
     enabled: true
     format: json
 "#;
-        let config: ZtraceGatewayConfig = serde_yaml::from_str(yaml).expect("Failed to parse YAML");
+        let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Failed to parse YAML");
         assert_eq!(config.metadata.name, Some("test-config".to_string()));
-        
+
         let spec = config.spec;
         assert!(spec.listener_defaults.is_some());
         assert!(spec.load_balancing.is_some());

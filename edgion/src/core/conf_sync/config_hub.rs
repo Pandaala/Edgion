@@ -2,7 +2,9 @@ use crate::core::conf_sync::center_cache::{EventDispatch, ListData};
 use crate::core::conf_sync::config_center::GatewayClassKey;
 use crate::core::conf_sync::hub_cache::HubCache;
 use crate::core::conf_sync::traits::EventDispatcher;
-use crate::types::{EdgionTls, Gateway, GatewayClass, GatewayClassSpec, HTTPRoute, ResourceKind};
+use crate::types::{
+    EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
+};
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
@@ -10,7 +12,7 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 pub struct ConfigHub {
     gateway_class_key: GatewayClassKey,
     gateway_classes: HubCache<GatewayClass>,
-    gateway_class_specs: HubCache<GatewayClassSpec>,
+    edgion_gateway_configs: HubCache<EdgionGatewayConfig>,
     gateways: HubCache<Gateway>,
     routes: HubCache<HTTPRoute>,
     services: HubCache<Service>,
@@ -24,7 +26,7 @@ impl ConfigHub {
         Self {
             gateway_class_key,
             gateway_classes: HubCache::new(),
-            gateway_class_specs: HubCache::new(),
+            edgion_gateway_configs: HubCache::new(),
             gateways: HubCache::new(),
             routes: HubCache::new(),
             services: HubCache::new(),
@@ -57,10 +59,10 @@ impl ConfigHub {
                     .map_err(|e| format!("Failed to serialize GatewayClass data: {}", e))?;
                 (json, list_data.resource_version)
             }
-            ResourceKind::GatewayClassSpec => {
-                let list_data = self.gateway_class_specs.list();
+            ResourceKind::EdgionGatewayConfig => {
+                let list_data = self.edgion_gateway_configs.list();
                 let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize GatewayClassSpec data: {}", e))?;
+                    .map_err(|e| format!("Failed to serialize EdgionGatewayConfig data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::Gateway => {
@@ -112,9 +114,9 @@ impl ConfigHub {
         self.gateway_classes.list()
     }
 
-    /// List gateway class specs
-    pub fn list_gateway_class_specs(&self) -> ListData<&GatewayClassSpec> {
-        self.gateway_class_specs.list()
+    /// List gateway class configs
+    pub fn list_edgion_gateway_config(&self) -> ListData<&EdgionGatewayConfig> {
+        self.edgion_gateway_configs.list()
     }
 
     /// List gateways
@@ -168,18 +170,17 @@ impl ConfigHub {
             );
         }
 
-        // Gateway Class Specs
-        let list_data = self.list_gateway_class_specs();
+        let list_data = self.list_edgion_gateway_config();
         println!(
-            "GatewayClassSpecs (count: {}, version: {}):",
+            "EdgionGatewayConfigs (count: {}, version: {}):",
             list_data.data.len(),
             list_data.resource_version
         );
-        for (idx, spec) in list_data.data.iter().enumerate() {
+        for (idx, egw) in list_data.data.iter().enumerate() {
             println!(
                 "  [{}] {}",
                 idx,
-                serde_json::to_string(spec).unwrap_or_else(|_| "serialization error".to_string())
+                serde_json::to_string(egw).unwrap_or_else(|_| "serialization error".to_string())
             );
         }
 
@@ -307,13 +308,13 @@ impl EventDispatcher for ConfigHub {
                     &data[..data.len().min(200)]
                 ),
             },
-            ResourceKind::GatewayClassSpec => {
-                match serde_json::from_str::<GatewayClassSpec>(&data) {
+            ResourceKind::EdgionGatewayConfig => {
+                match serde_json::from_str::<EdgionGatewayConfig>(&data) {
                     Ok(resource) => self
-                        .gateway_class_specs
+                        .edgion_gateway_configs
                         .init_add(resource, resource_version),
                     Err(e) => eprintln!(
-                        "[HUB] init_add: Failed to parse GatewayClassSpec: {} (data: {})",
+                        "[HUB] init_add: Failed to parse EdgionGatewayConfig: {} (data: {})",
                         e,
                         &data[..data.len().min(200)]
                     ),
@@ -391,9 +392,9 @@ impl EventDispatcher for ConfigHub {
                     self.gateway_classes.event_add(resource, resource_version);
                 }
             }
-            ResourceKind::GatewayClassSpec => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
-                    self.gateway_class_specs
+            ResourceKind::EdgionGatewayConfig => {
+                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
+                    self.edgion_gateway_configs
                         .event_add(resource, resource_version);
                 }
             }
@@ -448,9 +449,9 @@ impl EventDispatcher for ConfigHub {
                         .event_update(resource, resource_version);
                 }
             }
-            ResourceKind::GatewayClassSpec => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
-                    self.gateway_class_specs
+            ResourceKind::EdgionGatewayConfig => {
+                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
+                    self.edgion_gateway_configs
                         .event_update(resource, resource_version);
                 }
             }
@@ -505,9 +506,9 @@ impl EventDispatcher for ConfigHub {
                     self.gateway_classes.event_del(resource, resource_version);
                 }
             }
-            ResourceKind::GatewayClassSpec => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClassSpec>(&data) {
-                    self.gateway_class_specs
+            ResourceKind::EdgionGatewayConfig => {
+                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
+                    self.edgion_gateway_configs
                         .event_del(resource, resource_version);
                 }
             }
