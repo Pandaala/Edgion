@@ -64,4 +64,3 @@ impl Versionable for EdgionTls {
         extract_version(&self.metadata)
     }
 }
-

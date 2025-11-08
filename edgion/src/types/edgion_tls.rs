@@ -21,7 +21,7 @@ pub struct EdgionTlsSpec {
     pub parent_refs: Option<Vec<ParentReference>>,
     pub hosts: Vec<String>,
     pub secret_ref: SecretReference,
-    
+
     // todo, replace secret_refer
     /// CertificateRefs contains references to Kubernetes objects
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -35,9 +35,12 @@ pub struct EdgionTlsStatus {
 }
 
 impl EdgionTls {
-
     pub fn get_secret_namespace(&self) -> Option<String> {
-        self.spec.secret_ref.namespace.clone().or_else(|| {self.metadata.namespace.clone()})
+        self.spec
+            .secret_ref
+            .namespace
+            .clone()
+            .or_else(|| self.metadata.namespace.clone())
     }
 
     pub fn matches_hostname(&self, hostname: &str) -> bool {
@@ -168,6 +171,7 @@ mod tests {
                     name: Some("test-secret".to_string()),
                     namespace: Some("default".to_string()),
                 },
+                certificate_refs: None,
             },
             status: None,
         }

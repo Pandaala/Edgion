@@ -1,8 +1,12 @@
 mod center_cache;
 pub mod config_center;
 pub mod config_hub;
+#[cfg(test)]
+mod config_tests;
 pub mod grpc_client;
 pub mod grpc_server;
+#[cfg(test)]
+mod grpc_tests;
 mod hub_cache;
 mod proto;
 pub mod traits;

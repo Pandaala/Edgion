@@ -2,20 +2,25 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::Mutex;
-use tokio::time::interval;
+use tokio::time::{interval, sleep};
 
 use edgion::core::conf_sync::config_hub::ConfigHub;
 use edgion::core::conf_sync::grpc_client::ConfigSyncClient;
 
 const GRPC_ADDR: &str = "http://127.0.0.1:50051";
-const GATEWAY_CLASS_KEY: &str = "test-gateway-class";
+const GATEWAY_CLASS_KEY: &str = "demo";
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+#[derive(Clone, Copy)]
+pub enum RunMode {
+    UntilCtrlC,
+    For(Duration),
+}
+
+pub async fn run_config_sync_client(mode: RunMode) -> anyhow::Result<()> {
     println!("[CLIENT] Starting Config Sync client example");
 
-    let mut client = ConfigSyncClient::connect(GRPC_ADDR.to_string(), GATEWAY_CLASS_KEY.to_string())
-        .await?;
+    let mut client =
+        ConfigSyncClient::connect(GRPC_ADDR.to_string(), GATEWAY_CLASS_KEY.to_string()).await?;
 
     println!("[CLIENT] Connected to {}", GRPC_ADDR);
 
@@ -25,8 +30,17 @@ async fn main() -> anyhow::Result<()> {
     let hub = client.get_config_hub();
     spawn_status_logger(hub.clone());
 
-    println!("[CLIENT] Running... press Ctrl+C to exit");
-    tokio::signal::ctrl_c().await?;
+    match mode {
+        RunMode::UntilCtrlC => {
+            println!("[CLIENT] Running... press Ctrl+C to exit");
+            tokio::signal::ctrl_c().await?;
+        }
+        RunMode::For(duration) => {
+            println!("[CLIENT] Running for {:?}", duration);
+            sleep(duration).await;
+        }
+    }
+
     println!("[CLIENT] Shutdown signal received");
 
     Ok(())
@@ -75,4 +89,8 @@ fn log_hub_summary(hub: &ConfigHub) {
     );
 }
 
-
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "manual integration harness; requires running Config Sync server"]
+async fn config_sync_client_manual() -> anyhow::Result<()> {
+    run_config_sync_client(RunMode::UntilCtrlC).await
+}

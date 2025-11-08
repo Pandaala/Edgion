@@ -298,3 +298,88 @@ impl<T: Versionable + Clone + Send + Sync + 'static> EventDispatch<T> for Center
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::task::yield_now;
+    use tokio::time::{sleep, Duration};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestResource {
+        name: &'static str,
+        version: u64,
+    }
+
+    impl Versionable for TestResource {
+        fn get_version(&self) -> u64 {
+            self.version
+        }
+    }
+
+    async fn wait_for_async_store_update() {
+        // Ensure spawned tasks have a chance to persist events into the store
+        yield_now().await;
+        sleep(Duration::from_millis(5)).await;
+    }
+
+    #[tokio::test]
+    async fn event_add_stores_resource_and_updates_version() {
+        let mut cache = CenterCache::<TestResource>::new(10);
+        let resource = TestResource {
+            name: "foo",
+            version: 1,
+        };
+
+        cache.event_add(resource.clone(), Some(resource.version));
+        wait_for_async_store_update().await;
+
+        let snapshot = cache.list_owned().await;
+        assert_eq!(snapshot.data.len(), 1);
+        assert_eq!(snapshot.data[0], resource);
+        assert_eq!(snapshot.resource_version, resource.version);
+    }
+
+    #[tokio::test]
+    async fn event_update_replaces_existing_resource() {
+        let mut cache = CenterCache::<TestResource>::new(10);
+        let original = TestResource {
+            name: "foo",
+            version: 1,
+        };
+        let updated = TestResource {
+            name: "foo-updated",
+            version: 1,
+        };
+
+        cache.event_add(original.clone(), Some(original.version));
+        wait_for_async_store_update().await;
+
+        cache.event_update(updated.clone(), Some(updated.version));
+        wait_for_async_store_update().await;
+
+        let snapshot = cache.list_owned().await;
+        assert_eq!(snapshot.data.len(), 1);
+        assert_eq!(snapshot.data[0], updated);
+        assert_eq!(snapshot.resource_version, updated.version);
+    }
+
+    #[tokio::test]
+    async fn event_delete_removes_resource() {
+        let mut cache = CenterCache::<TestResource>::new(10);
+        let resource = TestResource {
+            name: "foo",
+            version: 42,
+        };
+
+        cache.event_add(resource.clone(), Some(resource.version));
+        wait_for_async_store_update().await;
+
+        cache.event_del(resource.clone(), Some(resource.version));
+        wait_for_async_store_update().await;
+
+        let snapshot = cache.list_owned().await;
+        assert!(snapshot.data.is_empty());
+        assert_eq!(snapshot.resource_version, resource.version);
+    }
+}

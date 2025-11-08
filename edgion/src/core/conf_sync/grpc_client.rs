@@ -277,7 +277,10 @@ impl ConfigSyncClient {
         client_name: String,
         from_version: u64,
     ) -> Result<mpsc::Receiver<WatchResponse>, tonic::Status> {
-        println!("start watch for {:?} kind={:?} client_id={:?} client_name={:?}", key, kind, client_id, client_name);
+        println!(
+            "start watch for {:?} kind={:?} client_id={:?} client_name={:?}",
+            key, kind, client_id, client_name
+        );
         let request = tonic::Request::new(WatchRequest {
             key,
             kind: resource_kind_to_proto(kind) as i32,

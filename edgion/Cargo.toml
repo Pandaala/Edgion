@@ -11,18 +11,6 @@ path = "src/lib.rs"
 name = "main"
 path = "src/bin/main.rs"
 
-[[bin]]
-name = "config_sync_test"
-path = "src/tests/config_sync_test.rs"
-
-[[bin]]
-name = "config_sync_server"
-path = "src/bin/config_sync_server.rs"
-
-[[bin]]
-name = "config_sync_client"
-path = "src/bin/config_sync_client.rs"
-
 [features]
 # Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
 legacy_route_tests = []
