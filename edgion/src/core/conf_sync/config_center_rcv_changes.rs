@@ -1,17 +1,18 @@
-use std::collections::HashMap;
-use k8s_openapi::api::core::v1::{Secret, Service};
-use k8s_openapi::api::discovery::v1::EndpointSlice;
-use crate::core::conf_sync::{CenterCache, ConfigCenter, EventDispatch, EventDispatcher, Versionable};
 use crate::core::conf_sync::config_center::{GatewayClassKey, ResourceItem};
 use crate::core::conf_sync::traits::ResourceChange;
-use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind};
-
+use crate::core::conf_sync::{
+    CenterCache, ConfigCenter, EventDispatch, EventDispatcher, Versionable,
+};
+use crate::types::{
+    EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
+};
+use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::discovery::v1::EndpointSlice;
+use std::collections::HashMap;
 
 const DEFAULT_GATEWAY_CLASS_KEY: &str = "default";
 
-
 impl ConfigCenter {
-
     fn execute_change_on_cache<T>(
         change: ResourceChange,
         cache: &mut CenterCache<T>,
@@ -36,7 +37,6 @@ impl ConfigCenter {
         }
     }
 
-
     fn resolve_gateway_class_keys_for_item(&self, resource: &ResourceItem) -> Vec<String> {
         match resource {
             ResourceItem::GatewayClass(resource) => resource
@@ -54,7 +54,7 @@ impl ConfigCenter {
         map: &mut HashMap<GatewayClassKey, CenterCache<T>>,
         key: GatewayClassKey,
         change: ResourceChange,
-        resource: &T,
+        resource: T,
         resource_version: Option<u64>,
     ) where
         T: Clone + Send + Sync + 'static + Versionable,
@@ -76,130 +76,6 @@ impl ConfigCenter {
             }
         }
     }
-
-
-
-    fn process_resource_change(
-        &mut self,
-        resource: ResourceItem,
-        change: ResourceChange,
-        resource_version: Option<u64>,
-    ) {
-        let gateway_class_keys = self.resolve_gateway_class_keys_for_item(&resource);
-
-        match resource {
-            ResourceItem::GatewayClass(resource) => {
-                if let Some(key) = gateway_class_keys.first() {
-                    match change {
-                        ResourceChange::EventUpdate | ResourceChange::EventDelete => {
-                            if let Some(cache) = self.gateway_classes.get_mut(key) {
-                                Self::execute_change_on_cache(
-                                    change,
-                                    cache,
-                                    resource,
-                                    resource_version,
-                                );
-                            }
-                        }
-                        _ => {
-                            let cache = self
-                                .gateway_classes
-                                .entry(key.clone())
-                                .or_insert_with(|| CenterCache::new(1000));
-                            Self::execute_change_on_cache(
-                                change,
-                                cache,
-                                resource,
-                                resource_version,
-                            );
-                        }
-                    }
-                } else {
-                    eprintln!(
-                        "[ConfigCenter::process_resource_change] GatewayClass missing metadata.name, skip"
-                    );
-                }
-            }
-            ResourceItem::EdgionGatewayConfig(resource) => {
-                for key in gateway_class_keys {
-                    Self::apply_change_to_cache(
-                        &mut self.edgion_gateway_configs,
-                        key,
-                        change,
-                        &resource,
-                        resource_version,
-                    );
-                }
-            }
-            ResourceItem::Gateway(resource) => {
-                for key in gateway_class_keys {
-                    Self::apply_change_to_cache(
-                        &mut self.gateways,
-                        key,
-                        change,
-                        &resource,
-                        resource_version,
-                    );
-                }
-            }
-            ResourceItem::HTTPRoute(resource) => {
-                for key in gateway_class_keys {
-                    Self::apply_change_to_cache(
-                        &mut self.routes,
-                        key,
-                        change,
-                        &resource,
-                        resource_version,
-                    );
-                }
-            }
-            ResourceItem::Service(resource) => {
-                for key in gateway_class_keys {
-                    Self::apply_change_to_cache(
-                        &mut self.services,
-                        key,
-                        change,
-                        &resource,
-                        resource_version,
-                    );
-                }
-            }
-            ResourceItem::EndpointSlice(resource) => {
-                for key in gateway_class_keys {
-                    Self::apply_change_to_cache(
-                        &mut self.endpoint_slices,
-                        key,
-                        change,
-                        &resource,
-                        resource_version,
-                    );
-                }
-            }
-            ResourceItem::EdgionTls(resource) => {
-                for key in gateway_class_keys {
-                    Self::apply_change_to_cache(
-                        &mut self.edgion_tls,
-                        key,
-                        change,
-                        &resource,
-                        resource_version,
-                    );
-                }
-            }
-            ResourceItem::Secret(resource) => {
-                for key in gateway_class_keys {
-                    Self::apply_change_to_cache(
-                        &mut self.secrets,
-                        key,
-                        change,
-                        &resource,
-                        resource_version,
-                    );
-                }
-            }
-        }
-    }
-
 }
 
 impl EventDispatcher for ConfigCenter {
@@ -219,40 +95,91 @@ impl EventDispatcher for ConfigCenter {
             ResourceKind::GatewayClass => {
                 serde_json::from_str::<GatewayClass>(&data).map(|resource| {
                     let item = ResourceItem::GatewayClass(resource);
-                    self.process_resource_change(item, change, resource_version);
+                    let gateway_class_keys = self.resolve_gateway_class_keys_for_item(&item);
+                    for key in gateway_class_keys {
+                        if let Some(cache) = self.gateway_classes.get_mut(&key) {
+                            Self::execute_change_on_cache::<GatewayClass>(change, cache, resource, resource_version);
+                        }
+                    }
                 })
             }
-            ResourceKind::EdgionGatewayConfig => serde_json::from_str::<EdgionGatewayConfig>(&data)
-                .map(|resource| {
+            ResourceKind::EdgionGatewayConfig => {
+                serde_json::from_str::<EdgionGatewayConfig>(&data).map(|resource| {
                     let item = ResourceItem::EdgionGatewayConfig(resource);
-                    self.process_resource_change(item, change, resource_version);
-                }),
-            ResourceKind::Gateway => serde_json::from_str::<Gateway>(&data).map(|resource| {
-                let item = ResourceItem::Gateway(resource);
-                self.process_resource_change(item, change, resource_version);
-            }),
-            ResourceKind::HTTPRoute => serde_json::from_str::<HTTPRoute>(&data).map(|resource| {
-                let item = ResourceItem::HTTPRoute(resource);
-                self.process_resource_change(item, change, resource_version);
-            }),
-            ResourceKind::Service => serde_json::from_str::<Service>(&data).map(|resource| {
-                let item = ResourceItem::Service(resource);
-                self.process_resource_change(item, change, resource_version);
-            }),
+                    let gateway_class_keys = self.resolve_gateway_class_keys_for_item(&item);
+                    for key in gateway_class_keys {
+                        if let Some(cache) = self.edgion_gateway_configs.get_mut(&key) {
+                            Self::execute_change_on_cache::<EdgionGatewayConfig>(change, cache, resource, resource_version);
+                        }
+                    }
+                })
+            }
+            ResourceKind::Gateway => {
+                serde_json::from_str::<Gateway>(&data).map(|resource| {
+                    let item = ResourceItem::Gateway(resource);
+                    let gateway_class_keys = self.resolve_gateway_class_keys_for_item(&item);
+                    for key in gateway_class_keys {
+                        if let Some(cache) = self.gateways.get_mut(&key) {
+                            Self::execute_change_on_cache::<Gateway>(change, cache, resource, resource_version);
+                        }
+                    }
+                })
+            }
+            ResourceKind::HTTPRoute => {
+                serde_json::from_str::<HTTPRoute>(&data).map(|resource| {
+                    let item = ResourceItem::HTTPRoute(resource);
+                    let gateway_class_keys = self.resolve_gateway_class_keys_for_item(&item);
+                    for key in gateway_class_keys {
+                        if let Some(cache) = self.routes.get_mut(&key) {
+                            Self::execute_change_on_cache::<HTTPRoute>(change, cache, resource, resource_version);
+                        }
+                    }
+                })
+            }
+            ResourceKind::Service => {
+                serde_json::from_str::<Service>(&data).map(|resource| {
+                    let item = ResourceItem::Service(resource);
+                    let gateway_class_keys = self.resolve_gateway_class_keys_for_item(&item);
+                    for key in gateway_class_keys {
+                        if let Some(cache) = self.services.get_mut(&key) {
+                            Self::execute_change_on_cache::<Service>(change, cache, resource, resource_version);
+                        }
+                    }
+                })
+            }
             ResourceKind::EndpointSlice => {
                 serde_json::from_str::<EndpointSlice>(&data).map(|resource| {
                     let item = ResourceItem::EndpointSlice(resource);
-                    self.process_resource_change(item, change, resource_version);
+                    let gateway_class_keys = self.resolve_gateway_class_keys_for_item(&item);
+                    for key in gateway_class_keys {
+                        if let Some(cache) = self.endpoint_slices.get_mut(&key) {
+                            Self::execute_change_on_cache::<EndpointSlice>(change, cache, resource, resource_version);
+                        }
+                    }
                 })
             }
-            ResourceKind::EdgionTls => serde_json::from_str::<EdgionTls>(&data).map(|resource| {
-                let item = ResourceItem::EdgionTls(resource);
-                self.process_resource_change(item, change, resource_version);
-            }),
-            ResourceKind::Secret => serde_json::from_str::<Secret>(&data).map(|resource| {
-                let item = ResourceItem::Secret(resource);
-                self.process_resource_change(item, change, resource_version);
-            }),
+            ResourceKind::EdgionTls => {
+                serde_json::from_str::<EdgionTls>(&data).map(|resource| {
+                    let item = ResourceItem::EdgionTls(resource);
+                    let gateway_class_keys = self.resolve_gateway_class_keys_for_item(&item);
+                    for key in gateway_class_keys {
+                        if let Some(cache) = self.edgion_tls.get_mut(&key) {
+                            Self::execute_change_on_cache::<EdgionTls>(change, cache, resource, resource_version);
+                        }
+                    }
+                })
+            }
+            ResourceKind::Secret => {
+                serde_json::from_str::<Secret>(&data).map(|resource| {
+                    let item = ResourceItem::Secret(resource);
+                    let gateway_class_keys = self.resolve_gateway_class_keys_for_item(&item);
+                    for key in gateway_class_keys {
+                        if let Some(cache) = self.secrets.get_mut(&key) {
+                            Self::execute_change_on_cache::<Secret>(change, cache, resource, resource_version);
+                        }
+                    }
+                })
+            }
         };
 
         if let Err(err) = result {
