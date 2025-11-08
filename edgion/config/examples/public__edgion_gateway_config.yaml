@@ -1,0 +1,56 @@
+apiVersion: example.com/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: public-gateway
+spec:
+  listenerDefaults:
+    defaultTLSMode: Terminate
+    allowInsecure: false
+    sniMatchingPolicy: Strict
+  loadBalancing:
+    defaultLBPolicy: round-robin
+    healthCheck:
+      enabled: false
+  accessLog:
+    enabled: true
+    format: json
+    logPath: /var/log/edgion/access.log
+    samplingRate: 1.0
+    includeHeaders:
+      - User-Agent
+      - X-Request-ID
+    excludePaths:
+      - /health
+      - /metrics
+  security:
+    tls:
+      minTLSVersion: "1.2"
+      maxTLSVersion: "1.3"
+      allowedCiphers:
+        - TLS_AES_128_GCM_SHA256
+        - TLS_AES_256_GCM_SHA384
+        - TLS_CHACHA20_POLY1305_SHA256
+  limits:
+    maxConnections: 5000
+    maxRequestsPerConnection: 100
+    connectionTimeout: 60s
+    requestTimeout: 30s
+    idleTimeout: 300s
+    maxRequestHeaderSize: 16KB
+    maxRequestBodySize: 20MB
+    readBufferSize: 8KB
+    writeBufferSize: 8KB
+  observability:
+    metrics:
+      enabled: true
+      endpoint: /metrics
+      port: 9090
+      format: prometheus
+    tracing:
+      enabled: true
+      provider: otlp
+      endpoint: http://otel-collector:4317
+      samplingRate: 0.1
+    logging:
+      level: info
+      format: json

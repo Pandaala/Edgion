@@ -1,0 +1,15 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gateway1
+  namespace: default
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https18443
+      protocol: HTTPS
+      port: 18443
+
+    - name: http18080
+      protocol: HTTP
+      port: 18080
