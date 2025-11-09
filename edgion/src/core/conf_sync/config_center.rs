@@ -6,12 +6,10 @@ use tokio::sync::mpsc;
 use crate::core::conf_sync::center_cache::{
     CenterCache, EventDispatch, ListData, Versionable, WatchResponse,
 };
-use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
 };
 use anyhow::Result;
-
 
 pub type GatewayClassKey = String;
 
@@ -52,8 +50,6 @@ pub struct EventDataSimple {
 }
 
 impl ConfigCenter {
-
-
     pub fn new() -> Self {
         Self {
             gateway_classes: HashMap::new(),

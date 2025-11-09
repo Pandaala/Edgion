@@ -1,17 +1,23 @@
 #![cfg(test)]
 
+use crate::core::conf_sync::cache_diff::diff_center_hub;
+use crate::core::conf_sync::center_cache::{EventType, Versionable, WatchResponse};
 use crate::core::conf_sync::config_center::ConfigCenter;
 use crate::core::conf_sync::config_hub::ConfigHub;
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
+use crate::core::conf_sync::{CenterCache, EventDispatch, HubCache};
 use crate::types::{
-    EdgionGatewayConfig, EdgionGatewayConfigSpec, EdgionTls, EdgionTlsSpec, HTTPRoute, ResourceKind,
+    EdgionGatewayConfig, EdgionGatewayConfigSpec, EdgionTls, EdgionTlsSpec, HTTPRoute,
+    HTTPRouteSpec, ParentReference, ResourceKind,
 };
 use k8s_openapi::api::core::v1::SecretReference;
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
 use tokio::task::yield_now;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 
 const GATEWAY_CLASS_KEY: &str = "test-gateway-class";
+const GATEWAY_NAMESPACE: &str = "default";
 
 fn http_route_value(hostname: &str, resource_version: u64) -> Value {
     json!({
@@ -172,6 +178,26 @@ fn resource_fixtures() -> Vec<(ResourceKind, Value, u64)> {
             8_u64,
         ),
     ]
+}
+
+fn make_http_route(name: &str, host: &str, version: u64) -> HTTPRoute {
+    let spec = HTTPRouteSpec {
+        parent_refs: Some(vec![ParentReference {
+            group: None,
+            kind: Some("Gateway".to_string()),
+            namespace: Some(GATEWAY_NAMESPACE.to_string()),
+            name: GATEWAY_CLASS_KEY.to_string(),
+            section_name: Some("http".to_string()),
+            port: Some(80),
+        }]),
+        hostnames: Some(vec![host.to_string()]),
+        rules: None,
+    };
+
+    let mut route = HTTPRoute::new(name, spec);
+    route.metadata.namespace = Some(GATEWAY_NAMESPACE.to_string());
+    route.metadata.resource_version = Some(version.to_string());
+    route
 }
 
 fn seed_config_center(center: &mut ConfigCenter) {
@@ -435,4 +461,150 @@ async fn config_center_http_route_lifecycle_syncs() {
     let mut config_hub = ConfigHub::new(GATEWAY_CLASS_KEY.to_string());
 
     exercise_http_route_lifecycle(&mut config_center, &mut config_hub).await;
+}
+
+fn apply_watch_response_to_hub(hub: &mut HubCache<HTTPRoute>, response: WatchResponse<HTTPRoute>) {
+    for event in response.events {
+        let change = match event.event_type {
+            EventType::Add => ResourceChange::EventAdd,
+            EventType::Update => ResourceChange::EventUpdate,
+            EventType::Delete => ResourceChange::EventDelete,
+        };
+        hub.apply_change(change, event.data, Some(event.resource_version));
+    }
+}
+
+async fn drain_watch_events(
+    hub: &mut HubCache<HTTPRoute>,
+    receiver: &mut mpsc::Receiver<WatchResponse<HTTPRoute>>,
+) {
+    loop {
+        match timeout(Duration::from_secs(2), receiver.recv()).await {
+            Ok(Some(response)) => apply_watch_response_to_hub(hub, response),
+            _ => break,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cache_diff_confirms_hub_matches_center_after_events() {
+    let mut center = CenterCache::<HTTPRoute>::new(32);
+    center.set_ready();
+    let mut hub = HubCache::<HTTPRoute>::new();
+
+    let initial_routes = vec![
+        make_http_route("route-a", "a.example.com", 1),
+        make_http_route("route-b", "b.example.com", 2),
+        make_http_route("route-c", "c.example.com", 3),
+    ];
+
+    for route in &initial_routes {
+        center.apply_change(
+            ResourceChange::EventAdd,
+            route.clone(),
+            Some(route.get_version()),
+        );
+    }
+
+    sleep(Duration::from_millis(50)).await;
+
+    let mut watch_rx = center.watch("hub-client".to_string(), "hub-http-route".to_string(), 0);
+
+    if let Some(response) = watch_rx.recv().await {
+        apply_watch_response_to_hub(&mut hub, response);
+    }
+
+    let updated_route_b = make_http_route("route-b", "b-updated.example.com", 2);
+    center.apply_change(ResourceChange::EventUpdate, updated_route_b, Some(2));
+
+    sleep(Duration::from_millis(50)).await;
+
+    if let Some(response) = watch_rx.recv().await {
+        apply_watch_response_to_hub(&mut hub, response);
+    }
+
+    let new_route = make_http_route("route-d", "d.example.com", 4);
+    center.apply_change(ResourceChange::EventAdd, new_route, Some(4));
+
+    sleep(Duration::from_millis(50)).await;
+
+    if let Some(response) = watch_rx.recv().await {
+        apply_watch_response_to_hub(&mut hub, response);
+    }
+
+    let to_delete = make_http_route("route-a", "a.example.com", 1);
+    center.apply_change(ResourceChange::EventDelete, to_delete, Some(1));
+
+    sleep(Duration::from_millis(50)).await;
+
+    if let Some(response) = watch_rx.recv().await {
+        apply_watch_response_to_hub(&mut hub, response);
+    }
+
+    sleep(Duration::from_secs(2)).await;
+
+    let diff = diff_center_hub(&center, &hub).await;
+    assert!(
+        diff.is_empty(),
+        "expected hub to match center after watch events, diff: {:?}",
+        diff
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cache_diff_verifies_full_sync_after_mixed_mutations() {
+    let mut center = CenterCache::<HTTPRoute>::new(32);
+    center.set_ready();
+    let mut hub = HubCache::<HTTPRoute>::new();
+
+    let initial_routes = vec![
+        make_http_route("route-alpha", "alpha.example.com", 10),
+        make_http_route("route-bravo", "bravo.example.com", 20),
+        make_http_route("route-charlie", "charlie.example.com", 30),
+    ];
+
+    for route in &initial_routes {
+        center.apply_change(
+            ResourceChange::EventAdd,
+            route.clone(),
+            Some(route.get_version()),
+        );
+    }
+
+    sleep(Duration::from_millis(50)).await;
+
+    let mut watch_rx = center.watch(
+        "hub-client-mixed".to_string(),
+        "hub-http-route-mixed".to_string(),
+        0,
+    );
+    drain_watch_events(&mut hub, &mut watch_rx).await;
+
+    let updated_bravo = make_http_route("route-bravo", "bravo-updated.example.com", 20);
+    center.apply_change(ResourceChange::EventUpdate, updated_bravo, Some(20));
+
+    sleep(Duration::from_millis(1)).await;
+    drain_watch_events(&mut hub, &mut watch_rx).await;
+
+    let new_route = make_http_route("route-delta", "delta.example.com", 40);
+    center.apply_change(ResourceChange::EventAdd, new_route, Some(40));
+
+    sleep(Duration::from_millis(50)).await;
+    drain_watch_events(&mut hub, &mut watch_rx).await;
+
+    let delete_route = make_http_route("route-alpha", "alpha.example.com", 10);
+    center.apply_change(ResourceChange::EventDelete, delete_route, Some(10));
+
+    sleep(Duration::from_millis(50)).await;
+    drain_watch_events(&mut hub, &mut watch_rx).await;
+
+    sleep(Duration::from_secs(2)).await;
+    drain_watch_events(&mut hub, &mut watch_rx).await;
+
+    let diff = diff_center_hub(&center, &hub).await;
+    assert!(
+        diff.is_empty(),
+        "expected hub and center caches to match after mixed mutations, diff: {:?}",
+        diff
+    );
 }

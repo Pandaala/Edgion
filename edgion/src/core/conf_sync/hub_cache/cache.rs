@@ -1,4 +1,5 @@
 use crate::core::conf_sync::center_cache::{EventDispatch, ListData, Versionable};
+use crate::core::conf_sync::traits::ResourceChange;
 use std::collections::HashMap;
 
 pub struct HubCache<T> {
@@ -63,50 +64,37 @@ impl<T: Versionable> HubCache<T> {
     }
 }
 
-impl<T: Versionable + Clone> EventDispatch<T> for HubCache<T> {
-    fn init_add(&mut self, resource: T, resource_version: Option<u64>) {
+impl<T: Versionable + Clone + Send + 'static> EventDispatch<T> for HubCache<T> {
+    fn apply_change(
+        &mut self,
+        change: ResourceChange,
+        resource: T,
+        resource_version: Option<u64>,
+    ) where
+        T: Send + 'static,
+    {
         let version = resource_version.unwrap_or_else(|| resource.get_version());
-        self.data.insert(version.to_string(), resource);
-        if version > self.resource_version {
-            self.resource_version = version;
+        match change {
+            ResourceChange::InitAdd
+            | ResourceChange::EventAdd
+            | ResourceChange::EventUpdate => {
+                self.data.insert(version.to_string(), resource);
+                if version > self.resource_version {
+                    self.resource_version = version;
+                }
+            }
+            ResourceChange::EventDelete => {
+                self.data.remove(&version.to_string());
+                if version > self.resource_version {
+                    self.resource_version = version;
+                }
+                drop(resource);
+            }
         }
     }
 
     fn set_ready(&mut self) {
         // HubCache doesn't need ready state, but we keep the method for trait compatibility
-    }
-
-    fn event_add(&mut self, resource: T, resource_version: Option<u64>)
-    where
-        T: Send + 'static,
-    {
-        let version = resource_version.unwrap_or_else(|| resource.get_version());
-        self.data.insert(version.to_string(), resource);
-        if version > self.resource_version {
-            self.resource_version = version;
-        }
-    }
-
-    fn event_update(&mut self, resource: T, resource_version: Option<u64>)
-    where
-        T: Send + 'static,
-    {
-        let version = resource_version.unwrap_or_else(|| resource.get_version());
-        self.data.insert(version.to_string(), resource);
-        if version > self.resource_version {
-            self.resource_version = version;
-        }
-    }
-
-    fn event_del(&mut self, resource: T, resource_version: Option<u64>)
-    where
-        T: Send + 'static,
-    {
-        let version = resource_version.unwrap_or_else(|| resource.get_version());
-        self.data.remove(&version.to_string());
-        if version > self.resource_version {
-            self.resource_version = version;
-        }
     }
 }
 

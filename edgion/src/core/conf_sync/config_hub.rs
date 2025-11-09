@@ -48,12 +48,7 @@ impl ConfigHub {
     ) where
         T: Clone + Versionable + Send + 'static,
     {
-        match change {
-            ResourceChange::InitAdd => cache.init_add(resource, resource_version),
-            ResourceChange::EventAdd => cache.event_add(resource, resource_version),
-            ResourceChange::EventUpdate => cache.event_update(resource, resource_version),
-            ResourceChange::EventDelete => cache.event_del(resource, resource_version),
-        }
+        cache.apply_change(change, resource, resource_version);
     }
 
     pub fn list(

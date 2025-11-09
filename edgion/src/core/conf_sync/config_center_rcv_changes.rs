@@ -1,4 +1,3 @@
-use crate::core::conf_sync::config_center::GatewayClassKey;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{
     CenterCache, ConfigCenter, EventDispatch, EventDispatcher, Versionable,
@@ -8,8 +7,6 @@ use crate::types::{
 };
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use std::collections::HashMap;
-
 const DEFAULT_GATEWAY_CLASS_KEY: &str = "default";
 
 trait ResolveGatewayClassKeysForItem {
@@ -81,12 +78,7 @@ impl ConfigCenter {
     ) where
         T: Clone + Send + Sync + 'static + Versionable,
     {
-        match change {
-            ResourceChange::InitAdd => cache.init_add(resource, resource_version),
-            ResourceChange::EventAdd => cache.event_add(resource, resource_version),
-            ResourceChange::EventUpdate => cache.event_update(resource, resource_version),
-            ResourceChange::EventDelete => cache.event_del(resource, resource_version),
-        }
+        cache.apply_change(change, resource, resource_version);
     }
 
     fn fallback_gateway_class_keys(&self) -> Vec<String> {

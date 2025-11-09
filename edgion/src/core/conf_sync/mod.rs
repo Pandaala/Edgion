@@ -1,5 +1,7 @@
+pub mod cache_diff;
 mod center_cache;
 pub mod config_center;
+pub mod config_center_rcv_changes;
 pub mod config_hub;
 #[cfg(test)]
 mod config_tests;
@@ -10,8 +12,8 @@ mod grpc_tests;
 mod hub_cache;
 mod proto;
 pub mod traits;
-mod config_center_rcv_changes;
 
+pub use cache_diff::{diff_center_hub, CacheDiff, CacheDiffItem};
 pub use center_cache::{CenterCache, EventDispatch, Versionable};
 pub use config_center::ConfigCenter;
 pub use grpc_client::ConfigSyncClient;
