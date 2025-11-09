@@ -91,25 +91,23 @@ impl<T: Versionable + Send + Sync> CenterCache<T> {
 
                 match result {
                     Ok((current_version, events)) => {
-                        if current_version > from_version {
-                            if !events.is_empty() {
-                                from_version = current_version;
-                                let response = WatchResponse::new(events, current_version);
+                        if !events.is_empty() {
+                            from_version = current_version;
+                            let response = WatchResponse::new(events, current_version);
 
-                                if sender.send(response).await.is_err() {
-                                    // Client disconnected, exit loop
-                                    break;
-                                }
-
-                                // Update send count and time
-                                send_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                if let Ok(mut last_time) = last_send_time.write() {
-                                    *last_time = Some(SystemTime::now());
-                                }
-                            } else {
-                                from_version = current_version;
-                                continue;
+                            if sender.send(response).await.is_err() {
+                                // Client disconnected, exit loop
+                                break;
                             }
+
+                            // Update send count and time
+                            send_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if let Ok(mut last_time) = last_send_time.write() {
+                                *last_time = Some(SystemTime::now());
+                            }
+                        } else if current_version > from_version {
+                            from_version = current_version;
+                            continue;
                         } else {
                             // Version is up-to-date, wait for next notification
                             notify.notified().await;

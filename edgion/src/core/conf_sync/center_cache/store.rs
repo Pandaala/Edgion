@@ -5,12 +5,12 @@ use std::fmt;
 
 /// Event storage - circular queue
 pub struct EventStore<T> {
-    capacity: u32,
-    cache: Vec<(u64, WatcherEvent<T>)>,
-    start_index: u32,
-    end_index: u32,
+    capacity: usize,
+    cache: Vec<Option<WatcherEvent<T>>>,
+    start_index: usize,
+    end_index: usize,
     resource_version: u64,
-    sequence: u64,
+    expire_version: u64,
     data: HashMap<String, T>,
 }
 
@@ -42,10 +42,10 @@ impl Error for WatchEventError {}
 impl<T> EventStore<T> {
     /// Set current resource version
     pub fn set_current_version(&mut self, version: u64) {
-        self.sequence = version;
         self.resource_version = version;
     }
 
+    // init add do not apply any events
     pub fn init_add(&mut self, version: u64, resource: T) {
         self.data.insert(version.to_string(), resource);
         if version > self.resource_version {
@@ -80,40 +80,36 @@ impl<T> EventStore<T> {
         T: Clone,
     {
         let data = self.data.values().cloned().collect();
-        (data, self.sequence)
+        (data, self.resource_version)
     }
 }
 
 impl<T: Clone> EventStore<T> {
-    pub fn new(capacity: u32) -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            cache: Vec::with_capacity(capacity as usize),
+            cache: Vec::with_capacity(capacity),
             start_index: 0,
             end_index: 0,
             resource_version: 0,
-            sequence: 0,
+            expire_version: 0,
             data: HashMap::new(),
         }
     }
 
     /// Add new event to circular queue
     pub fn mut_update(&mut self, event: WatcherEvent<T>) {
-        self.sequence = self.sequence.wrapping_add(1);
-        self.resource_version = event.resource_version;
-        let seq = self.sequence;
-
-        if (self.cache.len() as u32) < self.capacity {
-            self.cache.push((seq, event));
-            self.end_index = self.cache.len() as u32;
-        } else {
-            let index = (self.end_index % self.capacity) as usize;
-            self.cache[index] = (seq, event);
-            self.end_index = self.end_index.wrapping_add(1);
-
-            if self.end_index.wrapping_sub(self.start_index) > self.capacity {
-                self.start_index = self.end_index.wrapping_sub(self.capacity);
+        if (self.end_index >= self.capacity) {
+            let index= self.end_index%self.capacity;
+            if let Some(last_event) = self.cache.get(index).unwrap() {
+                self.expire_version = last_event.resource_version;
             }
+            self.cache[index] = Some(event);
+            self.end_index += 1;
+            self.start_index += 1;
+        } else {
+            self.cache[self.end_index] = Some(event);
+            self.end_index += 1;
         }
     }
 
@@ -122,44 +118,33 @@ impl<T: Clone> EventStore<T> {
         &self,
         from_version: u64,
     ) -> Result<(u64, Vec<WatcherEvent<T>>), WatchEventError> {
-        if let Some(oldest_version) = self.oldest_version() {
-            if from_version != 0 && from_version < oldest_version {
-                return Err(WatchEventError::StaleResourceVersion {
-                    requested: from_version,
-                    oldest_available: oldest_version,
-                });
-            }
+        if from_version != 0 && from_version <= self.expire_version {
+            return Err(WatchEventError::StaleResourceVersion {
+                requested: from_version,
+                oldest_available: self.expire_version,
+            });
+        }
+
+        if self.cache.is_empty() {
+            return Ok((0, Vec::new()));
         }
 
         let mut events = Vec::new();
 
-        let count = if (self.cache.len() as u32) < self.capacity {
-            self.cache.len() as u32
-        } else {
-            self.capacity
-        };
-
-        for i in 0..count {
-            let index = ((self.start_index + i) % self.capacity) as usize;
-            if index < self.cache.len() {
-                let (seq, event) = &self.cache[index];
-                if *seq > from_version {
-                    events.push(event.clone());
+        let mut loop_index = self.end_index;
+        while loop_index > self.start_index  {
+            if let Some(ev) = self.cache.get(loop_index%self.capacity).unwrap() {
+                if ev.resource_version > from_version {
+                    events.push(ev.clone())
+                } else {
+                    break;
                 }
+            } else {
+                panic!("error no ev")
             }
+            loop_index -= 1;
         }
 
-        Ok((self.sequence, events))
-    }
-
-    fn oldest_version(&self) -> Option<u64> {
-        if self.cache.is_empty() {
-            None
-        } else if (self.cache.len() as u32) < self.capacity {
-            self.cache.first().map(|(seq, _)| *seq)
-        } else {
-            let index = (self.start_index % self.capacity) as usize;
-            self.cache.get(index).map(|(seq, _)| *seq)
-        }
+        Ok((self.resource_version, events))
     }
 }
