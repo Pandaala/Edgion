@@ -49,5 +49,6 @@ message WatchRequest {
 message WatchResponse {
     string data = 1;
     uint64 resource_version = 2;
+    string err = 3;
 }
 

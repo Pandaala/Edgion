@@ -47,6 +47,7 @@ pub struct ListDataSimple {
 pub struct EventDataSimple {
     pub data: String,
     pub resource_version: u64,
+    pub err: Option<String>,
 }
 
 impl ConfigCenter {
@@ -206,7 +207,13 @@ impl ConfigCenter {
                 );
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
-                        let events_json = match serde_json::to_string(&response.events) {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize GatewayClass events: {}", e);
@@ -215,7 +222,8 @@ impl ConfigCenter {
                         };
                         let event_data = EventDataSimple {
                             data: events_json,
-                            resource_version: response.resource_version,
+                            resource_version,
+                            err,
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -231,7 +239,13 @@ impl ConfigCenter {
                     })?;
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
-                        let events_json = match serde_json::to_string(&response.events) {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize EdgionGatewayConfig events: {}", e);
@@ -240,7 +254,8 @@ impl ConfigCenter {
                         };
                         let event_data = EventDataSimple {
                             data: events_json,
-                            resource_version: response.resource_version,
+                            resource_version,
+                            err,
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -254,7 +269,13 @@ impl ConfigCenter {
                     .ok_or_else(|| format!("Gateway cache not found for key: {}", key))?;
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
-                        let events_json = match serde_json::to_string(&response.events) {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize Gateway events: {}", e);
@@ -263,7 +284,8 @@ impl ConfigCenter {
                         };
                         let event_data = EventDataSimple {
                             data: events_json,
-                            resource_version: response.resource_version,
+                            resource_version,
+                            err,
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -277,7 +299,13 @@ impl ConfigCenter {
                     .ok_or_else(|| format!("HTTPRoute cache not found for key: {}", key))?;
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
-                        let events_json = match serde_json::to_string(&response.events) {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize HTTPRoute events: {}", e);
@@ -286,7 +314,8 @@ impl ConfigCenter {
                         };
                         let event_data = EventDataSimple {
                             data: events_json,
-                            resource_version: response.resource_version,
+                            resource_version,
+                            err,
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -300,7 +329,13 @@ impl ConfigCenter {
                     .ok_or_else(|| format!("Service cache not found for key: {}", key))?;
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
-                        let events_json = match serde_json::to_string(&response.events) {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize Service events: {}", e);
@@ -309,7 +344,8 @@ impl ConfigCenter {
                         };
                         let event_data = EventDataSimple {
                             data: events_json,
-                            resource_version: response.resource_version,
+                            resource_version,
+                            err,
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -323,7 +359,13 @@ impl ConfigCenter {
                     .ok_or_else(|| format!("EndpointSlice cache not found for key: {}", key))?;
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
-                        let events_json = match serde_json::to_string(&response.events) {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize EndpointSlice events: {}", e);
@@ -332,7 +374,8 @@ impl ConfigCenter {
                         };
                         let event_data = EventDataSimple {
                             data: events_json,
-                            resource_version: response.resource_version,
+                            resource_version,
+                            err,
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -346,7 +389,13 @@ impl ConfigCenter {
                     .ok_or_else(|| format!("EdgionTls cache not found for key: {}", key))?;
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
-                        let events_json = match serde_json::to_string(&response.events) {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize EdgionTls events: {}", e);
@@ -355,7 +404,8 @@ impl ConfigCenter {
                         };
                         let event_data = EventDataSimple {
                             data: events_json,
-                            resource_version: response.resource_version,
+                            resource_version,
+                            err,
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -369,7 +419,13 @@ impl ConfigCenter {
                     .ok_or_else(|| format!("Secret cache not found for key: {}", key))?;
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
-                        let events_json = match serde_json::to_string(&response.events) {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize Secret events: {}", e);
@@ -378,7 +434,8 @@ impl ConfigCenter {
                         };
                         let event_data = EventDataSimple {
                             data: events_json,
-                            resource_version: response.resource_version,
+                            resource_version,
+                            err,
                         };
                         if tx.send(event_data).await.is_err() {
                             break;

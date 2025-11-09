@@ -161,6 +161,7 @@ impl ConfigSync for ConfigSyncServer {
                 let response = WatchResponse {
                     data: event_data.data,
                     resource_version: event_data.resource_version,
+                    err: event_data.err.unwrap_or_default(),
                 };
 
                 if tx.send(Ok(response)).await.is_err() {

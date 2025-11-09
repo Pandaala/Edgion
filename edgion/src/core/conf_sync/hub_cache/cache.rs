@@ -65,19 +65,13 @@ impl<T: Versionable> HubCache<T> {
 }
 
 impl<T: Versionable + Clone + Send + 'static> EventDispatch<T> for HubCache<T> {
-    fn apply_change(
-        &mut self,
-        change: ResourceChange,
-        resource: T,
-        resource_version: Option<u64>,
-    ) where
+    fn apply_change(&mut self, change: ResourceChange, resource: T, resource_version: Option<u64>)
+    where
         T: Send + 'static,
     {
         let version = resource_version.unwrap_or_else(|| resource.get_version());
         match change {
-            ResourceChange::InitAdd
-            | ResourceChange::EventAdd
-            | ResourceChange::EventUpdate => {
+            ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
                 self.data.insert(version.to_string(), resource);
                 if version > self.resource_version {
                     self.resource_version = version;

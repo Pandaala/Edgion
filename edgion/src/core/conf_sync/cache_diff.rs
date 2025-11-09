@@ -78,8 +78,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::conf_sync::EventDispatch;
     use crate::core::conf_sync::traits::ResourceChange;
+    use crate::core::conf_sync::EventDispatch;
     use serde::Serialize;
 
     #[derive(Debug, Clone, Serialize)]

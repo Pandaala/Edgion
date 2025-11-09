@@ -464,7 +464,19 @@ async fn config_center_http_route_lifecycle_syncs() {
 }
 
 fn apply_watch_response_to_hub(hub: &mut HubCache<HTTPRoute>, response: WatchResponse<HTTPRoute>) {
-    for event in response.events {
+    let WatchResponse {
+        events,
+        err,
+        resource_version: _,
+    } = response;
+
+    assert!(
+        err.is_none(),
+        "unexpected error in watch response: {:?}",
+        err
+    );
+
+    for event in events {
         let change = match event.event_type {
             EventType::Add => ResourceChange::EventAdd,
             EventType::Update => ResourceChange::EventUpdate,
