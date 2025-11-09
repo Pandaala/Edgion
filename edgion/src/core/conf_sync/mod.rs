@@ -1,19 +1,14 @@
-pub mod cache_diff;
 mod cache_server;
 pub mod config_server;
 pub mod config_server_update;
 pub mod config_client;
-#[cfg(test)]
-mod config_tests;
 pub mod grpc_client;
 pub mod grpc_server;
-#[cfg(test)]
-mod grpc_tests;
+
 mod cache_client;
 mod proto;
 pub mod traits;
 
-pub use cache_diff::{diff_center_hub, CacheDiff, CacheDiffItem};
 pub use cache_server::{ServerCache, EventDispatch, Versionable};
 pub use config_server::ConfigServer;
 pub use grpc_client::ConfigSyncClient;
