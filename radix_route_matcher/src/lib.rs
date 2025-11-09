@@ -71,9 +71,9 @@
 //! - `radix_tree`: High-level safe Rust API (`RadixTree` struct)
 //! - `c_api`: C ABI exports for use from other languages
 
+mod c_api;
 mod ffi;
 mod radix_tree;
-mod c_api;
 
 #[cfg(test)]
 mod tests;
@@ -91,7 +91,4 @@ pub use c_api::{
     radix_tree_new_it,
     radix_tree_search,
     radix_tree_up,
-    radix_tree_prev,
-    radix_tree_next,
-    radix_tree_stop,
 };

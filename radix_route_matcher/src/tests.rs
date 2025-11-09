@@ -258,9 +258,8 @@ impl RadixTree {
     /// ```
     pub fn search(&self, iter: &RadixIterator, path: &str) -> bool {
         let bytes = path.as_bytes();
-        let search_ptr = unsafe {
-            tree_search_raw(self.tree, iter.iter, bytes.as_ptr(), bytes.len())
-        };
+        let search_ptr =
+            unsafe { tree_search_raw(self.tree, iter.iter, bytes.as_ptr(), bytes.len()) };
         !search_ptr.is_null()
     }
 

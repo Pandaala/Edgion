@@ -105,11 +105,7 @@ pub extern "C" fn radix_tree_find(
 ///
 /// t must be a valid tree pointer, buf must point to at least len bytes.
 #[no_mangle]
-pub extern "C" fn radix_tree_remove(
-    t: *mut c_void,
-    buf: *const c_uchar,
-    len: c_ulong,
-) -> c_int {
+pub extern "C" fn radix_tree_remove(t: *mut c_void, buf: *const c_uchar, len: c_ulong) -> c_int {
     unsafe { tree_remove_raw(t, buf as *const u8, len as usize) }
 }
 
@@ -174,11 +170,7 @@ pub extern "C" fn radix_tree_search(
 ///
 /// it must be a valid iterator, buf must point to at least len bytes.
 #[no_mangle]
-pub extern "C" fn radix_tree_prev(
-    it: *mut c_void,
-    buf: *const c_uchar,
-    len: c_ulong,
-) -> c_int {
+pub extern "C" fn radix_tree_prev(it: *mut c_void, buf: *const c_uchar, len: c_ulong) -> c_int {
     if it.is_null() || buf.is_null() {
         return -1;
     }
@@ -222,11 +214,7 @@ pub extern "C" fn radix_tree_prev(
 ///
 /// it must be a valid iterator, buf must point to at least len bytes.
 #[no_mangle]
-pub extern "C" fn radix_tree_next(
-    it: *mut c_void,
-    buf: *const c_uchar,
-    len: c_ulong,
-) -> c_int {
+pub extern "C" fn radix_tree_next(it: *mut c_void, buf: *const c_uchar, len: c_ulong) -> c_int {
     if it.is_null() || buf.is_null() {
         return -1;
     }
@@ -269,11 +257,7 @@ pub extern "C" fn radix_tree_next(
 /// it must be a valid iterator initialized with radix_tree_search(),
 /// buf must point to at least len bytes.
 #[no_mangle]
-pub extern "C" fn radix_tree_up(
-    it: *mut c_void,
-    buf: *const c_uchar,
-    len: c_ulong,
-) -> c_int {
+pub extern "C" fn radix_tree_up(it: *mut c_void, buf: *const c_uchar, len: c_ulong) -> c_int {
     unsafe { tree_up_raw(it, buf as *const u8, len as usize) }
 }
 
