@@ -28,7 +28,7 @@ impl<T: Versionable + Send + Sync> CenterCache<T> {
     {
         Self {
             ready: false,
-            store: Arc::new(tokio::sync::RwLock::new(EventStore::new(capacity))),
+            store: Arc::new(tokio::sync::RwLock::new(EventStore::new(capacity as usize))),
             watchers: Vec::new(),
             notify: Arc::new(Notify::new()),
         }
