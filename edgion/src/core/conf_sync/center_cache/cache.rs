@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
-use super::store::EventStore;
+use super::store::{EventStore, WatchEventError};
 use super::traits::{EventDispatch, Versionable};
 use super::types::{EventType, ListData, WatchClient, WatchResponse, WatcherEvent};
 
@@ -104,24 +104,40 @@ impl<T: Versionable> CenterCache<T> {
 
                 // Only fetch events if version has changed
                 if from_version < current_version {
-                    let (events, current_version) = {
+                    let result = {
                         let store_guard = store.read().await;
                         store_guard.get_events_from_resource_version(from_version)
                     };
 
-                    if !events.is_empty() {
-                        from_version = current_version;
-                        let response = WatchResponse::new(events, current_version);
+                    match result {
+                        Ok((events, current_version)) => {
+                            if !events.is_empty() {
+                                from_version = current_version;
+                                let response = WatchResponse::new(events, current_version);
 
-                        if sender.send(response).await.is_err() {
-                            // Client disconnected, exit loop
-                            break;
+                                if sender.send(response).await.is_err() {
+                                    // Client disconnected, exit loop
+                                    break;
+                                }
+
+                                // Update send count and time
+                                send_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if let Ok(mut last_time) = last_send_time.write() {
+                                    *last_time = Some(SystemTime::now());
+                                }
+                            } else {
+                                from_version = current_version;
+                            }
                         }
-
-                        // Update send count and time
-                        send_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if let Ok(mut last_time) = last_send_time.write() {
-                            *last_time = Some(SystemTime::now());
+                        Err(WatchEventError::StaleResourceVersion {
+                            requested,
+                            oldest_available,
+                        }) => {
+                            eprintln!(
+                                "[CenterCache] watcher {} requested stale version {} (oldest available {}), stopping watcher",
+                                watcher.client_id, requested, oldest_available
+                            );
+                            break;
                         }
                     }
                 } else {

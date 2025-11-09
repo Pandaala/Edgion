@@ -5,6 +5,6 @@ mod traits;
 mod types;
 
 pub use cache::CenterCache;
-pub use store::EventStore;
+pub use store::{EventStore, WatchEventError};
 pub use traits::{EventDispatch, Versionable};
 pub use types::{EventType, ListData, WatchClient, WatchResponse, WatcherEvent};
