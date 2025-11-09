@@ -15,3 +15,6 @@ pub use config_server::ConfigServer;
 pub use grpc_client::ConfigSyncClient;
 pub use grpc_server::ConfigSyncServer;
 pub use traits::EventDispatcher;
+
+#[cfg(test)]
+mod tests;
