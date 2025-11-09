@@ -1,24 +1,29 @@
-use axum::{routing::get, Router};
-use std::net::SocketAddr;
-use axum::extract::{Request, ConnectInfo};
-use axum::response::IntoResponse;
 use axum::body::Body;
-use tokio::task;
-use futures::future;
 use axum::extract::Extension;
-
+use axum::extract::{ConnectInfo, Request};
+use axum::response::IntoResponse;
+use axum::{routing::get, Router};
+use futures::future;
+use std::net::SocketAddr;
+use tokio::task;
 
 async fn hello(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Extension(server_addr): Extension<String>,
-    req: Request<Body>
+    req: Request<Body>,
 ) -> impl IntoResponse {
     let mut resp = String::with_capacity(1024);
-    resp.push_str(&format!("\n\n============= Response from {} ===========\n", server_addr));
+    resp.push_str(&format!(
+        "\n\n============= Response from {} ===========\n",
+        server_addr
+    ));
 
     let headers = req.headers();
 
-    let host = headers.get("host").and_then(|h| h.to_str().ok()).unwrap_or("");
+    let host = headers
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
     resp.push_str(&format!("Host: {}\n", host));
 
     let path = req.uri().path();
@@ -42,10 +47,18 @@ async fn hello(
 #[tokio::main]
 async fn main() {
     println!("Starting test servers...");
-    let app1 = Router::new().route("/{*path}", get(hello)).layer(Extension("127.0.0.1:30001".to_string()));
-    let app2 = Router::new().route("/{*path}", get(hello)).layer(Extension("127.0.0.1:30002".to_string()));
-    let app3 = Router::new().route("/{*path}", get(hello)).layer(Extension("127.0.0.1:30003".to_string()));
-    let app4 = Router::new().route("/{*path}", get(hello)).layer(Extension("127.0.0.1:30004".to_string()));
+    let app1 = Router::new()
+        .route("/{*path}", get(hello))
+        .layer(Extension("127.0.0.1:30001".to_string()));
+    let app2 = Router::new()
+        .route("/{*path}", get(hello))
+        .layer(Extension("127.0.0.1:30002".to_string()));
+    let app3 = Router::new()
+        .route("/{*path}", get(hello))
+        .layer(Extension("127.0.0.1:30003".to_string()));
+    let app4 = Router::new()
+        .route("/{*path}", get(hello))
+        .layer(Extension("127.0.0.1:30004".to_string()));
 
     let addrs = [
         SocketAddr::from("127.0.0.1:30001".parse::<SocketAddr>().unwrap()),
