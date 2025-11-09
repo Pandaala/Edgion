@@ -14,7 +14,7 @@ use uuid::Uuid;
 /// gRPC client for ConfigSync service
 pub struct ConfigSyncClient {
     client: ConfigSyncClientService<Channel>,
-    config_hub: Arc<Mutex<ConfigClient>>,
+    config_client: Arc<Mutex<ConfigClient>>,
     client_id: String,
     client_name: String,
 }
@@ -26,12 +26,12 @@ impl ConfigSyncClient {
         gateway_class_key: String,
     ) -> Result<Self, tonic::transport::Error> {
         let client = ConfigSyncClientService::connect(addr).await?;
-        let config_hub = Arc::new(Mutex::new(ConfigClient::new(gateway_class_key)));
+        let config_client = Arc::new(Mutex::new(ConfigClient::new(gateway_class_key)));
         let client_id = Uuid::new_v4().to_string();
         let client_name = "config-sync-client".to_string();
         Ok(Self {
             client,
-            config_hub,
+            config_client,
             client_id,
             client_name,
         })
@@ -48,20 +48,20 @@ impl ConfigSyncClient {
             .connect_timeout(timeout);
         let channel = endpoint.connect().await?;
         let client = ConfigSyncClientService::new(channel);
-        let config_hub = Arc::new(Mutex::new(ConfigClient::new(gateway_class_key)));
+        let config_client = Arc::new(Mutex::new(ConfigClient::new(gateway_class_key)));
         let client_id = Uuid::new_v4().to_string();
         let client_name = "config-sync-client".to_string();
         Ok(Self {
             client,
-            config_hub,
+            config_client,
             client_id,
             client_name,
         })
     }
 
     /// Get a reference to the ConfigHub
-    pub fn get_config_hub(&self) -> Arc<Mutex<ConfigClient>> {
-        self.config_hub.clone()
+    pub fn get_config_client(&self) -> Arc<Mutex<ConfigClient>> {
+        self.config_client.clone()
     }
 
     /// Sync all resources of a specific kind from server
@@ -97,7 +97,7 @@ impl ConfigSyncClient {
             kind
         );
 
-        let mut hub = self.config_hub.lock().await;
+        let mut hub = self.config_client.lock().await;
         for (idx, resource) in resources.iter().enumerate() {
             // Each resource in the list should be added/updated
             let data_str = serde_json::to_string(&resource).map_err(|e| {
@@ -126,7 +126,7 @@ impl ConfigSyncClient {
         key: String,
         kind: ResourceKind,
     ) -> Result<(), tonic::Status> {
-        let hub = self.config_hub.lock().await;
+        let hub = self.config_client.lock().await;
         let from_version = match kind {
             ResourceKind::GatewayClass => hub.list_gateway_classes().resource_version,
             ResourceKind::EdgionGatewayConfig => hub.list_edgion_gateway_config().resource_version,
@@ -149,7 +149,7 @@ impl ConfigSyncClient {
             )
             .await?;
 
-        let hub_clone = self.config_hub.clone();
+        let hub_clone = self.config_client.clone();
         let kind_clone = kind;
 
         tokio::spawn(async move {
@@ -213,7 +213,7 @@ impl ConfigSyncClient {
 
     /// Sync all resource types from server
     pub async fn sync_all(&mut self) -> Result<(), tonic::Status> {
-        let hub = self.config_hub.lock().await;
+        let hub = self.config_client.lock().await;
         let key = hub.get_gateway_class_key().clone();
         drop(hub);
 
@@ -239,7 +239,7 @@ impl ConfigSyncClient {
 
     /// Start watching all resource types and automatically sync to ConfigHub
     pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
-        let hub = self.config_hub.lock().await;
+        let hub = self.config_client.lock().await;
         let key = hub.get_gateway_class_key().clone();
         drop(hub);
 

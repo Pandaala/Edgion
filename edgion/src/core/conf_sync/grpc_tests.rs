@@ -32,7 +32,7 @@ fn edgion_gateway_config_value(resource_version: u64) -> Value {
 }
 
 async fn start_test_server(
-    config_center: Arc<Mutex<ConfigServer>>,
+    config_server: Arc<Mutex<ConfigServer>>,
 ) -> (
     std::net::SocketAddr,
     tokio::sync::oneshot::Sender<()>,
@@ -44,7 +44,7 @@ async fn start_test_server(
     let addr = listener.local_addr().expect("retrieve listener address");
 
     let incoming = TcpListenerStream::new(listener);
-    let service = ConfigSyncServer::new_with_shared(config_center).into_service();
+    let service = ConfigSyncServer::new_with_shared(config_server).into_service();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -63,7 +63,7 @@ async fn start_test_server(
     (addr, shutdown_tx, handle)
 }
 
-async fn seed_all_resource_types(config_center: &Arc<Mutex<ConfigServer>>) {
+async fn seed_all_resource_types(config_server: &Arc<Mutex<ConfigServer>>) {
     let tls_spec = EdgionTlsSpec {
         parent_refs: None,
         hosts: vec!["example.com".to_string()],
@@ -204,7 +204,7 @@ async fn seed_all_resource_types(config_center: &Arc<Mutex<ConfigServer>>) {
         ),
     ];
 
-    let mut center = config_center.lock().await;
+    let mut center = config_server.lock().await;
     for (kind, value, version) in resources {
         let data = serde_json::to_string(&value).expect("serialize resource");
         <ConfigServer as EventDispatcher>::apply_resource_change(
@@ -219,14 +219,14 @@ async fn seed_all_resource_types(config_center: &Arc<Mutex<ConfigServer>>) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn grpc_server_client_syncs_all_resource_types() {
-    let config_center = Arc::new(Mutex::new(ConfigServer::new()));
+    let config_server = Arc::new(Mutex::new(ConfigServer::new()));
 
-    let (addr, shutdown_tx, server_handle) = start_test_server(config_center.clone()).await;
+    let (addr, shutdown_tx, server_handle) = start_test_server(config_server.clone()).await;
 
     // Ensure the server is listening before proceeding.
     sleep(Duration::from_millis(50)).await;
 
-    seed_all_resource_types(&config_center).await;
+    seed_all_resource_types(&config_server).await;
 
     let endpoint = format!("http://{}", addr);
     let mut client = ConfigSyncClient::connect(endpoint, GATEWAY_CLASS_KEY.to_string())
@@ -235,7 +235,7 @@ async fn grpc_server_client_syncs_all_resource_types() {
 
     client.sync_all().await.expect("sync all resources");
 
-    let hub = client.get_config_hub();
+    let hub = client.get_config_client();
     let hub_guard = hub.lock().await;
 
     assert_eq!(hub_guard.list_gateway_classes().data.len(), 1);

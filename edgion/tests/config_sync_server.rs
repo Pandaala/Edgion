@@ -31,7 +31,7 @@ pub enum RunMode {
 pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
     println!("[SERVER] Starting Config Sync server example");
 
-    let config_center = Arc::new(Mutex::new(ConfigServer::new()));
+    let config_server = Arc::new(Mutex::new(ConfigServer::new()));
     let version_counters = Arc::new(Mutex::new(HashMap::<ResourceKind, u64>::new()));
     let known_gateway_keys = Arc::new(Mutex::new(HashSet::new()));
 
@@ -41,7 +41,7 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
     }
 
     let state = ServerState {
-        config_center: config_center.clone(),
+        config_server: config_server.clone(),
         version_counters,
         known_gateway_keys: known_gateway_keys.clone(),
     };
@@ -52,7 +52,7 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
     let shutdown = Arc::new(Notify::new());
 
     let grpc_shutdown = shutdown.clone();
-    let grpc_center = config_center.clone();
+    let grpc_center = config_server.clone();
     let grpc_handle = tokio::spawn(async move {
         let server = ConfigSyncServer::new_with_shared(grpc_center.clone());
         println!("[SERVER] gRPC endpoint listening on {}", grpc_addr);
@@ -95,7 +95,7 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
     });
 
     let status_shutdown = shutdown.clone();
-    let status_center = config_center.clone();
+    let status_center = config_server.clone();
     let status_keys = known_gateway_keys.clone();
     let status_handle = tokio::spawn(async move {
         let mut ticker = interval(Duration::from_secs(10));
@@ -147,7 +147,7 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
 
 #[derive(Clone)]
 struct ServerState {
-    config_center: Arc<Mutex<ConfigServer>>,
+    config_server: Arc<Mutex<ConfigServer>>,
     version_counters: Arc<Mutex<HashMap<ResourceKind, u64>>>,
     known_gateway_keys: Arc<Mutex<HashSet<GatewayClassKey>>>,
 }
@@ -226,7 +226,7 @@ async fn add_config(
         None => next_version(&state, kind).await,
     };
 
-    let mut center = state.config_center.lock().await;
+    let mut center = state.config_server.lock().await;
 
     let operation = payload.operation;
 

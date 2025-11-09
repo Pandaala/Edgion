@@ -12,24 +12,24 @@ use crate::types::ResourceKind;
 
 /// Server wrapper for WatcherMgr
 pub struct ConfigSyncServer {
-    config_center: Arc<Mutex<ConfigServer>>,
+    config_server: Arc<Mutex<ConfigServer>>,
 }
 
 impl ConfigSyncServer {
     pub fn new(watcher_mgr: ConfigServer) -> Self {
         Self {
-            config_center: Arc::new(Mutex::new(watcher_mgr)),
+            config_server: Arc::new(Mutex::new(watcher_mgr)),
         }
     }
 
     /// Create a new ConfigSyncServer with a shared ConfigCenter
-    pub fn new_with_shared(config_center: Arc<Mutex<ConfigServer>>) -> Self {
-        Self { config_center }
+    pub fn new_with_shared(config_server: Arc<Mutex<ConfigServer>>) -> Self {
+        Self { config_server }
     }
 
     /// Get a reference to the shared ConfigCenter
-    pub fn get_config_center(&self) -> Arc<Mutex<ConfigServer>> {
-        self.config_center.clone()
+    pub fn get_config_server(&self) -> Arc<Mutex<ConfigServer>> {
+        self.config_server.clone()
     }
 
     pub fn into_service(self) -> ConfigSyncService<ConfigSyncServer> {
@@ -80,7 +80,7 @@ impl ConfigSync for ConfigSyncServer {
             .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
         // Get WatcherMgr and call list
-        let watcher_mgr = self.config_center.lock().await;
+        let watcher_mgr = self.config_server.lock().await;
         let list_data = watcher_mgr
             .list(&req.key, &resource_kind)
             .await
@@ -119,7 +119,7 @@ impl ConfigSync for ConfigSyncServer {
         );
 
         // Get WatcherMgr and call watch
-        let mut watcher_mgr = self.config_center.lock().await;
+        let mut watcher_mgr = self.config_server.lock().await;
         let watch_result = watcher_mgr.watch(
             &req.key,
             &resource_kind,

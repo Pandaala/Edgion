@@ -27,7 +27,7 @@ pub async fn run_config_sync_client(mode: RunMode) -> anyhow::Result<()> {
     client.sync_all().await?;
     client.start_watch_all().await?;
 
-    let hub = client.get_config_hub();
+    let hub = client.get_config_client();
     spawn_status_logger(hub.clone());
 
     match mode {

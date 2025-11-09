@@ -200,7 +200,7 @@ fn make_http_route(name: &str, host: &str, version: u64) -> HTTPRoute {
     route
 }
 
-fn seed_config_center(center: &mut ConfigServer) {
+fn seed_config_server(center: &mut ConfigServer) {
     for (kind, value, version) in resource_fixtures() {
         let data = serde_json::to_string(&value).expect("serialize resource");
         <ConfigServer as EventDispatcher>::apply_resource_change(
@@ -334,15 +334,15 @@ async fn exercise_http_route_lifecycle(center: &mut ConfigServer, hub: &mut Conf
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn config_center_data_syncs_into_config_hub() {
-    let mut config_center = ConfigServer::new();
-    seed_config_center(&mut config_center);
+async fn config_server_data_syncs_into_config_client() {
+    let mut config_server = ConfigServer::new();
+    seed_config_server(&mut config_server);
 
     // Allow any spawned tasks to update internal stores
     yield_now().await;
     sleep(Duration::from_millis(5)).await;
 
-    let mut config_hub = ConfigClient::new(GATEWAY_CLASS_KEY.to_string());
+    let mut config_client = ConfigClient::new(GATEWAY_CLASS_KEY.to_string());
     let key = GATEWAY_CLASS_KEY.to_string();
     let resource_kinds = [
         ResourceKind::GatewayClass,
@@ -356,7 +356,7 @@ async fn config_center_data_syncs_into_config_hub() {
     ];
 
     for kind in resource_kinds {
-        let list_response = config_center
+        let list_response = config_server
             .list(&key, &kind)
             .await
             .unwrap_or_else(|e| panic!("list {:?} from center failed: {}", kind, e));
@@ -367,7 +367,7 @@ async fn config_center_data_syncs_into_config_hub() {
         for resource in resources {
             let data = serde_json::to_string(&resource).expect("serialize resource for hub");
             <ConfigClient as EventDispatcher>::apply_resource_change(
-                &mut config_hub,
+                &mut config_client,
                 ResourceChange::InitAdd,
                 Some(kind),
                 data,
@@ -376,7 +376,7 @@ async fn config_center_data_syncs_into_config_hub() {
         }
     }
 
-    let gateway_classes = config_hub.list_gateway_classes();
+    let gateway_classes = config_client.list_gateway_classes();
     assert_eq!(gateway_classes.data.len(), 1);
     assert_eq!(gateway_classes.resource_version, 1);
     assert_eq!(
@@ -384,7 +384,7 @@ async fn config_center_data_syncs_into_config_hub() {
         Some(GATEWAY_CLASS_KEY)
     );
 
-    let gateway_configs = config_hub.list_edgion_gateway_config();
+    let gateway_configs = config_client.list_edgion_gateway_config();
     assert_eq!(gateway_configs.data.len(), 1);
     assert_eq!(gateway_configs.resource_version, 2);
     assert_eq!(
@@ -396,7 +396,7 @@ async fn config_center_data_syncs_into_config_hub() {
         "expected listener_defaults to be None"
     );
 
-    let gateways = config_hub.list_gateways();
+    let gateways = config_client.list_gateways();
     assert_eq!(gateways.data.len(), 1);
     assert_eq!(gateways.resource_version, 3);
     assert_eq!(
@@ -408,7 +408,7 @@ async fn config_center_data_syncs_into_config_hub() {
         Some(80)
     );
 
-    let routes = config_hub.list_routes();
+    let routes = config_client.list_routes();
     assert_eq!(routes.data.len(), 1);
     assert_eq!(routes.resource_version, 4);
     assert_eq!(routes.data[0].metadata.name.as_deref(), Some("demo-route"));
@@ -422,7 +422,7 @@ async fn config_center_data_syncs_into_config_hub() {
         Some("example.com")
     );
 
-    let services = config_hub.list_services();
+    let services = config_client.list_services();
     assert_eq!(services.data.len(), 1);
     assert_eq!(services.resource_version, 5);
     assert_eq!(
@@ -430,7 +430,7 @@ async fn config_center_data_syncs_into_config_hub() {
         Some("demo-service")
     );
 
-    let endpoint_slices = config_hub.list_endpoint_slices();
+    let endpoint_slices = config_client.list_endpoint_slices();
     assert_eq!(endpoint_slices.data.len(), 1);
     assert_eq!(endpoint_slices.resource_version, 6);
     assert_eq!(
@@ -438,7 +438,7 @@ async fn config_center_data_syncs_into_config_hub() {
         Some("demo-slice")
     );
 
-    let edgion_tls = config_hub.list_edgion_tls();
+    let edgion_tls = config_client.list_edgion_tls();
     assert_eq!(edgion_tls.data.len(), 1);
     assert_eq!(edgion_tls.resource_version, 7);
     assert_eq!(
@@ -446,7 +446,7 @@ async fn config_center_data_syncs_into_config_hub() {
         Some("demo-secret")
     );
 
-    let secrets = config_hub.list_secrets();
+    let secrets = config_client.list_secrets();
     assert_eq!(secrets.data.len(), 1);
     assert_eq!(secrets.resource_version, 8);
     assert_eq!(
@@ -456,11 +456,11 @@ async fn config_center_data_syncs_into_config_hub() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn config_center_http_route_lifecycle_syncs() {
-    let mut config_center = ConfigServer::new();
-    let mut config_hub = ConfigClient::new(GATEWAY_CLASS_KEY.to_string());
+async fn config_server_http_route_lifecycle_syncs() {
+    let mut config_server = ConfigServer::new();
+    let mut config_client = ConfigClient::new(GATEWAY_CLASS_KEY.to_string());
 
-    exercise_http_route_lifecycle(&mut config_center, &mut config_hub).await;
+    exercise_http_route_lifecycle(&mut config_server, &mut config_client).await;
 }
 
 fn apply_watch_response_to_hub(hub: &mut ClientCache<HTTPRoute>, response: WatchResponse<HTTPRoute>) {
