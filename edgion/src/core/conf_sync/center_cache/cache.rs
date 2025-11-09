@@ -1,16 +1,13 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
 use super::store::{EventStore, WatchEventError};
 use super::traits::{EventDispatch, Versionable};
-use super::types::{EventType, ListData, WatchClient, WatchResponse, WatcherEvent};
+use super::types::{EventType, ListData, WatchClient, WatchResponse};
+use crate::core::conf_sync::traits::ResourceChange;
 
 pub struct CenterCache<T> {
-    // data
-    data: HashMap<String, T>,
-
     // wait for init complete
     ready: bool,
 
@@ -24,13 +21,12 @@ pub struct CenterCache<T> {
     notify: Arc<Notify>,
 }
 
-impl<T: Versionable> CenterCache<T> {
+impl<T: Versionable + Send + Sync> CenterCache<T> {
     pub fn new(capacity: u32) -> Self
     where
         T: Clone,
     {
         Self {
-            data: HashMap::new(),
             ready: false,
             store: Arc::new(tokio::sync::RwLock::new(EventStore::new(capacity))),
             watchers: Vec::new(),
@@ -54,10 +50,11 @@ impl<T: Versionable> CenterCache<T> {
 
     /// List all data - returns all resources in the cache with resource version
     /// This is typically called by clients to get the full snapshot of data
-    pub async fn list(&self) -> ListData<&T> {
-        let data: Vec<&T> = self.data.values().collect();
-        let resource_version = self.store.read().await.get_current_version();
-        ListData::new(data, resource_version)
+    pub async fn list(&self) -> ListData<T>
+    where
+        T: Clone,
+    {
+        self.list_owned().await
     }
 
     /// List all data as owned values (cloned)
@@ -66,18 +63,10 @@ impl<T: Versionable> CenterCache<T> {
     where
         T: Clone,
     {
-        let data: Vec<T> = self.data.values().cloned().collect();
-        let resource_version = self.store.read().await.get_current_version();
+        let store_guard = self.store.read().await;
+        let data: Vec<T> = store_guard.snapshot_owned();
+        let resource_version = store_guard.get_current_version();
         ListData::new(data, resource_version)
-    }
-
-    /// Notify all pending watchers (non-blocking)
-    /// Uses shared Notify to broadcast to all watchers at once
-    fn notify_watchers(&mut self) {
-        if self.is_ready() {
-            // Notify all waiting tasks at once - much more efficient!
-            self.notify.notify_waiters();
-        }
     }
 
     /// Start a watcher task that listens for notifications and sends data
@@ -202,122 +191,66 @@ impl<T: Versionable> CenterCache<T> {
     }
 
     /// Add event to the circular queue
-    async fn add_event(&mut self, event_type: EventType, resource: T, resource_version: Option<u64>)
+    fn push_event(&self, event_type: EventType, resource: T, resource_version: u64)
     where
-        T: Clone,
+        T: Clone + Send + 'static,
     {
-        let version = resource_version.unwrap_or_else(|| resource.get_version());
-
-        let event = WatcherEvent {
-            event_type,
-            resource_version: version,
-            data: resource,
-        };
-
-        {
-            let mut store_guard = self.store.write().await;
-            store_guard.mut_update(event);
-        }
-
-        // Notify all pending watchers (non-blocking)
-        if !self.watchers.is_empty() {
-            self.notify_watchers();
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                let store = self.store.clone();
+                let notify = self.notify.clone();
+                handle.spawn(async move {
+                    {
+                        let mut store_guard = store.write().await;
+                        store_guard.apply_event(event_type, resource, resource_version);
+                    }
+                    notify.notify_waiters();
+                });
+            }
+            Err(_) => {
+                {
+                    let mut store_guard = self.store.blocking_write();
+                    store_guard.apply_event(event_type, resource, resource_version);
+                }
+                self.notify.notify_waiters();
+            }
         }
     }
 }
 
 impl<T: Versionable + Clone + Send + Sync + 'static> EventDispatch<T> for CenterCache<T> {
-    fn init_add(&mut self, resource: T, resource_version: Option<u64>) {
+    fn apply_change(&mut self, change: ResourceChange, resource: T, resource_version: Option<u64>)
+    where
+        T: Send + 'static,
+    {
         let version = resource_version.unwrap_or_else(|| resource.get_version());
-        self.data.insert(version.to_string(), resource);
+        match change {
+            ResourceChange::InitAdd => {
+                let mut store_guard = self.store.blocking_write();
+                store_guard.init_add(version, resource);
+            }
+            ResourceChange::EventAdd => {
+                self.push_event(EventType::Add, resource, version);
+            }
+            ResourceChange::EventUpdate => {
+                self.push_event(EventType::Update, resource, version);
+            }
+            ResourceChange::EventDelete => {
+                self.push_event(EventType::Delete, resource, version);
+            }
+        }
     }
 
     fn set_ready(&mut self) {
         self.ready = true;
-    }
-
-    fn event_add(&mut self, resource: T, resource_version: Option<u64>)
-    where
-        T: Send + 'static,
-    {
-        let version = resource_version.unwrap_or_else(|| resource.get_version());
-        let resource_clone = resource.clone();
-        self.data.insert(version.to_string(), resource);
-        let event = WatcherEvent {
-            event_type: EventType::Add,
-            resource_version: version,
-            data: resource_clone,
-        };
-        let store = self.store.clone();
-        let notify = self.notify.clone();
-        // Spawn async task to update store
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                {
-                    let mut store_guard = store.write().await;
-                    store_guard.mut_update(event);
-                }
-                notify.notify_waiters();
-            });
-        }
-        // If not in async context, we can't update the store asynchronously
-        // The data is already updated in self.data, so this is acceptable
-    }
-
-    fn event_update(&mut self, resource: T, resource_version: Option<u64>)
-    where
-        T: Send + 'static,
-    {
-        let version = resource_version.unwrap_or_else(|| resource.get_version());
-        let resource_clone = resource.clone();
-        self.data.insert(version.to_string(), resource);
-        let event = WatcherEvent {
-            event_type: EventType::Update,
-            resource_version: version,
-            data: resource_clone,
-        };
-        let store = self.store.clone();
-        let notify = self.notify.clone();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                {
-                    let mut store_guard = store.write().await;
-                    store_guard.mut_update(event);
-                }
-                notify.notify_waiters();
-            });
-        }
-    }
-
-    fn event_del(&mut self, resource: T, resource_version: Option<u64>)
-    where
-        T: Send + 'static,
-    {
-        let version = resource_version.unwrap_or_else(|| resource.get_version());
-        let resource_clone = resource.clone();
-        self.data.remove(&version.to_string());
-        let event = WatcherEvent {
-            event_type: EventType::Delete,
-            resource_version: version,
-            data: resource_clone,
-        };
-        let store = self.store.clone();
-        let notify = self.notify.clone();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                {
-                    let mut store_guard = store.write().await;
-                    store_guard.mut_update(event);
-                }
-                notify.notify_waiters();
-            });
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::conf_sync::traits::ResourceChange;
+    use crate::core::conf_sync::EventDispatch;
     use tokio::task::yield_now;
     use tokio::time::{sleep, Duration};
 
@@ -347,7 +280,11 @@ mod tests {
             version: 1,
         };
 
-        cache.event_add(resource.clone(), Some(resource.version));
+        cache.apply_change(
+            ResourceChange::EventAdd,
+            resource.clone(),
+            Some(resource.version),
+        );
         wait_for_async_store_update().await;
 
         let snapshot = cache.list_owned().await;
@@ -368,10 +305,18 @@ mod tests {
             version: 1,
         };
 
-        cache.event_add(original.clone(), Some(original.version));
+        cache.apply_change(
+            ResourceChange::EventAdd,
+            original.clone(),
+            Some(original.version),
+        );
         wait_for_async_store_update().await;
 
-        cache.event_update(updated.clone(), Some(updated.version));
+        cache.apply_change(
+            ResourceChange::EventUpdate,
+            updated.clone(),
+            Some(updated.version),
+        );
         wait_for_async_store_update().await;
 
         let snapshot = cache.list_owned().await;
@@ -388,10 +333,18 @@ mod tests {
             version: 42,
         };
 
-        cache.event_add(resource.clone(), Some(resource.version));
+        cache.apply_change(
+            ResourceChange::EventAdd,
+            resource.clone(),
+            Some(resource.version),
+        );
         wait_for_async_store_update().await;
 
-        cache.event_del(resource.clone(), Some(resource.version));
+        cache.apply_change(
+            ResourceChange::EventDelete,
+            resource.clone(),
+            Some(resource.version),
+        );
         wait_for_async_store_update().await;
 
         let snapshot = cache.list_owned().await;

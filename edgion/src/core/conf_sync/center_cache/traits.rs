@@ -1,3 +1,5 @@
+use crate::core::conf_sync::traits::ResourceChange;
+
 /// Trait for resources that have a version
 pub trait Versionable {
     /// Get the resource version
@@ -6,24 +8,11 @@ pub trait Versionable {
 
 /// Trait for handling resource events
 pub trait EventDispatch<T> {
-    /// Initialize by adding a resource
-    fn init_add(&mut self, resource: T, resource_version: Option<u64>);
+    /// Apply a change to the resource cache
+    fn apply_change(&mut self, change: ResourceChange, resource: T, resource_version: Option<u64>)
+    where
+        T: Send + 'static;
 
     /// Set the dispatcher as ready
     fn set_ready(&mut self);
-
-    /// Handle add event
-    fn event_add(&mut self, resource: T, resource_version: Option<u64>)
-    where
-        T: Send + 'static;
-
-    /// Handle update event
-    fn event_update(&mut self, resource: T, resource_version: Option<u64>)
-    where
-        T: Send + 'static;
-
-    /// Handle delete event
-    fn event_del(&mut self, resource: T, resource_version: Option<u64>)
-    where
-        T: Send + 'static;
 }
