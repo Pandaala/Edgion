@@ -99,13 +99,19 @@ impl<T: Clone> EventStore<T> {
     pub fn get_events_from_resource_version(
         &self,
         from_version: u64,
-    ) -> Result<(u64, Vec<WatcherEvent<T>>), String> {
+    ) -> Result<(u64, Option<Vec<WatcherEvent<T>>>), String> {
+        if from_version > self.resource_version {
+            return Err("VersionUnexpect".to_owned());
+        } else if from_version == self.resource_version {
+            return Ok((self.resource_version, None));
+        }
+
         if from_version != 0 && from_version < self.expire_version {
-            return Err("failed".to_owned());
+            return Err("TooOldVersion".to_owned());
         }
 
         if self.capacity == 0 || self.end_index == self.start_index {
-            return Ok((self.resource_version, Vec::new()));
+            return Ok((self.resource_version, None));
         }
 
         // Walk backward to find the earliest index whose version is > from_version.
@@ -132,7 +138,7 @@ impl<T: Clone> EventStore<T> {
             loop_index += 1;
         }
 
-        Ok((self.resource_version, events))
+        Ok((self.resource_version, Some(events)))
     }
 }
 
@@ -151,7 +157,7 @@ mod tests {
         let (current_version, events) = store.get_events_from_resource_version(0).unwrap();
 
         assert_eq!(current_version, 0);
-        assert!(events.is_empty());
+        assert!(events.is_none());
     }
 
     #[test]
@@ -165,7 +171,8 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot.contains(&"alpha".to_string()));
 
-        let (current_version, events) = store.get_events_from_resource_version(0).unwrap();
+        let (current_version, events_opt) = store.get_events_from_resource_version(0).unwrap();
+        let events = events_opt.expect("expected events");
         assert_eq!(current_version, 1);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].resource_version, 1);
@@ -180,14 +187,18 @@ mod tests {
         store.apply_event(EventType::Add, "alpha".to_string(), 1);
         store.apply_event(EventType::Update, "beta".to_string(), 2);
 
-        let (_, events) = store.get_events_from_resource_version(1).unwrap();
+        let (_, events_opt) = store.get_events_from_resource_version(1).unwrap();
+        let events = events_opt.expect("expected events for version > 1");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].resource_version, 2);
         assert_eq!(events[0].data, "beta");
         assert!(matches!(events[0].event_type, EventType::Update));
 
-        let (_, events) = store.get_events_from_resource_version(2).unwrap();
-        assert!(events.is_empty());
+        let (_, events_opt) = store.get_events_from_resource_version(2).unwrap();
+        assert!(
+            events_opt.is_none(),
+            "no events expected when requesting current version"
+        );
     }
 
     #[test]
@@ -199,11 +210,12 @@ mod tests {
         }
 
         let err = store
-            .get_events_from_resource_version(0)
+            .get_events_from_resource_version(5)
             .expect_err("expected stale version error");
-        assert_eq!(err, "failed");
+        assert_eq!(err, "TooOldVersion");
 
-        let (current_version, events) = store.get_events_from_resource_version(55).unwrap();
+        let (current_version, events_opt) = store.get_events_from_resource_version(55).unwrap();
+        let events = events_opt.expect("expected events after catching up");
         assert_eq!(current_version, 60);
         let versions: Vec<u64> = events.iter().map(|ev| ev.resource_version).collect();
         assert_eq!(versions, vec![56, 57, 58, 59, 60]);
@@ -217,7 +229,8 @@ mod tests {
             store.apply_event(EventType::Add, format!("value-{version}"), version);
         }
 
-        let (current_version, events) = store.get_events_from_resource_version(110).unwrap();
+        let (current_version, events_opt) = store.get_events_from_resource_version(110).unwrap();
+        let events = events_opt.expect("expected events after wrap");
         assert_eq!(current_version, 120);
         let versions: Vec<u64> = events.iter().map(|ev| ev.resource_version).collect();
         assert_eq!(versions, (111..=120).collect::<Vec<_>>());
@@ -229,6 +242,18 @@ mod tests {
         let err = store
             .get_events_from_resource_version(10)
             .expect_err("versions older than expire_version should error");
-        assert_eq!(err, "failed");
+        assert_eq!(err, "TooOldVersion");
+    }
+
+    #[test]
+    fn version_unexpect_error_when_requesting_future_version() {
+        let mut store = make_store();
+
+        store.apply_event(EventType::Add, "alpha".to_string(), 1);
+
+        let err = store
+            .get_events_from_resource_version(99)
+            .expect_err("requesting future version should error");
+        assert_eq!(err, "VersionUnexpect");
     }
 }

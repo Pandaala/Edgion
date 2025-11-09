@@ -41,6 +41,7 @@ pub struct WatcherEvent<T> {
 pub struct WatchResponse<T> {
     pub events: Vec<WatcherEvent<T>>,
     pub resource_version: u64,
+    pub err: Option<String>,
 }
 
 impl<T> WatchResponse<T> {
@@ -48,6 +49,15 @@ impl<T> WatchResponse<T> {
         Self {
             events,
             resource_version,
+            err: None,
+        }
+    }
+
+    pub fn from_error(error: String, resource_version: u64) -> Self {
+        Self {
+            events: Vec::new(),
+            resource_version,
+            err: Some(error),
         }
     }
 }

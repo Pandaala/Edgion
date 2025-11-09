@@ -90,34 +90,39 @@ impl<T: Versionable + Send + Sync> CenterCache<T> {
                 };
 
                 match result {
-                    Ok((current_version, events)) => {
-                        if !events.is_empty() {
-                            from_version = current_version;
+                    Ok((current_version, maybe_events)) => match maybe_events {
+                        Some(events) if !events.is_empty() => {
                             let response = WatchResponse::new(events, current_version);
 
                             if sender.send(response).await.is_err() {
-                                // Client disconnected, exit loop
+                                println!("CenterCache receiver dropped, client disconnected");
                                 break;
                             }
 
-                            // Update send count and time
+                            from_version = current_version;
+
                             send_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             if let Ok(mut last_time) = last_send_time.write() {
                                 *last_time = Some(SystemTime::now());
                             }
-                        } else if current_version > from_version {
-                            from_version = current_version;
-                            continue;
-                        } else {
-                            // Version is up-to-date, wait for next notification
-                            notify.notified().await;
                         }
-                    }
+                        _ => {
+                            if current_version > from_version {
+                                from_version = current_version;
+                                continue;
+                            } else {
+                                notify.notified().await;
+                            }
+                        }
+                    },
                     Err(err) => {
                         eprintln!(
-                            "[CenterCache] watcher {} error fetching events: {}, stopping watcher",
+                            "[CenterCache] watcher {} error fetching events: {}",
                             watcher.client_id, err
                         );
+
+                        let response = WatchResponse::from_error(err.clone(), from_version);
+                        let _ = sender.send(response).await;
                         break;
                     }
                 }
