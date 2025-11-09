@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::core::conf_sync::cache_diff::diff_center_hub;
-use crate::core::conf_sync::server_cache::{EventType, Versionable, WatchResponse};
+use crate::core::conf_sync::cache_server::{EventType, Versionable, WatchResponse};
 use crate::core::conf_sync::config_server::ConfigServer;
 use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};

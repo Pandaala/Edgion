@@ -1,4 +1,4 @@
-use crate::core::conf_sync::server_cache::{EventDispatch, ListData, Versionable};
+use crate::core::conf_sync::cache_server::{EventDispatch, ListData, Versionable};
 use crate::core::conf_sync::traits::ResourceChange;
 use std::collections::HashMap;
 

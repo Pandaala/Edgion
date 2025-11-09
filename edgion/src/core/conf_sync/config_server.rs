@@ -3,7 +3,7 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-use crate::core::conf_sync::server_cache::{
+use crate::core::conf_sync::cache_server::{
     ServerCache, EventDispatch, ListData, Versionable, WatchResponse,
 };
 use crate::types::{
