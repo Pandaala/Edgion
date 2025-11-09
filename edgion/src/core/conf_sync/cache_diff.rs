@@ -27,16 +27,17 @@ where
     T: Versionable + Clone + Serialize + Send + Sync + 'static,
 {
     let center_store = center.get_store();
-    let center_data = {
+    let center_data_vec: Vec<T> = {
         let store_guard = center_store.read().await;
-        store_guard.snapshot_owned()
+        let (data, _version) = store_guard.snapshot_owned();
+        data
     };
     let hub_snapshot = hub.list_owned();
 
     let mut center_map: HashMap<u64, T> = HashMap::new();
     let mut hub_map: HashMap<u64, T> = HashMap::new();
 
-    for item in center_data {
+    for item in center_data_vec.into_iter() {
         center_map.insert(item.get_version(), item);
     }
 

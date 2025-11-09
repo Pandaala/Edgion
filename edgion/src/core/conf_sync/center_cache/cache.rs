@@ -64,8 +64,7 @@ impl<T: Versionable + Send + Sync> CenterCache<T> {
         T: Clone,
     {
         let store_guard = self.store.read().await;
-        let data: Vec<T> = store_guard.snapshot_owned();
-        let resource_version = store_guard.get_current_version();
+        let (data, resource_version) = store_guard.snapshot_owned();
         ListData::new(data, resource_version)
     }
 
@@ -85,21 +84,14 @@ impl<T: Versionable + Send + Sync> CenterCache<T> {
             let last_send_time = watcher.last_send_time;
 
             loop {
-                // First check if current version is different from client version
-                let current_version = {
+                let result = {
                     let store_guard = store.read().await;
-                    store_guard.get_current_version()
+                    store_guard.get_events_from_resource_version(from_version)
                 };
 
-                // Only fetch events if version has changed
-                if from_version < current_version {
-                    let result = {
-                        let store_guard = store.read().await;
-                        store_guard.get_events_from_resource_version(from_version)
-                    };
-
-                    match result {
-                        Ok((events, current_version)) => {
+                match result {
+                    Ok((current_version, events)) => {
+                        if current_version > from_version {
                             if !events.is_empty() {
                                 from_version = current_version;
                                 let response = WatchResponse::new(events, current_version);
@@ -116,22 +108,23 @@ impl<T: Versionable + Send + Sync> CenterCache<T> {
                                 }
                             } else {
                                 from_version = current_version;
+                                continue;
                             }
-                        }
-                        Err(WatchEventError::StaleResourceVersion {
-                            requested,
-                            oldest_available,
-                        }) => {
-                            eprintln!(
-                                "[CenterCache] watcher {} requested stale version {} (oldest available {}), stopping watcher",
-                                watcher.client_id, requested, oldest_available
-                            );
-                            break;
+                        } else {
+                            // Version is up-to-date, wait for next notification
+                            notify.notified().await;
                         }
                     }
-                } else {
-                    // Version is up-to-date, wait for next notification
-                    notify.notified().await;
+                    Err(WatchEventError::StaleResourceVersion {
+                        requested,
+                        oldest_available,
+                    }) => {
+                        eprintln!(
+                            "[CenterCache] watcher {} requested stale version {} (oldest available {}), stopping watcher",
+                            watcher.client_id, requested, oldest_available
+                        );
+                        break;
+                    }
                 }
             }
         });

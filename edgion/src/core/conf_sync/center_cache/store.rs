@@ -40,11 +40,6 @@ impl fmt::Display for WatchEventError {
 impl Error for WatchEventError {}
 
 impl<T> EventStore<T> {
-    /// Get current resource version
-    pub fn get_current_version(&self) -> u64 {
-        self.sequence
-    }
-
     /// Set current resource version
     pub fn set_current_version(&mut self, version: u64) {
         self.sequence = version;
@@ -80,11 +75,12 @@ impl<T> EventStore<T> {
         self.mut_update(event);
     }
 
-    pub fn snapshot_owned(&self) -> Vec<T>
+    pub fn snapshot_owned(&self) -> (Vec<T>, u64)
     where
         T: Clone,
     {
-        self.data.values().cloned().collect()
+        let data = self.data.values().cloned().collect();
+        (data, self.sequence)
     }
 }
 
@@ -125,7 +121,7 @@ impl<T: Clone> EventStore<T> {
     pub fn get_events_from_resource_version(
         &self,
         from_version: u64,
-    ) -> Result<(Vec<WatcherEvent<T>>, u64), WatchEventError> {
+    ) -> Result<(u64, Vec<WatcherEvent<T>>), WatchEventError> {
         if let Some(oldest_version) = self.oldest_version() {
             if from_version != 0 && from_version < oldest_version {
                 return Err(WatchEventError::StaleResourceVersion {
@@ -153,7 +149,7 @@ impl<T: Clone> EventStore<T> {
             }
         }
 
-        Ok((events, self.sequence))
+        Ok((self.sequence, events))
     }
 
     fn oldest_version(&self) -> Option<u64> {
