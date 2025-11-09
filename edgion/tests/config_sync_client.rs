@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::{interval, sleep};
 
-use edgion::core::conf_sync::config_hub::ConfigHub;
+use edgion::core::conf_sync::config_client::ConfigClient;
 use edgion::core::conf_sync::grpc_client::ConfigSyncClient;
 
 const GRPC_ADDR: &str = "http://127.0.0.1:50051";
@@ -46,7 +46,7 @@ pub async fn run_config_sync_client(mode: RunMode) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn spawn_status_logger(hub: Arc<Mutex<ConfigHub>>) {
+fn spawn_status_logger(hub: Arc<Mutex<ConfigClient>>) {
     tokio::spawn(async move {
         let mut ticker = interval(Duration::from_secs(10));
         loop {
@@ -57,7 +57,7 @@ fn spawn_status_logger(hub: Arc<Mutex<ConfigHub>>) {
     });
 }
 
-fn log_hub_summary(hub: &ConfigHub) {
+fn log_hub_summary(hub: &ConfigClient) {
     let gc = hub.list_gateway_classes();
     let specs = hub.list_edgion_gateway_config();
     let gateways = hub.list_gateways();

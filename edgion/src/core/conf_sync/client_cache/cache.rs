@@ -1,8 +1,8 @@
-use crate::core::conf_sync::center_cache::{EventDispatch, ListData, Versionable};
+use crate::core::conf_sync::server_cache::{EventDispatch, ListData, Versionable};
 use crate::core::conf_sync::traits::ResourceChange;
 use std::collections::HashMap;
 
-pub struct HubCache<T> {
+pub struct ClientCache<T> {
     // data
     data: HashMap<String, T>,
 
@@ -10,7 +10,7 @@ pub struct HubCache<T> {
     resource_version: u64,
 }
 
-impl<T: Versionable> HubCache<T> {
+impl<T: Versionable> ClientCache<T> {
     pub fn new() -> Self {
         Self {
             data: HashMap::new(),
@@ -64,7 +64,7 @@ impl<T: Versionable> HubCache<T> {
     }
 }
 
-impl<T: Versionable + Clone + Send + 'static> EventDispatch<T> for HubCache<T> {
+impl<T: Versionable + Clone + Send + 'static> EventDispatch<T> for ClientCache<T> {
     fn apply_change(&mut self, change: ResourceChange, resource: T, resource_version: Option<u64>)
     where
         T: Send + 'static,
@@ -92,7 +92,7 @@ impl<T: Versionable + Clone + Send + 'static> EventDispatch<T> for HubCache<T> {
     }
 }
 
-impl<T: Versionable> Default for HubCache<T> {
+impl<T: Versionable> Default for ClientCache<T> {
     fn default() -> Self {
         Self::new()
     }

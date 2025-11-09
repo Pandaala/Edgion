@@ -1,11 +1,11 @@
 #![cfg(test)]
 
 use crate::core::conf_sync::cache_diff::diff_center_hub;
-use crate::core::conf_sync::center_cache::{EventType, Versionable, WatchResponse};
-use crate::core::conf_sync::config_center::ConfigCenter;
-use crate::core::conf_sync::config_hub::ConfigHub;
+use crate::core::conf_sync::server_cache::{EventType, Versionable, WatchResponse};
+use crate::core::conf_sync::config_server::ConfigServer;
+use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
-use crate::core::conf_sync::{CenterCache, EventDispatch, HubCache};
+use crate::core::conf_sync::{ServerCache, EventDispatch, ClientCache};
 use crate::types::{
     EdgionGatewayConfig, EdgionGatewayConfigSpec, EdgionTls, EdgionTlsSpec, HTTPRoute,
     HTTPRouteSpec, ParentReference, ResourceKind,
@@ -200,10 +200,10 @@ fn make_http_route(name: &str, host: &str, version: u64) -> HTTPRoute {
     route
 }
 
-fn seed_config_center(center: &mut ConfigCenter) {
+fn seed_config_center(center: &mut ConfigServer) {
     for (kind, value, version) in resource_fixtures() {
         let data = serde_json::to_string(&value).expect("serialize resource");
-        <ConfigCenter as EventDispatcher>::apply_resource_change(
+        <ConfigServer as EventDispatcher>::apply_resource_change(
             center,
             ResourceChange::EventAdd,
             Some(kind),
@@ -223,8 +223,8 @@ fn extract_route_host(route: &HTTPRoute) -> Option<&str> {
 }
 
 async fn assert_http_route_state(
-    center: &ConfigCenter,
-    hub: &ConfigHub,
+    center: &ConfigServer,
+    hub: &ConfigClient,
     expected_host: Option<&str>,
     expected_version: u64,
     expected_count: usize,
@@ -270,13 +270,13 @@ async fn assert_http_route_state(
     );
 }
 
-async fn exercise_http_route_lifecycle(center: &mut ConfigCenter, hub: &mut ConfigHub) {
+async fn exercise_http_route_lifecycle(center: &mut ConfigServer, hub: &mut ConfigClient) {
     let version = 10_u64;
 
     // Add
     let add_route = http_route_value("example.com", version);
     let add_data = serde_json::to_string(&add_route).expect("serialize HTTPRoute add payload");
-    <ConfigCenter as EventDispatcher>::apply_resource_change(
+    <ConfigServer as EventDispatcher>::apply_resource_change(
         center,
         ResourceChange::EventAdd,
         Some(ResourceKind::HTTPRoute),
@@ -284,7 +284,7 @@ async fn exercise_http_route_lifecycle(center: &mut ConfigCenter, hub: &mut Conf
         Some(version),
     );
     sleep(Duration::from_secs(1)).await;
-    <ConfigHub as EventDispatcher>::apply_resource_change(
+    <ConfigClient as EventDispatcher>::apply_resource_change(
         hub,
         ResourceChange::EventAdd,
         Some(ResourceKind::HTTPRoute),
@@ -297,7 +297,7 @@ async fn exercise_http_route_lifecycle(center: &mut ConfigCenter, hub: &mut Conf
     let update_route = http_route_value("api.example.com", version);
     let update_data =
         serde_json::to_string(&update_route).expect("serialize HTTPRoute update payload");
-    <ConfigCenter as EventDispatcher>::apply_resource_change(
+    <ConfigServer as EventDispatcher>::apply_resource_change(
         center,
         ResourceChange::EventUpdate,
         Some(ResourceKind::HTTPRoute),
@@ -305,7 +305,7 @@ async fn exercise_http_route_lifecycle(center: &mut ConfigCenter, hub: &mut Conf
         Some(version),
     );
     sleep(Duration::from_secs(1)).await;
-    <ConfigHub as EventDispatcher>::apply_resource_change(
+    <ConfigClient as EventDispatcher>::apply_resource_change(
         hub,
         ResourceChange::EventUpdate,
         Some(ResourceKind::HTTPRoute),
@@ -315,7 +315,7 @@ async fn exercise_http_route_lifecycle(center: &mut ConfigCenter, hub: &mut Conf
     assert_http_route_state(center, hub, Some("api.example.com"), version, 1).await;
 
     // Delete
-    <ConfigCenter as EventDispatcher>::apply_resource_change(
+    <ConfigServer as EventDispatcher>::apply_resource_change(
         center,
         ResourceChange::EventDelete,
         Some(ResourceKind::HTTPRoute),
@@ -323,7 +323,7 @@ async fn exercise_http_route_lifecycle(center: &mut ConfigCenter, hub: &mut Conf
         Some(version),
     );
     sleep(Duration::from_secs(1)).await;
-    <ConfigHub as EventDispatcher>::apply_resource_change(
+    <ConfigClient as EventDispatcher>::apply_resource_change(
         hub,
         ResourceChange::EventDelete,
         Some(ResourceKind::HTTPRoute),
@@ -335,14 +335,14 @@ async fn exercise_http_route_lifecycle(center: &mut ConfigCenter, hub: &mut Conf
 
 #[tokio::test(flavor = "multi_thread")]
 async fn config_center_data_syncs_into_config_hub() {
-    let mut config_center = ConfigCenter::new();
+    let mut config_center = ConfigServer::new();
     seed_config_center(&mut config_center);
 
     // Allow any spawned tasks to update internal stores
     yield_now().await;
     sleep(Duration::from_millis(5)).await;
 
-    let mut config_hub = ConfigHub::new(GATEWAY_CLASS_KEY.to_string());
+    let mut config_hub = ConfigClient::new(GATEWAY_CLASS_KEY.to_string());
     let key = GATEWAY_CLASS_KEY.to_string();
     let resource_kinds = [
         ResourceKind::GatewayClass,
@@ -366,7 +366,7 @@ async fn config_center_data_syncs_into_config_hub() {
 
         for resource in resources {
             let data = serde_json::to_string(&resource).expect("serialize resource for hub");
-            <ConfigHub as EventDispatcher>::apply_resource_change(
+            <ConfigClient as EventDispatcher>::apply_resource_change(
                 &mut config_hub,
                 ResourceChange::InitAdd,
                 Some(kind),
@@ -457,13 +457,13 @@ async fn config_center_data_syncs_into_config_hub() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn config_center_http_route_lifecycle_syncs() {
-    let mut config_center = ConfigCenter::new();
-    let mut config_hub = ConfigHub::new(GATEWAY_CLASS_KEY.to_string());
+    let mut config_center = ConfigServer::new();
+    let mut config_hub = ConfigClient::new(GATEWAY_CLASS_KEY.to_string());
 
     exercise_http_route_lifecycle(&mut config_center, &mut config_hub).await;
 }
 
-fn apply_watch_response_to_hub(hub: &mut HubCache<HTTPRoute>, response: WatchResponse<HTTPRoute>) {
+fn apply_watch_response_to_hub(hub: &mut ClientCache<HTTPRoute>, response: WatchResponse<HTTPRoute>) {
     let WatchResponse {
         events,
         err,
@@ -487,7 +487,7 @@ fn apply_watch_response_to_hub(hub: &mut HubCache<HTTPRoute>, response: WatchRes
 }
 
 async fn drain_watch_events(
-    hub: &mut HubCache<HTTPRoute>,
+    hub: &mut ClientCache<HTTPRoute>,
     receiver: &mut mpsc::Receiver<WatchResponse<HTTPRoute>>,
 ) {
     loop {
@@ -500,9 +500,9 @@ async fn drain_watch_events(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cache_diff_confirms_hub_matches_center_after_events() {
-    let mut center = CenterCache::<HTTPRoute>::new(32);
+    let mut center = ServerCache::<HTTPRoute>::new(32);
     center.set_ready();
-    let mut hub = HubCache::<HTTPRoute>::new();
+    let mut hub = ClientCache::<HTTPRoute>::new();
 
     let initial_routes = vec![
         make_http_route("route-a", "a.example.com", 1),
@@ -565,9 +565,9 @@ async fn cache_diff_confirms_hub_matches_center_after_events() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cache_diff_verifies_full_sync_after_mixed_mutations() {
-    let mut center = CenterCache::<HTTPRoute>::new(32);
+    let mut center = ServerCache::<HTTPRoute>::new(32);
     center.set_ready();
-    let mut hub = HubCache::<HTTPRoute>::new();
+    let mut hub = ClientCache::<HTTPRoute>::new();
 
     let initial_routes = vec![
         make_http_route("route-alpha", "alpha.example.com", 10),

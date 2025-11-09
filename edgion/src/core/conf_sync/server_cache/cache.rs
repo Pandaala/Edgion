@@ -7,7 +7,7 @@ use super::traits::{EventDispatch, Versionable};
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
 use crate::core::conf_sync::traits::ResourceChange;
 
-pub struct CenterCache<T> {
+pub struct ServerCache<T> {
     // wait for init complete
     ready: bool,
 
@@ -21,7 +21,7 @@ pub struct CenterCache<T> {
     notify: Arc<Notify>,
 }
 
-impl<T: Versionable + Send + Sync> CenterCache<T> {
+impl<T: Versionable + Send + Sync> ServerCache<T> {
     pub fn new(capacity: u32) -> Self
     where
         T: Clone,
@@ -211,7 +211,7 @@ impl<T: Versionable + Send + Sync> CenterCache<T> {
     }
 }
 
-impl<T: Versionable + Clone + Send + Sync + 'static> EventDispatch<T> for CenterCache<T> {
+impl<T: Versionable + Clone + Send + Sync + 'static> EventDispatch<T> for ServerCache<T> {
     fn apply_change(&mut self, change: ResourceChange, resource: T, resource_version: Option<u64>)
     where
         T: Send + 'static,
@@ -267,7 +267,7 @@ mod tests {
 
     #[tokio::test]
     async fn event_add_stores_resource_and_updates_version() {
-        let mut cache = CenterCache::<TestResource>::new(10);
+        let mut cache = ServerCache::<TestResource>::new(10);
         let resource = TestResource {
             name: "foo",
             version: 1,
@@ -288,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn event_update_replaces_existing_resource() {
-        let mut cache = CenterCache::<TestResource>::new(10);
+        let mut cache = ServerCache::<TestResource>::new(10);
         let original = TestResource {
             name: "foo",
             version: 1,
@@ -320,7 +320,7 @@ mod tests {
 
     #[tokio::test]
     async fn event_delete_removes_resource() {
-        let mut cache = CenterCache::<TestResource>::new(10);
+        let mut cache = ServerCache::<TestResource>::new(10);
         let resource = TestResource {
             name: "foo",
             version: 42,

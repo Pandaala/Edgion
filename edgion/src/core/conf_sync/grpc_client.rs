@@ -1,4 +1,4 @@
-use crate::core::conf_sync::config_hub::ConfigHub;
+use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, ListRequest, ListResponse,
     ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
@@ -14,7 +14,7 @@ use uuid::Uuid;
 /// gRPC client for ConfigSync service
 pub struct ConfigSyncClient {
     client: ConfigSyncClientService<Channel>,
-    config_hub: Arc<Mutex<ConfigHub>>,
+    config_hub: Arc<Mutex<ConfigClient>>,
     client_id: String,
     client_name: String,
 }
@@ -26,7 +26,7 @@ impl ConfigSyncClient {
         gateway_class_key: String,
     ) -> Result<Self, tonic::transport::Error> {
         let client = ConfigSyncClientService::connect(addr).await?;
-        let config_hub = Arc::new(Mutex::new(ConfigHub::new(gateway_class_key)));
+        let config_hub = Arc::new(Mutex::new(ConfigClient::new(gateway_class_key)));
         let client_id = Uuid::new_v4().to_string();
         let client_name = "config-sync-client".to_string();
         Ok(Self {
@@ -48,7 +48,7 @@ impl ConfigSyncClient {
             .connect_timeout(timeout);
         let channel = endpoint.connect().await?;
         let client = ConfigSyncClientService::new(channel);
-        let config_hub = Arc::new(Mutex::new(ConfigHub::new(gateway_class_key)));
+        let config_hub = Arc::new(Mutex::new(ConfigClient::new(gateway_class_key)));
         let client_id = Uuid::new_v4().to_string();
         let client_name = "config-sync-client".to_string();
         Ok(Self {
@@ -60,7 +60,7 @@ impl ConfigSyncClient {
     }
 
     /// Get a reference to the ConfigHub
-    pub fn get_config_hub(&self) -> Arc<Mutex<ConfigHub>> {
+    pub fn get_config_hub(&self) -> Arc<Mutex<ConfigClient>> {
         self.config_hub.clone()
     }
 

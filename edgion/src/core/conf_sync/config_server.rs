@@ -3,8 +3,8 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-use crate::core::conf_sync::center_cache::{
-    CenterCache, EventDispatch, ListData, Versionable, WatchResponse,
+use crate::core::conf_sync::server_cache::{
+    ServerCache, EventDispatch, ListData, Versionable, WatchResponse,
 };
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
@@ -28,15 +28,15 @@ pub enum ResourceItem {
 }
 
 // todo, 所有的资源，都按照gatewayclass进行规制，对于多层映射的，后期可以通过添加filter的机制
-pub struct ConfigCenter {
-    pub gateway_classes: HashMap<GatewayClassKey, CenterCache<GatewayClass>>,
-    pub edgion_gateway_configs: HashMap<GatewayClassKey, CenterCache<EdgionGatewayConfig>>,
-    pub gateways: HashMap<GatewayClassKey, CenterCache<Gateway>>,
-    pub routes: HashMap<GatewayClassKey, CenterCache<HTTPRoute>>,
-    pub services: HashMap<GatewayClassKey, CenterCache<Service>>,
-    pub endpoint_slices: HashMap<GatewayClassKey, CenterCache<EndpointSlice>>,
-    pub edgion_tls: HashMap<GatewayClassKey, CenterCache<EdgionTls>>,
-    pub secrets: HashMap<GatewayClassKey, CenterCache<Secret>>,
+pub struct ConfigServer {
+    pub gateway_classes: HashMap<GatewayClassKey, ServerCache<GatewayClass>>,
+    pub edgion_gateway_configs: HashMap<GatewayClassKey, ServerCache<EdgionGatewayConfig>>,
+    pub gateways: HashMap<GatewayClassKey, ServerCache<Gateway>>,
+    pub routes: HashMap<GatewayClassKey, ServerCache<HTTPRoute>>,
+    pub services: HashMap<GatewayClassKey, ServerCache<Service>>,
+    pub endpoint_slices: HashMap<GatewayClassKey, ServerCache<EndpointSlice>>,
+    pub edgion_tls: HashMap<GatewayClassKey, ServerCache<EdgionTls>>,
+    pub secrets: HashMap<GatewayClassKey, ServerCache<Secret>>,
 }
 
 pub struct ListDataSimple {
@@ -50,7 +50,7 @@ pub struct EventDataSimple {
     pub err: Option<String>,
 }
 
-impl ConfigCenter {
+impl ConfigServer {
     pub fn new() -> Self {
         Self {
             gateway_classes: HashMap::new(),
@@ -534,7 +534,7 @@ impl ConfigCenter {
             .gateway_classes
             .entry(key.to_string())
             .or_insert_with(|| {
-                let mut cache = CenterCache::new(1000);
+                let mut cache = ServerCache::new(1000);
                 EventDispatch::set_ready(&mut cache);
                 cache
             });
@@ -552,7 +552,7 @@ impl ConfigCenter {
             .edgion_gateway_configs
             .entry(key.to_string())
             .or_insert_with(|| {
-                let mut cache = CenterCache::new(1000);
+                let mut cache = ServerCache::new(1000);
                 EventDispatch::set_ready(&mut cache);
                 cache
             });
@@ -568,7 +568,7 @@ impl ConfigCenter {
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<Gateway>>> {
         let cache = self.gateways.entry(key.to_string()).or_insert_with(|| {
-            let mut cache = CenterCache::new(1000);
+            let mut cache = ServerCache::new(1000);
             EventDispatch::set_ready(&mut cache);
             cache
         });
@@ -584,7 +584,7 @@ impl ConfigCenter {
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<HTTPRoute>>> {
         let cache = self.routes.entry(key.to_string()).or_insert_with(|| {
-            let mut cache = CenterCache::new(1000);
+            let mut cache = ServerCache::new(1000);
             EventDispatch::set_ready(&mut cache);
             cache
         });
@@ -600,7 +600,7 @@ impl ConfigCenter {
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<Service>>> {
         let cache = self.services.entry(key.to_string()).or_insert_with(|| {
-            let mut cache = CenterCache::new(1000);
+            let mut cache = ServerCache::new(1000);
             EventDispatch::set_ready(&mut cache);
             cache
         });
@@ -619,7 +619,7 @@ impl ConfigCenter {
             .endpoint_slices
             .entry(key.to_string())
             .or_insert_with(|| {
-                let mut cache = CenterCache::new(1000);
+                let mut cache = ServerCache::new(1000);
                 EventDispatch::set_ready(&mut cache);
                 cache
             });
@@ -635,7 +635,7 @@ impl ConfigCenter {
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<EdgionTls>>> {
         let cache = self.edgion_tls.entry(key.to_string()).or_insert_with(|| {
-            let mut cache = CenterCache::new(1000);
+            let mut cache = ServerCache::new(1000);
             EventDispatch::set_ready(&mut cache);
             cache
         });
@@ -651,7 +651,7 @@ impl ConfigCenter {
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<Secret>>> {
         let cache = self.secrets.entry(key.to_string()).or_insert_with(|| {
-            let mut cache = CenterCache::new(1000);
+            let mut cache = ServerCache::new(1000);
             EventDispatch::set_ready(&mut cache);
             cache
         });
@@ -814,7 +814,7 @@ impl ConfigCenter {
     }
 }
 
-impl Default for ConfigCenter {
+impl Default for ConfigServer {
     fn default() -> Self {
         Self::new()
     }

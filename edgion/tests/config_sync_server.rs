@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{interval, sleep};
 
-use edgion::core::conf_sync::config_center::{ConfigCenter, GatewayClassKey};
+use edgion::core::conf_sync::config_server::{ConfigServer, GatewayClassKey};
 use edgion::core::conf_sync::grpc_server::ConfigSyncServer;
 use edgion::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use edgion::types::ResourceKind;
@@ -31,7 +31,7 @@ pub enum RunMode {
 pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
     println!("[SERVER] Starting Config Sync server example");
 
-    let config_center = Arc::new(Mutex::new(ConfigCenter::new()));
+    let config_center = Arc::new(Mutex::new(ConfigServer::new()));
     let version_counters = Arc::new(Mutex::new(HashMap::<ResourceKind, u64>::new()));
     let known_gateway_keys = Arc::new(Mutex::new(HashSet::new()));
 
@@ -147,7 +147,7 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
 
 #[derive(Clone)]
 struct ServerState {
-    config_center: Arc<Mutex<ConfigCenter>>,
+    config_center: Arc<Mutex<ConfigServer>>,
     version_counters: Arc<Mutex<HashMap<ResourceKind, u64>>>,
     known_gateway_keys: Arc<Mutex<HashSet<GatewayClassKey>>>,
 }
@@ -232,7 +232,7 @@ async fn add_config(
 
     match operation {
         Operation::Add => {
-            <ConfigCenter as EventDispatcher>::apply_resource_change(
+            <ConfigServer as EventDispatcher>::apply_resource_change(
                 &mut *center,
                 ResourceChange::EventAdd,
                 Some(kind),
@@ -241,7 +241,7 @@ async fn add_config(
             );
         }
         Operation::Update => {
-            <ConfigCenter as EventDispatcher>::apply_resource_change(
+            <ConfigServer as EventDispatcher>::apply_resource_change(
                 &mut *center,
                 ResourceChange::EventUpdate,
                 Some(kind),
@@ -250,7 +250,7 @@ async fn add_config(
             );
         }
         Operation::Delete => {
-            <ConfigCenter as EventDispatcher>::apply_resource_change(
+            <ConfigServer as EventDispatcher>::apply_resource_change(
                 &mut *center,
                 ResourceChange::EventDelete,
                 Some(kind),
@@ -300,7 +300,7 @@ fn format_operation(operation: Operation) -> String {
     }
 }
 
-async fn log_center_summary(center: &ConfigCenter, key: &str) {
+async fn log_center_summary(center: &ConfigServer, key: &str) {
     let key_string = key.to_string();
     let gc_count = center
         .list_gateway_classes(&key_string)

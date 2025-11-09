@@ -1,6 +1,6 @@
-use crate::core::conf_sync::center_cache::{EventDispatch, ListData, Versionable};
-use crate::core::conf_sync::config_center::GatewayClassKey;
-use crate::core::conf_sync::hub_cache::HubCache;
+use crate::core::conf_sync::server_cache::{EventDispatch, ListData, Versionable};
+use crate::core::conf_sync::config_server::GatewayClassKey;
+use crate::core::conf_sync::client_cache::ClientCache;
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
@@ -9,30 +9,30 @@ use anyhow::Result;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 
-pub struct ConfigHub {
+pub struct ConfigClient {
     gateway_class_key: GatewayClassKey,
-    gateway_classes: HubCache<GatewayClass>,
-    edgion_gateway_configs: HubCache<EdgionGatewayConfig>,
-    gateways: HubCache<Gateway>,
-    routes: HubCache<HTTPRoute>,
-    services: HubCache<Service>,
-    endpoint_slices: HubCache<EndpointSlice>,
-    edgion_tls: HubCache<EdgionTls>,
-    secrets: HubCache<Secret>,
+    gateway_classes: ClientCache<GatewayClass>,
+    edgion_gateway_configs: ClientCache<EdgionGatewayConfig>,
+    gateways: ClientCache<Gateway>,
+    routes: ClientCache<HTTPRoute>,
+    services: ClientCache<Service>,
+    endpoint_slices: ClientCache<EndpointSlice>,
+    edgion_tls: ClientCache<EdgionTls>,
+    secrets: ClientCache<Secret>,
 }
 
-impl ConfigHub {
+impl ConfigClient {
     pub fn new(gateway_class_key: GatewayClassKey) -> Self {
         Self {
             gateway_class_key,
-            gateway_classes: HubCache::new(),
-            edgion_gateway_configs: HubCache::new(),
-            gateways: HubCache::new(),
-            routes: HubCache::new(),
-            services: HubCache::new(),
-            endpoint_slices: HubCache::new(),
-            edgion_tls: HubCache::new(),
-            secrets: HubCache::new(),
+            gateway_classes: ClientCache::new(),
+            edgion_gateway_configs: ClientCache::new(),
+            gateways: ClientCache::new(),
+            routes: ClientCache::new(),
+            services: ClientCache::new(),
+            endpoint_slices: ClientCache::new(),
+            edgion_tls: ClientCache::new(),
+            secrets: ClientCache::new(),
         }
     }
 
@@ -41,7 +41,7 @@ impl ConfigHub {
     }
 
     fn apply_change_to_cache<T>(
-        cache: &mut HubCache<T>,
+        cache: &mut ClientCache<T>,
         change: ResourceChange,
         resource: T,
         resource_version: Option<u64>,
@@ -294,7 +294,7 @@ pub struct ListDataSimple {
     pub resource_version: u64,
 }
 
-impl EventDispatcher for ConfigHub {
+impl EventDispatcher for ConfigClient {
     fn apply_resource_change(
         &mut self,
         change: ResourceChange,

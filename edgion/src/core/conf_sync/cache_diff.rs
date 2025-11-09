@@ -1,4 +1,4 @@
-use crate::core::conf_sync::{CenterCache, HubCache, Versionable};
+use crate::core::conf_sync::{ServerCache, ClientCache, Versionable};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -22,7 +22,7 @@ impl CacheDiff {
     }
 }
 
-pub async fn diff_center_hub<T>(center: &CenterCache<T>, hub: &HubCache<T>) -> CacheDiff
+pub async fn diff_center_hub<T>(center: &ServerCache<T>, hub: &ClientCache<T>) -> CacheDiff
 where
     T: Versionable + Clone + Serialize + Send + Sync + 'static,
 {
@@ -96,8 +96,8 @@ mod tests {
 
     #[tokio::test]
     async fn detects_differences_between_center_and_hub() {
-        let mut center = CenterCache::new(10);
-        let mut hub = HubCache::new();
+        let mut center = ServerCache::new(10);
+        let mut hub = ClientCache::new();
 
         center.apply_change(
             ResourceChange::InitAdd,

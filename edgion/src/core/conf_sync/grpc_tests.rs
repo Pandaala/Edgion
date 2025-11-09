@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::core::conf_sync::config_center::ConfigCenter;
+use crate::core::conf_sync::config_server::ConfigServer;
 use crate::core::conf_sync::grpc_client::ConfigSyncClient;
 use crate::core::conf_sync::grpc_server::ConfigSyncServer;
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
@@ -32,7 +32,7 @@ fn edgion_gateway_config_value(resource_version: u64) -> Value {
 }
 
 async fn start_test_server(
-    config_center: Arc<Mutex<ConfigCenter>>,
+    config_center: Arc<Mutex<ConfigServer>>,
 ) -> (
     std::net::SocketAddr,
     tokio::sync::oneshot::Sender<()>,
@@ -63,7 +63,7 @@ async fn start_test_server(
     (addr, shutdown_tx, handle)
 }
 
-async fn seed_all_resource_types(config_center: &Arc<Mutex<ConfigCenter>>) {
+async fn seed_all_resource_types(config_center: &Arc<Mutex<ConfigServer>>) {
     let tls_spec = EdgionTlsSpec {
         parent_refs: None,
         hosts: vec!["example.com".to_string()],
@@ -207,7 +207,7 @@ async fn seed_all_resource_types(config_center: &Arc<Mutex<ConfigCenter>>) {
     let mut center = config_center.lock().await;
     for (kind, value, version) in resources {
         let data = serde_json::to_string(&value).expect("serialize resource");
-        <ConfigCenter as EventDispatcher>::apply_resource_change(
+        <ConfigServer as EventDispatcher>::apply_resource_change(
             &mut *center,
             ResourceChange::EventAdd,
             Some(kind),
@@ -219,7 +219,7 @@ async fn seed_all_resource_types(config_center: &Arc<Mutex<ConfigCenter>>) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn grpc_server_client_syncs_all_resource_types() {
-    let config_center = Arc::new(Mutex::new(ConfigCenter::new()));
+    let config_center = Arc::new(Mutex::new(ConfigServer::new()));
 
     let (addr, shutdown_tx, server_handle) = start_test_server(config_center.clone()).await;
 

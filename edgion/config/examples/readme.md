@@ -12,7 +12,7 @@
 ## 2. Gateway 与 GatewayClass 的绑定
 
 - `Gateway` 使用 `spec.gatewayClassName` 指定所依赖的 `GatewayClass`。
-- 在 `ConfigCenter::event_add` 中，`Gateway` 会按照 `gatewayClassName` 写入以该名称为 key 的缓存。
+- 在 `ConfigCenter::apply_change` 处理中，当收到 `ResourceChange::EventAdd` 时，`Gateway` 会按照 `gatewayClassName` 写入以该名称为 key 的缓存。
 - 因此：
   - 一个 `GatewayClass` 可以对应多个 `Gateway`；
   - 删除或更新 `GatewayClass` 时，不会自动清除 `Gateway`，但在业务侧可根据 key 做关联操作。

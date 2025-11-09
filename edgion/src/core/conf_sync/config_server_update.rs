@@ -1,6 +1,6 @@
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{
-    CenterCache, ConfigCenter, EventDispatch, EventDispatcher, Versionable,
+    ServerCache, ConfigServer, EventDispatch, EventDispatcher, Versionable,
 };
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
@@ -10,11 +10,11 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 const DEFAULT_GATEWAY_CLASS_KEY: &str = "default";
 
 trait ResolveGatewayClassKeysForItem {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigCenter) -> Vec<String>;
+    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String>;
 }
 
 impl ResolveGatewayClassKeysForItem for GatewayClass {
-    fn resolve_gateway_class_keys_for_item(&self, _center: &ConfigCenter) -> Vec<String> {
+    fn resolve_gateway_class_keys_for_item(&self, _center: &ConfigServer) -> Vec<String> {
         self.metadata
             .name
             .clone()
@@ -24,7 +24,7 @@ impl ResolveGatewayClassKeysForItem for GatewayClass {
 }
 
 impl ResolveGatewayClassKeysForItem for EdgionGatewayConfig {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigCenter) -> Vec<String> {
+    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
         self.metadata
             .name
             .clone()
@@ -34,45 +34,45 @@ impl ResolveGatewayClassKeysForItem for EdgionGatewayConfig {
 }
 
 impl ResolveGatewayClassKeysForItem for Gateway {
-    fn resolve_gateway_class_keys_for_item(&self, _center: &ConfigCenter) -> Vec<String> {
+    fn resolve_gateway_class_keys_for_item(&self, _center: &ConfigServer) -> Vec<String> {
         vec![self.spec.gateway_class_name.clone()]
     }
 }
 
 impl ResolveGatewayClassKeysForItem for HTTPRoute {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigCenter) -> Vec<String> {
+    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
         center.fallback_gateway_class_keys()
     }
 }
 
 impl ResolveGatewayClassKeysForItem for Service {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigCenter) -> Vec<String> {
+    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
         center.fallback_gateway_class_keys()
     }
 }
 
 impl ResolveGatewayClassKeysForItem for EndpointSlice {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigCenter) -> Vec<String> {
+    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
         center.fallback_gateway_class_keys()
     }
 }
 
 impl ResolveGatewayClassKeysForItem for EdgionTls {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigCenter) -> Vec<String> {
+    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
         center.fallback_gateway_class_keys()
     }
 }
 
 impl ResolveGatewayClassKeysForItem for Secret {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigCenter) -> Vec<String> {
+    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
         center.fallback_gateway_class_keys()
     }
 }
 
-impl ConfigCenter {
+impl ConfigServer {
     fn execute_change_on_cache<T>(
         change: ResourceChange,
-        cache: &mut CenterCache<T>,
+        cache: &mut ServerCache<T>,
         resource: T,
         resource_version: Option<u64>,
     ) where
@@ -90,7 +90,7 @@ impl ConfigCenter {
     }
 }
 
-impl EventDispatcher for ConfigCenter {
+impl EventDispatcher for ConfigServer {
     fn apply_resource_change(
         &mut self,
         change: ResourceChange,

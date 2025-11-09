@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-use crate::core::conf_sync::config_center::ConfigCenter;
+use crate::core::conf_sync::config_server::ConfigServer;
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
     ListRequest, ListResponse, ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
@@ -12,23 +12,23 @@ use crate::types::ResourceKind;
 
 /// Server wrapper for WatcherMgr
 pub struct ConfigSyncServer {
-    config_center: Arc<Mutex<ConfigCenter>>,
+    config_center: Arc<Mutex<ConfigServer>>,
 }
 
 impl ConfigSyncServer {
-    pub fn new(watcher_mgr: ConfigCenter) -> Self {
+    pub fn new(watcher_mgr: ConfigServer) -> Self {
         Self {
             config_center: Arc::new(Mutex::new(watcher_mgr)),
         }
     }
 
     /// Create a new ConfigSyncServer with a shared ConfigCenter
-    pub fn new_with_shared(config_center: Arc<Mutex<ConfigCenter>>) -> Self {
+    pub fn new_with_shared(config_center: Arc<Mutex<ConfigServer>>) -> Self {
         Self { config_center }
     }
 
     /// Get a reference to the shared ConfigCenter
-    pub fn get_config_center(&self) -> Arc<Mutex<ConfigCenter>> {
+    pub fn get_config_center(&self) -> Arc<Mutex<ConfigServer>> {
         self.config_center.clone()
     }
 
