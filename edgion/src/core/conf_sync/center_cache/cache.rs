@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
-use super::store::{EventStore, WatchEventError};
+use super::store::EventStore;
 use super::traits::{EventDispatch, Versionable};
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
 use crate::core::conf_sync::traits::ResourceChange;
@@ -113,13 +113,10 @@ impl<T: Versionable + Send + Sync> CenterCache<T> {
                             notify.notified().await;
                         }
                     }
-                    Err(WatchEventError::StaleResourceVersion {
-                        requested,
-                        oldest_available,
-                    }) => {
+                    Err(err) => {
                         eprintln!(
-                            "[CenterCache] watcher {} requested stale version {} (oldest available {}), stopping watcher",
-                            watcher.client_id, requested, oldest_available
+                            "[CenterCache] watcher {} error fetching events: {}, stopping watcher",
+                            watcher.client_id, err
                         );
                         break;
                     }

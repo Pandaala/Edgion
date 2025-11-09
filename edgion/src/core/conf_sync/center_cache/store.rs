@@ -1,7 +1,5 @@
 use super::types::{EventType, WatcherEvent};
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
 
 /// Event storage - circular queue
 pub struct EventStore<T> {
@@ -65,9 +63,11 @@ impl<T> EventStore<T> {
 
 impl<T: Clone> EventStore<T> {
     pub fn new(capacity: usize) -> Self {
+        let capacity = if capacity == 0 { 200 } else { capacity.max(10) };
+
         Self {
             capacity,
-            cache: Vec::with_capacity(capacity + 1),
+            cache: vec![None; capacity],
             start_index: 0,
             end_index: 0,
             resource_version: 0,
@@ -78,18 +78,17 @@ impl<T: Clone> EventStore<T> {
 
     /// Add new event to circular queue
     pub fn mut_update(&mut self, event: WatcherEvent<T>) {
-        if (self.end_index >= self.capacity) {
-            let index = self.end_index % self.capacity;
-            if let Some(last_event) = self.cache.get(index).unwrap() {
+        let index = self.end_index % self.capacity;
+
+        if self.end_index - self.start_index >= self.capacity {
+            if let Some(last_event) = self.cache[index].as_ref() {
                 self.expire_version = last_event.resource_version;
             }
-            self.cache[index] = Some(event);
-            self.end_index += 1;
             self.start_index += 1;
-        } else {
-            self.cache[self.end_index] = Some(event);
-            self.end_index += 1;
         }
+
+        self.cache[index] = Some(event);
+        self.end_index += 1;
     }
 
     /// Get events starting from specified version
@@ -101,24 +100,32 @@ impl<T: Clone> EventStore<T> {
             return Err("failed".to_owned());
         }
 
-        if self.cache.is_empty() {
-            return Ok((0, Vec::new()));
+        if self.capacity == 0 || self.end_index == self.start_index {
+            return Ok((self.resource_version, Vec::new()));
+        }
+
+        // Walk backward to find the earliest index whose version is > from_version.
+        let mut start_scan = self.end_index;
+        while start_scan > self.start_index {
+            let idx = (start_scan - 1) % self.capacity;
+            match self.cache[idx].as_ref() {
+                Some(ev) if ev.resource_version > from_version => {
+                    start_scan -= 1;
+                }
+                _ => break,
+            }
         }
 
         let mut events = Vec::new();
-
-        let mut loop_index = self.end_index;
-        while loop_index >= self.start_index {
-            if let Some(ev) = self.cache.get(loop_index % self.capacity).unwrap() {
+        let mut loop_index = start_scan;
+        while loop_index < self.end_index {
+            let idx = loop_index % self.capacity;
+            if let Some(ev) = self.cache[idx].as_ref() {
                 if ev.resource_version > from_version {
-                    events.push(ev.clone())
-                } else {
-                    break;
+                    events.push(ev.clone());
                 }
-            } else {
-                panic!("error no ev")
             }
-            loop_index -= 1;
+            loop_index += 1;
         }
 
         Ok((self.resource_version, events))
@@ -181,27 +188,43 @@ mod tests {
 
     #[test]
     fn stale_version_error_when_events_expired() {
-        let mut store: EventStore<String> = EventStore::new(2);
+        let mut store: EventStore<String> = EventStore::new(50);
 
-        store.apply_event(EventType::Add, "v1".to_string(), 1);
-        store.apply_event(EventType::Add, "v2".to_string(), 2);
-        store.apply_event(EventType::Add, "v3".to_string(), 3);
+        for version in 1..=60 {
+            store.apply_event(EventType::Add, format!("v{version}"), version);
+        }
 
         let err = store
             .get_events_from_resource_version(0)
             .expect_err("expected stale version error");
-        assert_eq!(
-            err,
-            WatchEventError::StaleResourceVersion {
-                requested: 0,
-                oldest_available: 2
-            }
-        );
+        assert_eq!(err, "failed");
 
-        let (current_version, events) = store.get_events_from_resource_version(2).unwrap();
-        assert_eq!(current_version, 3);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].resource_version, 3);
-        assert_eq!(events[0].data, "v3");
+        let (current_version, events) = store.get_events_from_resource_version(55).unwrap();
+        assert_eq!(current_version, 60);
+        let versions: Vec<u64> = events.iter().map(|ev| ev.resource_version).collect();
+        assert_eq!(versions, vec![56, 57, 58, 59, 60]);
+    }
+
+    #[test]
+    fn multiple_wraps_over_capacity() {
+        let mut store: EventStore<String> = EventStore::new(50);
+
+        for version in 1..=120 {
+            store.apply_event(EventType::Add, format!("value-{version}"), version);
+        }
+
+        let (current_version, events) = store.get_events_from_resource_version(110).unwrap();
+        assert_eq!(current_version, 120);
+        let versions: Vec<u64> = events.iter().map(|ev| ev.resource_version).collect();
+        assert_eq!(versions, (111..=120).collect::<Vec<_>>());
+
+        for (offset, event) in events.iter().enumerate() {
+            assert_eq!(event.data, format!("value-{}", 111 + offset as u64));
+        }
+
+        let err = store
+            .get_events_from_resource_version(10)
+            .expect_err("versions older than expire_version should error");
+        assert_eq!(err, "failed");
     }
 }
