@@ -64,6 +64,10 @@ impl<T> EventStore<T> {
 impl<T: Clone> EventStore<T> {
     pub fn new(capacity: usize) -> Self {
         let capacity = if capacity == 0 { 200 } else { capacity.max(10) };
+        assert!(
+            capacity > 5,
+            "EventStore capacity must be greater than 5, got {capacity}"
+        );
 
         Self {
             capacity,
@@ -137,7 +141,7 @@ mod tests {
     use super::*;
 
     fn make_store() -> EventStore<String> {
-        EventStore::new(4)
+        EventStore::new(10)
     }
 
     #[test]
