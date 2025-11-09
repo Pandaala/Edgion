@@ -1,9 +1,15 @@
 use std::sync::Arc;
 
-/// RadixHost represents a hostname pattern for radix tree matching
-/// Hostnames are reversed for longest prefix matching
-/// e.g., "api.example.com" becomes "com.example.api"
-///      "*.example.com" becomes "com.example" (radix_key for prefix matching)
+/// `RadixHost` represents a hostname pattern used in the radix-tree based matcher.
+/// The current algorithm relies on reversing hostnames to make longest-prefix
+/// comparison straightforward:
+/// - `"api.example.com"` becomes `"com.example.api"`
+/// - `"*.example.com"` becomes `"com.example"` for prefix matching
+/// - Multi-level wildcards (e.g. `*.*.example.com`) are matched by counting the
+///   leading wildcard segments
+///
+/// Note: if the matching strategy ever changes (e.g. DFA/NFA/regex), please
+/// update this documentation accordingly.
 #[derive(Clone)]
 pub struct RadixHost<T> {
     pub original: String,
@@ -14,15 +20,24 @@ pub struct RadixHost<T> {
 }
 
 impl<T> RadixHost<T> {
-    /// Create a new RadixHost from a hostname pattern
+    /// Create a `RadixHost` from a hostname pattern.
     ///
-    /// # Arguments
-    /// * `host` - The hostname pattern (e.g., "example.com" or "*.example.com")
-    /// * `runtime` - The runtime associated with this host
+    /// - `host`: plain hostname or wildcard pattern (e.g. `"example.com"`,
+    ///   `"*.example.com"`)
+    /// - `runtime`: runtime data associated with the host (typically a route or
+    ///   service handle)
+    ///
+    /// Only leading `*.` wildcards are supported. We record how many wildcard
+    /// segments are present so that matching can enforce the same depth.
     ///
     /// # Examples
-    /// ```
-    /// let host = RadixHost::new("api.example.com", runtime);
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use crate::core::host_match::radix_match::radix_host::RadixHost;
+    ///
+    /// let runtime = Arc::new(());
+    ///
+    /// let host = RadixHost::new("api.example.com", runtime.clone());
     /// assert_eq!(host.radix_key, "com.example.api");
     /// assert!(!host.is_wildcard);
     ///
@@ -71,11 +86,14 @@ impl<T> RadixHost<T> {
     /// Reverse a hostname for radix tree matching
     /// Handles wildcard patterns by keeping wildcards at the end after reversal
     ///
-    /// Examples:
-    /// - "example.com" -> "moc.elpmaxe"
-    /// - "api.example.com" -> "moc.elpmaxe.ipa"
-    /// - "*.example.com" -> "moc.elpmaxe.*"
-    /// - "*.*.example.com" -> "moc.elpmaxe.*.*"
+    /// Example output (showing the intuitive “reversed hostname” form):
+    /// - `"example.com"` -> `"com.example"`
+    /// - `"api.example.com"` -> `"com.example.api"`
+    /// - `"*.example.com"` -> `"com.example"`
+    /// - `"*.*.example.com"` -> `"com.example"`
+    ///
+    /// When wildcards are present, only the fixed part is reversed; the number
+    /// of wildcard segments is stored in `wildcard_count` for validation.
     pub fn reverse_hostname(host: &str) -> String {
         if host.is_empty() {
             return String::new();

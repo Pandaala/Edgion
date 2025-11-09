@@ -1,6 +1,6 @@
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{
-    ServerCache, ConfigServer, EventDispatch, EventDispatcher, Versionable,
+    ConfigServer, EventDispatch, EventDispatcher, ServerCache, Versionable,
 };
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,

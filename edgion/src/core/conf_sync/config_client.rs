@@ -1,6 +1,6 @@
+use crate::core::conf_sync::cache_client::ClientCache;
 use crate::core::conf_sync::cache_server::{EventDispatch, ListData, Versionable};
 use crate::core::conf_sync::config_server::GatewayClassKey;
-use crate::core::conf_sync::cache_client::ClientCache;
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,

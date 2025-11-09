@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 use crate::core::conf_sync::cache_server::{
-    ServerCache, EventDispatch, ListData, Versionable, WatchResponse,
+    EventDispatch, ListData, ServerCache, Versionable, WatchResponse,
 };
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
