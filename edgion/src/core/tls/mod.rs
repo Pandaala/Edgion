@@ -1,2 +1,2 @@
-mod tls_cert_matcher;
-mod tls_pingora;
+pub mod tls_cert_matcher;
+pub mod tls_pingora;

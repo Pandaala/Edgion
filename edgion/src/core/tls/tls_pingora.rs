@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::core::tls::tls_cert_matcher::match_sni;
 use anyhow::anyhow;
 use anyhow::Result;

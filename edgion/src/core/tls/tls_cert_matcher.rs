@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::core::host_match::HashHost;
 use crate::types::err::EdError;
 use crate::types::EdgionTls;
@@ -22,10 +24,10 @@ impl TlsWithSecret {
             .secret
             .data
             .as_ref()
-            .ok_or_else(|| (anyhow::anyhow!("Secret data not found")))?;
+            .ok_or_else(|| anyhow::anyhow!("Secret data not found"))?;
         let cert_pem = data
             .get("tls.crt")
-            .ok_or_else(|| (anyhow::anyhow!("Secret data tls.crt not found")))?;
+            .ok_or_else(|| anyhow::anyhow!("Secret data tls.crt not found"))?;
         String::from_utf8(cert_pem.0.clone()).map_err(|e| anyhow::anyhow!(e))
     }
 

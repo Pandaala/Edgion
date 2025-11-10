@@ -8,7 +8,7 @@ pub enum ResourceChange {
     EventDelete,
 }
 
-pub trait EventDispatcher {
+pub trait EventDispatcher: Send + Sync {
     fn apply_resource_change(
         &mut self,
         change: ResourceChange,
