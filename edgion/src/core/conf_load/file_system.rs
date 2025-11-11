@@ -89,7 +89,8 @@ impl FileSystemConfigLoader {
             .lock()
             .await
             .insert(path.to_path_buf(), content.clone());
-        self.dispatch_change(ResourceChange::EventAdd, content).await;
+        self.dispatch_change(ResourceChange::EventAdd, content)
+            .await;
         Ok(())
     }
 
@@ -116,7 +117,8 @@ impl FileSystemConfigLoader {
         let mut cache = self.cache.lock().await;
         cache.insert(path.to_path_buf(), new_content.clone());
         drop(cache);
-        self.dispatch_change(ResourceChange::EventAdd, new_content).await;
+        self.dispatch_change(ResourceChange::EventAdd, new_content)
+            .await;
         Ok(())
     }
 
@@ -162,10 +164,7 @@ impl FileSystemConfigLoader {
 impl ConfigLoader for FileSystemConfigLoader {
     async fn run(self: Arc<Self>) -> Result<()> {
         if !self.root.exists() {
-            return Err(anyhow!(
-                "Config directory {:?} does not exist",
-                self.root
-            ));
+            return Err(anyhow!("Config directory {:?} does not exist", self.root));
         }
 
         self.bootstrap_existing().await?;
