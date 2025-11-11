@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
-
 use async_trait::async_trait;
+use tokio::sync::Mutex;
 
 use crate::core::conf_sync::traits::EventDispatcher;
 

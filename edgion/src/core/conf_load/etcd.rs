@@ -7,7 +7,7 @@ use futures::StreamExt;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use crate::core::conf_sync::config_loader::{ConfigLoader, SharedDispatcher};
+use crate::core::conf_load::{ConfigLoader, SharedDispatcher};
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::types::ResourceKind;
 

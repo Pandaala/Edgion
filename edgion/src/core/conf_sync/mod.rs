@@ -1,6 +1,5 @@
 mod cache_server;
 pub mod config_client;
-pub mod config_loader;
 pub mod config_server;
 pub mod config_server_update;
 pub mod grpc_client;
@@ -12,7 +11,6 @@ pub mod traits;
 
 pub use cache_client::ClientCache;
 pub use cache_server::{EventDispatch, ServerCache, Versionable};
-pub use config_loader::{ConfigLoader, EtcdConfigLoader, FileSystemConfigLoader, SharedDispatcher};
 pub use config_server::ConfigServer;
 pub use grpc_client::ConfigSyncClient;
 pub use grpc_server::ConfigSyncServer;
