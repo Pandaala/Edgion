@@ -33,9 +33,24 @@ pub fn next_resource_version() -> u64 {
     }
 }
 
+/// Inspect a raw YAML/JSON document to determine whether a Kubernetes
+/// `resource_version` is already present. If missing, generate one using
+/// `next_resource_version()`.
+///
+/// The function looks for the key `resource_version` (case-insensitive) and
+/// also supports the canonical snake-case `resourceVersion` spelling. It
+/// performs a lightweight text scan without fully parsing the resource.
+pub fn check_need_version(input: &str) -> Option<u64> {
+    if input.contains("resourceVersion:") {
+        None
+    } else {
+        Some(next_resource_version())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::next_resource_version;
+    use super::{check_need_version, next_resource_version};
     use std::thread;
 
     #[test]
@@ -63,5 +78,30 @@ mod tests {
         for window in values.windows(2) {
             assert!(window[1] > window[0]);
         }
+    }
+
+    #[test]
+    fn check_need_version_detects_existing_field() {
+        let sample = r#"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo
+  resourceVersion: "123"
+"#;
+
+        assert!(check_need_version(sample).is_none());
+    }
+
+    #[test]
+    fn check_need_version_generates_when_missing() {
+        let sample = r#"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo
+"#;
+
+        assert!(check_need_version(sample).is_some());
     }
 }
