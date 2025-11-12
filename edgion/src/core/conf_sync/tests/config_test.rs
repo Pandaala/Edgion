@@ -2,11 +2,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{self, Value};
+use std::borrow::Borrow;
 use tokio::sync::Mutex;
+use tokio::task::yield_now;
 use tokio::time::timeout;
 
 use crate::core::conf_sync::cache_server::ServerCache;
 use crate::core::conf_sync::config_client::ConfigClient;
+use crate::core::conf_sync::config_server::EventDataSimple;
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::core::conf_sync::{ConfigServer, EventDispatch};
 use crate::types::{GatewayClass, GatewayClassSpec, ResourceKind};
@@ -380,4 +383,336 @@ async fn wait(duration: Duration, use_realtime: bool) {
     } else {
         tokio::time::advance(duration).await;
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multiple_clients_relist_after_stale_watch_error() {
+    let key = "gateway-class-multi-client".to_string();
+    let use_realtime = std::env::var_os("EDGEION_WATCH_TEST_REALTIME").is_some();
+    if !use_realtime {
+        tokio::time::pause();
+    }
+
+    let server = Arc::new(Mutex::new(ConfigServer::new()));
+    {
+        let mut guard = server.lock().await;
+        guard
+            .gateway_classes
+            .insert(key.clone(), ServerCache::new(16));
+        guard
+            .gateway_classes
+            .get_mut(&key)
+            .expect("cache exists")
+            .set_ready();
+    }
+
+    let fast_client = Arc::new(Mutex::new(ConfigClient::new(key.clone())));
+    let fast_watch_rx = {
+        let mut guard = server.lock().await;
+        guard
+            .watch(
+                &key,
+                &ResourceKind::GatewayClass,
+                "fast-client".to_string(),
+                "config-test".to_string(),
+                0,
+            )
+            .expect("fast watch receiver")
+    };
+
+    let fast_task = spawn_watch_consumer(
+        fast_watch_rx,
+        fast_client.clone(),
+        Duration::from_secs(3),
+        use_realtime,
+    );
+
+    let initial_event_count: u64 = 30;
+    for version in 1..=initial_event_count {
+        let mut gc = sample_gateway_class(&key, version);
+        gc.spec.description = Some(format!("initial-{version}"));
+
+        let payload = serde_json::to_string(&gc).expect("serialize gateway class");
+        {
+            let mut guard = server.lock().await;
+            guard.apply_resource_change(
+                ResourceChange::EventAdd,
+                Some(ResourceKind::GatewayClass),
+                payload,
+                Some(version),
+            );
+        }
+        wait(Duration::from_millis(2), use_realtime).await;
+    }
+
+    wait(Duration::from_millis(20), use_realtime).await;
+
+    let mut initial_snapshot = {
+        let guard = server.lock().await;
+        guard
+            .list_gateway_classes(&key)
+            .await
+            .expect("initial server snapshot")
+    };
+    while initial_snapshot.resource_version < initial_event_count {
+        wait(Duration::from_millis(5), use_realtime).await;
+        yield_now().await;
+        initial_snapshot = {
+            let guard = server.lock().await;
+            guard
+                .list_gateway_classes(&key)
+                .await
+                .expect("initial server snapshot")
+        };
+    }
+    let mut latest_version = initial_snapshot.resource_version;
+    let stale_from_version = latest_version.saturating_sub(20).max(1);
+
+    let mut stale_watch_rx = {
+        let mut guard = server.lock().await;
+        guard
+            .watch(
+                &key,
+                &ResourceKind::GatewayClass,
+                "stale-client".to_string(),
+                "config-test".to_string(),
+                stale_from_version,
+            )
+            .expect("stale watch receiver")
+    };
+
+    let stale_client = Arc::new(Mutex::new(ConfigClient::new(key.clone())));
+
+    let error_event = stale_watch_rx
+        .recv()
+        .await
+        .expect("stale watcher should emit an error");
+    let err_kind = error_event
+        .err
+        .as_deref()
+        .expect("stale watcher should set err field");
+    assert!(
+        matches!(err_kind, "TooOldVersion" | "VersionUnexpect"),
+        "unexpected watch error: {err_kind}"
+    );
+
+    drop(stale_watch_rx);
+
+    let snapshot = {
+        let guard = server.lock().await;
+        guard
+            .list(&key, &ResourceKind::GatewayClass)
+            .await
+            .expect("server list")
+    };
+
+    latest_version = snapshot.resource_version;
+    let snapshot_items: Vec<GatewayClass> =
+        serde_json::from_str(&snapshot.data).expect("decode list snapshot");
+    replace_client_with_snapshot(&stale_client, &key, snapshot_items).await;
+
+    let follow_watch_rx = {
+        let mut guard = server.lock().await;
+        guard
+            .watch(
+                &key,
+                &ResourceKind::GatewayClass,
+                "stale-client-follow".to_string(),
+                "config-test".to_string(),
+                latest_version,
+            )
+            .expect("follow-up watch receiver")
+    };
+
+    let follow_task = spawn_watch_consumer(
+        follow_watch_rx,
+        stale_client.clone(),
+        Duration::from_secs(3),
+        use_realtime,
+    );
+
+    for offset in 1..=5 {
+        latest_version += 1;
+        let mut gc = sample_gateway_class(&key, latest_version);
+        gc.spec.description = Some(format!("extra-{offset}"));
+        let payload = serde_json::to_string(&gc).expect("serialize gateway class");
+        {
+            let mut guard = server.lock().await;
+            guard.apply_resource_change(
+                ResourceChange::EventAdd,
+                Some(ResourceKind::GatewayClass),
+                payload,
+                Some(latest_version),
+            );
+        }
+        wait(Duration::from_millis(2), use_realtime).await;
+    }
+
+    wait(Duration::from_secs(1), use_realtime).await;
+    wait(Duration::from_secs(3), use_realtime).await;
+
+    fast_task.await.expect("fast watcher task completed");
+    follow_task
+        .await
+        .expect("stale watcher follow-up task completed");
+
+    let server_snapshot = {
+        let guard = server.lock().await;
+        guard
+            .list_gateway_classes(&key)
+            .await
+            .expect("server snapshot")
+    };
+
+    let (server_versions, fast_versions, stale_versions) = {
+        let server_versions = collect_versions(server_snapshot.data.iter());
+
+        let (fast_versions, fast_version) = {
+            let guard = fast_client.lock().await;
+            let snapshot = guard.list_gateway_classes();
+            assert_eq!(server_snapshot.resource_version, snapshot.resource_version);
+            (
+                collect_versions(snapshot.data.iter().copied()),
+                snapshot.resource_version,
+            )
+        };
+
+        let (stale_versions, stale_version) = {
+            let guard = stale_client.lock().await;
+            let snapshot = guard.list_gateway_classes();
+            assert_eq!(server_snapshot.resource_version, snapshot.resource_version);
+            (
+                collect_versions(snapshot.data.iter().copied()),
+                snapshot.resource_version,
+            )
+        };
+
+        assert_eq!(fast_version, server_snapshot.resource_version);
+        assert_eq!(stale_version, server_snapshot.resource_version);
+
+        (server_versions, fast_versions, stale_versions)
+    };
+
+    assert_eq!(server_versions, fast_versions);
+    assert_eq!(server_versions, stale_versions);
+}
+
+async fn replace_client_with_snapshot(
+    client: &Arc<Mutex<ConfigClient>>,
+    key: &str,
+    items: Vec<GatewayClass>,
+) {
+    let mut guard = client.lock().await;
+    *guard = ConfigClient::new(key.to_string());
+
+    for item in items {
+        let resource_version = item
+            .metadata
+            .resource_version
+            .as_deref()
+            .unwrap_or("0")
+            .parse::<u64>()
+            .unwrap_or(0);
+        let payload = serde_json::to_string(&item).expect("serialize gateway class");
+        guard.apply_resource_change(
+            ResourceChange::EventAdd,
+            Some(ResourceKind::GatewayClass),
+            payload,
+            Some(resource_version),
+        );
+    }
+}
+
+async fn apply_watch_events_to_client(client: &Arc<Mutex<ConfigClient>>, event: &EventDataSimple) {
+    if event.data.is_empty() {
+        return;
+    }
+
+    let raw_events: Vec<Value> =
+        serde_json::from_str(&event.data).expect("valid watcher events payload");
+
+    let mut parsed_events = Vec::with_capacity(raw_events.len());
+    for raw in raw_events {
+        let event_type = raw
+            .get("type")
+            .and_then(|v| v.as_str())
+            .expect("event type");
+        let change = match event_type {
+            "add" => ResourceChange::EventAdd,
+            "update" => ResourceChange::EventUpdate,
+            "delete" => ResourceChange::EventDelete,
+            other => panic!("unexpected event type {}", other),
+        };
+
+        let payload_value = raw.get("data").expect("event data");
+        let payload =
+            serde_json::to_string(payload_value).expect("serialize watcher event payload");
+
+        let resource_version = raw
+            .get("resource_version")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(event.resource_version);
+
+        parsed_events.push((change, payload, resource_version));
+    }
+
+    let mut guard = client.lock().await;
+    for (change, payload, resource_version) in parsed_events {
+        guard.apply_resource_change(
+            change,
+            Some(ResourceKind::GatewayClass),
+            payload,
+            Some(resource_version),
+        );
+    }
+}
+
+fn spawn_watch_consumer(
+    mut rx: tokio::sync::mpsc::Receiver<EventDataSimple>,
+    client: Arc<Mutex<ConfigClient>>,
+    duration: Duration,
+    use_realtime: bool,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let deadline = tokio::time::sleep(duration);
+        tokio::pin!(deadline);
+
+        loop {
+            tokio::select! {
+                _ = &mut deadline => break,
+                maybe_event = rx.recv() => {
+                    match maybe_event {
+                        Some(event) => {
+                            assert!(event.err.is_none(), "unexpected watcher error: {:?}", event.err);
+                            apply_watch_events_to_client(&client, &event).await;
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+
+        wait(Duration::from_millis(1), use_realtime).await;
+    })
+}
+
+fn collect_versions<T>(data: T) -> Vec<u64>
+where
+    T: IntoIterator,
+    T::Item: Borrow<GatewayClass>,
+{
+    let mut versions: Vec<u64> = data
+        .into_iter()
+        .filter_map(|item| {
+            let gc = item.borrow();
+            gc.metadata
+                .resource_version
+                .as_deref()
+                .unwrap_or("0")
+                .parse::<u64>()
+                .ok()
+        })
+        .collect();
+    versions.sort_unstable();
+    versions
 }
