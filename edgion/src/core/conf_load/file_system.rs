@@ -20,6 +20,9 @@ pub struct FileSystemConfigLoader {
     cache: Arc<Mutex<HashMap<PathBuf, String>>>,
 }
 
+// TODO: Support nested directory watch and propagation. Currently only flat file
+// updates inside the root directory are handled; directory-level operations are
+// ignored with an error log.
 impl FileSystemConfigLoader {
     pub fn new<P: Into<PathBuf>>(
         root: P,
@@ -80,6 +83,11 @@ impl FileSystemConfigLoader {
     }
 
     async fn process_new_file(&self, path: &Path) -> Result<()> {
+        if path.is_dir() {
+            log_directory_not_supported(path);
+            return Ok(());
+        }
+
         if !path.is_file() {
             return Ok(());
         }
@@ -99,11 +107,22 @@ impl FileSystemConfigLoader {
         if let Some(old) = cache.remove(path) {
             drop(cache);
             self.dispatch_change(ResourceChange::EventDelete, old).await;
+        } else {
+            let has_children = cache.keys().any(|entry| entry.starts_with(path));
+            drop(cache);
+            if has_children {
+                log_directory_not_supported(path);
+            }
         }
         Ok(())
     }
 
     async fn process_updated_file(&self, path: &Path) -> Result<()> {
+        if path.is_dir() {
+            log_directory_not_supported(path);
+            return Ok(());
+        }
+
         if !path.is_file() {
             return Ok(());
         }
@@ -158,6 +177,13 @@ impl FileSystemConfigLoader {
         }
         Ok(())
     }
+}
+
+fn log_directory_not_supported(path: &Path) {
+    eprintln!(
+        "[FileSystemConfigLoader] directory changes are not supported: {:?}",
+        path
+    );
 }
 
 #[async_trait::async_trait]
