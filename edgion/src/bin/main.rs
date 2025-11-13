@@ -1,6 +1,10 @@
 use edgion::core::cli::Cli;
 
-fn main() {
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
     let cli = Cli::parse_args();
-    cli.validate_and_run();
+    if let Err(err) = cli.run().await {
+        eprintln!("Error: {err}");
+        std::process::exit(1);
+    }
 }
