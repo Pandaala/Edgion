@@ -8,14 +8,15 @@ use tokio::fs;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
-use crate::core::conf_load::{ConfigLoader, SharedDispatcher};
+use crate::core::conf_load::ConfigLoader;
+use crate::core::conf_sync::config_server::ConfigServer;
+use crate::core::conf_sync::EventDispatcher;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::types::ResourceKind;
 
-#[derive(Clone)]
 pub struct FileSystemConfigLoader {
     root: PathBuf,
-    dispatcher: SharedDispatcher,
+    dispatcher: Arc<ConfigServer>,
     resource_kind: Option<ResourceKind>,
     cache: Arc<Mutex<HashMap<PathBuf, String>>>,
 }
@@ -26,7 +27,7 @@ pub struct FileSystemConfigLoader {
 impl FileSystemConfigLoader {
     pub fn new<P: Into<PathBuf>>(
         root: P,
-        dispatcher: SharedDispatcher,
+        dispatcher: Arc<ConfigServer>,
         resource_kind: Option<ResourceKind>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -71,8 +72,8 @@ impl FileSystemConfigLoader {
 
     async fn dispatch_change(&self, change: ResourceChange, data: String) {
         let resource_type = self.resource_kind;
-        let mut dispatcher = self.dispatcher.lock().await;
-        dispatcher.apply_resource_change(change, resource_type, data, None);
+        self.dispatcher
+            .apply_resource_change(change, resource_type, data, None);
     }
 
     async fn read_file(path: &Path) -> Result<String> {

@@ -125,9 +125,7 @@ async fn operator_config_handler(
         .unwrap_or_else(|| DEFAULT_GATEWAY_CLASS_KEY.to_string());
 
     let server = state.server.lock().await;
-    let list = server
-        .list(&key, &kind)
-        .await
+    let list = server.list(&key, &kind)
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err))?;
 
     let data: Value = serde_json::from_str(&list.data)
@@ -208,14 +206,13 @@ fn parse_resource_kind(kind: &str) -> Option<ResourceKind> {
 }
 
 fn list_refs_to_json<T>(
-    data: Vec<&T>,
+    data: Vec<T>,
     resource_version: u64,
 ) -> Result<(Value, u64), (StatusCode, String)>
 where
-    T: Clone + Serialize,
+    T: Serialize,
 {
-    let owned: Vec<T> = data.into_iter().cloned().collect();
-    let json = serde_json::to_value(owned)
+    let json = serde_json::to_value(data)
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     Ok((json, resource_version))
 }

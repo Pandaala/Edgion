@@ -1,6 +1,7 @@
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::HashMap;
+use std::sync::RwLock;
 use tokio::sync::mpsc;
 
 use crate::core::conf_sync::cache_server::{
@@ -29,14 +30,15 @@ pub enum ResourceItem {
 
 // todo, 所有的资源，都按照gatewayclass进行规制，对于多层映射的，后期可以通过添加filter的机制
 pub struct ConfigServer {
-    pub gateway_classes: HashMap<GatewayClassKey, ServerCache<GatewayClass>>,
-    pub edgion_gateway_configs: HashMap<GatewayClassKey, ServerCache<EdgionGatewayConfig>>,
-    pub gateways: HashMap<GatewayClassKey, ServerCache<Gateway>>,
-    pub routes: HashMap<GatewayClassKey, ServerCache<HTTPRoute>>,
-    pub services: HashMap<GatewayClassKey, ServerCache<Service>>,
-    pub endpoint_slices: HashMap<GatewayClassKey, ServerCache<EndpointSlice>>,
-    pub edgion_tls: HashMap<GatewayClassKey, ServerCache<EdgionTls>>,
-    pub secrets: HashMap<GatewayClassKey, ServerCache<Secret>>,
+    pub gateway_classes: RwLock<HashMap<GatewayClassKey, ServerCache<GatewayClass>>>,
+    pub edgion_gateway_configs:
+        RwLock<HashMap<GatewayClassKey, ServerCache<EdgionGatewayConfig>>>,
+    pub gateways: RwLock<HashMap<GatewayClassKey, ServerCache<Gateway>>>,
+    pub routes: RwLock<HashMap<GatewayClassKey, ServerCache<HTTPRoute>>>,
+    pub services: RwLock<HashMap<GatewayClassKey, ServerCache<Service>>>,
+    pub endpoint_slices: RwLock<HashMap<GatewayClassKey, ServerCache<EndpointSlice>>>,
+    pub edgion_tls: RwLock<HashMap<GatewayClassKey, ServerCache<EdgionTls>>>,
+    pub secrets: RwLock<HashMap<GatewayClassKey, ServerCache<Secret>>>,
 }
 
 pub struct ListDataSimple {
@@ -53,18 +55,18 @@ pub struct EventDataSimple {
 impl ConfigServer {
     pub fn new() -> Self {
         Self {
-            gateway_classes: HashMap::new(),
-            edgion_gateway_configs: HashMap::new(),
-            gateways: HashMap::new(),
-            routes: HashMap::new(),
-            services: HashMap::new(),
-            endpoint_slices: HashMap::new(),
-            edgion_tls: HashMap::new(),
-            secrets: HashMap::new(),
+            gateway_classes: RwLock::new(HashMap::new()),
+            edgion_gateway_configs: RwLock::new(HashMap::new()),
+            gateways: RwLock::new(HashMap::new()),
+            routes: RwLock::new(HashMap::new()),
+            services: RwLock::new(HashMap::new()),
+            endpoint_slices: RwLock::new(HashMap::new()),
+            edgion_tls: RwLock::new(HashMap::new()),
+            secrets: RwLock::new(HashMap::new()),
         }
     }
 
-    pub async fn list(
+    pub fn list(
         &self,
         key: &GatewayClassKey,
         kind: &ResourceKind,
@@ -73,7 +75,6 @@ impl ConfigServer {
             ResourceKind::GatewayClass => {
                 let list_data = self
                     .list_gateway_classes(key)
-                    .await
                     .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize GatewayClass data: {}", e))?;
@@ -82,7 +83,6 @@ impl ConfigServer {
             ResourceKind::EdgionGatewayConfig => {
                 let list_data = self
                     .list_edgion_gateway_configs(key)
-                    .await
                     .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EdgionGatewayConfig data: {}", e))?;
@@ -91,7 +91,6 @@ impl ConfigServer {
             ResourceKind::Gateway => {
                 let list_data = self
                     .list_gateways(key)
-                    .await
                     .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize Gateway data: {}", e))?;
@@ -100,7 +99,6 @@ impl ConfigServer {
             ResourceKind::HTTPRoute => {
                 let list_data = self
                     .list_routes(key)
-                    .await
                     .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize HTTPRoute data: {}", e))?;
@@ -109,7 +107,6 @@ impl ConfigServer {
             ResourceKind::Service => {
                 let list_data = self
                     .list_services(key)
-                    .await
                     .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize Service data: {}", e))?;
@@ -118,7 +115,6 @@ impl ConfigServer {
             ResourceKind::EndpointSlice => {
                 let list_data = self
                     .list_endpoint_slices(key)
-                    .await
                     .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EndpointSlice data: {}", e))?;
@@ -127,7 +123,6 @@ impl ConfigServer {
             ResourceKind::EdgionTls => {
                 let list_data = self
                     .list_edgion_tls(key)
-                    .await
                     .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EdgionTls data: {}", e))?;
@@ -136,7 +131,6 @@ impl ConfigServer {
             ResourceKind::Secret => {
                 let list_data = self
                     .list_secrets(key)
-                    .await
                     .unwrap_or_else(|| ListData::new(Vec::new(), 0));
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize Secret data: {}", e))?;
@@ -186,7 +180,13 @@ impl ConfigServer {
                         receiver
                     }
                     None => {
-                        let available_keys: Vec<_> = self.gateway_classes.keys().cloned().collect();
+                        let available_keys: Vec<_> = self
+                            .gateway_classes
+                            .read()
+                            .unwrap()
+                            .keys()
+                            .cloned()
+                            .collect();
                         println!(
                             "[ConfigCenter::watch] GatewayClass cache miss key={} client_id={} client_name={} available_keys={:?}",
                             key,
@@ -449,74 +449,79 @@ impl ConfigServer {
     }
 
     /// List gateway classes
-    pub async fn list_gateway_classes(&self, key: &str) -> Option<ListData<GatewayClass>> {
-        if let Some(cache) = self.gateway_classes.get(key) {
-            Some(cache.list_owned().await)
+    pub fn list_gateway_classes(&self, key: &str) -> Option<ListData<GatewayClass>> {
+        let gateway_classes = self.gateway_classes.read().unwrap();
+        if let Some(cache) = gateway_classes.get(key) {
+            Some(cache.list_owned())
         } else {
             None
         }
     }
 
-    pub async fn list_edgion_gateway_configs(
-        &self,
-        key: &str,
-    ) -> Option<ListData<EdgionGatewayConfig>> {
-        if let Some(cache) = self.edgion_gateway_configs.get(key) {
-            Some(cache.list_owned().await)
+    pub fn list_edgion_gateway_configs(&self, key: &str) -> Option<ListData<EdgionGatewayConfig>> {
+        let edgion_gateway_configs = self.edgion_gateway_configs.read().unwrap();
+        if let Some(cache) = edgion_gateway_configs.get(key) {
+            Some(cache.list_owned())
         } else {
             None
         }
     }
 
     /// List gateways
-    pub async fn list_gateways(&self, key: &str) -> Option<ListData<Gateway>> {
-        if let Some(cache) = self.gateways.get(key) {
-            Some(cache.list_owned().await)
+    pub fn list_gateways(&self, key: &str) -> Option<ListData<Gateway>> {
+        let gateways = self.gateways.read().unwrap();
+        if let Some(cache) = gateways.get(key) {
+            Some(cache.list_owned())
         } else {
             None
         }
     }
 
     /// List HTTP routes
-    pub async fn list_routes(&self, key: &str) -> Option<ListData<HTTPRoute>> {
-        if let Some(cache) = self.routes.get(key) {
-            Some(cache.list_owned().await)
+    pub fn list_routes(&self, key: &str) -> Option<ListData<HTTPRoute>> {
+        let routes = self.routes.read().unwrap();
+        if let Some(cache) = routes.get(key) {
+            Some(cache.list_owned())
         } else {
             None
         }
     }
 
     /// List services
-    pub async fn list_services(&self, key: &str) -> Option<ListData<Service>> {
-        if let Some(cache) = self.services.get(key) {
-            Some(cache.list_owned().await)
+    pub fn list_services(&self, key: &str) -> Option<ListData<Service>> {
+        let services = self.services.read().unwrap();
+        if let Some(cache) = services.get(key) {
+            Some(cache.list_owned())
         } else {
             None
         }
     }
 
     /// List endpoint slices
-    pub async fn list_endpoint_slices(&self, key: &str) -> Option<ListData<EndpointSlice>> {
-        if let Some(cache) = self.endpoint_slices.get(key) {
-            Some(cache.list_owned().await)
+    pub fn list_endpoint_slices(&self, key: &str) -> Option<ListData<EndpointSlice>> {
+        let endpoint_slices = self.endpoint_slices.read().unwrap();
+        if let Some(cache) = endpoint_slices.get(key) {
+            Some(cache.list_owned())
         } else {
             None
         }
     }
 
     /// List Edgion TLS
-    pub async fn list_edgion_tls(&self, key: &str) -> Option<ListData<EdgionTls>> {
-        if let Some(cache) = self.edgion_tls.get(key) {
-            Some(cache.list_owned().await)
+    pub fn list_edgion_tls(&self, key: &str) -> Option<ListData<EdgionTls>> {
+        let edgion_tls = self.edgion_tls.read().unwrap();
+        if let Some(cache) = edgion_tls.get(key) {
+            Some(cache.list_owned())
         } else {
             None
         }
     }
 
     /// List secrets
-    pub async fn list_secrets(&self, key: &str) -> Option<ListData<Secret>> {
-        if let Some(cache) = self.secrets.get(key) {
-            Some(cache.list_owned().await)
+    pub fn list_secrets(&self, key: &str) -> Option<ListData<Secret>> {
+        let secrets = self.secrets.read().unwrap();
+        if let Some(cache) = secrets.get(key) {
+            Some(cache.list_owned())
         } else {
             None
         }
@@ -530,14 +535,12 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<GatewayClass>>> {
-        let cache = self
-            .gateway_classes
-            .entry(key.to_string())
-            .or_insert_with(|| {
-                let mut cache = ServerCache::new(1000);
-                EventDispatch::set_ready(&mut cache);
-                cache
-            });
+        let mut gateway_classes = self.gateway_classes.write().unwrap();
+        let cache = gateway_classes.entry(key.to_string()).or_insert_with(|| {
+            let mut cache = ServerCache::new(1000);
+            EventDispatch::set_ready(&mut cache);
+            cache
+        });
         Some(cache.watch(client_id, client_name, from_version))
     }
 
@@ -548,8 +551,8 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<EdgionGatewayConfig>>> {
-        let cache = self
-            .edgion_gateway_configs
+        let mut edgion_gateway_configs = self.edgion_gateway_configs.write().unwrap();
+        let cache = edgion_gateway_configs
             .entry(key.to_string())
             .or_insert_with(|| {
                 let mut cache = ServerCache::new(1000);
@@ -567,7 +570,8 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<Gateway>>> {
-        let cache = self.gateways.entry(key.to_string()).or_insert_with(|| {
+        let mut gateways = self.gateways.write().unwrap();
+        let cache = gateways.entry(key.to_string()).or_insert_with(|| {
             let mut cache = ServerCache::new(1000);
             EventDispatch::set_ready(&mut cache);
             cache
@@ -583,7 +587,8 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<HTTPRoute>>> {
-        let cache = self.routes.entry(key.to_string()).or_insert_with(|| {
+        let mut routes = self.routes.write().unwrap();
+        let cache = routes.entry(key.to_string()).or_insert_with(|| {
             let mut cache = ServerCache::new(1000);
             EventDispatch::set_ready(&mut cache);
             cache
@@ -599,7 +604,8 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<Service>>> {
-        let cache = self.services.entry(key.to_string()).or_insert_with(|| {
+        let mut services = self.services.write().unwrap();
+        let cache = services.entry(key.to_string()).or_insert_with(|| {
             let mut cache = ServerCache::new(1000);
             EventDispatch::set_ready(&mut cache);
             cache
@@ -615,14 +621,12 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<EndpointSlice>>> {
-        let cache = self
-            .endpoint_slices
-            .entry(key.to_string())
-            .or_insert_with(|| {
-                let mut cache = ServerCache::new(1000);
-                EventDispatch::set_ready(&mut cache);
-                cache
-            });
+        let mut endpoint_slices = self.endpoint_slices.write().unwrap();
+        let cache = endpoint_slices.entry(key.to_string()).or_insert_with(|| {
+            let mut cache = ServerCache::new(1000);
+            EventDispatch::set_ready(&mut cache);
+            cache
+        });
         Some(cache.watch(client_id, client_name, from_version))
     }
 
@@ -634,7 +638,8 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<EdgionTls>>> {
-        let cache = self.edgion_tls.entry(key.to_string()).or_insert_with(|| {
+        let mut edgion_tls = self.edgion_tls.write().unwrap();
+        let cache = edgion_tls.entry(key.to_string()).or_insert_with(|| {
             let mut cache = ServerCache::new(1000);
             EventDispatch::set_ready(&mut cache);
             cache
@@ -650,7 +655,8 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> Option<mpsc::Receiver<WatchResponse<Secret>>> {
-        let cache = self.secrets.entry(key.to_string()).or_insert_with(|| {
+        let mut secrets = self.secrets.write().unwrap();
+        let cache = secrets.entry(key.to_string()).or_insert_with(|| {
             let mut cache = ServerCache::new(1000);
             EventDispatch::set_ready(&mut cache);
             cache
@@ -663,7 +669,7 @@ impl ConfigServer {
         println!("=== ConfigCenter Config for GatewayClassKey: {} ===", key);
 
         // Gateway Classes
-        if let Some(list_data) = self.list_gateway_classes(key).await {
+        if let Some(list_data) = self.list_gateway_classes(key) {
             println!(
                 "GatewayClasses (count: {}, version: {}):",
                 list_data.data.len(),
@@ -680,7 +686,7 @@ impl ConfigServer {
             println!("GatewayClasses: not found");
         }
 
-        if let Some(list_data) = self.list_edgion_gateway_configs(key).await {
+        if let Some(list_data) = self.list_edgion_gateway_configs(key) {
             println!(
                 "EdgionGatewayConfigs (count: {}, version: {}):",
                 list_data.data.len(),
@@ -699,7 +705,7 @@ impl ConfigServer {
         }
 
         // Gateways
-        if let Some(list_data) = self.list_gateways(key).await {
+        if let Some(list_data) = self.list_gateways(key) {
             println!(
                 "Gateways (count: {}, version: {}):",
                 list_data.data.len(),
@@ -717,7 +723,7 @@ impl ConfigServer {
         }
 
         // HTTP Routes
-        if let Some(list_data) = self.list_routes(key).await {
+        if let Some(list_data) = self.list_routes(key) {
             println!(
                 "HTTPRoutes (count: {}, version: {}):",
                 list_data.data.len(),
@@ -736,7 +742,7 @@ impl ConfigServer {
         }
 
         // Services
-        if let Some(list_data) = self.list_services(key).await {
+        if let Some(list_data) = self.list_services(key) {
             println!(
                 "Services (count: {}, version: {}):",
                 list_data.data.len(),
@@ -755,7 +761,7 @@ impl ConfigServer {
         }
 
         // Endpoint Slices
-        if let Some(list_data) = self.list_endpoint_slices(key).await {
+        if let Some(list_data) = self.list_endpoint_slices(key) {
             println!(
                 "EndpointSlices (count: {}, version: {}):",
                 list_data.data.len(),
@@ -773,7 +779,7 @@ impl ConfigServer {
         }
 
         // Edgion TLS
-        if let Some(list_data) = self.list_edgion_tls(key).await {
+        if let Some(list_data) = self.list_edgion_tls(key) {
             println!(
                 "EdgionTls (count: {}, version: {}):",
                 list_data.data.len(),
@@ -792,7 +798,7 @@ impl ConfigServer {
         }
 
         // Secrets
-        if let Some(list_data) = self.list_secrets(key).await {
+        if let Some(list_data) = self.list_secrets(key) {
             println!(
                 "Secrets (count: {}, version: {}):",
                 list_data.data.len(),

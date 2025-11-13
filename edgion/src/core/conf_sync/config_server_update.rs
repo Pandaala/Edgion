@@ -82,17 +82,18 @@ impl ConfigServer {
     }
 
     fn fallback_gateway_class_keys(&self) -> Vec<String> {
-        if self.gateway_classes.is_empty() {
+        let gateway_classes = self.gateway_classes.read().unwrap();
+        if gateway_classes.is_empty() {
             vec![DEFAULT_GATEWAY_CLASS_KEY.to_string()]
         } else {
-            self.gateway_classes.keys().cloned().collect()
+            gateway_classes.keys().cloned().collect()
         }
     }
 }
 
 impl EventDispatcher for ConfigServer {
     fn apply_resource_change(
-        &mut self,
+        &self,
         change: ResourceChange,
         resource_type: Option<ResourceKind>,
         data: String,
@@ -103,12 +104,13 @@ impl EventDispatcher for ConfigServer {
             return;
         };
 
-        let result = match resource_type {
+        match resource_type {
             ResourceKind::GatewayClass => {
-                serde_json::from_str::<GatewayClass>(&data).map(|resource| {
+                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
+                    let mut gateway_classes = self.gateway_classes.write().unwrap();
                     for key in gateway_class_keys {
-                        if let Some(cache) = self.gateway_classes.get_mut(&key) {
+                        if let Some(cache) = gateway_classes.get_mut(&key) {
                             Self::execute_change_on_cache::<GatewayClass>(
                                 change,
                                 cache,
@@ -117,13 +119,14 @@ impl EventDispatcher for ConfigServer {
                             );
                         }
                     }
-                })
+                }
             }
-            ResourceKind::EdgionGatewayConfig => serde_json::from_str::<EdgionGatewayConfig>(&data)
-                .map(|resource| {
+            ResourceKind::EdgionGatewayConfig => {
+                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
+                    let mut edgion_gateway_configs = self.edgion_gateway_configs.write().unwrap();
                     for key in gateway_class_keys {
-                        if let Some(cache) = self.edgion_gateway_configs.get_mut(&key) {
+                        if let Some(cache) = edgion_gateway_configs.get_mut(&key) {
                             Self::execute_change_on_cache::<EdgionGatewayConfig>(
                                 change,
                                 cache,
@@ -132,51 +135,62 @@ impl EventDispatcher for ConfigServer {
                             );
                         }
                     }
-                }),
-            ResourceKind::Gateway => serde_json::from_str::<Gateway>(&data).map(|resource| {
-                let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
-                for key in gateway_class_keys {
-                    if let Some(cache) = self.gateways.get_mut(&key) {
-                        Self::execute_change_on_cache::<Gateway>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
-                    }
                 }
-            }),
-            ResourceKind::HTTPRoute => serde_json::from_str::<HTTPRoute>(&data).map(|resource| {
-                let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
-                for key in gateway_class_keys {
-                    if let Some(cache) = self.routes.get_mut(&key) {
-                        Self::execute_change_on_cache::<HTTPRoute>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
-                    }
-                }
-            }),
-            ResourceKind::Service => serde_json::from_str::<Service>(&data).map(|resource| {
-                let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
-                for key in gateway_class_keys {
-                    if let Some(cache) = self.services.get_mut(&key) {
-                        Self::execute_change_on_cache::<Service>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
-                    }
-                }
-            }),
-            ResourceKind::EndpointSlice => {
-                serde_json::from_str::<EndpointSlice>(&data).map(|resource| {
+            }
+            ResourceKind::Gateway => {
+                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
+                    let mut gateways = self.gateways.write().unwrap();
                     for key in gateway_class_keys {
-                        if let Some(cache) = self.endpoint_slices.get_mut(&key) {
+                        if let Some(cache) = gateways.get_mut(&key) {
+                            Self::execute_change_on_cache::<Gateway>(
+                                change,
+                                cache,
+                                resource.clone(),
+                                resource_version,
+                            );
+                        }
+                    }
+                }
+            }
+            ResourceKind::HTTPRoute => {
+                if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
+                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
+                    let mut routes = self.routes.write().unwrap();
+                    for key in gateway_class_keys {
+                        if let Some(cache) = routes.get_mut(&key) {
+                            Self::execute_change_on_cache::<HTTPRoute>(
+                                change,
+                                cache,
+                                resource.clone(),
+                                resource_version,
+                            );
+                        }
+                    }
+                }
+            }
+            ResourceKind::Service => {
+                if let Ok(resource) = serde_json::from_str::<Service>(&data) {
+                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
+                    let mut services = self.services.write().unwrap();
+                    for key in gateway_class_keys {
+                        if let Some(cache) = services.get_mut(&key) {
+                            Self::execute_change_on_cache::<Service>(
+                                change,
+                                cache,
+                                resource.clone(),
+                                resource_version,
+                            );
+                        }
+                    }
+                }
+            }
+            ResourceKind::EndpointSlice => {
+                if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
+                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
+                    let mut endpoint_slices = self.endpoint_slices.write().unwrap();
+                    for key in gateway_class_keys {
+                        if let Some(cache) = endpoint_slices.get_mut(&key) {
                             Self::execute_change_on_cache::<EndpointSlice>(
                                 change,
                                 cache,
@@ -185,69 +199,83 @@ impl EventDispatcher for ConfigServer {
                             );
                         }
                     }
-                })
+                }
             }
-            ResourceKind::EdgionTls => serde_json::from_str::<EdgionTls>(&data).map(|resource| {
-                let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
-                for key in gateway_class_keys {
-                    if let Some(cache) = self.edgion_tls.get_mut(&key) {
-                        Self::execute_change_on_cache::<EdgionTls>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
+            ResourceKind::EdgionTls => {
+                if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
+                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
+                    let mut edgion_tls = self.edgion_tls.write().unwrap();
+                    for key in gateway_class_keys {
+                        if let Some(cache) = edgion_tls.get_mut(&key) {
+                            Self::execute_change_on_cache::<EdgionTls>(
+                                change,
+                                cache,
+                                resource.clone(),
+                                resource_version,
+                            );
+                        }
                     }
                 }
-            }),
-            ResourceKind::Secret => serde_json::from_str::<Secret>(&data).map(|resource| {
-                let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
-                for key in gateway_class_keys {
-                    if let Some(cache) = self.secrets.get_mut(&key) {
-                        Self::execute_change_on_cache::<Secret>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
+            }
+            ResourceKind::Secret => {
+                if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
+                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
+                    let mut secrets = self.secrets.write().unwrap();
+                    for key in gateway_class_keys {
+                        if let Some(cache) = secrets.get_mut(&key) {
+                            Self::execute_change_on_cache::<Secret>(
+                                change,
+                                cache,
+                                resource.clone(),
+                                resource_version,
+                            );
+                        }
                     }
                 }
-            }),
-        };
-
-        if let Err(err) = result {
-            eprintln!(
-                "[ConfigCenter::apply_resource_change] Failed to parse resource {:?}: {} (data: {})",
-                resource_type,
-                err,
-                &data[..data.len().min(200)]
-            );
+            }
         }
     }
 
-    fn set_ready(&mut self) {
-        for cache in self.gateway_classes.values_mut() {
+    async fn set_ready(&self) {
+        use crate::core::conf_sync::EventDispatch;
+
+        let mut gateway_classes = self.gateway_classes.write().unwrap();
+        for cache in gateway_classes.values_mut() {
             cache.set_ready();
         }
-        for cache in self.edgion_gateway_configs.values_mut() {
+
+        let mut edgion_gateway_configs = self.edgion_gateway_configs.write().unwrap();
+        for cache in edgion_gateway_configs.values_mut() {
             cache.set_ready();
         }
-        for cache in self.gateways.values_mut() {
+
+        let mut gateways = self.gateways.write().unwrap();
+        for cache in gateways.values_mut() {
             cache.set_ready();
         }
-        for cache in self.routes.values_mut() {
+
+        let mut routes = self.routes.write().unwrap();
+        for cache in routes.values_mut() {
             cache.set_ready();
         }
-        for cache in self.services.values_mut() {
+
+        let mut services = self.services.write().unwrap();
+        for cache in services.values_mut() {
             cache.set_ready();
         }
-        for cache in self.endpoint_slices.values_mut() {
+
+        let mut endpoint_slices = self.endpoint_slices.write().unwrap();
+        for cache in endpoint_slices.values_mut() {
             cache.set_ready();
         }
-        for cache in self.edgion_tls.values_mut() {
+
+        let mut edgion_tls = self.edgion_tls.write().unwrap();
+        for cache in edgion_tls.values_mut() {
             cache.set_ready();
         }
-        for cache in self.secrets.values_mut() {
+
+        let mut secrets = self.secrets.write().unwrap();
+        for cache in secrets.values_mut() {
             cache.set_ready();
         }
     }

@@ -1,5 +1,5 @@
+use crate::core::conf_load::LoaderArgs;
 use crate::core::conf_sync::grpc_client::ConfigSyncClient;
-use crate::core::model::edgion_op::LoaderArgs;
 use crate::core::utils::net::{normalize_grpc_endpoint, parse_optional_listen_addr};
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;

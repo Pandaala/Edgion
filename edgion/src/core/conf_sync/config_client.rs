@@ -8,31 +8,32 @@ use crate::types::{
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
+use std::sync::RwLock;
 
 pub struct ConfigClient {
     gateway_class_key: GatewayClassKey,
-    gateway_classes: ClientCache<GatewayClass>,
-    edgion_gateway_configs: ClientCache<EdgionGatewayConfig>,
-    gateways: ClientCache<Gateway>,
-    routes: ClientCache<HTTPRoute>,
-    services: ClientCache<Service>,
-    endpoint_slices: ClientCache<EndpointSlice>,
-    edgion_tls: ClientCache<EdgionTls>,
-    secrets: ClientCache<Secret>,
+    gateway_classes: RwLock<ClientCache<GatewayClass>>,
+    edgion_gateway_configs: RwLock<ClientCache<EdgionGatewayConfig>>,
+    gateways: RwLock<ClientCache<Gateway>>,
+    routes: RwLock<ClientCache<HTTPRoute>>,
+    services: RwLock<ClientCache<Service>>,
+    endpoint_slices: RwLock<ClientCache<EndpointSlice>>,
+    edgion_tls: RwLock<ClientCache<EdgionTls>>,
+    secrets: RwLock<ClientCache<Secret>>,
 }
 
 impl ConfigClient {
     pub fn new(gateway_class_key: GatewayClassKey) -> Self {
         Self {
             gateway_class_key,
-            gateway_classes: ClientCache::new(),
-            edgion_gateway_configs: ClientCache::new(),
-            gateways: ClientCache::new(),
-            routes: ClientCache::new(),
-            services: ClientCache::new(),
-            endpoint_slices: ClientCache::new(),
-            edgion_tls: ClientCache::new(),
-            secrets: ClientCache::new(),
+            gateway_classes: RwLock::new(ClientCache::new()),
+            edgion_gateway_configs: RwLock::new(ClientCache::new()),
+            gateways: RwLock::new(ClientCache::new()),
+            routes: RwLock::new(ClientCache::new()),
+            services: RwLock::new(ClientCache::new()),
+            endpoint_slices: RwLock::new(ClientCache::new()),
+            edgion_tls: RwLock::new(ClientCache::new()),
+            secrets: RwLock::new(ClientCache::new()),
         }
     }
 
@@ -41,13 +42,14 @@ impl ConfigClient {
     }
 
     fn apply_change_to_cache<T>(
-        cache: &mut ClientCache<T>,
+        cache: &RwLock<ClientCache<T>>,
         change: ResourceChange,
         resource: T,
         resource_version: Option<u64>,
     ) where
         T: Clone + Versionable + Send + 'static,
     {
+        let mut cache = cache.write().unwrap();
         cache.apply_change(change, resource, resource_version);
     }
 
@@ -65,49 +67,57 @@ impl ConfigClient {
 
         let (data_json, resource_version) = match kind {
             ResourceKind::GatewayClass => {
-                let list_data = self.gateway_classes.list();
+                let gateway_classes = self.gateway_classes.read().unwrap();
+                let list_data = gateway_classes.list();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize GatewayClass data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::EdgionGatewayConfig => {
-                let list_data = self.edgion_gateway_configs.list();
+                let edgion_gateway_configs = self.edgion_gateway_configs.read().unwrap();
+                let list_data = edgion_gateway_configs.list();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EdgionGatewayConfig data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::Gateway => {
-                let list_data = self.gateways.list();
+                let gateways = self.gateways.read().unwrap();
+                let list_data = gateways.list();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize Gateway data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::HTTPRoute => {
-                let list_data = self.routes.list();
+                let routes = self.routes.read().unwrap();
+                let list_data = routes.list();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize HTTPRoute data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::Service => {
-                let list_data = self.services.list();
+                let services = self.services.read().unwrap();
+                let list_data = services.list();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize Service data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::EndpointSlice => {
-                let list_data = self.endpoint_slices.list();
+                let endpoint_slices = self.endpoint_slices.read().unwrap();
+                let list_data = endpoint_slices.list();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EndpointSlice data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::EdgionTls => {
-                let list_data = self.edgion_tls.list();
+                let edgion_tls = self.edgion_tls.read().unwrap();
+                let list_data = edgion_tls.list();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EdgionTls data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::Secret => {
-                let list_data = self.secrets.list();
+                let secrets = self.secrets.read().unwrap();
+                let list_data = secrets.list();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize Secret data: {}", e))?;
                 (json, list_data.resource_version)
@@ -121,43 +131,43 @@ impl ConfigClient {
     }
 
     /// List gateway classes
-    pub fn list_gateway_classes(&self) -> ListData<&GatewayClass> {
-        self.gateway_classes.list()
+    pub fn list_gateway_classes(&self) -> ListData<GatewayClass> {
+        self.gateway_classes.read().unwrap().list_owned()
     }
 
     /// List gateway class configs
-    pub fn list_edgion_gateway_config(&self) -> ListData<&EdgionGatewayConfig> {
-        self.edgion_gateway_configs.list()
+    pub fn list_edgion_gateway_config(&self) -> ListData<EdgionGatewayConfig> {
+        self.edgion_gateway_configs.read().unwrap().list_owned()
     }
 
     /// List gateways
-    pub fn list_gateways(&self) -> ListData<&Gateway> {
-        self.gateways.list()
+    pub fn list_gateways(&self) -> ListData<Gateway> {
+        self.gateways.read().unwrap().list_owned()
     }
 
     /// List HTTP routes
-    pub fn list_routes(&self) -> ListData<&HTTPRoute> {
-        self.routes.list()
+    pub fn list_routes(&self) -> ListData<HTTPRoute> {
+        self.routes.read().unwrap().list_owned()
     }
 
     /// List services
-    pub fn list_services(&self) -> ListData<&Service> {
-        self.services.list()
+    pub fn list_services(&self) -> ListData<Service> {
+        self.services.read().unwrap().list_owned()
     }
 
     /// List endpoint slices
-    pub fn list_endpoint_slices(&self) -> ListData<&EndpointSlice> {
-        self.endpoint_slices.list()
+    pub fn list_endpoint_slices(&self) -> ListData<EndpointSlice> {
+        self.endpoint_slices.read().unwrap().list_owned()
     }
 
     /// List Edgion TLS
-    pub fn list_edgion_tls(&self) -> ListData<&EdgionTls> {
-        self.edgion_tls.list()
+    pub fn list_edgion_tls(&self) -> ListData<EdgionTls> {
+        self.edgion_tls.read().unwrap().list_owned()
     }
 
     /// List secrets
-    pub fn list_secrets(&self) -> ListData<&Secret> {
-        self.secrets.list()
+    pub fn list_secrets(&self) -> ListData<Secret> {
+        self.secrets.read().unwrap().list_owned()
     }
 
     /// Print all configuration for the gateway class key
@@ -296,7 +306,7 @@ pub struct ListDataSimple {
 
 impl EventDispatcher for ConfigClient {
     fn apply_resource_change(
-        &mut self,
+        &self,
         change: ResourceChange,
         resource_type: Option<ResourceKind>,
         data: String,
@@ -325,7 +335,7 @@ impl EventDispatcher for ConfigClient {
         match resource_type {
             ResourceKind::GatewayClass => match serde_json::from_str::<GatewayClass>(&data) {
                 Ok(resource) => Self::apply_change_to_cache(
-                    &mut self.gateway_classes,
+                    &self.gateway_classes,
                     change,
                     resource,
                     resource_version,
@@ -335,7 +345,7 @@ impl EventDispatcher for ConfigClient {
             ResourceKind::EdgionGatewayConfig => {
                 match serde_json::from_str::<EdgionGatewayConfig>(&data) {
                     Ok(resource) => Self::apply_change_to_cache(
-                        &mut self.edgion_gateway_configs,
+                        &self.edgion_gateway_configs,
                         change,
                         resource,
                         resource_version,
@@ -345,7 +355,7 @@ impl EventDispatcher for ConfigClient {
             }
             ResourceKind::Gateway => match serde_json::from_str::<Gateway>(&data) {
                 Ok(resource) => Self::apply_change_to_cache(
-                    &mut self.gateways,
+                    &self.gateways,
                     change,
                     resource,
                     resource_version,
@@ -354,7 +364,7 @@ impl EventDispatcher for ConfigClient {
             },
             ResourceKind::HTTPRoute => match serde_json::from_str::<HTTPRoute>(&data) {
                 Ok(resource) => Self::apply_change_to_cache(
-                    &mut self.routes,
+                    &self.routes,
                     change,
                     resource,
                     resource_version,
@@ -363,7 +373,7 @@ impl EventDispatcher for ConfigClient {
             },
             ResourceKind::Service => match serde_json::from_str::<Service>(&data) {
                 Ok(resource) => Self::apply_change_to_cache(
-                    &mut self.services,
+                    &self.services,
                     change,
                     resource,
                     resource_version,
@@ -372,7 +382,7 @@ impl EventDispatcher for ConfigClient {
             },
             ResourceKind::EndpointSlice => match serde_json::from_str::<EndpointSlice>(&data) {
                 Ok(resource) => Self::apply_change_to_cache(
-                    &mut self.endpoint_slices,
+                    &self.endpoint_slices,
                     change,
                     resource,
                     resource_version,
@@ -381,7 +391,7 @@ impl EventDispatcher for ConfigClient {
             },
             ResourceKind::EdgionTls => match serde_json::from_str::<EdgionTls>(&data) {
                 Ok(resource) => Self::apply_change_to_cache(
-                    &mut self.edgion_tls,
+                    &self.edgion_tls,
                     change,
                     resource,
                     resource_version,
@@ -390,7 +400,7 @@ impl EventDispatcher for ConfigClient {
             },
             ResourceKind::Secret => match serde_json::from_str::<Secret>(&data) {
                 Ok(resource) => Self::apply_change_to_cache(
-                    &mut self.secrets,
+                    &self.secrets,
                     change,
                     resource,
                     resource_version,
@@ -400,7 +410,7 @@ impl EventDispatcher for ConfigClient {
         }
     }
 
-    fn set_ready(&mut self) {
+    async fn set_ready(&self) {
         // HubCache doesn't need ready state
     }
 }

@@ -1,5 +1,5 @@
+use crate::core::conf_load::{Loader, LoaderArgs, LoaderKind};
 use crate::core::model::edgion_op::EdgionOpServer;
-use crate::core::model::edgion_op::{resolve_filesystem_dir, LoaderArgs, LoaderKind};
 use crate::core::utils::net::{
     default_operator_addr, parse_listen_addr, parse_optional_listen_addr,
 };
@@ -32,19 +32,12 @@ impl EdgionOpCli {
     }
 
     pub async fn run(&self) -> Result<()> {
-        let config_dir = resolve_filesystem_dir(&self.loader)?;
-        let listen_addr = parse_listen_addr(self.grpc_listen.as_ref(), default_operator_addr())?;
-        let admin_addr = parse_optional_listen_addr(self.admin_listen.as_ref())?;
+        let server = EdgionOpServer::new();
 
-        ensure_filesystem_only(&self.loader)?;
+        let loader = Loader::from_args(&self.loader, server.config_server())?;
 
-        let mut server = EdgionOpServer::new();
-
-        server
-            .run_with_admin(config_dir, listen_addr, admin_addr, |server, addr| {
-                crate::core::model::edgion_op::admin::spawn_operator_admin_server(server, addr);
-            })
-            .await?;
+        // TODO: Run the loader
+        // loader.run().await?;
 
         Ok(())
     }

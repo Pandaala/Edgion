@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::core::conf_load::{ConfigLoader, SharedDispatcher};
-use crate::core::conf_sync::traits::ResourceChange;
+use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::types::ResourceKind;
 
 #[derive(Clone)]
@@ -49,7 +49,7 @@ impl EtcdConfigLoader {
     }
 
     async fn dispatch_change(&self, change: ResourceChange, payload: String) {
-        let mut dispatcher = self.dispatcher.lock().await;
+        let dispatcher = &*self.dispatcher.lock().await;
         dispatcher.apply_resource_change(change, self.resource_kind, payload, None);
     }
 
