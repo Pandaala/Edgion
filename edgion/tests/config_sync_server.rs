@@ -304,42 +304,34 @@ async fn log_center_summary(center: &ConfigServer, key: &str) {
     let key_string = key.to_string();
     let gc_count = center
         .list_gateway_classes(&key_string)
-        .await
         .map(|d| d.data.len())
         .unwrap_or(0);
     let spec_count = center
         .list_edgion_gateway_configs(&key_string)
-        .await
         .map(|d| d.data.len())
         .unwrap_or(0);
     let gateway_count = center
         .list_gateways(&key_string)
-        .await
         .map(|d| d.data.len())
         .unwrap_or(0);
     let route_count = center
         .list_routes(&key_string)
-        .await
         .map(|d| d.data.len())
         .unwrap_or(0);
     let svc_count = center
         .list_services(&key_string)
-        .await
         .map(|d| d.data.len())
         .unwrap_or(0);
     let endpoint_count = center
         .list_endpoint_slices(&key_string)
-        .await
         .map(|d| d.data.len())
         .unwrap_or(0);
     let tls_count = center
         .list_edgion_tls(&key_string)
-        .await
         .map(|d| d.data.len())
         .unwrap_or(0);
     let secret_count = center
         .list_secrets(&key_string)
-        .await
         .map(|d| d.data.len())
         .unwrap_or(0);
 
