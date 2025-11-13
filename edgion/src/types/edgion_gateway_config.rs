@@ -1,6 +1,6 @@
 //! EdgionGatewayConfig CRD definition
 //!
-//! This module defines the EdgionGatewayConfig custom resource, which is used
+//! This model defines the EdgionGatewayConfig custom resource, which is used
 //! as parametersRef in GatewayClass to provide gateway-wide configuration.
 
 use kube::CustomResource;

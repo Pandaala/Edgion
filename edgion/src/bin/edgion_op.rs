@@ -1,10 +1,11 @@
-use edgion::core::cli::Cli;
+use edgion::EdgionOpCli;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    let cli = Cli::parse_args();
+    let cli = EdgionOpCli::parse_args();
     if let Err(err) = cli.run().await {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
 }
+

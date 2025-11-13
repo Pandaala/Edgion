@@ -1,6 +1,6 @@
 //! FFI bindings to the C rax library
 //!
-//! This module contains the low-level FFI declarations and internal wrapper functions
+//! This model contains the low-level FFI declarations and internal wrapper functions
 //! for interfacing with the C implementation of the Radix Tree.
 
 use libc::{c_int, c_uchar, c_ulong, c_void};

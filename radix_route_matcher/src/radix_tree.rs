@@ -1,6 +1,6 @@
 //! High-level Rust API for the Radix Tree
 //!
-//! This module provides a safe, idiomatic Rust interface to the underlying C implementation.
+//! This model provides a safe, idiomatic Rust interface to the underlying C implementation.
 
 use crate::ffi::*;
 use libc::c_void;

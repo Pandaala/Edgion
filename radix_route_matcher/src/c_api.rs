@@ -1,6 +1,6 @@
 //! C ABI exports
 //!
-//! This module exports C-compatible functions that can be called from C/C++ or other languages
+//! This model exports C-compatible functions that can be called from C/C++ or other languages
 //! through FFI. These functions provide the same functionality as the Rust API but with a C ABI.
 
 use crate::ffi::*;

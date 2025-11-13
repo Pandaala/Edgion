@@ -1,6 +1,6 @@
 //! Native Gateway API type definitions
 //!
-//! This module provides type-safe definitions for Kubernetes Gateway API resources
+//! This model provides type-safe definitions for Kubernetes Gateway API resources
 //! without depending on the gateway-api crate.
 
 use kube::CustomResource;

@@ -8,8 +8,12 @@ name = "edgion"
 path = "src/lib.rs"
 
 [[bin]]
-name = "main"
-path = "src/bin/main.rs"
+name = "edgion-gw"
+path = "src/bin/edgion_gw.rs"
+
+[[bin]]
+name = "edgion-op"
+path = "src/bin/edgion_op.rs"
 
 [features]
 # Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
