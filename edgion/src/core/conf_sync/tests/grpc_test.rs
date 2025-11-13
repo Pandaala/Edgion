@@ -35,9 +35,11 @@ async fn grpc_client_receives_watch_updates() {
         let mut server = shared_server.lock().await;
         server
             .gateway_classes
+            .write().unwrap()
             .insert(key.clone(), ServerCache::new(32));
         server
             .gateway_classes
+            .write().unwrap()
             .get_mut(&key)
             .expect("cache exists")
             .set_ready();
@@ -95,7 +97,6 @@ async fn grpc_client_receives_watch_updates() {
         .lock()
         .await
         .list_gateway_classes(&key)
-        .await
         .expect("server snapshot");
     let config_client_arc = client.get_config_client();
     let client_guard = config_client_arc.lock().await;

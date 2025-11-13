@@ -35,9 +35,11 @@ async fn config_server_and_client_stay_in_sync_via_watch() {
     let mut server = ConfigServer::new();
     server
         .gateway_classes
+        .write().unwrap()
         .insert(key.clone(), ServerCache::new(32));
     server
         .gateway_classes
+        .write().unwrap()
         .get_mut(&key)
         .expect("cache exists")
         .set_ready();
@@ -116,7 +118,6 @@ async fn config_server_and_client_stay_in_sync_via_watch() {
     // Step 6: compare server snapshot with client state
     let server_snapshot = server
         .list_gateway_classes(&key)
-        .await
         .expect("server snapshot");
     let client_guard = client.lock().await;
     let client_snapshot = client_guard.list_gateway_classes();
@@ -153,9 +154,11 @@ async fn config_client_stays_consistent_during_long_watch_window() {
     let mut server = ConfigServer::new();
     server
         .gateway_classes
+        .write().unwrap()
         .insert(key.clone(), ServerCache::new(64));
     server
         .gateway_classes
+        .write().unwrap()
         .get_mut(&key)
         .expect("cache exists")
         .set_ready();
@@ -350,7 +353,6 @@ async fn config_client_stays_consistent_during_long_watch_window() {
 
     let server_snapshot = server
         .list_gateway_classes(&key)
-        .await
         .expect("server snapshot");
     let client_guard = client.lock().await;
     let client_snapshot = client_guard.list_gateway_classes();
@@ -398,9 +400,11 @@ async fn multiple_clients_relist_after_stale_watch_error() {
         let mut guard = server.lock().await;
         guard
             .gateway_classes
+            .write().unwrap()
             .insert(key.clone(), ServerCache::new(16));
         guard
             .gateway_classes
+            .write().unwrap()
             .get_mut(&key)
             .expect("cache exists")
             .set_ready();
@@ -451,7 +455,6 @@ async fn multiple_clients_relist_after_stale_watch_error() {
         let guard = server.lock().await;
         guard
             .list_gateway_classes(&key)
-            .await
             .expect("initial server snapshot")
     };
     while initial_snapshot.resource_version < initial_event_count {
@@ -461,7 +464,6 @@ async fn multiple_clients_relist_after_stale_watch_error() {
             let guard = server.lock().await;
             guard
                 .list_gateway_classes(&key)
-                .await
                 .expect("initial server snapshot")
         };
     }
@@ -502,7 +504,6 @@ async fn multiple_clients_relist_after_stale_watch_error() {
         let guard = server.lock().await;
         guard
             .list(&key, &ResourceKind::GatewayClass)
-            .await
             .expect("server list")
     };
 
@@ -560,7 +561,6 @@ async fn multiple_clients_relist_after_stale_watch_error() {
         let guard = server.lock().await;
         guard
             .list_gateway_classes(&key)
-            .await
             .expect("server snapshot")
     };
 
@@ -572,7 +572,7 @@ async fn multiple_clients_relist_after_stale_watch_error() {
             let snapshot = guard.list_gateway_classes();
             assert_eq!(server_snapshot.resource_version, snapshot.resource_version);
             (
-                collect_versions(snapshot.data.iter().copied()),
+                collect_versions(snapshot.data.iter().cloned()),
                 snapshot.resource_version,
             )
         };
@@ -582,7 +582,7 @@ async fn multiple_clients_relist_after_stale_watch_error() {
             let snapshot = guard.list_gateway_classes();
             assert_eq!(server_snapshot.resource_version, snapshot.resource_version);
             (
-                collect_versions(snapshot.data.iter().copied()),
+                collect_versions(snapshot.data.iter().cloned()),
                 snapshot.resource_version,
             )
         };
