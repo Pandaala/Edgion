@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
@@ -12,7 +12,7 @@ pub struct ServerCache<T> {
     ready: bool,
 
     // Event storage
-    store: Arc<tokio::sync::RwLock<EventStore<T>>>,
+    store: Arc<RwLock<EventStore<T>>>,
 
     // pending watch requests
     watchers: Vec<WatchClient<T>>,
@@ -28,7 +28,7 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
     {
         Self {
             ready: false,
-            store: Arc::new(tokio::sync::RwLock::new(EventStore::new(capacity as usize))),
+            store: Arc::new(RwLock::new(EventStore::new(capacity as usize))),
             watchers: Vec::new(),
             notify: Arc::new(Notify::new()),
         }
@@ -40,7 +40,7 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
     }
 
     /// Get a clone of the store for watchers
-    pub fn get_store(&self) -> Arc<tokio::sync::RwLock<EventStore<T>>> {
+    pub fn get_store(&self) -> Arc<RwLock<EventStore<T>>> {
         self.store.clone()
     }
 
@@ -50,20 +50,20 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
 
     /// List all data - returns all resources in the cache with resource version
     /// This is typically called by clients to get the full snapshot of data
-    pub async fn list(&self) -> ListData<T>
+    pub fn list(&self) -> ListData<T>
     where
         T: Clone,
     {
-        self.list_owned().await
+        self.list_owned()
     }
 
     /// List all data as owned values (cloned)
     /// Useful when clients need owned data instead of references
-    pub async fn list_owned(&self) -> ListData<T>
+    pub fn list_owned(&self) -> ListData<T>
     where
         T: Clone,
     {
-        let store_guard = self.store.read().await;
+        let store_guard = self.store.read().unwrap();
         let (data, resource_version) = store_guard.snapshot_owned();
         ListData::new(data, resource_version)
     }
@@ -71,7 +71,7 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
     /// Start a watcher task that listens for notifications and sends data
     /// Only needs the store to access data
     pub fn start_watcher_task(
-        store: Arc<tokio::sync::RwLock<EventStore<T>>>,
+        store: Arc<RwLock<EventStore<T>>>,
         notify: Arc<Notify>,
         watcher: WatchClient<T>,
     ) where
@@ -85,7 +85,7 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
 
             loop {
                 let result = {
-                    let store_guard = store.read().await;
+                    let store_guard = store.read().unwrap();
                     store_guard.get_events_from_resource_version(from_version)
                 };
 
@@ -167,7 +167,7 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
             sender: data_tx,
             watch_start_time: SystemTime::now(),
             send_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            last_send_time: Arc::new(std::sync::RwLock::new(None)),
+            last_send_time: Arc::new(RwLock::new(None)),
         };
         self.watchers.push(watcher.clone());
 
@@ -194,7 +194,7 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
                 let notify = self.notify.clone();
                 handle.spawn(async move {
                     {
-                        let mut store_guard = store.write().await;
+                        let mut store_guard = store.write().unwrap();
                         store_guard.apply_event(event_type, resource, resource_version);
                     }
                     notify.notify_waiters();
@@ -202,7 +202,7 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
             }
             Err(_) => {
                 {
-                    let mut store_guard = self.store.blocking_write();
+                    let mut store_guard = self.store.write().unwrap();
                     store_guard.apply_event(event_type, resource, resource_version);
                 }
                 self.notify.notify_waiters();
@@ -219,7 +219,7 @@ impl<T: Versionable + Clone + Send + Sync + 'static> EventDispatch<T> for Server
         let version = resource_version.unwrap_or_else(|| resource.get_version());
         match change {
             ResourceChange::InitAdd => {
-                let mut store_guard = self.store.blocking_write();
+                let mut store_guard = self.store.write().unwrap();
                 store_guard.init_add(version, resource);
             }
             ResourceChange::EventAdd => {
@@ -280,7 +280,7 @@ mod tests {
         );
         wait_for_async_store_update().await;
 
-        let snapshot = cache.list_owned().await;
+        let snapshot = cache.list_owned();
         assert_eq!(snapshot.data.len(), 1);
         assert_eq!(snapshot.data[0], resource);
         assert_eq!(snapshot.resource_version, resource.version);
@@ -312,7 +312,7 @@ mod tests {
         );
         wait_for_async_store_update().await;
 
-        let snapshot = cache.list_owned().await;
+        let snapshot = cache.list_owned();
         assert_eq!(snapshot.data.len(), 1);
         assert_eq!(snapshot.data[0], updated);
         assert_eq!(snapshot.resource_version, updated.version);
@@ -340,7 +340,7 @@ mod tests {
         );
         wait_for_async_store_update().await;
 
-        let snapshot = cache.list_owned().await;
+        let snapshot = cache.list_owned();
         assert!(snapshot.data.is_empty());
         assert_eq!(snapshot.resource_version, resource.version);
     }
