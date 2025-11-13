@@ -5,7 +5,8 @@ use crate::core::conf_sync::grpc_server::ConfigSyncServer;
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::core::conf_sync::{EventDispatch, ServerCache, Versionable};
 use crate::types::{GatewayClass, ResourceKind};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use clap::{Args, ValueEnum};
 use serde_yaml::from_str;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -16,8 +17,10 @@ use tokio::signal;
 use tokio::task::JoinHandle;
 use tonic::transport::Server;
 
+pub mod admin;
+
 const CACHE_CAPACITY: u32 = 1024;
-const DEFAULT_GATEWAY_CLASS_KEY: &str = "default";
+pub const DEFAULT_GATEWAY_CLASS_KEY: &str = "default";
 
 pub struct EdgionOpServer {
     config_server: Arc<tokio::sync::Mutex<ConfigServer>>,
@@ -33,7 +36,8 @@ impl EdgionOpServer {
         };
         let dispatcher: SharedDispatcher = Arc::new(tokio::sync::Mutex::new(Box::new(
             dispatcher_impl,
-        ) as Box<dyn EventDispatcher>));
+        )
+            as Box<dyn EventDispatcher>));
 
         Self {
             config_server: server,
@@ -83,6 +87,37 @@ impl EdgionOpServer {
 
     pub fn server(&self) -> Arc<tokio::sync::Mutex<ConfigServer>> {
         self.config_server.clone()
+    }
+
+    pub async fn run_with_admin<F>(
+        &mut self,
+        config_dir: PathBuf,
+        listen_addr: SocketAddr,
+        admin_addr: Option<SocketAddr>,
+        admin_server_starter: F,
+    ) -> Result<()>
+    where
+        F: FnOnce(Arc<tokio::sync::Mutex<ConfigServer>>, SocketAddr),
+    {
+        self.start_loader(config_dir.clone())?;
+        self.ensure_default_gateway_class().await;
+
+        if let Some(addr) = admin_addr {
+            println!("[operator] admin HTTP address: {}", addr);
+            admin_server_starter(self.server(), addr);
+        }
+
+        println!(
+            "[operator] configuration directory: {}",
+            config_dir.display()
+        );
+        println!("[operator] gRPC listen address: {}", listen_addr);
+
+        self.serve(listen_addr).await?;
+
+        self.shutdown().await;
+
+        Ok(())
     }
 }
 
@@ -175,3 +210,50 @@ where
     });
 }
 
+#[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
+pub enum LoaderKind {
+    Filesystem,
+    Etcd,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct LoaderArgs {
+    /// Configuration loader type (currently only filesystem is supported)
+    #[arg(long, value_enum, value_name = "TYPE", default_value = "filesystem")]
+    pub loader: LoaderKind,
+
+    /// Root directory for filesystem loader
+    #[arg(long, value_name = "DIR")]
+    pub dir: Option<String>,
+
+    /// Etcd node addresses (not currently supported)
+    #[arg(long = "etcd-endpoint", value_name = "URL")]
+    pub etcd_endpoint: Vec<String>,
+
+    /// Etcd key prefix (not currently supported)
+    #[arg(long = "etcd-prefix", value_name = "PREFIX")]
+    pub etcd_prefix: Option<String>,
+}
+
+pub fn resolve_filesystem_dir(args: &LoaderArgs) -> Result<PathBuf> {
+    if args.loader != LoaderKind::Filesystem {
+        return Err(anyhow!(
+            "currently only the filesystem loader is supported by the CLI"
+        ));
+    }
+
+    if !args.etcd_endpoint.is_empty() || args.etcd_prefix.is_some() {
+        println!("[CLI] etcd loader options are ignored for the filesystem loader");
+    }
+
+    const DEFAULT_FILESYSTEM_DIR: &str = "edgion/config/examples";
+    let dir = args
+        .dir
+        .clone()
+        .unwrap_or_else(|| DEFAULT_FILESYSTEM_DIR.to_string());
+    let path = PathBuf::from(&dir);
+    if !path.exists() {
+        return Err(anyhow!("configuration directory {:?} does not exist", path));
+    }
+    Ok(path)
+}

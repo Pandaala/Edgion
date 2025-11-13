@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
-use super::runtime::DEFAULT_GATEWAY_CLASS_KEY;
+use crate::core::model::edgion_op::DEFAULT_GATEWAY_CLASS_KEY;
 
 pub(crate) struct OperatorAdminHandle {
     handle: JoinHandle<()>,

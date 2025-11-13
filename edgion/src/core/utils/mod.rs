@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod net;
+
 static LAST_VERSION: AtomicU64 = AtomicU64::new(0);
 
 /// Generate a unique `resource_version` as a monotonically increasing `u64`.

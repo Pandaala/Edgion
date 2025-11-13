@@ -1,9 +1,8 @@
-use crate::core::cli::admin::spawn_operator_admin_server;
-use crate::core::cli::common::{
-    default_operator_addr, parse_listen_addr, parse_optional_listen_addr, resolve_filesystem_dir,
-    LoaderArgs, LoaderKind,
-};
 use crate::core::model::edgion_op::EdgionOpServer;
+use crate::core::model::edgion_op::{resolve_filesystem_dir, LoaderArgs, LoaderKind};
+use crate::core::utils::net::{
+    default_operator_addr, parse_listen_addr, parse_optional_listen_addr,
+};
 use anyhow::{anyhow, Result};
 use clap::Parser;
 
@@ -40,28 +39,12 @@ impl EdgionOpCli {
         ensure_filesystem_only(&self.loader)?;
 
         let mut server = EdgionOpServer::new();
-        server.start_loader(config_dir.clone())?;
-        server.ensure_default_gateway_class().await;
 
-        let admin_handle =
-            admin_addr.map(|addr| spawn_operator_admin_server(server.server(), addr));
-
-        println!(
-            "[operator] configuration directory: {}",
-            config_dir.display()
-        );
-        println!("[operator] gRPC listen address: {}", listen_addr);
-        if let Some(addr) = admin_addr {
-            println!("[operator] admin HTTP address: {}", addr);
-        }
-
-        server.serve(listen_addr).await?;
-
-        if let Some(handle) = admin_handle {
-            handle.shutdown().await;
-        }
-
-        server.shutdown().await;
+        server
+            .run_with_admin(config_dir, listen_addr, admin_addr, |server, addr| {
+                crate::core::model::edgion_op::admin::spawn_operator_admin_server(server, addr);
+            })
+            .await?;
 
         Ok(())
     }
