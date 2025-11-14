@@ -17,5 +17,5 @@ pub trait EventDispatcher: Send + Sync {
         resource_version: Option<u64>,
     );
 
-    async fn set_ready(&self);
+    fn set_ready(&self);
 }

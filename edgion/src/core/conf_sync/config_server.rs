@@ -5,7 +5,7 @@ use std::sync::RwLock;
 use tokio::sync::mpsc;
 
 use crate::core::conf_sync::cache_server::{
-    EventDispatch, ListData, ServerCache, Versionable, WatchResponse,
+    EventDispatch, ListData, ServerCache, WatchResponse,
 };
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,

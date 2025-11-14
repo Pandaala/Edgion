@@ -1,12 +1,5 @@
-use crate::core::conf_load::{Loader, LoaderArgs};
 use crate::core::conf_sync::config_server::ConfigServer;
-use crate::types::{GatewayClass, ResourceKind};
-use anyhow::Result;
-use serde_yaml::from_str;
-use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 pub mod admin;
 

@@ -397,7 +397,7 @@ async fn multiple_clients_relist_after_stale_watch_error() {
 
     let server = Arc::new(Mutex::new(ConfigServer::new()));
     {
-        let mut guard = server.lock().await;
+        let guard = server.lock().await;
         guard
             .gateway_classes
             .write().unwrap()
@@ -438,7 +438,7 @@ async fn multiple_clients_relist_after_stale_watch_error() {
 
         let payload = serde_json::to_string(&gc).expect("serialize gateway class");
         {
-            let mut guard = server.lock().await;
+            let guard = server.lock().await;
             guard.apply_resource_change(
                 ResourceChange::EventAdd,
                 Some(ResourceKind::GatewayClass),
@@ -538,7 +538,7 @@ async fn multiple_clients_relist_after_stale_watch_error() {
         gc.spec.description = Some(format!("extra-{offset}"));
         let payload = serde_json::to_string(&gc).expect("serialize gateway class");
         {
-            let mut guard = server.lock().await;
+            let guard = server.lock().await;
             guard.apply_resource_change(
                 ResourceChange::EventAdd,
                 Some(ResourceKind::GatewayClass),
@@ -656,7 +656,7 @@ async fn apply_watch_events_to_client(client: &Arc<Mutex<ConfigClient>>, event: 
         parsed_events.push((change, payload, resource_version));
     }
 
-    let mut guard = client.lock().await;
+    let guard = client.lock().await;
     for (change, payload, resource_version) in parsed_events {
         guard.apply_resource_change(
             change,

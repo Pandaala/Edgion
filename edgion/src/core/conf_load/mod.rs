@@ -4,7 +4,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use clap::{Args, ValueEnum};
 use std::path::PathBuf;
-use tokio::sync::Mutex;
 
 use crate::core::conf_sync::config_server::ConfigServer;
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
@@ -97,7 +96,7 @@ impl EventDispatcher for ConfigServerDispatcher {
             .apply_resource_change(change, resource_type, data, resource_version);
     }
 
-    async fn set_ready(&self) {
-        self.server.set_ready().await;
+    fn set_ready(&self) {
+        self.server.set_ready();
     }
 }

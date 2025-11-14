@@ -32,7 +32,7 @@ async fn grpc_client_receives_watch_updates() {
     // Step 1: prepare a shared server cache with ready state
     let shared_server = Arc::new(Mutex::new(ConfigServer::new()));
     {
-        let mut server = shared_server.lock().await;
+        let server = shared_server.lock().await;
         server
             .gateway_classes
             .write().unwrap()
@@ -79,7 +79,7 @@ async fn grpc_client_receives_watch_updates() {
 
     // Step 4: push an event through the server pipeline
     {
-        let mut server = shared_server.lock().await;
+        let server = shared_server.lock().await;
         let gc = sample_gateway_class(&key, 1);
         let payload = serde_json::to_string(&gc).expect("serialize gateway class");
         server.apply_resource_change(

@@ -236,7 +236,7 @@ impl EventDispatcher for ConfigServer {
         }
     }
 
-    async fn set_ready(&self) {
+    fn set_ready(&self) {
         use crate::core::conf_sync::EventDispatch;
 
         let mut gateway_classes = self.gateway_classes.write().unwrap();

@@ -9,7 +9,7 @@ use crate::core::conf_sync::traits::ResourceChange;
 
 pub struct ServerCache<T> {
     // wait for init complete
-    ready: bool,
+    ready: RwLock<bool>,
 
     // Event storage
     store: Arc<RwLock<EventStore<T>>>,
@@ -27,7 +27,7 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
         T: Clone,
     {
         Self {
-            ready: false,
+            ready: RwLock::new(false),
             store: Arc::new(RwLock::new(EventStore::new(capacity as usize))),
             watchers: Vec::new(),
             notify: Arc::new(Notify::new()),
@@ -45,7 +45,7 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
     }
 
     pub fn is_ready(&self) -> bool {
-        self.ready
+        *self.ready.read().unwrap()
     }
 
     /// List all data - returns all resources in the cache with resource version
@@ -150,7 +150,7 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
             client_id,
             client_name,
             from_version,
-            self.ready,
+            *self.ready.read().unwrap(),
             self.watchers.len()
         );
         // Use bounded channel for data to provide backpressure
@@ -235,7 +235,7 @@ impl<T: Versionable + Clone + Send + Sync + 'static> EventDispatch<T> for Server
     }
 
     fn set_ready(&mut self) {
-        self.ready = true;
+        *self.ready.write().unwrap() = true;
     }
 }
 

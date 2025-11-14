@@ -410,7 +410,7 @@ impl EventDispatcher for ConfigClient {
         }
     }
 
-    async fn set_ready(&self) {
+    fn set_ready(&self) {
         // HubCache doesn't need ready state
     }
 }

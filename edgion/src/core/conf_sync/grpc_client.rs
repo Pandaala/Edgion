@@ -97,7 +97,7 @@ impl ConfigSyncClient {
             kind
         );
 
-        let mut hub = self.config_client.lock().await;
+        let hub = self.config_client.lock().await;
         for (idx, resource) in resources.iter().enumerate() {
             // Each resource in the list should be added/updated
             let data_str = serde_json::to_string(&resource).map_err(|e| {
@@ -165,7 +165,7 @@ impl ConfigSyncClient {
                         }
                     };
 
-                let mut hub = hub_clone.lock().await;
+                let hub = hub_clone.lock().await;
                 for event in events {
                     if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
                         let data_str = match serde_json::to_string(
