@@ -52,10 +52,7 @@ pub struct Loader {
 }
 
 impl Loader {
-    pub fn from_args(
-        args: &LoaderArgs,
-        dispatcher: Arc<dyn EventDispatcher>,
-    ) -> Result<Self> {
+    pub fn from_args(args: &LoaderArgs, dispatcher: Arc<dyn EventDispatcher>) -> Result<Self> {
         match args.loader {
             LoaderKind::Filesystem => {
                 const DEFAULT_FILESYSTEM_DIR: &str = "edgion/config/examples";
