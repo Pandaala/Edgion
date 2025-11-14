@@ -2,6 +2,7 @@ use crate::core::conf_load::{Loader, LoaderArgs, LoaderKind};
 use crate::core::model::edgion_op::EdgionOpServer;
 use anyhow::{anyhow, Result};
 use clap::Parser;
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -31,7 +32,7 @@ impl EdgionOpCli {
     pub async fn run(&self) -> Result<()> {
         let server = EdgionOpServer::new();
 
-        let loader = Loader::from_args(&self.loader, server.config_server())?;
+        let loader = Loader::from_args(&self.loader, server.config_server() as Arc<dyn crate::core::conf_sync::traits::EventDispatcher + Send + Sync>)?;
 
         // TODO: Run the loader
         // loader.run().await?;

@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use clap::{Args, ValueEnum};
 use std::path::PathBuf;
 
-use crate::core::conf_sync::config_server::ConfigServer;
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
+use crate::core::conf_sync::config_server::ConfigServer;
 use crate::types::ResourceKind;
 
 pub mod etcd;
@@ -52,7 +52,7 @@ pub struct Loader {
 }
 
 impl Loader {
-    pub fn from_args(args: &LoaderArgs, config_server: Arc<ConfigServer>) -> Result<Self> {
+    pub fn from_args(args: &LoaderArgs, dispatcher: Arc<dyn EventDispatcher + Send + Sync>) -> Result<Self> {
         match args.loader {
             LoaderKind::Filesystem => {
                 const DEFAULT_FILESYSTEM_DIR: &str = "edgion/config/examples";
@@ -68,7 +68,7 @@ impl Loader {
                     ));
                 }
 
-                let loader = FileSystemConfigLoader::new(path, config_server, None);
+                let loader = FileSystemConfigLoader::new(path, dispatcher, None);
                 Ok(Self { inner: loader })
             }
             LoaderKind::Etcd => Err(anyhow::anyhow!("etcd loader is not currently supported")),

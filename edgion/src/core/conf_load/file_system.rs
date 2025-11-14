@@ -9,14 +9,13 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
 use crate::core::conf_load::ConfigLoader;
-use crate::core::conf_sync::config_server::ConfigServer;
 use crate::core::conf_sync::EventDispatcher;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::types::ResourceKind;
 
 pub struct FileSystemConfigLoader {
     root: PathBuf,
-    dispatcher: Arc<ConfigServer>,
+    dispatcher: Arc<dyn EventDispatcher + Send + Sync>,
     resource_kind: Option<ResourceKind>,
     cache: Arc<Mutex<HashMap<PathBuf, String>>>,
 }
@@ -27,7 +26,7 @@ pub struct FileSystemConfigLoader {
 impl FileSystemConfigLoader {
     pub fn new<P: Into<PathBuf>>(
         root: P,
-        dispatcher: Arc<ConfigServer>,
+        dispatcher: Arc<dyn EventDispatcher + Send + Sync>,
         resource_kind: Option<ResourceKind>,
     ) -> Arc<Self> {
         Arc::new(Self {
