@@ -32,7 +32,7 @@ impl EdgionOpCli {
     pub async fn run(&self) -> Result<()> {
         let server = EdgionOpServer::new();
 
-        let loader = Loader::from_args(&self.loader, server.config_server() as Arc<dyn crate::core::conf_sync::traits::EventDispatcher + Send + Sync>)?;
+        let loader = Loader::from_args(&self.loader, server.config_server() as Arc<dyn crate::core::conf_sync::traits::EventDispatcher>)?;
 
         // TODO: Run the loader
         // loader.run().await?;

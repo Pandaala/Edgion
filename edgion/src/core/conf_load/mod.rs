@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use clap::{Args, ValueEnum};
 use std::path::PathBuf;
 
-use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::core::conf_sync::config_server::ConfigServer;
+use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::types::ResourceKind;
 
 pub mod etcd;
@@ -52,7 +52,10 @@ pub struct Loader {
 }
 
 impl Loader {
-    pub fn from_args(args: &LoaderArgs, dispatcher: Arc<dyn EventDispatcher + Send + Sync>) -> Result<Self> {
+    pub fn from_args(
+        args: &LoaderArgs,
+        dispatcher: Arc<dyn EventDispatcher>,
+    ) -> Result<Self> {
         match args.loader {
             LoaderKind::Filesystem => {
                 const DEFAULT_FILESYSTEM_DIR: &str = "edgion/config/examples";
