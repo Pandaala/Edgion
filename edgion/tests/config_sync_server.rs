@@ -41,7 +41,7 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
     }
 
     let state = ServerState {
-        config_server: Mutex::new(config_server.clone()),
+        config_server: config_server.clone(),
         version_counters,
         known_gateway_keys: known_gateway_keys.clone(),
     };
@@ -52,8 +52,9 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
     let shutdown = Arc::new(Notify::new());
 
     let grpc_shutdown = shutdown.clone();
+    let grpc_config_server = config_server.clone();
     let grpc_handle = tokio::spawn(async move {
-        let server = ConfigSyncServer::new(config_server.clone());
+        let server = ConfigSyncServer::new(grpc_config_server);
         println!("[SERVER] gRPC endpoint listening on {}", grpc_addr);
         tokio::select! {
             res = server.serve(grpc_addr) => {
@@ -94,7 +95,7 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
     });
 
     let status_shutdown = shutdown.clone();
-    let status_center = config_server.clone();
+    let status_config_server = config_server.clone();
     let status_keys = known_gateway_keys.clone();
     let status_handle = tokio::spawn(async move {
         let mut ticker = interval(Duration::from_secs(10));
@@ -107,8 +108,7 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
                     };
 
                     for key in keys {
-                        let center = status_center.lock().await;
-                        log_center_summary(&center, &key).await;
+                        log_center_summary(&status_config_server, &key).await;
                     }
                 }
                 _ = status_shutdown.notified() => {
@@ -146,7 +146,7 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
 
 #[derive(Clone)]
 struct ServerState {
-    config_server: Arc<Mutex<ConfigServer>>,
+    config_server: Arc<ConfigServer>,
     version_counters: Arc<Mutex<HashMap<ResourceKind, u64>>>,
     known_gateway_keys: Arc<Mutex<HashSet<GatewayClassKey>>>,
 }
@@ -225,14 +225,11 @@ async fn add_config(
         None => next_version(&state, kind).await,
     };
 
-    let mut center = state.config_server.lock().await;
-
     let operation = payload.operation;
 
     match operation {
         Operation::Add => {
-            <ConfigServer as EventDispatcher>::apply_resource_change(
-                &mut *center,
+            state.config_server.apply_resource_change(
                 ResourceChange::EventAdd,
                 Some(kind),
                 data_str.clone(),
@@ -240,8 +237,7 @@ async fn add_config(
             );
         }
         Operation::Update => {
-            <ConfigServer as EventDispatcher>::apply_resource_change(
-                &mut *center,
+            state.config_server.apply_resource_change(
                 ResourceChange::EventUpdate,
                 Some(kind),
                 data_str.clone(),
@@ -249,8 +245,7 @@ async fn add_config(
             );
         }
         Operation::Delete => {
-            <ConfigServer as EventDispatcher>::apply_resource_change(
-                &mut *center,
+            state.config_server.apply_resource_change(
                 ResourceChange::EventDelete,
                 Some(kind),
                 data_str,
