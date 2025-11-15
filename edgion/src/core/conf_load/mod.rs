@@ -4,10 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use clap::{Args, ValueEnum};
 use std::path::PathBuf;
-
-use crate::core::conf_sync::config_server::ConfigServer;
-use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
-use crate::types::ResourceKind;
+use crate::core::conf_sync::traits::{EventDispatcher};
 
 pub mod etcd;
 pub mod file_system;
@@ -96,26 +93,5 @@ impl Loader {
         
         // Start watching for changes
         self.inner.run().await
-    }
-}
-
-struct ConfigServerDispatcher {
-    server: Arc<ConfigServer>,
-}
-
-impl EventDispatcher for ConfigServerDispatcher {
-    fn apply_resource_change(
-        &self,
-        change: ResourceChange,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        resource_version: Option<u64>,
-    ) {
-        self.server
-            .apply_resource_change(change, resource_type, data, resource_version);
-    }
-
-    fn set_ready(&self) {
-        self.server.set_ready();
     }
 }

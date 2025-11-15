@@ -1,0 +1,8 @@
+todo list
+- connect external systems, like (es/clickhouse/kafka/redis/nacos/...)
+- need a crd design
+    - addr
+    - key/auth
+    - ssl
+    - ...
+    - get/set/update/store ?
