@@ -60,18 +60,6 @@ impl EdgionGwCli {
             .context("failed to start configuration watches")?;
 
         let config_client = client.get_config_client();
-        let admin_handle = match parse_optional_listen_addr(self.admin_listen.as_ref())? {
-            Some(addr) => {
-                println!("[gateway] admin HTTP address: {}", addr);
-                Some(
-                    crate::core::model::edgion_op::admin::spawn_gateway_admin_server(
-                        config_client.clone(),
-                        addr,
-                    ),
-                )
-            }
-            None => None,
-        };
 
         println!("[gateway] connected to operator {}", server_endpoint);
         println!("[gateway] press Ctrl+C to stop");
@@ -79,10 +67,6 @@ impl EdgionGwCli {
         signal::ctrl_c()
             .await
             .expect("failed to listen for ctrl_c signal");
-
-        if let Some(handle) = admin_handle {
-            handle.shutdown().await;
-        }
 
         Ok(())
     }

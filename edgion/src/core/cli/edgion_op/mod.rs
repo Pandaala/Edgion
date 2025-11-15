@@ -1,5 +1,6 @@
 use crate::core::conf_load::{Loader, LoaderArgs, LoaderKind};
-use crate::core::model::edgion_op::EdgionOpServer;
+use crate::core::conf_sync::{ConfigServer, ConfigSyncServer};
+use crate::core::utils;
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::sync::Arc;
@@ -30,12 +31,25 @@ impl EdgionOpCli {
     }
 
     pub async fn run(&self) -> Result<()> {
-        let server = EdgionOpServer::new();
+        let config_server = Arc::new(ConfigServer::new());
+        let sync_server = ConfigSyncServer::new(config_server.clone());
+        let loader = Loader::from_args(
+            &self.loader,
+            config_server as Arc<dyn crate::core::conf_sync::traits::EventDispatcher>,
+        )?;
 
-        let loader = Loader::from_args(&self.loader, server.config_server() as Arc<dyn crate::core::conf_sync::traits::EventDispatcher>)?;
+        let addr =
+            utils::parse_listen_addr(self.grpc_listen.as_ref(), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
 
-        // TODO: Run the loader
-        // loader.run().await?;
+        // Run both services concurrently using tokio::join!
+        let (sync_result, loader_result) = tokio::join!(
+            sync_server.serve(addr),
+            loader.run()
+        );
+
+        // Check results - if either service fails, return error
+        sync_result.map_err(|e| anyhow!("gRPC server error: {}", e))?;
+        loader_result?;
 
         Ok(())
     }

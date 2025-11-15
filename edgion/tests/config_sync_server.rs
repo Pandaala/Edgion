@@ -31,7 +31,7 @@ pub enum RunMode {
 pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
     println!("[SERVER] Starting Config Sync server example");
 
-    let config_server = Arc::new(Mutex::new(ConfigServer::new()));
+    let config_server = Arc::new(ConfigServer::new());
     let version_counters = Arc::new(Mutex::new(HashMap::<ResourceKind, u64>::new()));
     let known_gateway_keys = Arc::new(Mutex::new(HashSet::new()));
 
@@ -41,7 +41,7 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
     }
 
     let state = ServerState {
-        config_server: config_server.clone(),
+        config_server: Mutex::new(config_server.clone()),
         version_counters,
         known_gateway_keys: known_gateway_keys.clone(),
     };
@@ -52,9 +52,8 @@ pub async fn run_config_sync_server(mode: RunMode) -> anyhow::Result<()> {
     let shutdown = Arc::new(Notify::new());
 
     let grpc_shutdown = shutdown.clone();
-    let grpc_center = config_server.clone();
     let grpc_handle = tokio::spawn(async move {
-        let server = ConfigSyncServer::new_with_shared(grpc_center.clone());
+        let server = ConfigSyncServer::new(config_server.clone());
         println!("[SERVER] gRPC endpoint listening on {}", grpc_addr);
         tokio::select! {
             res = server.serve(grpc_addr) => {

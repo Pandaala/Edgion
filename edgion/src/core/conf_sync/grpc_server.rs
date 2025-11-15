@@ -1,6 +1,6 @@
 use std::convert::TryFrom;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use crate::core::conf_sync::config_server::ConfigServer;
@@ -12,24 +12,14 @@ use crate::types::ResourceKind;
 
 /// Server wrapper for WatcherMgr
 pub struct ConfigSyncServer {
-    config_server: Arc<Mutex<ConfigServer>>,
+    config_server: Arc<ConfigServer>,
 }
 
 impl ConfigSyncServer {
-    pub fn new(watcher_mgr: ConfigServer) -> Self {
+    pub fn new(conf_server: Arc<ConfigServer>) -> Self {
         Self {
-            config_server: Arc::new(Mutex::new(watcher_mgr)),
+            config_server: conf_server,
         }
-    }
-
-    /// Create a new ConfigSyncServer with a shared ConfigCenter
-    pub fn new_with_shared(config_server: Arc<Mutex<ConfigServer>>) -> Self {
-        Self { config_server }
-    }
-
-    /// Get a reference to the shared ConfigCenter
-    pub fn get_config_server(&self) -> Arc<Mutex<ConfigServer>> {
-        self.config_server.clone()
     }
 
     pub fn into_service(self) -> ConfigSyncService<ConfigSyncServer> {
@@ -80,8 +70,7 @@ impl ConfigSync for ConfigSyncServer {
             .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
         // Get WatcherMgr and call list
-        let watcher_mgr = self.config_server.lock().await;
-        let list_data = watcher_mgr.list(&req.key, &resource_kind)
+        let list_data = self.config_server.list(&req.key, &resource_kind)
             .map_err(|e| Status::internal(format!("Failed to list resources: {}", e)))?;
 
         Ok(Response::new(ListResponse {
@@ -117,8 +106,7 @@ impl ConfigSync for ConfigSyncServer {
         );
 
         // Get WatcherMgr and call watch
-        let mut watcher_mgr = self.config_server.lock().await;
-        let watch_result = watcher_mgr.watch(
+        let watch_result = self.config_server.watch(
             &req.key,
             &resource_kind,
             req.client_id,

@@ -145,7 +145,7 @@ impl ConfigServer {
     }
 
     pub fn watch(
-        &mut self,
+        &self,
         key: &GatewayClassKey,
         kind: &ResourceKind,
         client_id: String,
@@ -529,7 +529,7 @@ impl ConfigServer {
 
     /// Watch gateway classes
     pub fn watch_gateway_classes(
-        &mut self,
+        &self,
         key: &str,
         client_id: String,
         client_name: String,
@@ -545,7 +545,7 @@ impl ConfigServer {
     }
 
     pub fn watch_edgion_gateway_configs(
-        &mut self,
+        &self,
         key: &str,
         client_id: String,
         client_name: String,
@@ -564,7 +564,7 @@ impl ConfigServer {
 
     /// Watch gateways
     pub fn watch_gateways(
-        &mut self,
+        &self,
         key: &str,
         client_id: String,
         client_name: String,
@@ -581,7 +581,7 @@ impl ConfigServer {
 
     /// Watch HTTP routes
     pub fn watch_routes(
-        &mut self,
+        &self,
         key: &str,
         client_id: String,
         client_name: String,
@@ -598,7 +598,7 @@ impl ConfigServer {
 
     /// Watch services
     pub fn watch_services(
-        &mut self,
+        &self,
         key: &str,
         client_id: String,
         client_name: String,
@@ -615,7 +615,7 @@ impl ConfigServer {
 
     /// Watch endpoint slices
     pub fn watch_endpoint_slices(
-        &mut self,
+        &self,
         key: &str,
         client_id: String,
         client_name: String,
@@ -632,7 +632,7 @@ impl ConfigServer {
 
     /// Watch Edgion TLS
     pub fn watch_edgion_tls(
-        &mut self,
+        &self,
         key: &str,
         client_id: String,
         client_name: String,
@@ -649,7 +649,7 @@ impl ConfigServer {
 
     /// Watch secrets
     pub fn watch_secrets(
-        &mut self,
+        &self,
         key: &str,
         client_id: String,
         client_name: String,

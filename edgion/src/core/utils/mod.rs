@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod net;
+pub use net::*;
 
 static LAST_VERSION: AtomicU64 = AtomicU64::new(0);
 
