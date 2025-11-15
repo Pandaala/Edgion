@@ -20,4 +20,5 @@ Thumbs.db
 *.dll
 *.a
 *.lib
+logs/
 

@@ -59,7 +59,8 @@ pingora-proxy = { version = "0.6", features = ["openssl_derived", "boringssl"] }
 # CLI
 clap = { version = "4.0", features = ["derive"] }
 tracing = { version = "0.1" }
-tracing-subscriber = { version = "0.3" }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
 
 # Test server
 axum = { version = "0.8.4", features = ["macros"] }
