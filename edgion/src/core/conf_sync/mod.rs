@@ -1,7 +1,7 @@
 mod cache_server;
 pub mod config_client;
 pub mod config_server;
-pub mod config_server_update;
+pub mod config_server_event_dispatch;
 pub mod grpc_client;
 pub mod grpc_server;
 

@@ -49,26 +49,6 @@ impl FileSystemConfigLoader {
         })
     }
 
-    async fn bootstrap_existing(&self) -> Result<()> {
-        let mut stack = vec![self.root.clone()];
-        while let Some(dir) = stack.pop() {
-            let mut entries = fs::read_dir(&dir)
-                .await
-                .with_context(|| format!("Failed to read directory {:?}", dir))?;
-
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else {
-                    self.process_new_file(&path).await?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     async fn dispatch_change(&self, change: ResourceChange, data: String) {
         let resource_type = self.resource_kind;
         self.dispatcher
@@ -83,6 +63,20 @@ impl FileSystemConfigLoader {
     }
 
     async fn process_new_file(&self, path: &Path) -> Result<()> {
+        self.process_file_with_change(path, ResourceChange::EventAdd)
+            .await
+    }
+
+    async fn process_init_file(&self, path: &Path) -> Result<()> {
+        self.process_file_with_change(path, ResourceChange::InitAdd)
+            .await
+    }
+
+    async fn process_file_with_change(
+        &self,
+        path: &Path,
+        change: ResourceChange,
+    ) -> Result<()> {
         if path.is_dir() {
             log_directory_not_supported(path);
             return Ok(());
@@ -97,8 +91,7 @@ impl FileSystemConfigLoader {
             .lock()
             .await
             .insert(path.to_path_buf(), content.clone());
-        self.dispatch_change(ResourceChange::EventAdd, content)
-            .await;
+        self.dispatch_change(change, content).await;
         Ok(())
     }
 
@@ -188,13 +181,45 @@ fn log_directory_not_supported(path: &Path) {
 
 #[async_trait::async_trait]
 impl ConfigLoader for FileSystemConfigLoader {
-    async fn run(self: Arc<Self>) -> Result<()> {
+    /// Connect to filesystem (no-op for filesystem loader)
+    async fn connect(&self) -> Result<()> {
+        // Filesystem doesn't need connection setup
         if !self.root.exists() {
             return Err(anyhow!("Config directory {:?} does not exist", self.root));
         }
+        Ok(())
+    }
 
-        self.bootstrap_existing().await?;
+    /// Bootstrap and load all existing configuration files
+    async fn bootstrap_existing(&self) -> Result<()> {
+        let mut stack = vec![self.root.clone()];
+        while let Some(dir) = stack.pop() {
+            let mut entries = fs::read_dir(&dir)
+                .await
+                .with_context(|| format!("Failed to read directory {:?}", dir))?;
 
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    // Use InitAdd for bootstrap phase
+                    self.process_init_file(&path).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Set ready state after initialization
+    async fn set_ready(&self) {
+        self.dispatcher.set_ready();
+    }
+
+    /// Main run loop for watching configuration changes
+    async fn run(&self) -> Result<()> {
+        // Start watching for changes
         let (tx, mut rx) = mpsc::channel::<Result<Event>>(128);
         let tx_watch = tx.clone();
         let mut watcher = RecommendedWatcher::new(

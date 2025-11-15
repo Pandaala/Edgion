@@ -12,11 +12,19 @@ use crate::types::ResourceKind;
 pub mod etcd;
 pub mod file_system;
 
-pub type SharedDispatcher = Arc<tokio::sync::Mutex<ConfigServerDispatcher>>;
-
 #[async_trait]
 pub trait ConfigLoader: Send + Sync {
-    async fn run(self: Arc<Self>) -> anyhow::Result<()>;
+    /// Connect to the configuration source (e.g., etcd cluster, filesystem)
+    async fn connect(&self) -> anyhow::Result<()>;
+    
+    /// Bootstrap and load all existing configurations
+    async fn bootstrap_existing(&self) -> anyhow::Result<()>;
+    
+    /// Set ready state after initialization is complete
+    async fn set_ready(&self);
+    
+    /// Main run loop for watching configuration changes
+    async fn run(&self) -> anyhow::Result<()>;
 }
 
 pub use etcd::EtcdConfigLoader;
@@ -76,6 +84,17 @@ impl Loader {
     }
 
     pub async fn run(self) -> Result<()> {
+
+        // Connect to etcd
+        self.inner.connect().await?;
+
+        // Bootstrap existing configurations
+        self.inner.bootstrap_existing().await?;
+
+        // Set ready state
+        self.inner.set_ready().await;
+        
+        // Start watching for changes
         self.inner.run().await
     }
 }
