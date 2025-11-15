@@ -1,7 +1,8 @@
-use crate::core::conf_load::{Loader, LoaderArgs, LoaderKind};
+use crate::core::conf_load::{Loader, LoaderArgs};
 use crate::core::conf_sync::{ConfigServer, ConfigSyncServer};
 use crate::core::logging::{init_logging, LogConfig};
 use crate::core::utils;
+use crate::types::{COMPONENT_EDGION_OPERATOR, LOG_PREFIX_OPERATOR, VERSION};
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::path::PathBuf;
@@ -48,7 +49,7 @@ impl EdgionOpCli {
         // Initialize logging system
         let log_config = LogConfig {
             log_dir: PathBuf::from(&self.log_dir),
-            file_prefix: "edgion-operator".to_string(),
+            file_prefix: LOG_PREFIX_OPERATOR.to_string(),
             json_format: self.log_json,
             console: true,
             level: self.log_level.clone(),
@@ -59,9 +60,9 @@ impl EdgionOpCli {
 
         // Log system startup
         tracing::info!(
-            component = "edgion-operator",
+            component = COMPONENT_EDGION_OPERATOR,
             event = "system_start",
-            version = env!("CARGO_PKG_VERSION"),
+            version = VERSION,
             grpc_addr = ?self.grpc_listen,
             admin_addr = ?self.admin_listen,
             log_level = %self.log_level,
@@ -79,7 +80,7 @@ impl EdgionOpCli {
             utils::parse_listen_addr(self.grpc_listen.as_ref(), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
 
         tracing::info!(
-            component = "edgion-operator",
+            component = COMPONENT_EDGION_OPERATOR,
             event = "services_starting",
             grpc_addr = %addr,
             "Starting gRPC server and configuration loader"
@@ -94,7 +95,7 @@ impl EdgionOpCli {
         // Check results - if either service fails, return error
         if let Err(e) = &sync_result {
             tracing::error!(
-                component = "edgion-operator",
+                component = COMPONENT_EDGION_OPERATOR,
                 event = "grpc_server_error",
                 error = %e,
                 "gRPC server failed"
@@ -103,7 +104,7 @@ impl EdgionOpCli {
         
         if let Err(e) = &loader_result {
             tracing::error!(
-                component = "edgion-operator",
+                component = COMPONENT_EDGION_OPERATOR,
                 event = "loader_error",
                 error = %e,
                 "Configuration loader failed"
@@ -114,7 +115,7 @@ impl EdgionOpCli {
         loader_result?;
 
         tracing::info!(
-            component = "edgion-operator",
+            component = COMPONENT_EDGION_OPERATOR,
             event = "system_shutdown",
             "Edgion Operator shutting down"
         );
