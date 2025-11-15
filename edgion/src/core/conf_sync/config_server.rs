@@ -458,6 +458,12 @@ impl ConfigServer {
         }
     }
 
+    /// List all gateway class keys currently configured
+    pub fn list_all_gateway_class_keys(&self) -> Vec<String> {
+        let gateway_classes = self.gateway_classes.read().unwrap();
+        gateway_classes.keys().cloned().collect()
+    }
+
     pub fn list_edgion_gateway_configs(&self, key: &str) -> Option<ListData<EdgionGatewayConfig>> {
         let edgion_gateway_configs = self.edgion_gateway_configs.read().unwrap();
         if let Some(cache) = edgion_gateway_configs.get(key) {

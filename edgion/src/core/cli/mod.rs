@@ -1,3 +1,4 @@
+pub mod config;
 pub mod edgion_gw;
 pub mod edgion_op;
 

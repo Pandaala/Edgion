@@ -34,6 +34,7 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+toml.workspace = true
 
 # Kubernetes client and types
 kube.workspace = true

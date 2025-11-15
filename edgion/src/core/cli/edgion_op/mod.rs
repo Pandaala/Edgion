@@ -1,11 +1,11 @@
-use crate::core::conf_load::{Loader, LoaderArgs};
+use crate::core::cli::config::EdgionOpConfig;
+use crate::core::conf_load::Loader;
 use crate::core::conf_sync::{ConfigServer, ConfigSyncServer};
-use crate::core::logging::{init_logging, LogConfig};
+use crate::core::logging::init_logging;
 use crate::core::utils;
-use crate::types::{COMPONENT_EDGION_OPERATOR, LOG_PREFIX_OPERATOR, VERSION};
+use crate::types::{COMPONENT_EDGION_OPERATOR, VERSION};
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
@@ -16,28 +16,8 @@ use std::sync::Arc;
     long_about = None
 )]
 pub struct EdgionOpCli {
-    /// Optional gRPC listen address for operator
-    #[arg(long, value_name = "ADDR")]
-    pub grpc_listen: Option<String>,
-
-    /// Optional HTTP listen address for operator admin plane
-    #[arg(long, value_name = "ADDR")]
-    pub admin_listen: Option<String>,
-
-    /// Log directory
-    #[arg(long, value_name = "DIR", default_value = "logs")]
-    pub log_dir: String,
-
-    /// Log level (trace, debug, info, warn, error)
-    #[arg(long, value_name = "LEVEL", default_value = "info")]
-    pub log_level: String,
-
-    /// Enable JSON log format
-    #[arg(long)]
-    pub log_json: bool,
-
     #[command(flatten)]
-    pub loader: LoaderArgs,
+    pub config: EdgionOpConfig,
 }
 
 impl EdgionOpCli {
@@ -45,17 +25,47 @@ impl EdgionOpCli {
         Self::parse()
     }
 
-    pub async fn run(&self) -> Result<()> {
-        // Initialize logging system
-        let log_config = LogConfig {
-            log_dir: PathBuf::from(&self.log_dir),
-            file_prefix: LOG_PREFIX_OPERATOR.to_string(),
-            json_format: self.log_json,
-            console: true,
-            level: self.log_level.clone(),
-            buffer_size: 10_000,
-        };
+    /// Spawn a background task to periodically print all gateway class configs in debug mode
+    /// This can be easily removed in the future if not needed
+    fn spawn_debug_config_printer(config_server: Arc<ConfigServer>, log_level: String, enabled: bool) {
+        if !enabled {
+            return;
+        }
         
+        tokio::spawn(async move {
+            if log_level == "debug" || log_level == "trace" {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+                loop {
+                    interval.tick().await;
+                    
+                    // Get all gateway class keys
+                    let gateway_classes = config_server.list_all_gateway_class_keys();
+                    
+                    if gateway_classes.is_empty() {
+                        tracing::debug!(
+                            component = COMPONENT_EDGION_OPERATOR,
+                            event = "config_summary",
+                            "No gateway classes configured"
+                        );
+                        continue;
+                    }
+                    
+                    // Print each gateway class config
+                    for key in gateway_classes {
+                        tracing::debug!("=========================== {} ===========================", key);
+                        config_server.print_config(&key).await;
+                    }
+                }
+            }
+        });
+    }
+
+    pub async fn run(&self) -> Result<()> {
+        // Load and merge configuration
+        let config = EdgionOpConfig::load(self.config.clone())?;
+
+        // Initialize logging system
+        let log_config = config.to_log_config();
         init_logging(log_config).await?;
 
         // Log system startup
@@ -63,27 +73,41 @@ impl EdgionOpCli {
             component = COMPONENT_EDGION_OPERATOR,
             event = "system_start",
             version = VERSION,
-            grpc_addr = ?self.grpc_listen,
-            admin_addr = ?self.admin_listen,
-            log_level = %self.log_level,
+            grpc_addr = %config.grpc_listen(),
+            admin_addr = %config.admin_listen(),
+            log_level = %config.log_level(),
             "Edgion Operator starting"
         );
 
         let config_server = Arc::new(ConfigServer::new());
         let sync_server = ConfigSyncServer::new(config_server.clone());
+        
+        // Clone config_server before moving into loader
+        let debug_config_server = config_server.clone();
+        
+        let loader_args = config.to_loader_args();
         let loader = Loader::from_args(
-            &self.loader,
+            &loader_args,
             config_server as Arc<dyn crate::core::conf_sync::traits::EventDispatcher>,
         )?;
 
-        let addr =
-            utils::parse_listen_addr(self.grpc_listen.as_ref(), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
+        let addr = utils::parse_listen_addr(
+            Some(&config.grpc_listen()),
+            utils::DEFAULT_OPERATOR_GRPC_ADDR,
+        )?;
 
         tracing::info!(
             component = COMPONENT_EDGION_OPERATOR,
             event = "services_starting",
             grpc_addr = %addr,
             "Starting gRPC server and configuration loader"
+        );
+
+        // Spawn debug task to print config every 30 seconds in debug mode
+        Self::spawn_debug_config_printer(
+            debug_config_server,
+            config.log_level(),
+            config.debug.enabled,
         );
 
         // Run both services concurrently using tokio::join!

@@ -1,0 +1,74 @@
+# ================================================================================
+# Edgion Operator Configuration File
+# ================================================================================
+# 
+# 使用方法:
+#   1. 直接使用配置文件运行:
+#      ./edgion-op --config edgion/config/edgion-op.toml
+#   
+#   2. 使用默认配置 (不指定 --config):
+#      ./edgion-op
+#   
+#   3. 命令行参数覆盖配置文件:
+#      ./edgion-op --config edgion/config/edgion-op.toml --log-level debug
+#
+# ================================================================================
+
+[server]
+# gRPC 服务器监听地址
+# 用于接收来自 Gateway 的配置同步请求
+grpc_listen = "0.0.0.0:50051"
+
+# Admin HTTP 服务器监听地址
+# 用于管理和健康检查端点
+admin_listen = "0.0.0.0:8080"
+
+[logging]
+# 日志文件存储目录
+log_dir = "logs"
+
+# 日志文件名前缀
+# 实际文件名格式: {log_prefix}.{date}.log
+log_prefix = "edgion-operator"
+
+# 日志级别: trace, debug, info, warn, error
+# - trace: 最详细的日志，包含所有调试信息
+# - debug: 调试级别，包含详细的运行时信息
+# - info:  常规信息，生产环境推荐使用
+# - warn:  警告信息
+# - error: 错误信息
+log_level = "info"
+
+# 是否使用 JSON 格式输出日志
+# true:  使用结构化 JSON 格式，便于日志采集和分析
+# false: 使用人类可读的文本格式
+json_format = false
+
+# 异步日志通道缓冲区大小
+# 增大此值可以提高高并发场景下的日志性能
+buffer_size = 10000
+
+[loader]
+# 配置加载器类型: filesystem 或 etcd
+# - filesystem: 从本地文件系统加载配置（开发和测试环境推荐）
+# - etcd:       从 etcd 集群加载配置（生产环境推荐）
+type = "filesystem"
+
+# 文件系统加载器的根目录 (仅当 type = "filesystem" 时生效)
+# 该目录应包含所有 Gateway API 资源的 YAML 文件
+dir = "edgion/config/examples"
+
+# Etcd 集群端点列表 (仅当 type = "etcd" 时生效)
+# 示例: etcd_endpoints = ["http://127.0.0.1:2379", "http://127.0.0.1:2380"]
+# etcd_endpoints = ["http://127.0.0.1:2379"]
+
+# Etcd 键前缀 (仅当 type = "etcd" 时生效)
+# 所有配置将存储在该前缀下
+# etcd_prefix = "/edgion/config"
+
+[debug]
+# 是否启用调试模式
+# 当启用且日志级别为 debug 或 trace 时，每 30 秒打印一次所有 GatewayClass 的配置
+# 生产环境建议设置为 false
+enabled = true
+
