@@ -188,6 +188,10 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
     where
         T: Clone + Send + 'static,
     {
+        if !self.is_ready() {
+            println!("trying push event when not ready!");
+        }
+
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 let store = self.store.clone();
