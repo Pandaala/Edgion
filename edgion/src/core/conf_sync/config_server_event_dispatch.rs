@@ -2,9 +2,7 @@ use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{
     ConfigServer, EventDispatch, EventDispatcher, ServerCache, Versionable,
 };
-use crate::types::{
-    EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
-};
+use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind};
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 const DEFAULT_GATEWAY_CLASS_KEY: &str = "default";
@@ -99,6 +97,15 @@ impl EventDispatcher for ConfigServer {
         data: String,
         resource_version: Option<u64>,
     ) {
+        tracing::info!(
+            component = "config_server",
+            event = "resource_change",
+            change = ?change,
+            resource_type = ?resource_type,
+            resource_version = ?resource_version,
+            "Applying resource change"
+        );
+
         let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
         let Some(resource_type) = resource_type else {
             return;

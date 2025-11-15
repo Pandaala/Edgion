@@ -75,9 +75,12 @@ impl Loader {
         // Bootstrap existing configurations
         self.inner.bootstrap_existing().await?;
 
+        tracing::info!("Bootstrapped, set ready");
+
         // Set ready state
         self.inner.set_ready().await;
         
+        tracing::info!("Loader running...");
         // Start watching for changes
         self.inner.run().await
     }
