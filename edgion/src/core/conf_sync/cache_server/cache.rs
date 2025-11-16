@@ -217,22 +217,35 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
 }
 
 impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T> for ServerCache<T> {
-    fn apply_change(&mut self, change: ResourceChange, resource: T, resource_version: Option<u64>)
+    fn apply_change(&mut self, change: ResourceChange, resource: T)
     where
         T: Resource + Send + 'static,
     {
+        let version = resource.get_version();
+        if resource.get_version() == 0 {
+            tracing::warn!(
+                component = "cache_client",
+                event = "apply_change",
+                change = ?change,
+                kind = std::any::type_name::<T>(),
+                name = ?resource.name_any(),
+                namespace = ?resource.namespace(),
+                version = 0,
+                "Applying change to cache with version 0"
+            );
+        } else {
+            tracing::info!(
+                component = "cache_server",
+                event = "apply_change",
+                change = ?change,
+                kind = std::any::type_name::<T>(),
+                name = ?resource.name_any(),
+                namespace = ?resource.namespace(),
+                version = resource.get_version(),
+                "Applying change to cache"
+            );
+        }
 
-        let version = resource_version.unwrap_or_else(|| resource.get_version());
-        tracing::info!(
-            component = "cache_server",
-            event = "apply_change",
-            change = ?change,
-            kind = std::any::type_name::<T>(),
-            name = ?resource.name_any(),
-            namespace = ?resource.namespace(),
-            version = version,
-            "Applying change to cache"
-        );
         match change {
             ResourceChange::InitAdd => {
                 let mut store_guard = self.store.write().unwrap();
@@ -336,7 +349,6 @@ mod tests {
         cache.apply_change(
             ResourceChange::EventAdd,
             resource.clone(),
-            Some(resource.version),
         );
         wait_for_async_store_update().await;
 
@@ -371,14 +383,12 @@ mod tests {
         cache.apply_change(
             ResourceChange::EventAdd,
             original.clone(),
-            Some(original.version),
         );
         wait_for_async_store_update().await;
 
         cache.apply_change(
             ResourceChange::EventUpdate,
             updated.clone(),
-            Some(updated.version),
         );
         wait_for_async_store_update().await;
 
@@ -404,14 +414,12 @@ mod tests {
         cache.apply_change(
             ResourceChange::EventAdd,
             resource.clone(),
-            Some(resource.version),
         );
         wait_for_async_store_update().await;
 
         cache.apply_change(
             ResourceChange::EventDelete,
             resource.clone(),
-            Some(resource.version),
         );
         wait_for_async_store_update().await;
 

@@ -9,7 +9,7 @@ pub trait Versionable {
 /// Trait for handling resource events
 pub trait EventDispatch<T> {
     /// Apply a change to the resource cache
-    fn apply_change(&mut self, change: ResourceChange, resource: T, resource_version: Option<u64>)
+    fn apply_change(&mut self, change: ResourceChange, resource: T)
     where
         T: Send + 'static;
 

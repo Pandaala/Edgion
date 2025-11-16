@@ -9,6 +9,7 @@ use anyhow::Result;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::sync::RwLock;
+use kube::Resource;
 
 pub struct ConfigClient {
     gateway_class_key: GatewayClassKey,
@@ -45,12 +46,11 @@ impl ConfigClient {
         cache: &RwLock<ClientCache<T>>,
         change: ResourceChange,
         resource: T,
-        resource_version: Option<u64>,
     ) where
-        T: Clone + Versionable + Send + 'static,
+        T: Clone + Versionable + Resource + Send + 'static,
     {
         let mut cache = cache.write().unwrap();
-        cache.apply_change(change, resource, resource_version);
+        cache.apply_change(change, resource);
     }
 
     pub fn list(
@@ -338,7 +338,6 @@ impl EventDispatcher for ConfigClient {
                     &self.gateway_classes,
                     change,
                     resource,
-                    resource_version,
                 ),
                 Err(e) => log_error("GatewayClass", &e),
             },
@@ -348,7 +347,6 @@ impl EventDispatcher for ConfigClient {
                         &self.edgion_gateway_configs,
                         change,
                         resource,
-                        resource_version,
                     ),
                     Err(e) => log_error("EdgionGatewayConfig", &e),
                 }
@@ -358,7 +356,6 @@ impl EventDispatcher for ConfigClient {
                     &self.gateways,
                     change,
                     resource,
-                    resource_version,
                 ),
                 Err(e) => log_error("Gateway", &e),
             },
@@ -367,7 +364,6 @@ impl EventDispatcher for ConfigClient {
                     &self.routes,
                     change,
                     resource,
-                    resource_version,
                 ),
                 Err(e) => log_error("HTTPRoute", &e),
             },
@@ -376,7 +372,6 @@ impl EventDispatcher for ConfigClient {
                     &self.services,
                     change,
                     resource,
-                    resource_version,
                 ),
                 Err(e) => log_error("Service", &e),
             },
@@ -385,7 +380,6 @@ impl EventDispatcher for ConfigClient {
                     &self.endpoint_slices,
                     change,
                     resource,
-                    resource_version,
                 ),
                 Err(e) => log_error("EndpointSlice", &e),
             },
@@ -394,7 +388,6 @@ impl EventDispatcher for ConfigClient {
                     &self.edgion_tls,
                     change,
                     resource,
-                    resource_version,
                 ),
                 Err(e) => log_error("EdgionTls", &e),
             },
@@ -403,7 +396,6 @@ impl EventDispatcher for ConfigClient {
                     &self.secrets,
                     change,
                     resource,
-                    resource_version,
                 ),
                 Err(e) => log_error("Secret", &e),
             },

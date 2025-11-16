@@ -78,12 +78,7 @@ impl ConfigServer {
     ) where
         T: Clone + Send + Sync + 'static + Versionable + Resource,
     {
-        tracing::info!(
-            component = "config_server",
-            event = "execute_change_on_cache",
-            resource_version = ?resource_version,
-        );
-        cache.apply_change(change, resource, resource_version);
+        cache.apply_change(change, resource);
     }
 
     fn fallback_gateway_class_keys(&self) -> Vec<String> {
