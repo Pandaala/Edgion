@@ -5,6 +5,8 @@ use crate::core::conf_sync::{
 use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind};
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
+use kube::Resource;
+
 const DEFAULT_GATEWAY_CLASS_KEY: &str = "default";
 
 trait ResolveGatewayClassKeysForItem {
@@ -74,15 +76,12 @@ impl ConfigServer {
         resource: T,
         resource_version: Option<u64>,
     ) where
-        T: Clone + Send + Sync + 'static + Versionable,
+        T: Clone + Send + Sync + 'static + Versionable + Resource,
     {
         tracing::info!(
             component = "config_server",
             event = "execute_change_on_cache",
-            change = ?change,
-            resource_type = stringify!(T),
             resource_version = ?resource_version,
-            "Executing change on cache"
         );
         cache.apply_change(change, resource, resource_version);
     }

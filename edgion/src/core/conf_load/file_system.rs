@@ -98,19 +98,16 @@ impl FileSystemConfigLoader {
     ) -> Result<()> {
 
         tracing::info!(
-            component = "file_system_config_loader",
-            event = "process_file_with_change",
+            component = "file_system_loader",
             path = ?path,
             change = ?change,
-            "Processing file with change"
         );
 
         if path.is_dir() {
             tracing::warn!(
-                component = "file_system_config_loader",
+                component = "file_system_loader",
                 event = "directory_not_supported",
                 path = ?path,
-                "Directory changes are not supported"
             );
             log_directory_not_supported(path);
             return Ok(());
@@ -118,10 +115,9 @@ impl FileSystemConfigLoader {
 
         if !path.is_file() {
             tracing::warn!(
-                component = "file_system_config_loader",
+                component = "file_system_loader",
                 event = "not_a_file",
                 path = ?path,
-                "Not a file"
             );
             return Ok(());
         }

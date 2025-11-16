@@ -1,5 +1,6 @@
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
+use kube::{Resource, ResourceExt};
 use tokio::sync::{mpsc, Notify};
 
 use super::store::EventStore;
@@ -7,7 +8,7 @@ use super::traits::{EventDispatch, Versionable};
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
 use crate::core::conf_sync::traits::ResourceChange;
 
-pub struct ServerCache<T> {
+pub struct ServerCache<T: Versionable + Resource + Send + Sync> {
     // wait for init complete
     ready: RwLock<bool>,
 
@@ -21,7 +22,7 @@ pub struct ServerCache<T> {
     notify: Arc<Notify>,
 }
 
-impl<T: Versionable + Send + Sync> ServerCache<T> {
+impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
     pub fn new(capacity: u32) -> Self
     where
         T: Clone,
@@ -215,11 +216,21 @@ impl<T: Versionable + Send + Sync> ServerCache<T> {
     }
 }
 
-impl<T: Versionable + Clone + Send + Sync + 'static> EventDispatch<T> for ServerCache<T> {
+impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T> for ServerCache<T> {
     fn apply_change(&mut self, change: ResourceChange, resource: T, resource_version: Option<u64>)
     where
-        T: Send + 'static,
+        T: Resource + Send + 'static,
     {
+        tracing::info!(
+            component = "cache_server",
+            event = "apply_change",
+            change = ?change,
+            resource_type = std::any::type_name::<T>(),
+            name = ?resource.name_any(),
+            namespace = ?resource.namespace(),
+            version = ?resource_version,
+            "Applying change to cache"
+        );
         let version = resource_version.unwrap_or_else(|| resource.get_version());
         match change {
             ResourceChange::InitAdd => {
@@ -248,18 +259,57 @@ mod tests {
     use super::*;
     use crate::core::conf_sync::traits::ResourceChange;
     use crate::core::conf_sync::EventDispatch;
+    use kube::api::{DynamicObject, ObjectMeta};
     use tokio::task::yield_now;
     use tokio::time::{sleep, Duration};
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone)]
     struct TestResource {
         name: &'static str,
         version: u64,
+        metadata: ObjectMeta,
     }
+
+    impl PartialEq for TestResource {
+        fn eq(&self, other: &Self) -> bool {
+            self.name == other.name && self.version == other.version
+        }
+    }
+
+    impl Eq for TestResource {}
 
     impl Versionable for TestResource {
         fn get_version(&self) -> u64 {
             self.version
+        }
+    }
+
+    impl kube::Resource for TestResource {
+        type DynamicType = ();
+        type Scope = kube::core::ClusterResourceScope;
+
+        fn kind(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+            "TestResource".into()
+        }
+
+        fn group(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+            "test.example.com".into()
+        }
+
+        fn version(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+            "v1".into()
+        }
+
+        fn plural(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+            "testresources".into()
+        }
+
+        fn meta(&self) -> &ObjectMeta {
+            &self.metadata
+        }
+
+        fn meta_mut(&mut self) -> &mut ObjectMeta {
+            &mut self.metadata
         }
     }
 
@@ -275,6 +325,11 @@ mod tests {
         let resource = TestResource {
             name: "foo",
             version: 1,
+            metadata: ObjectMeta {
+                name: Some("test-resource".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
         };
 
         cache.apply_change(
@@ -296,10 +351,20 @@ mod tests {
         let original = TestResource {
             name: "foo",
             version: 1,
+            metadata: ObjectMeta {
+                name: Some("test-resource".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
         };
         let updated = TestResource {
             name: "foo-updated",
             version: 1,
+            metadata: ObjectMeta {
+                name: Some("test-resource".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
         };
 
         cache.apply_change(
@@ -328,6 +393,11 @@ mod tests {
         let resource = TestResource {
             name: "foo",
             version: 42,
+            metadata: ObjectMeta {
+                name: Some("test-resource".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
         };
 
         cache.apply_change(

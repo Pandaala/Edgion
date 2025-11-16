@@ -52,7 +52,6 @@ impl EdgionOpCli {
                     
                     // Print each gateway class config
                     for key in gateway_classes {
-                        tracing::debug!("=========================== {} ===========================", key);
                         config_server.print_config(&key).await;
                     }
                 }
