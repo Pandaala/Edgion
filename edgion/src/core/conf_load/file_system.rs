@@ -51,8 +51,27 @@ impl FileSystemConfigLoader {
 
     async fn dispatch_change(&self, change: ResourceChange, data: String) {
         let resource_type = self.resource_kind;
+        
+        // Convert YAML to JSON for dispatcher
+        let json_data = match Self::yaml_to_json(&data) {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to convert YAML to JSON: {}, skipping file",
+                    e
+                );
+                return;
+            }
+        };
+        
         self.dispatcher
-            .apply_resource_change(change, resource_type, data, None);
+            .apply_resource_change(change, resource_type, json_data, None);
+    }
+    
+    fn yaml_to_json(yaml_str: &str) -> Result<String> {
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml_str)?;
+        let json_str = serde_json::to_string(&value)?;
+        Ok(json_str)
     }
 
     async fn read_file(path: &Path) -> Result<String> {
@@ -77,12 +96,33 @@ impl FileSystemConfigLoader {
         path: &Path,
         change: ResourceChange,
     ) -> Result<()> {
+
+        tracing::info!(
+            component = "file_system_config_loader",
+            event = "process_file_with_change",
+            path = ?path,
+            change = ?change,
+            "Processing file with change"
+        );
+
         if path.is_dir() {
+            tracing::warn!(
+                component = "file_system_config_loader",
+                event = "directory_not_supported",
+                path = ?path,
+                "Directory changes are not supported"
+            );
             log_directory_not_supported(path);
             return Ok(());
         }
 
         if !path.is_file() {
+            tracing::warn!(
+                component = "file_system_config_loader",
+                event = "not_a_file",
+                path = ?path,
+                "Not a file"
+            );
             return Ok(());
         }
 

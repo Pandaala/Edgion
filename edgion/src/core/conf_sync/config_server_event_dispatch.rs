@@ -76,6 +76,14 @@ impl ConfigServer {
     ) where
         T: Clone + Send + Sync + 'static + Versionable,
     {
+        tracing::info!(
+            component = "config_server",
+            event = "execute_change_on_cache",
+            change = ?change,
+            resource_type = stringify!(T),
+            resource_version = ?resource_version,
+            "Executing change on cache"
+        );
         cache.apply_change(change, resource, resource_version);
     }
 
@@ -97,19 +105,29 @@ impl EventDispatcher for ConfigServer {
         data: String,
         resource_version: Option<u64>,
     ) {
-        tracing::info!(
+        tracing::debug!(
             component = "config_server",
             event = "resource_change",
             change = ?change,
             resource_type = ?resource_type,
             resource_version = ?resource_version,
+            data_preview = %data.chars().take(200).collect::<String>(),
             "Applying resource change"
         );
 
         let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-        let Some(resource_type) = resource_type else {
+        
+        if resource_type.is_none() {
+            tracing::warn!(
+                component = "config_server",
+                event = "unknown_resource_type",
+                data_preview = %data.chars().take(500).collect::<String>(),
+                "Failed to determine resource type from content"
+            );
             return;
-        };
+        }
+        
+        let resource_type = resource_type.unwrap();
 
         match resource_type {
             ResourceKind::GatewayClass => {
@@ -117,14 +135,16 @@ impl EventDispatcher for ConfigServer {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut gateway_classes = self.gateway_classes.write().unwrap();
                     for key in gateway_class_keys {
-                        if let Some(cache) = gateway_classes.get_mut(&key) {
-                            Self::execute_change_on_cache::<GatewayClass>(
-                                change,
-                                cache,
-                                resource.clone(),
-                                resource_version,
-                            );
-                        }
+                        let cache = gateway_classes
+                            .entry(key.clone())
+                            .or_insert_with(|| ServerCache::new(200));
+                        
+                        Self::execute_change_on_cache::<GatewayClass>(
+                            change,
+                            cache,
+                            resource.clone(),
+                            resource_version,
+                        );
                     }
                 }
             }
@@ -133,14 +153,16 @@ impl EventDispatcher for ConfigServer {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut edgion_gateway_configs = self.edgion_gateway_configs.write().unwrap();
                     for key in gateway_class_keys {
-                        if let Some(cache) = edgion_gateway_configs.get_mut(&key) {
-                            Self::execute_change_on_cache::<EdgionGatewayConfig>(
-                                change,
-                                cache,
-                                resource.clone(),
-                                resource_version,
-                            );
-                        }
+                        let cache = edgion_gateway_configs
+                            .entry(key.clone())
+                            .or_insert_with(|| ServerCache::new(200));
+                        
+                        Self::execute_change_on_cache::<EdgionGatewayConfig>(
+                            change,
+                            cache,
+                            resource.clone(),
+                            resource_version,
+                        );
                     }
                 }
             }
@@ -149,14 +171,16 @@ impl EventDispatcher for ConfigServer {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut gateways = self.gateways.write().unwrap();
                     for key in gateway_class_keys {
-                        if let Some(cache) = gateways.get_mut(&key) {
-                            Self::execute_change_on_cache::<Gateway>(
-                                change,
-                                cache,
-                                resource.clone(),
-                                resource_version,
-                            );
-                        }
+                        let cache = gateways
+                            .entry(key.clone())
+                            .or_insert_with(|| ServerCache::new(200));
+                        
+                        Self::execute_change_on_cache::<Gateway>(
+                            change,
+                            cache,
+                            resource.clone(),
+                            resource_version,
+                        );
                     }
                 }
             }
@@ -165,14 +189,16 @@ impl EventDispatcher for ConfigServer {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut routes = self.routes.write().unwrap();
                     for key in gateway_class_keys {
-                        if let Some(cache) = routes.get_mut(&key) {
-                            Self::execute_change_on_cache::<HTTPRoute>(
-                                change,
-                                cache,
-                                resource.clone(),
-                                resource_version,
-                            );
-                        }
+                        let cache = routes
+                            .entry(key.clone())
+                            .or_insert_with(|| ServerCache::new(200));
+                        
+                        Self::execute_change_on_cache::<HTTPRoute>(
+                            change,
+                            cache,
+                            resource.clone(),
+                            resource_version,
+                        );
                     }
                 }
             }
@@ -181,14 +207,16 @@ impl EventDispatcher for ConfigServer {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut services = self.services.write().unwrap();
                     for key in gateway_class_keys {
-                        if let Some(cache) = services.get_mut(&key) {
-                            Self::execute_change_on_cache::<Service>(
-                                change,
-                                cache,
-                                resource.clone(),
-                                resource_version,
-                            );
-                        }
+                        let cache = services
+                            .entry(key.clone())
+                            .or_insert_with(|| ServerCache::new(200));
+                        
+                        Self::execute_change_on_cache::<Service>(
+                            change,
+                            cache,
+                            resource.clone(),
+                            resource_version,
+                        );
                     }
                 }
             }
@@ -197,14 +225,16 @@ impl EventDispatcher for ConfigServer {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut endpoint_slices = self.endpoint_slices.write().unwrap();
                     for key in gateway_class_keys {
-                        if let Some(cache) = endpoint_slices.get_mut(&key) {
-                            Self::execute_change_on_cache::<EndpointSlice>(
-                                change,
-                                cache,
-                                resource.clone(),
-                                resource_version,
-                            );
-                        }
+                        let cache = endpoint_slices
+                            .entry(key.clone())
+                            .or_insert_with(|| ServerCache::new(200));
+                        
+                        Self::execute_change_on_cache::<EndpointSlice>(
+                            change,
+                            cache,
+                            resource.clone(),
+                            resource_version,
+                        );
                     }
                 }
             }
@@ -213,14 +243,16 @@ impl EventDispatcher for ConfigServer {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut edgion_tls = self.edgion_tls.write().unwrap();
                     for key in gateway_class_keys {
-                        if let Some(cache) = edgion_tls.get_mut(&key) {
-                            Self::execute_change_on_cache::<EdgionTls>(
-                                change,
-                                cache,
-                                resource.clone(),
-                                resource_version,
-                            );
-                        }
+                        let cache = edgion_tls
+                            .entry(key.clone())
+                            .or_insert_with(|| ServerCache::new(200));
+                        
+                        Self::execute_change_on_cache::<EdgionTls>(
+                            change,
+                            cache,
+                            resource.clone(),
+                            resource_version,
+                        );
                     }
                 }
             }
@@ -229,14 +261,16 @@ impl EventDispatcher for ConfigServer {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut secrets = self.secrets.write().unwrap();
                     for key in gateway_class_keys {
-                        if let Some(cache) = secrets.get_mut(&key) {
-                            Self::execute_change_on_cache::<Secret>(
-                                change,
-                                cache,
-                                resource.clone(),
-                                resource_version,
-                            );
-                        }
+                        let cache = secrets
+                            .entry(key.clone())
+                            .or_insert_with(|| ServerCache::new(200));
+                        
+                        Self::execute_change_on_cache::<Secret>(
+                            change,
+                            cache,
+                            resource.clone(),
+                            resource_version,
+                        );
                     }
                 }
             }
