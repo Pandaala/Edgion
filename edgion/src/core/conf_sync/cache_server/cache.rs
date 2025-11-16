@@ -221,17 +221,18 @@ impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T>
     where
         T: Resource + Send + 'static,
     {
+
+        let version = resource_version.unwrap_or_else(|| resource.get_version());
         tracing::info!(
             component = "cache_server",
             event = "apply_change",
             change = ?change,
-            resource_type = std::any::type_name::<T>(),
+            kind = std::any::type_name::<T>(),
             name = ?resource.name_any(),
             namespace = ?resource.namespace(),
-            version = ?resource_version,
+            version = version,
             "Applying change to cache"
         );
-        let version = resource_version.unwrap_or_else(|| resource.get_version());
         match change {
             ResourceChange::InitAdd => {
                 let mut store_guard = self.store.write().unwrap();
