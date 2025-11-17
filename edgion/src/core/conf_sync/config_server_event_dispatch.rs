@@ -137,117 +137,82 @@ impl EventDispatcher for ConfigServer {
             }
             ResourceKind::HTTPRoute => {
                 if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
-                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     tracing::info!(
                         component = "config_server",
                         kind = "HTTPRoute",
-                        gateway_class_keys = ?gateway_class_keys,
+                        "Applying HTTPRoute resource change"
                     );
                     let mut routes = self.routes.write().unwrap();
-                    for key in gateway_class_keys {
-                        let cache = routes
-                            .entry(key.clone())
-                            .or_insert_with(|| ServerCache::new(200));
-                        
-                        Self::execute_change_on_cache::<HTTPRoute>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
-                    }
+                    Self::execute_change_on_cache::<HTTPRoute>(
+                        change,
+                        &mut routes,
+                        resource,
+                        resource_version,
+                    );
                 }
             }
             ResourceKind::Service => {
                 if let Ok(resource) = serde_json::from_str::<Service>(&data) {
-                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     tracing::info!(
                         component = "config_server",
                         kind = "Service",
-                        gateway_class_keys = ?gateway_class_keys,
+                        "Applying Service resource change"
                     );
                     let mut services = self.services.write().unwrap();
-                    for key in gateway_class_keys {
-                        let cache = services
-                            .entry(key.clone())
-                            .or_insert_with(|| ServerCache::new(200));
-                        
-                        Self::execute_change_on_cache::<Service>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
-                    }
+                    Self::execute_change_on_cache::<Service>(
+                        change,
+                        &mut services,
+                        resource,
+                        resource_version,
+                    );
                 }
             }
             ResourceKind::EndpointSlice => {
                 if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
-                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     tracing::info!(
                         component = "config_server",
                         kind = "EndpointSlice",
-                        gateway_class_keys = ?gateway_class_keys,
+                        "Applying EndpointSlice resource change"
                     );
                     let mut endpoint_slices = self.endpoint_slices.write().unwrap();
-                    for key in gateway_class_keys {
-                        let cache = endpoint_slices
-                            .entry(key.clone())
-                            .or_insert_with(|| ServerCache::new(200));
-                        
-                        Self::execute_change_on_cache::<EndpointSlice>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
-                    }
+                    Self::execute_change_on_cache::<EndpointSlice>(
+                        change,
+                        &mut endpoint_slices,
+                        resource,
+                        resource_version,
+                    );
                 }
             }
             ResourceKind::EdgionTls => {
                 if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
-                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
-                    let mut edgion_tls = self.edgion_tls.write().unwrap();
                     tracing::info!(
                         component = "config_server",
                         kind = "EdgionTls",
-                        gateway_class_keys = ?gateway_class_keys,
+                        "Applying EdgionTls resource change"
                     );
-                    for key in gateway_class_keys {
-                        let cache = edgion_tls
-                            .entry(key.clone())
-                            .or_insert_with(|| ServerCache::new(200));
-                        
-                        Self::execute_change_on_cache::<EdgionTls>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
-                    }
+                    let mut edgion_tls = self.edgion_tls.write().unwrap();
+                    Self::execute_change_on_cache::<EdgionTls>(
+                        change,
+                        &mut edgion_tls,
+                        resource,
+                        resource_version,
+                    );
                 }
             }
             ResourceKind::Secret => {
                 if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
-                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
-                    let mut secrets = self.secrets.write().unwrap();
                     tracing::info!(
                         component = "config_server",
                         kind = "Secret",
-                        gateway_class_keys = ?gateway_class_keys,
+                        "Applying Secret resource change"
                     );
-                    for key in gateway_class_keys {
-                        let cache = secrets
-                            .entry(key.clone())
-                            .or_insert_with(|| ServerCache::new(200));
-                        
-                        Self::execute_change_on_cache::<Secret>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
-                    }
+                    let mut secrets = self.secrets.write().unwrap();
+                    Self::execute_change_on_cache::<Secret>(
+                        change,
+                        &mut secrets,
+                        resource,
+                        resource_version,
+                    );
                 }
             }
         }
@@ -260,29 +225,19 @@ impl EventDispatcher for ConfigServer {
         // They are stored in base_conf and don't need set_ready
 
         let mut routes = self.routes.write().unwrap();
-        for cache in routes.values_mut() {
-            cache.set_ready();
-        }
+        routes.set_ready();
 
         let mut services = self.services.write().unwrap();
-        for cache in services.values_mut() {
-            cache.set_ready();
-        }
+        services.set_ready();
 
         let mut endpoint_slices = self.endpoint_slices.write().unwrap();
-        for cache in endpoint_slices.values_mut() {
-            cache.set_ready();
-        }
+        endpoint_slices.set_ready();
 
         let mut edgion_tls = self.edgion_tls.write().unwrap();
-        for cache in edgion_tls.values_mut() {
-            cache.set_ready();
-        }
+        edgion_tls.set_ready();
 
         let mut secrets = self.secrets.write().unwrap();
-        for cache in secrets.values_mut() {
-            cache.set_ready();
-        }
+        secrets.set_ready();
     }
 
     fn apply_base_conf(
