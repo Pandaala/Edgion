@@ -7,87 +7,16 @@ use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::Resource;
 
-const DEFAULT_GATEWAY_CLASS_KEY: &str = "default";
-
-trait ResolveGatewayClassKeysForItem {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String>;
-}
-
-impl ResolveGatewayClassKeysForItem for GatewayClass {
-    fn resolve_gateway_class_keys_for_item(&self, _center: &ConfigServer) -> Vec<String> {
-        self.metadata
-            .name
-            .clone()
-            .map(|key| vec![key])
-            .unwrap_or_else(|| vec![DEFAULT_GATEWAY_CLASS_KEY.to_string()])
-    }
-}
-
-impl ResolveGatewayClassKeysForItem for EdgionGatewayConfig {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
-        self.metadata
-            .name
-            .clone()
-            .map(|key| vec![key])
-            .unwrap_or_else(|| center.fallback_gateway_class_keys())
-    }
-}
-
-impl ResolveGatewayClassKeysForItem for Gateway {
-    fn resolve_gateway_class_keys_for_item(&self, _center: &ConfigServer) -> Vec<String> {
-        vec![self.spec.gateway_class_name.clone()]
-    }
-}
-
-impl ResolveGatewayClassKeysForItem for HTTPRoute {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
-        center.fallback_gateway_class_keys()
-    }
-}
-
-impl ResolveGatewayClassKeysForItem for Service {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
-        center.fallback_gateway_class_keys()
-    }
-}
-
-impl ResolveGatewayClassKeysForItem for EndpointSlice {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
-        center.fallback_gateway_class_keys()
-    }
-}
-
-impl ResolveGatewayClassKeysForItem for EdgionTls {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
-        center.fallback_gateway_class_keys()
-    }
-}
-
-impl ResolveGatewayClassKeysForItem for Secret {
-    fn resolve_gateway_class_keys_for_item(&self, center: &ConfigServer) -> Vec<String> {
-        center.fallback_gateway_class_keys()
-    }
-}
-
 impl ConfigServer {
     fn execute_change_on_cache<T>(
         change: ResourceChange,
         cache: &ServerCache<T>,
         resource: T,
-        resource_version: Option<u64>,
+        _resource_version: Option<u64>,
     ) where
         T: Clone + Send + Sync + 'static + Versionable + Resource,
     {
         cache.apply_change(change, resource);
-    }
-
-    fn fallback_gateway_class_keys(&self) -> Vec<String> {
-        // Use configured gateway_class if available, otherwise use default
-        if let Some(gc) = self.gateway_class() {
-            vec![gc.clone()]
-        } else {
-            vec![DEFAULT_GATEWAY_CLASS_KEY.to_string()]
-        }
     }
 }
 
