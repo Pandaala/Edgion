@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use notify::{event::{ModifyKind, RenameMode}, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::fs;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 
@@ -13,18 +13,14 @@ use crate::core::conf_load::ConfigLoader;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::EventDispatcher;
 use crate::core::utils::{extract_resource_metadata, is_base_conf, ResourceMetadata};
-use crate::types::ResourceKind;
 
 pub struct FileSystemConfigLoader {
     root: PathBuf,
     dispatcher: Arc<dyn EventDispatcher>,
-    resource_kind: Option<ResourceKind>,
-    cache: Arc<Mutex<HashMap<PathBuf, String>>>,
-    // Track pending renames: from_path -> to_path
-    pending_renames: Arc<Mutex<HashMap<PathBuf, PathBuf>>>,
     // Track resource metadata to file paths mapping for duplicate detection
     // Key: ResourceMetadata (kind/namespace/name), Value: Vec<PathBuf> (file paths)
     resource_to_files: Arc<Mutex<HashMap<ResourceMetadata, Vec<PathBuf>>>>,
+    files_to_resource: Arc<RwLock<HashMap<PathBuf, ResourceMetadata>>>,
 }
 
 // TODO: Support nested directory watch and propagation. Currently only flat file
@@ -34,15 +30,12 @@ impl FileSystemConfigLoader {
     pub fn new<P: Into<PathBuf>>(
         root: P,
         dispatcher: Arc<dyn EventDispatcher>,
-        resource_kind: Option<ResourceKind>,
     ) -> Arc<Self> {
         let loader = Arc::new(Self {
             root: root.into(),
             dispatcher,
-            resource_kind,
-            cache: Arc::new(Mutex::new(HashMap::new())),
-            pending_renames: Arc::new(Mutex::new(HashMap::new())),
             resource_to_files: Arc::new(Mutex::new(HashMap::new())),
+            files_to_resource: Arc::new(RwLock::new(HashMap::new())),
         });
         
         // Spawn duplicate detection task
@@ -71,8 +64,6 @@ impl FileSystemConfigLoader {
     }
 
     async fn dispatch_change(&self, change: ResourceChange, data: String, use_base_conf: bool) {
-        let resource_type = self.resource_kind;
-        
         // Convert YAML to JSON for dispatcher
         let json_data = match Self::yaml_to_json(&data) {
             Ok(json) => json,
@@ -87,10 +78,10 @@ impl FileSystemConfigLoader {
         
         if use_base_conf {
             self.dispatcher
-                .apply_base_conf(change, resource_type, json_data, None);
+                .apply_base_conf(change, None, json_data, None);
         } else {
             self.dispatcher
-                .apply_resource_change(change, resource_type, json_data, None);
+                .apply_resource_change(change, None, json_data, None);
         }
     }
     
@@ -156,26 +147,68 @@ impl FileSystemConfigLoader {
             change = ?change,
         );
 
-        if path.is_dir() {
-            tracing::warn!(
+        // Normalize path for consistent tracking
+        let normalized_path = self.normalize_path(path).await;
+
+        // 判断文件是否存在
+        if !path.exists() || path.is_dir() || !path.is_file() {
+            // 文件不存在,处理删除逻辑
+            tracing::info!(
                 component = "file_system_loader",
-                event = "directory_not_supported",
+                event = "file_not_exists",
                 path = ?path,
+                "File does not exist, processing as deletion"
             );
-            log_directory_not_supported(path);
+
+            // 从 files_to_resource 中获取旧的 resource metadata
+            let mut files_to_resource = self.files_to_resource.write().await;
+            let old_metadata = files_to_resource.remove(&normalized_path);
+            drop(files_to_resource);
+
+            if let Some(metadata) = old_metadata {
+                // 从 resource_to_files 中删除该文件
+                let mut resource_to_files = self.resource_to_files.lock().await;
+                
+                if let Some(files) = resource_to_files.get_mut(&metadata) {
+                    files.retain(|p| p != &normalized_path);
+                    
+                    // 如果 vec 为空,触发 delete 事件
+                    if files.is_empty() {
+                        resource_to_files.remove(&metadata);
+                        drop(resource_to_files);
+                        
+                        // 尝试读取文件内容以触发delete事件
+                        // 由于文件已删除,我们需要从其他途径获取内容
+                        // 这里假设我们无法获取内容,可能需要其他机制来处理
+                        tracing::info!(
+                            component = "file_system_loader",
+                            event = "resource_deleted",
+                            path = ?path,
+                            kind = ?metadata.kind,
+                            namespace = ?metadata.namespace,
+                            name = ?metadata.name,
+                            "Resource has no more files, triggering delete event (但无法获取文件内容)"
+                        );
+                    } else {
+                        let remaining_count = files.len();
+                        drop(resource_to_files);
+                        tracing::info!(
+                            component = "file_system_loader",
+                            event = "file_removed_but_resource_still_exists",
+                            path = ?path,
+                            remaining_files = remaining_count,
+                            "File removed but resource still has other files"
+                        );
+                    }
+                } else {
+                    drop(resource_to_files);
+                }
+            }
+            
             return Ok(());
         }
 
-        if !path.is_file() {
-            tracing::warn!(
-                component = "file_system_loader",
-                event = "not_a_file",
-                path = ?path,
-            );
-            return Ok(());
-        }
-
-        // Only process .yml or .yaml files
+        // 只处理 .yml 或 .yaml 文件
         let extension = path.extension()
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
@@ -189,544 +222,89 @@ impl FileSystemConfigLoader {
             return Ok(());
         }
 
+        // 文件存在,读取内容
         let content = Self::read_file(path).await?;
-        self.cache
-            .lock()
-            .await
-            .insert(path.to_path_buf(), content.clone());
         
-        // Update resource_to_files mapping
-        self.update_resource_to_files(path, &content).await;
-        
-        // Extract resource metadata for logging
-        if let Some(metadata) = extract_resource_metadata(&content) {
-            let kind_str = metadata.kind.as_deref().unwrap_or("Unknown");
-            let name_str = metadata.name.as_deref().unwrap_or("Unknown");
-            let namespace_str = metadata.namespace.as_deref();
-            
-            if let Some(ns) = namespace_str {
-                tracing::info!(
+        // 提取 resource metadata
+        let metadata = match extract_resource_metadata(&content) {
+            Some(m) => m,
+            None => {
+                tracing::warn!(
                     component = "file_system_loader",
-                    event = "processing_file",
+                    event = "failed_to_extract_metadata",
                     path = ?path,
-                    change = ?change,
-                    kind = kind_str,
-                    namespace = ns,
-                    name = name_str,
-                    "Processing resource file"
+                    "Failed to extract resource metadata from file"
                 );
-            } else {
-                tracing::info!(
-                    component = "file_system_loader",
-                    event = "processing_file",
-                    path = ?path,
-                    change = ?change,
-                    kind = kind_str,
-                    name = name_str,
-                    "Processing cluster-scoped resource file"
-                );
+                return Ok(());
             }
+        };
+
+        // 检查 files_to_resource 中是否已存在该文件
+        let mut files_to_resource = self.files_to_resource.write().await;
+        let existed_before = files_to_resource.contains_key(&normalized_path);
+        
+        // 更新 files_to_resource
+        files_to_resource.insert(normalized_path.clone(), metadata.clone());
+        drop(files_to_resource);
+
+        // 更新 resource_to_files
+        let mut resource_to_files = self.resource_to_files.lock().await;
+        let files = resource_to_files.entry(metadata.clone()).or_insert_with(Vec::new);
+        if !files.contains(&normalized_path) {
+            files.push(normalized_path.clone());
+        }
+        drop(resource_to_files);
+
+        // 根据是否存在决定触发 add 还是 update
+        let actual_change = if existed_before {
+            ResourceChange::EventUpdate
+        } else {
+            ResourceChange::EventAdd
+        };
+
+        let kind_str = metadata.kind.as_deref().unwrap_or("Unknown");
+        let name_str = metadata.name.as_deref().unwrap_or("Unknown");
+        let namespace_str = metadata.namespace.as_deref();
+        
+        if let Some(ns) = namespace_str {
+            tracing::info!(
+                component = "file_system_loader",
+                event = "processing_file",
+                path = ?path,
+                change = ?actual_change,
+                kind = kind_str,
+                namespace = ns,
+                name = name_str,
+                existed_before = existed_before,
+                "Processing resource file"
+            );
+        } else {
+            tracing::info!(
+                component = "file_system_loader",
+                event = "processing_file",
+                path = ?path,
+                change = ?actual_change,
+                kind = kind_str,
+                name = name_str,
+                existed_before = existed_before,
+                "Processing cluster-scoped resource file"
+            );
         }
         
         // Determine if this is a base conf resource
         let use_base_conf = is_base_conf(&content);
-        self.dispatch_change(change, content, use_base_conf).await;
+        self.dispatch_change(actual_change, content, use_base_conf).await;
         Ok(())
     }
 
     async fn process_removed_file(&self, path: &Path) -> Result<()> {
-        tracing::debug!(
-            component = "file_system_loader",
-            event = "process_removed_file",
-            path = ?path,
-            "Processing file removal"
-        );
-        
-        // Check if this resource has duplicate files before removing from mapping
-        let normalized_path = self.normalize_path(path).await;
-        let resource_to_files = self.resource_to_files.lock().await;
-        
-        // Find the resource metadata for this file
-        let mut resource_metadata: Option<(ResourceMetadata, Vec<PathBuf>)> = None;
-        for (metadata, files) in resource_to_files.iter() {
-            if files.contains(&normalized_path) {
-                let mut remaining_files = files.clone();
-                remaining_files.retain(|p| p != &normalized_path);
-                resource_metadata = Some((metadata.clone(), remaining_files));
-                break;
-            }
-        }
-        drop(resource_to_files);
-        
-        // Try to get content from cache first (most reliable)
-        let mut cache = self.cache.lock().await;
-        let cached_content = cache.remove(path);
-        drop(cache);
-        
-        let content_to_delete = if let Some(cached) = cached_content {
-            // Use cached content
-            tracing::debug!(
-                component = "file_system_loader",
-                event = "using_cached_content",
-                path = ?path,
-                "Using cached content for deletion"
-            );
-            Some(cached)
-        } else if path.exists() && path.is_file() {
-            // File still exists, try to read it (might be a race condition)
-            tracing::debug!(
-                component = "file_system_loader",
-                event = "reading_file_for_deletion",
-                path = ?path,
-                "File not in cache but still exists, reading for deletion"
-            );
-            match Self::read_file(path).await {
-                Ok(content) => Some(content),
-                Err(e) => {
-                    tracing::warn!(
-                        component = "file_system_loader",
-                        event = "failed_to_read_file",
-                        path = ?path,
-                        error = %e,
-                        "Failed to read file for deletion, skipping"
-                    );
-                    None
-                }
-            }
-        } else {
-            // File doesn't exist and not in cache
-            // Try to get content from other files defining the same resource
-            if let Some((_metadata, remaining_files)) = &resource_metadata {
-                if !remaining_files.is_empty() {
-                    // Try to read from the first remaining file to get resource content
-                    let first_file = &remaining_files[0];
-                    tracing::debug!(
-                        component = "file_system_loader",
-                        event = "reading_duplicate_file_for_deletion",
-                        path = ?path,
-                        duplicate_file = ?first_file,
-                        "File not in cache, trying to read from duplicate file for deletion"
-                    );
-                    match Self::read_file(first_file).await {
-                        Ok(content) => {
-                            tracing::info!(
-                                component = "file_system_loader",
-                                event = "using_duplicate_content_for_deletion",
-                                path = ?path,
-                                duplicate_file = ?first_file,
-                                "Using content from duplicate file for deletion"
-                            );
-                            Some(content)
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                component = "file_system_loader",
-                                event = "failed_to_read_duplicate_file",
-                                path = ?path,
-                                duplicate_file = ?first_file,
-                                error = %e,
-                                "Failed to read duplicate file for deletion"
-                            );
-                            None
-                        }
-                    }
-                } else {
-                    // No remaining files in resource_to_files, but check cache for other files defining same resource
-                    if let Some((metadata, _)) = &resource_metadata {
-                        // Try to find any file in cache that defines the same resource
-                        let cache = self.cache.lock().await;
-                        let mut found_content: Option<String> = None;
-                        let mut found_path: Option<PathBuf> = None;
-                        
-                        for (cached_path, cached_content) in cache.iter() {
-                            if let Some(cached_metadata) = extract_resource_metadata(cached_content) {
-                                if cached_metadata.kind == metadata.kind
-                                    && cached_metadata.namespace == metadata.namespace
-                                    && cached_metadata.name == metadata.name
-                                {
-                                    // Found a file with same resource
-                                    found_content = Some(cached_content.clone());
-                                    found_path = Some(cached_path.clone());
-                                    tracing::debug!(
-                                        component = "file_system_loader",
-                                        event = "found_same_resource_in_cache",
-                                        path = ?path,
-                                        cached_path = ?cached_path,
-                                        "Found same resource in cache"
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-                        drop(cache);
-                        
-                        if let Some(content) = found_content {
-                            // Check if the found file is still in resource_to_files (might be a duplicate)
-                            // We need to check this before removing the current file from mapping
-                            let resource_to_files_check = self.resource_to_files.lock().await;
-                            let mut duplicate_files = Vec::new();
-                            
-                            for (check_metadata, files) in resource_to_files_check.iter() {
-                                if check_metadata.kind == metadata.kind
-                                    && check_metadata.namespace == metadata.namespace
-                                    && check_metadata.name == metadata.name
-                                {
-                                    // Found the resource in mapping, check if found_path is in it
-                                    // Note: files in resource_to_files are already normalized
-                                    if let Some(ref fp) = found_path {
-                                        let normalized_found = self.normalize_path(fp).await;
-                                        if files.contains(&normalized_found) {
-                                            // Get all files except the one being removed
-                                            // Files in resource_to_files are already normalized, so we can compare directly
-                                            duplicate_files = files.iter()
-                                                .filter(|p| p != &&normalized_path)
-                                                .cloned()
-                                                .collect();
-                                            
-                                            // Update resource_metadata with duplicate files
-                                            resource_metadata = Some((metadata.clone(), duplicate_files.clone()));
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                            drop(resource_to_files_check);
-                            
-                            if !duplicate_files.is_empty() {
-                                // There are other files in resource_to_files, we'll handle update later
-                                tracing::info!(
-                                    component = "file_system_loader",
-                                    event = "found_duplicate_in_mapping",
-                                    path = ?path,
-                                    duplicate_count = duplicate_files.len(),
-                                    "Found duplicate resource in resource_to_files mapping, will update instead of delete"
-                                );
-                            } else {
-                                tracing::info!(
-                                    component = "file_system_loader",
-                                    event = "using_cached_duplicate_for_deletion",
-                                    path = ?path,
-                                    "File not in cache but found duplicate resource in cache, using it for deletion"
-                                );
-                            }
-                            Some(content)
-                        } else {
-                            // Cannot find content, but we have metadata
-                            tracing::warn!(
-                                component = "file_system_loader",
-                                event = "file_not_in_cache_and_missing",
-                                path = ?path,
-                                kind = ?metadata.kind,
-                                namespace = ?metadata.namespace,
-                                name = ?metadata.name,
-                                "File removed but not found in cache and file doesn't exist, cannot delete resource without content"
-                            );
-                            None
-                        }
-                    } else {
-                        // No metadata found, check if it's a directory
-                        let cache = self.cache.lock().await;
-                        let has_children = cache.keys().any(|entry| entry.starts_with(path));
-                        drop(cache);
-                        
-                        if has_children {
-                            log_directory_not_supported(path);
-                        } else {
-                            tracing::warn!(
-                                component = "file_system_loader",
-                                event = "file_not_in_cache_and_missing",
-                                path = ?path,
-                                "File removed but not found in cache and file doesn't exist, cannot delete resource"
-                            );
-                        }
-                        None
-                    }
-                }
-            } else {
-                // Not found in resource_to_files, check if it's a directory
-                let cache = self.cache.lock().await;
-                let has_children = cache.keys().any(|entry| entry.starts_with(path));
-                drop(cache);
-                
-                if has_children {
-                    log_directory_not_supported(path);
-                } else {
-                    tracing::warn!(
-                        component = "file_system_loader",
-                        event = "file_not_in_cache_and_missing",
-                        path = ?path,
-                        "File removed but not found in cache and file doesn't exist, cannot delete resource"
-                    );
-                }
-                None
-            }
-        };
-        
-        // Remove file from resource_to_files mapping
-        self.remove_resource_from_files(path).await;
-        
-        // Dispatch delete event or update with first remaining file
-        if let Some(old_content) = content_to_delete {
-            let use_base_conf = is_base_conf(&old_content);
-            
-            // Check if there are other files defining the same resource
-            if let Some((_metadata, remaining_files)) = resource_metadata {
-                if !remaining_files.is_empty() {
-                    // There are other files, use the first one for update instead of delete
-                    let first_file = &remaining_files[0];
-                    
-                    // Extract metadata for logging
-                    if let Some(metadata_extracted) = extract_resource_metadata(&old_content) {
-                        let kind_str = metadata_extracted.kind.as_deref().unwrap_or("Unknown");
-                        let name_str = metadata_extracted.name.as_deref().unwrap_or("Unknown");
-                        let namespace_str = metadata_extracted.namespace.as_deref();
-                        
-                        if let Some(ns) = namespace_str {
-                            tracing::info!(
-                                component = "file_system_loader",
-                                event = "file_removed_with_duplicate",
-                                path = ?path,
-                                remaining_file = ?first_file,
-                                kind = kind_str,
-                                namespace = ns,
-                                name = name_str,
-                                "File removed but resource has duplicates, updating with first remaining file instead of deleting"
-                            );
-                        } else {
-                            tracing::info!(
-                                component = "file_system_loader",
-                                event = "file_removed_with_duplicate",
-                                path = ?path,
-                                remaining_file = ?first_file,
-                                kind = kind_str,
-                                name = name_str,
-                                "File removed but resource has duplicates, updating with first remaining file instead of deleting (cluster-scoped)"
-                            );
-                        }
-                    }
-                    
-                    // Read the first remaining file and update the resource
-                    match Self::read_file(first_file).await {
-                        Ok(new_content) => {
-                            let new_use_base_conf = is_base_conf(&new_content);
-                            
-                            // Delete old resource first, then add new resource
-                            // This ensures correct handling if namespace or other fields changed
-                            self.dispatch_change(ResourceChange::EventDelete, old_content, use_base_conf).await;
-                            self.dispatch_change(ResourceChange::EventAdd, new_content, new_use_base_conf).await;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                component = "file_system_loader",
-                                event = "failed_to_read_remaining_file",
-                                path = ?first_file,
-                                error = %e,
-                                "Failed to read remaining file for update, falling back to delete"
-                            );
-                            // Fallback to delete if we can't read the remaining file
-                            self.dispatch_change(ResourceChange::EventDelete, old_content, use_base_conf).await;
-                        }
-                    }
-                } else {
-                    // No remaining files, proceed with normal delete
-                    if let Some(metadata_extracted) = extract_resource_metadata(&old_content) {
-                        let kind_str = metadata_extracted.kind.as_deref().unwrap_or("Unknown");
-                        let name_str = metadata_extracted.name.as_deref().unwrap_or("Unknown");
-                        let namespace_str = metadata_extracted.namespace.as_deref();
-                        
-                        if let Some(ns) = namespace_str {
-                            tracing::info!(
-                                component = "file_system_loader",
-                                event = "file_removed",
-                                path = ?path,
-                                use_base_conf = use_base_conf,
-                                kind = kind_str,
-                                namespace = ns,
-                                name = name_str,
-                                "Dispatching delete event for removed file"
-                            );
-                        } else {
-                            tracing::info!(
-                                component = "file_system_loader",
-                                event = "file_removed",
-                                path = ?path,
-                                use_base_conf = use_base_conf,
-                                kind = kind_str,
-                                name = name_str,
-                                "Dispatching delete event for removed file (cluster-scoped)"
-                            );
-                        }
-                    } else {
-                        tracing::info!(
-                            component = "file_system_loader",
-                            event = "file_removed",
-                            path = ?path,
-                            use_base_conf = use_base_conf,
-                            "Dispatching delete event (metadata extraction failed)"
-                        );
-                    }
-                    
-                    self.dispatch_change(ResourceChange::EventDelete, old_content, use_base_conf).await;
-                }
-            } else {
-                // No metadata found, proceed with normal delete
-                if let Some(metadata_extracted) = extract_resource_metadata(&old_content) {
-                    let kind_str = metadata_extracted.kind.as_deref().unwrap_or("Unknown");
-                    let name_str = metadata_extracted.name.as_deref().unwrap_or("Unknown");
-                    let namespace_str = metadata_extracted.namespace.as_deref();
-                    
-                    if let Some(ns) = namespace_str {
-                        tracing::info!(
-                            component = "file_system_loader",
-                            event = "file_removed",
-                            path = ?path,
-                            use_base_conf = use_base_conf,
-                            kind = kind_str,
-                            namespace = ns,
-                            name = name_str,
-                            "Dispatching delete event for removed file"
-                        );
-                    } else {
-                        tracing::info!(
-                            component = "file_system_loader",
-                            event = "file_removed",
-                            path = ?path,
-                            use_base_conf = use_base_conf,
-                            kind = kind_str,
-                            name = name_str,
-                            "Dispatching delete event for removed file (cluster-scoped)"
-                        );
-                    }
-                } else {
-                    tracing::info!(
-                        component = "file_system_loader",
-                        event = "file_removed",
-                        path = ?path,
-                        use_base_conf = use_base_conf,
-                        "Dispatching delete event (metadata extraction failed)"
-                    );
-                }
-                
-                self.dispatch_change(ResourceChange::EventDelete, old_content, use_base_conf).await;
-            }
-        }
-        
-        Ok(())
+        // 简化为直接调用 process_file_with_change,由它处理文件不存在的情况
+        self.process_file_with_change(path, ResourceChange::EventDelete).await
     }
 
     async fn process_updated_file(&self, path: &Path) -> Result<()> {
-        if path.is_dir() {
-            log_directory_not_supported(path);
-            return Ok(());
-        }
-
-        if !path.is_file() {
-            return Ok(());
-        }
-
-        let new_content = Self::read_file(path).await?;
-        let new_use_base_conf = is_base_conf(&new_content);
-        
-        // Get old content from cache and update cache with new content in one lock
-        let mut cache = self.cache.lock().await;
-        let old_content = cache.remove(path);
-        cache.insert(path.to_path_buf(), new_content.clone());
-        drop(cache);
-        
-        // Remove old resource from resource_to_files mapping before processing
-        if old_content.is_some() {
-            self.remove_resource_from_files(path).await;
-        }
-        
-        // Update resource_to_files mapping with new content
-        self.update_resource_to_files(path, &new_content).await;
-        
-        // Always delete old resource first, then add new resource
-        // This is necessary because namespace or other identifying fields might have changed
-        // Using delete+add instead of update ensures correct handling of namespace changes
-        if let Some(old_content) = old_content {
-            let old_use_base_conf = is_base_conf(&old_content);
-            
-            // Extract metadata for logging
-            if let Some(old_metadata) = extract_resource_metadata(&old_content) {
-                let old_kind = old_metadata.kind.as_deref().unwrap_or("Unknown");
-                let old_name = old_metadata.name.as_deref().unwrap_or("Unknown");
-                let old_namespace = old_metadata.namespace.as_deref();
-                
-                if let Some(new_metadata) = extract_resource_metadata(&new_content) {
-                    let new_kind = new_metadata.kind.as_deref().unwrap_or("Unknown");
-                    let new_name = new_metadata.name.as_deref().unwrap_or("Unknown");
-                    let new_namespace = new_metadata.namespace.as_deref();
-                    
-                    // Check if namespace or name changed
-                    let namespace_changed = old_namespace != new_namespace;
-                    let name_changed = old_name != new_name;
-                    let kind_changed = old_kind != new_kind;
-                    
-                    if namespace_changed || name_changed || kind_changed {
-                        tracing::info!(
-                            component = "file_system_loader",
-                            event = "file_modified_with_identity_change",
-                            path = ?path,
-                            old_kind = old_kind,
-                            old_namespace = ?old_namespace,
-                            old_name = old_name,
-                            new_kind = new_kind,
-                            new_namespace = ?new_namespace,
-                            new_name = new_name,
-                            "File modified with identity change, using delete+add instead of update"
-                        );
-                    }
-                }
-            }
-            
-            // Delete old resource (use old content's use_base_conf flag)
-            self.dispatch_change(ResourceChange::EventDelete, old_content, old_use_base_conf).await;
-        }
-        
-        // Add the new resource (use new content's use_base_conf flag)
-        self.dispatch_change(ResourceChange::EventAdd, new_content, new_use_base_conf)
-            .await;
-        Ok(())
-    }
-    
-    /// Update resource_to_files mapping when a file is added or updated
-    async fn update_resource_to_files(&self, path: &Path, content: &str) {
-        if let Some(metadata) = extract_resource_metadata(content) {
-            let mut resource_to_files = self.resource_to_files.lock().await;
-            // Normalize path to avoid duplicates from relative/absolute path differences
-            let normalized_path = self.normalize_path(path).await;
-            let files = resource_to_files
-                .entry(metadata)
-                .or_insert_with(Vec::new);
-            
-            // Only add if not already present (avoid duplicates)
-            if !files.contains(&normalized_path) {
-                files.push(normalized_path);
-            }
-        }
-    }
-    
-    /// Remove a file from resource_to_files mapping
-    async fn remove_resource_from_files(&self, path: &Path) {
-        let mut resource_to_files = self.resource_to_files.lock().await;
-        
-        // Normalize path to match against normalized paths in the map
-        let normalized_path = self.normalize_path(path).await;
-        
-        // Find and remove the normalized path from all resource entries
-        let mut to_remove = Vec::new();
-        for (metadata, files) in resource_to_files.iter_mut() {
-            files.retain(|p| p != &normalized_path);
-            if files.is_empty() {
-                to_remove.push(metadata.clone());
-            }
-        }
-        
-        // Remove entries with empty file lists
-        for metadata in to_remove {
-            resource_to_files.remove(&metadata);
-        }
+        // 简化为直接调用 process_file_with_change,由它处理文件更新的情况
+        self.process_file_with_change(path, ResourceChange::EventUpdate).await
     }
     
     /// Check for duplicate resources (multiple files pointing to the same resource)
@@ -774,43 +352,24 @@ impl FileSystemConfigLoader {
     async fn handle_event(&self, event: Event) -> Result<()> {
         match event.kind {
             EventKind::Create(_) => {
+                // 新文件创建
                 for path in event.paths.clone() {
-                    // Check if this is a rename target (file moved in)
-                    let mut pending_renames = self.pending_renames.lock().await;
-                    let is_rename = pending_renames.values().any(|to_path| to_path == &path);
-                    if is_rename {
-                        // Find the source path
-                        let from_path = pending_renames.iter()
-                            .find(|(_, to_path)| to_path == &&path)
-                            .map(|(from, _)| from.clone());
-                        if let Some(from_path) = from_path {
-                            pending_renames.remove(&from_path);
-                            drop(pending_renames);
-                            // Process as rename: remove old, add new
-                            self.process_removed_file(&from_path).await?;
-                            self.process_new_file(&path).await?;
-                        } else {
-                            drop(pending_renames);
-                            self.process_new_file(&path).await?;
-                        }
-                    } else {
-                        drop(pending_renames);
-                        // Regular create event (new file or file moved in from outside)
-                        self.process_new_file(&path).await?;
-                    }
+                    self.process_new_file(&path).await?;
                 }
             }
             EventKind::Modify(modify_kind) => match modify_kind {
                 ModifyKind::Data(_) | ModifyKind::Metadata(_) => {
+                    // 文件内容或元数据修改
                     for path in event.paths.clone() {
                         self.process_updated_file(&path).await?;
                     }
                 }
                 ModifyKind::Name(rename_mode) => {
+                    // 文件重命名
                     let paths = event.paths.clone();
                     match rename_mode {
                         RenameMode::Both => {
-                            // Both paths in one event
+                            // 同时提供旧路径和新路径
                             if paths.len() == 2 {
                                 let old = paths[0].clone();
                                 let new = paths[1].clone();
@@ -827,7 +386,7 @@ impl FileSystemConfigLoader {
                             }
                         }
                         RenameMode::From => {
-                            // Source path (old path) - store for potential matching To event
+                            // 旧路径(文件被移走)
                             for from_path in paths.clone() {
                                 tracing::debug!(
                                     component = "file_system_loader",
@@ -835,56 +394,23 @@ impl FileSystemConfigLoader {
                                     path = ?from_path,
                                     "Received RenameMode::From event"
                                 );
-                                
-                                // Check if source is in watched directory
-                                let from_in_watched = from_path.starts_with(&self.root);
-                                
-                                // Store the source path, we'll match it with To or Create event
-                                // But only if source is in watched directory (might be moved within)
-                                let mut pending_renames = self.pending_renames.lock().await;
-                                if from_in_watched {
-                                    // Use a placeholder to_path for now, will be updated when we see To/Create
-                                    pending_renames.insert(from_path.clone(), PathBuf::new());
-                                }
-                                drop(pending_renames);
-                                
-                                // Process removal immediately
-                                // If file is moved outside watched directory, this will handle deletion
-                                // If moved within, the To/Create event will handle the new location
                                 self.process_removed_file(&from_path).await?;
                             }
                         }
                         RenameMode::To => {
-                            // Target path (new path) - match with pending From
+                            // 新路径(文件被移入)
                             for to_path in paths.clone() {
-                                let mut pending_renames = self.pending_renames.lock().await;
-                                // Find matching From path (same directory or any pending)
-                                let mut matched_from = None;
-                                for (from_path, _) in pending_renames.iter() {
-                                    // Try to match by same directory first
-                                    if from_path.parent() == to_path.parent() {
-                                        matched_from = Some(from_path.clone());
-                                        break;
-                                    }
-                                }
-                                // If no same-directory match, use any pending From
-                                if matched_from.is_none() {
-                                    matched_from = pending_renames.keys().next().cloned();
-                                }
-                                if let Some(from_path) = matched_from {
-                                    pending_renames.remove(&from_path);
-                                    drop(pending_renames);
-                                    // Process as rename: From already processed as removal, now add new
-                                    self.process_new_file(&to_path).await?;
-                                } else {
-                                    drop(pending_renames);
-                                    // No matching From, treat as new file
-                                    self.process_new_file(&to_path).await?;
-                                }
+                                tracing::debug!(
+                                    component = "file_system_loader",
+                                    event = "rename_to",
+                                    path = ?to_path,
+                                    "Received RenameMode::To event"
+                                );
+                                self.process_new_file(&to_path).await?;
                             }
                         }
                         RenameMode::Any => {
-                            // Fallback: try to handle as Both if 2 paths, otherwise process individually
+                            // 通用处理
                             let path_count = paths.len();
                             if path_count == 2 {
                                 let old = paths[0].clone();
@@ -892,79 +418,25 @@ impl FileSystemConfigLoader {
                                 self.process_removed_file(&old).await?;
                                 self.process_new_file(&new).await?;
                             } else if path_count == 1 {
-                                // Single path: could be:
-                                // 1. File moved in from outside (Create) - not in cache, file exists
-                                // 2. File moved out (Delete) - in cache or resource_to_files, file doesn't exist or moved outside
-                                // 3. File renamed within - in cache, file exists
+                                // 单个路径,检查文件是否存在来决定是添加还是删除
                                 for path in paths {
-                                    let cache = self.cache.lock().await;
-                                    let is_in_cache = cache.contains_key(&path);
-                                    drop(cache);
+                                    let normalized_path = self.normalize_path(&path).await;
+                                    let files_to_resource = self.files_to_resource.read().await;
+                                    let was_tracked = files_to_resource.contains_key(&normalized_path);
+                                    drop(files_to_resource);
                                     
-                                    // Check if path is still in watched directory
                                     let is_in_watched_dir = path.starts_with(&self.root);
                                     
-                                    if is_in_cache {
-                                        // File was tracked, check if it still exists and is in watched directory
-                                        if path.exists() && is_in_watched_dir {
-                                            // File still exists in watched directory, treat as update/rename
+                                    if path.exists() && is_in_watched_dir {
+                                        // 文件存在,判断是新增还是更新
+                                        if was_tracked {
                                             self.process_updated_file(&path).await?;
                                         } else {
-                                            // File moved outside or deleted, treat as removal
-                                            tracing::debug!(
-                                                component = "file_system_loader",
-                                                event = "rename_any_single_path_removed",
-                                                path = ?path,
-                                                exists = path.exists(),
-                                                in_watched = is_in_watched_dir,
-                                                "RenameMode::Any with single path in cache but file moved outside or deleted, treating as removal"
-                                            );
-                                            self.process_removed_file(&path).await?;
-                                        }
-                                    } else {
-                                        // File not in cache, check if it exists and is in watched directory
-                                        if path.exists() && is_in_watched_dir {
-                                            // File exists in watched directory, treat as new
-                                            tracing::debug!(
-                                                component = "file_system_loader",
-                                                event = "rename_any_single_path_new",
-                                                path = ?path,
-                                                "RenameMode::Any with single path not in cache, treating as new file"
-                                            );
                                             self.process_new_file(&path).await?;
-                                        } else {
-                                            // File doesn't exist or moved outside, check resource_to_files mapping
-                                            let normalized_path = self.normalize_path(&path).await;
-                                            let resource_to_files = self.resource_to_files.lock().await;
-                                            
-                                            // Check if this path was tracked in resource_to_files
-                                            let was_tracked = resource_to_files.values()
-                                                .any(|files| files.contains(&normalized_path));
-                                            drop(resource_to_files);
-                                            
-                                            if was_tracked {
-                                                // File was tracked but not in cache, treat as removal
-                                                tracing::debug!(
-                                                    component = "file_system_loader",
-                                                    event = "rename_any_single_path_removed_from_mapping",
-                                                    path = ?path,
-                                                    exists = path.exists(),
-                                                    in_watched = is_in_watched_dir,
-                                                    "RenameMode::Any with single path not in cache but found in resource_to_files, treating as removal"
-                                                );
-                                                self.process_removed_file(&path).await?;
-                                            } else {
-                                                // File not tracked at all, skip
-                                                tracing::warn!(
-                                                    component = "file_system_loader",
-                                                    event = "rename_any_single_path_skipped",
-                                                    path = ?path,
-                                                    exists = path.exists(),
-                                                    in_watched = is_in_watched_dir,
-                                                    "RenameMode::Any with single path not in cache and file doesn't exist or outside watched dir, skipping"
-                                                );
-                                            }
                                         }
+                                    } else if was_tracked {
+                                        // 文件不存在但之前被跟踪,处理为删除
+                                        self.process_removed_file(&path).await?;
                                     }
                                 }
                             } else {
@@ -978,7 +450,7 @@ impl FileSystemConfigLoader {
                             }
                         }
                         RenameMode::Other => {
-                            // Unknown rename mode, log and try to handle
+                            // 未知重命名模式
                             tracing::warn!(
                                 component = "file_system_loader",
                                 event = "unknown_rename_mode",
@@ -1001,6 +473,7 @@ impl FileSystemConfigLoader {
                 _ => {}
             },
             EventKind::Remove(_) => {
+                // 文件删除
                 for path in event.paths.clone() {
                     tracing::debug!(
                         component = "file_system_loader",
@@ -1008,24 +481,6 @@ impl FileSystemConfigLoader {
                         path = ?path,
                         "Received Remove event"
                     );
-                    
-                    // Check if this path is within the watched root directory
-                    // If not, it might be a file moved outside, but we should still process it
-                    let is_in_watched_dir = path.starts_with(&self.root);
-                    
-                    // Track removed files - if we see a Create event soon, it's a move
-                    // Otherwise, it's a deletion
-                    let mut pending_renames = self.pending_renames.lock().await;
-                    // Store the removed path with empty target (will be updated if Create follows)
-                    // But only if the file is still in the watched directory (might be moved within)
-                    if is_in_watched_dir {
-                        pending_renames.insert(path.clone(), PathBuf::new());
-                    }
-                    drop(pending_renames);
-                    
-                    // Process as removal immediately
-                    // If it's actually a move within the directory, the Create event will handle adding the new file
-                    // If it's moved outside, this will process the deletion
                     self.process_removed_file(&path).await?;
                 }
             }

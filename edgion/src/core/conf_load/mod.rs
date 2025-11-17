@@ -59,7 +59,7 @@ impl Loader {
                     ));
                 }
 
-                let loader = FileSystemConfigLoader::new(path, dispatcher, None);
+                let loader = FileSystemConfigLoader::new(path, dispatcher);
                 Ok(Self { inner: loader })
             }
             LoaderKind::Etcd => Err(anyhow::anyhow!("etcd loader is not currently supported")),
