@@ -41,6 +41,11 @@ pub struct ServerConfig {
     #[arg(long, value_name = "ADDR")]
     #[serde(default)]
     pub admin_listen: Option<String>,
+    
+    /// Gateway class name that this operator instance will handle
+    #[arg(long = "gateway-class", value_name = "NAME")]
+    #[serde(default)]
+    pub gateway_class: Option<String>,
 }
 
 /// Logging configuration
@@ -140,6 +145,7 @@ impl Default for ServerConfig {
         Self {
             grpc_listen: None,
             admin_listen: None,
+            gateway_class: None,
         }
     }
 }
@@ -217,6 +223,9 @@ impl EdgionOpConfig {
         if cli.server.admin_listen.is_some() {
             base.server.admin_listen = cli.server.admin_listen.clone();
         }
+        if cli.server.gateway_class.is_some() {
+            base.server.gateway_class = cli.server.gateway_class.clone();
+        }
         
         // Logging config
         if cli.logging.log_dir.is_some() {
@@ -254,6 +263,11 @@ impl EdgionOpConfig {
     pub fn admin_listen(&self) -> String {
         self.server.admin_listen.clone()
             .unwrap_or_else(default_admin_listen)
+    }
+    
+    /// Get gateway_class
+    pub fn gateway_class(&self) -> Option<String> {
+        self.server.gateway_class.clone()
     }
     
     /// Get log_dir with default fallback

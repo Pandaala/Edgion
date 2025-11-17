@@ -12,6 +12,7 @@ use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
 };
 use anyhow::Result;
+use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
 
 pub type GatewayClassKey = String;
 
@@ -29,8 +30,12 @@ pub enum ResourceItem {
     Secret(Secret),
 }
 
-// todo, 所有的资源，都按照gatewayclass进行规制，对于多层映射的，后期可以通过添加filter的机制
+// 1、单个controller只处理一种gateway_class
+// 2、内部不做细分的全新配置，实际的权限配置全部由RBAC来控制他能取到哪些，取到哪些，就把哪些全部同步到对应的网关。（此处如果给予全部service/secret可见，那么对应的网关就可见）
+// 3、只会处理对应route信息里的有些parentRefs是对应的，不然就不会处理
 pub struct ConfigServer {
+    gateway_class: Option<String>,
+    pub base_conf: RwLock<GatewayClassBaseConf>,
     pub gateway_classes: RwLock<HashMap<GatewayClassKey, ServerCache<GatewayClass>>>,
     pub edgion_gateway_configs:
         RwLock<HashMap<GatewayClassKey, ServerCache<EdgionGatewayConfig>>>,
@@ -38,6 +43,8 @@ pub struct ConfigServer {
     pub routes: RwLock<HashMap<GatewayClassKey, ServerCache<HTTPRoute>>>,
     pub services: RwLock<HashMap<GatewayClassKey, ServerCache<Service>>>,
     pub endpoint_slices: RwLock<HashMap<GatewayClassKey, ServerCache<EndpointSlice>>>,
+
+    // this two should bond, otherwise, different gateway client will get all secrets.
     pub edgion_tls: RwLock<HashMap<GatewayClassKey, ServerCache<EdgionTls>>>,
     pub secrets: RwLock<HashMap<GatewayClassKey, ServerCache<Secret>>>,
 }
@@ -54,8 +61,10 @@ pub struct EventDataSimple {
 }
 
 impl ConfigServer {
-    pub fn new() -> Self {
+    pub fn new(gateway_class: Option<String>) -> Self {
         Self {
+            gateway_class,
+            base_conf: RwLock::new(GatewayClassBaseConf::new()),
             gateway_classes: RwLock::new(HashMap::new()),
             edgion_gateway_configs: RwLock::new(HashMap::new()),
             gateways: RwLock::new(HashMap::new()),
@@ -65,6 +74,11 @@ impl ConfigServer {
             edgion_tls: RwLock::new(HashMap::new()),
             secrets: RwLock::new(HashMap::new()),
         }
+    }
+    
+    /// Get the configured gateway class name
+    pub fn gateway_class(&self) -> Option<&String> {
+        self.gateway_class.as_ref()
     }
 
     pub fn list(
@@ -800,6 +814,6 @@ impl ConfigServer {
 
 impl Default for ConfigServer {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }

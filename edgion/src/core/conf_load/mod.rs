@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use clap::{Args, ValueEnum};
 use std::path::PathBuf;
 use crate::core::conf_sync::traits::{EventDispatcher};
@@ -68,12 +67,14 @@ impl Loader {
     }
 
     pub async fn run(self) -> Result<()> {
-
-        // Connect to etcd
+        // Connect to configuration source
         self.inner.connect().await?;
 
-        // Bootstrap existing configurations
-        self.inner.bootstrap_existing().await?;
+        // Bootstrap base configuration resources first
+        self.inner.bootstrap_base_conf().await?;
+        
+        // Bootstrap user configuration resources
+        self.inner.bootstrap_user_conf().await?;
 
         tracing::info!("Bootstrapped, set ready");
 

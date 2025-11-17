@@ -51,6 +51,23 @@ pub fn check_need_version(input: &str) -> Option<u64> {
     }
 }
 
+/// Check if content contains a base configuration resource
+/// 
+/// Base configuration resources are: GatewayClass, EdgionGatewayConfig, or Gateway
+/// Returns true if the content contains any of these resource types
+pub fn is_base_conf(content: &str) -> bool {
+    use crate::types::ResourceKind;
+    
+    if let Some(kind) = ResourceKind::from_content(content) {
+        matches!(
+            kind,
+            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+        )
+    } else {
+        false
+    }
+}
+
 /// Format resource info as kind/namespace/name/resource_version
 ///
 /// This function extracts key information from a Kubernetes resource for logging/debugging purposes.

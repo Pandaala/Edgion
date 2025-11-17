@@ -32,7 +32,7 @@ async fn config_server_and_client_stay_in_sync_via_watch() {
     let key = "gateway-class-test".to_string();
 
     // Step 1: build a config server with an initialized gateway class cache
-    let mut server = ConfigServer::new();
+    let mut server = ConfigServer::new(None);
     server
         .gateway_classes
         .write().unwrap()
@@ -395,7 +395,7 @@ async fn multiple_clients_relist_after_stale_watch_error() {
         tokio::time::pause();
     }
 
-    let server = Arc::new(Mutex::new(ConfigServer::new()));
+    let server = Arc::new(Mutex::new(ConfigServer::new(None)));
     {
         let guard = server.lock().await;
         guard

@@ -23,6 +23,10 @@ grpc_listen = "0.0.0.0:50051"
 # 用于管理和健康检查端点
 admin_listen = "0.0.0.0:8080"
 
+# Gateway class name that this operator instance will handle
+# 指定此 operator 实例将处理的 gateway class 名称
+gateway_class = "edgion-gateway-public"
+
 [logging]
 # 日志文件存储目录
 log_dir = "logs"

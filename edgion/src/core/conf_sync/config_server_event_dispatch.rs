@@ -350,4 +350,108 @@ impl EventDispatcher for ConfigServer {
             cache.set_ready();
         }
     }
+
+    fn apply_base_conf(
+        &self,
+        change: ResourceChange,
+        resource_type: Option<ResourceKind>,
+        data: String,
+        resource_version: Option<u64>,
+    ) {
+        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
+        
+        if resource_type.is_none() {
+            tracing::warn!(
+                component = "config_server",
+                event = "unknown_resource_type",
+                data_preview = %data.chars().take(500).collect::<String>(),
+                "Failed to determine resource type from content in apply_base_conf"
+            );
+            return;
+        }
+        
+        let resource_type = resource_type.unwrap();
+
+        // Only process base conf resources
+        match resource_type {
+            ResourceKind::GatewayClass => {
+                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "GatewayClass",
+                        event = "apply_base_conf",
+                        gateway_class_name = ?resource.metadata.name,
+                        change = ?change,
+                        "Applying GatewayClass to base_conf"
+                    );
+                    match change {
+                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                            let mut base_conf = self.base_conf.write().unwrap();
+                            base_conf.set_gateway_class(resource);
+                        }
+                        ResourceChange::EventDelete => {
+                            let mut base_conf = self.base_conf.write().unwrap();
+                            base_conf.clear_gateway_class();
+                        }
+                    }
+                }
+            }
+            ResourceKind::EdgionGatewayConfig => {
+                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "EdgionGatewayConfig",
+                        event = "apply_base_conf",
+                        edgion_gateway_config_name = ?resource.metadata.name,
+                        change = ?change,
+                        "Applying EdgionGatewayConfig to base_conf"
+                    );
+                    match change {
+                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                            let mut base_conf = self.base_conf.write().unwrap();
+                            base_conf.set_edgion_gateway_config(resource);
+                        }
+                        ResourceChange::EventDelete => {
+                            let mut base_conf = self.base_conf.write().unwrap();
+                            base_conf.clear_edgion_gateway_config();
+                        }
+                    }
+                }
+            }
+            ResourceKind::Gateway => {
+                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "Gateway",
+                        event = "apply_base_conf",
+                        gateway_name = ?resource.metadata.name,
+                        gateway_namespace = ?resource.metadata.namespace,
+                        change = ?change,
+                        "Applying Gateway to base_conf"
+                    );
+                    match change {
+                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                            let mut base_conf = self.base_conf.write().unwrap();
+                            base_conf.add_gateway(resource);
+                        }
+                        ResourceChange::EventDelete => {
+                            let mut base_conf = self.base_conf.write().unwrap();
+                            base_conf.remove_gateway(
+                                resource.metadata.namespace.as_ref(),
+                                resource.metadata.name.as_ref()
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    component = "config_server",
+                    event = "invalid_resource_type_for_base_conf",
+                    resource_type = ?resource_type,
+                    "apply_base_conf called with non-base-conf resource type"
+                );
+            }
+        }
+    }
 }

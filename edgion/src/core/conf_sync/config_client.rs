@@ -371,6 +371,17 @@ impl EventDispatcher for ConfigClient {
         }
     }
 
+    fn apply_base_conf(
+        &self,
+        _change: ResourceChange,
+        _resource_type: Option<ResourceKind>,
+        _data: String,
+        _resource_version: Option<u64>,
+    ) {
+        // ConfigClient doesn't handle base_conf initialization
+        // This is only used by ConfigServer
+    }
+
     fn set_ready(&self) {
         // HubCache doesn't need ready state
     }

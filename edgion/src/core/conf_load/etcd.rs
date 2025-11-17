@@ -9,6 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::core::conf_load::{ConfigLoader};
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
+use crate::core::utils::is_base_conf;
 use crate::types::ResourceKind;
 
 #[derive(Clone)]
@@ -50,28 +51,34 @@ impl EtcdConfigLoader {
         })
     }
 
-    async fn dispatch_change(&self, change: ResourceChange, payload: String) {
-        self.dispatcher.apply_resource_change(change, self.resource_kind, payload, None);
+    async fn dispatch_change(&self, change: ResourceChange, payload: String, use_base_conf: bool) {
+        if use_base_conf {
+            self.dispatcher.apply_base_conf(change, self.resource_kind, payload, None);
+        } else {
+            self.dispatcher.apply_resource_change(change, self.resource_kind, payload, None);
+        }
     }
 
 
     async fn handle_put(&self, key: String, value: String) {
+        let use_base_conf = is_base_conf(&value);
         let mut cache = self.cache.lock().await;
         if let Some(old) = cache.remove(&key) {
             drop(cache);
-            self.dispatch_change(ResourceChange::EventDelete, old).await;
+            self.dispatch_change(ResourceChange::EventDelete, old, use_base_conf).await;
             cache = self.cache.lock().await;
         }
         cache.insert(key, value.clone());
         drop(cache);
-        self.dispatch_change(ResourceChange::EventAdd, value).await;
+        self.dispatch_change(ResourceChange::EventAdd, value, use_base_conf).await;
     }
 
     async fn handle_delete(&self, key: String) {
         let mut cache = self.cache.lock().await;
         if let Some(old) = cache.remove(&key) {
+            let use_base_conf = is_base_conf(&old);
             drop(cache);
-            self.dispatch_change(ResourceChange::EventDelete, old).await;
+            self.dispatch_change(ResourceChange::EventDelete, old, use_base_conf).await;
         }
     }
 }
@@ -93,8 +100,8 @@ impl ConfigLoader for EtcdConfigLoader {
         Ok(())
     }
 
-    /// Bootstrap and load all existing configurations from etcd
-    async fn bootstrap_existing(&self) -> Result<()> {
+    /// Bootstrap and load base configuration resources (GatewayClass, EdgionGatewayConfig, Gateway)
+    async fn bootstrap_base_conf(&self) -> Result<()> {
         let mut client_guard = self.client.lock().await;
         let client = client_guard
             .as_mut()
@@ -107,16 +114,49 @@ impl ConfigLoader for EtcdConfigLoader {
             .with_context(|| format!("Failed to fetch initial keys for prefix {}", self.prefix))?;
 
         let mut cache_guard = self.cache.lock().await;
-        cache_guard.clear();
 
         for kv in resp.kvs() {
             if let Ok(value) = String::from_utf8(kv.value().to_vec()) {
-                let key = String::from_utf8_lossy(kv.key()).to_string();
-                cache_guard.insert(key, value.clone());
-                drop(cache_guard);
-                // Use InitAdd for bootstrap phase
-                self.dispatch_change(ResourceChange::InitAdd, value).await;
-                cache_guard = self.cache.lock().await;
+                if is_base_conf(&value) {
+                    let key = String::from_utf8_lossy(kv.key()).to_string();
+                    cache_guard.insert(key, value.clone());
+                    drop(cache_guard);
+                    // Use InitAdd for bootstrap phase
+                    self.dispatch_change(ResourceChange::InitAdd, value, true).await;
+                    cache_guard = self.cache.lock().await;
+                }
+            }
+        }
+
+        drop(cache_guard);
+        Ok(())
+    }
+
+    /// Bootstrap and load user configuration resources (all other resources)
+    async fn bootstrap_user_conf(&self) -> Result<()> {
+        let mut client_guard = self.client.lock().await;
+        let client = client_guard
+            .as_mut()
+            .ok_or_else(|| anyhow!("Client not connected"))?;
+
+        let options = GetOptions::new().with_prefix();
+        let resp = client
+            .get(self.prefix.clone(), Some(options))
+            .await
+            .with_context(|| format!("Failed to fetch initial keys for prefix {}", self.prefix))?;
+
+        let mut cache_guard = self.cache.lock().await;
+
+        for kv in resp.kvs() {
+            if let Ok(value) = String::from_utf8(kv.value().to_vec()) {
+                if !is_base_conf(&value) {
+                    let key = String::from_utf8_lossy(kv.key()).to_string();
+                    cache_guard.insert(key, value.clone());
+                    drop(cache_guard);
+                    // Use InitAdd for bootstrap phase
+                    self.dispatch_change(ResourceChange::InitAdd, value, false).await;
+                    cache_guard = self.cache.lock().await;
+                }
             }
         }
 

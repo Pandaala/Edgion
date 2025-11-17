@@ -92,7 +92,7 @@ impl EdgionOpCli {
             "Edgion Operator starting"
         );
 
-        let config_server = Arc::new(ConfigServer::new());
+        let config_server = Arc::new(ConfigServer::new(config.gateway_class()));
         let sync_server = ConfigSyncServer::new(config_server.clone());
         
         // Clone config_server before moving into loader

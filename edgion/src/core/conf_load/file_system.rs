@@ -11,6 +11,7 @@ use tokio::task::JoinHandle;
 use crate::core::conf_load::ConfigLoader;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::EventDispatcher;
+use crate::core::utils::is_base_conf;
 use crate::types::ResourceKind;
 
 pub struct FileSystemConfigLoader {
@@ -49,7 +50,7 @@ impl FileSystemConfigLoader {
         })
     }
 
-    async fn dispatch_change(&self, change: ResourceChange, data: String) {
+    async fn dispatch_change(&self, change: ResourceChange, data: String, use_base_conf: bool) {
         let resource_type = self.resource_kind;
         
         // Convert YAML to JSON for dispatcher
@@ -64,8 +65,13 @@ impl FileSystemConfigLoader {
             }
         };
         
-        self.dispatcher
-            .apply_resource_change(change, resource_type, json_data, None);
+        if use_base_conf {
+            self.dispatcher
+                .apply_base_conf(change, resource_type, json_data, None);
+        } else {
+            self.dispatcher
+                .apply_resource_change(change, resource_type, json_data, None);
+        }
     }
     
     fn yaml_to_json(yaml_str: &str) -> Result<String> {
@@ -141,15 +147,19 @@ impl FileSystemConfigLoader {
             .lock()
             .await
             .insert(path.to_path_buf(), content.clone());
-        self.dispatch_change(change, content).await;
+        
+        // Determine if this is a base conf resource
+        let use_base_conf = is_base_conf(&content);
+        self.dispatch_change(change, content, use_base_conf).await;
         Ok(())
     }
 
     async fn process_removed_file(&self, path: &Path) -> Result<()> {
         let mut cache = self.cache.lock().await;
         if let Some(old) = cache.remove(path) {
+            let use_base_conf = is_base_conf(&old);
             drop(cache);
-            self.dispatch_change(ResourceChange::EventDelete, old).await;
+            self.dispatch_change(ResourceChange::EventDelete, old, use_base_conf).await;
         } else {
             let has_children = cache.keys().any(|entry| entry.starts_with(path));
             drop(cache);
@@ -171,15 +181,16 @@ impl FileSystemConfigLoader {
         }
 
         let new_content = Self::read_file(path).await?;
+        let use_base_conf = is_base_conf(&new_content);
         let mut cache = self.cache.lock().await;
         if let Some(old) = cache.remove(path) {
             drop(cache);
-            self.dispatch_change(ResourceChange::EventDelete, old).await;
+            self.dispatch_change(ResourceChange::EventDelete, old, use_base_conf).await;
         }
         let mut cache = self.cache.lock().await;
         cache.insert(path.to_path_buf(), new_content.clone());
         drop(cache);
-        self.dispatch_change(ResourceChange::EventAdd, new_content)
+        self.dispatch_change(ResourceChange::EventAdd, new_content, use_base_conf)
             .await;
         Ok(())
     }
@@ -240,8 +251,8 @@ impl ConfigLoader for FileSystemConfigLoader {
         Ok(())
     }
 
-    /// Bootstrap and load all existing configuration files
-    async fn bootstrap_existing(&self) -> Result<()> {
+    /// Bootstrap and load base configuration resources (GatewayClass, EdgionGatewayConfig, Gateway)
+    async fn bootstrap_base_conf(&self) -> Result<()> {
         let mut stack = vec![self.root.clone()];
         while let Some(dir) = stack.pop() {
             let mut entries = fs::read_dir(&dir)
@@ -253,8 +264,72 @@ impl ConfigLoader for FileSystemConfigLoader {
                 if path.is_dir() {
                     stack.push(path);
                 } else {
-                    // Use InitAdd for bootstrap phase
-                    self.process_init_file(&path).await?;
+                    // Only process base conf files
+                    if path.extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext == "yml" || ext == "yaml")
+                        .unwrap_or(false)
+                    {
+                        let content = match Self::read_file(&path).await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                tracing::warn!(
+                                    component = "file_system_loader",
+                                    event = "failed_to_read_file",
+                                    path = ?path,
+                                    error = %e,
+                                );
+                                continue;
+                            }
+                        };
+                        
+                        if is_base_conf(&content) {
+                            self.process_init_file(&path).await?;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Bootstrap and load user configuration resources (all other resources)
+    async fn bootstrap_user_conf(&self) -> Result<()> {
+        let mut stack = vec![self.root.clone()];
+        while let Some(dir) = stack.pop() {
+            let mut entries = fs::read_dir(&dir)
+                .await
+                .with_context(|| format!("Failed to read directory {:?}", dir))?;
+
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    // Only process non-base conf files
+                    if path.extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext == "yml" || ext == "yaml")
+                        .unwrap_or(false)
+                    {
+                        let content = match Self::read_file(&path).await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                tracing::warn!(
+                                    component = "file_system_loader",
+                                    event = "failed_to_read_file",
+                                    path = ?path,
+                                    error = %e,
+                                );
+                                continue;
+                            }
+                        };
+                        
+                        if !is_base_conf(&content) {
+                            self.process_init_file(&path).await?;
+                        }
+                    }
                 }
             }
         }
