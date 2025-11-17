@@ -42,7 +42,7 @@ impl ConfigLoader for FileSystemConfigLoader {
                             Err(e) => {
                                 tracing::warn!(
                                     component = "file_system_loader",
-                                    event = "failed_to_read_file",
+                                    event = "failed to read base conf",
                                     path = ?path,
                                     error = %e,
                                 );
@@ -86,7 +86,7 @@ impl ConfigLoader for FileSystemConfigLoader {
                             Err(e) => {
                                 tracing::warn!(
                                     component = "file_system_loader",
-                                    event = "failed_to_read_file",
+                                    event = "failed to read user conf",
                                     path = ?path,
                                     error = %e,
                                 );
