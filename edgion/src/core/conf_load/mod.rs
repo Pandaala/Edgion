@@ -6,12 +6,12 @@ use std::path::PathBuf;
 use crate::core::conf_sync::traits::{EventDispatcher};
 
 pub mod etcd;
-pub mod file_system;
+pub mod file_system_loader;
 pub mod traits;
 pub use traits::ConfigLoader;
 
 pub use etcd::EtcdConfigLoader;
-pub use file_system::FileSystemConfigLoader;
+pub use file_system_loader::FileSystemConfigLoader;
 
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
 pub enum LoaderKind {

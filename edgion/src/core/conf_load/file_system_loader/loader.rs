@@ -9,16 +9,11 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 
-use crate::core::conf_load::ConfigLoader;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::EventDispatcher;
 use crate::core::utils::{extract_resource_metadata, is_base_conf, ResourceMetadata};
 
-#[derive(Clone)]
-struct FileInfo {
-    metadata: ResourceMetadata,
-    content: String,
-}
+use super::types::FileInfo;
 
 pub struct FileSystemConfigLoader {
     root: PathBuf,
@@ -79,13 +74,21 @@ impl FileSystemConfigLoader {
     pub fn spawn(self: Arc<Self>) -> JoinHandle<()> {
         let root = self.root.clone();
         tokio::spawn(async move {
-            if let Err(err) = self.run().await {
+            if let Err(err) = self.run_watcher().await {
                 eprintln!(
                     "[FileSystemConfigLoader] watcher exited with error for {:?}: {}",
                     root, err
                 );
             }
         })
+    }
+
+    pub fn root(&self) -> &PathBuf {
+        &self.root
+    }
+
+    pub fn dispatcher(&self) -> &Arc<dyn EventDispatcher> {
+        &self.dispatcher
     }
 
     async fn dispatch_change(&self, change: ResourceChange, data: String, use_base_conf: bool) {
@@ -116,7 +119,7 @@ impl FileSystemConfigLoader {
         Ok(json_str)
     }
 
-    async fn read_file(path: &Path) -> Result<String> {
+    pub async fn read_file(path: &Path) -> Result<String> {
         let content = fs::read_to_string(path)
             .await
             .with_context(|| format!("Failed to read file {:?}", path))?;
@@ -205,7 +208,7 @@ impl FileSystemConfigLoader {
     }
 
     /// 处理初始化阶段的文件加载，固定使用 InitAdd
-    async fn process_init_file(&self, path: &Path) -> Result<()> {
+    pub async fn process_init_file(&self, path: &Path) -> Result<()> {
         let result = self.load_and_store_file(path).await?;
         
         let Some((metadata, content, _existed_before)) = result else {
@@ -229,10 +232,7 @@ impl FileSystemConfigLoader {
     }
 
     /// 处理文件变化，自动判断是 add/update/delete
-    async fn process_file(
-        &self,
-        path: &Path,
-    ) -> Result<()> {
+    pub async fn process_file(&self, path: &Path) -> Result<()> {
 
         tracing::debug!(
             component = "file_system_loader",
@@ -397,7 +397,7 @@ impl FileSystemConfigLoader {
         }
     }
 
-    async fn handle_event(&self, event: Event) -> Result<()> {
+    pub async fn handle_event(&self, event: Event) -> Result<()> {
         // 提取所有路径，只处理在监控目录 root 下的文件
         // process_file 会自动判断是 add/update/delete
         for path in event.paths {
@@ -425,119 +425,8 @@ impl FileSystemConfigLoader {
         }
         Ok(())
     }
-}
 
-fn log_directory_not_supported(path: &Path) {
-    eprintln!(
-        "[FileSystemConfigLoader] directory changes are not supported: {:?}",
-        path
-    );
-}
-
-#[async_trait::async_trait]
-impl ConfigLoader for FileSystemConfigLoader {
-    /// Connect to filesystem (no-op for filesystem loader)
-    async fn connect(&self) -> Result<()> {
-        // Filesystem doesn't need connection setup
-        if !self.root.exists() {
-            return Err(anyhow!("Config directory {:?} does not exist", self.root));
-        }
-        Ok(())
-    }
-
-    /// Bootstrap and load base configuration resources (GatewayClass, EdgionGatewayConfig, Gateway)
-    async fn bootstrap_base_conf(&self) -> Result<()> {
-        let mut stack = vec![self.root.clone()];
-        while let Some(dir) = stack.pop() {
-            let mut entries = fs::read_dir(&dir)
-                .await
-                .with_context(|| format!("Failed to read directory {:?}", dir))?;
-
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else {
-                    // Only process base conf files
-                    if path.extension()
-                        .and_then(|ext| ext.to_str())
-                        .map(|ext| ext == "yml" || ext == "yaml")
-                        .unwrap_or(false)
-                    {
-                        let content = match Self::read_file(&path).await {
-                            Ok(c) => c,
-                            Err(e) => {
-                                tracing::warn!(
-                                    component = "file_system_loader",
-                                    event = "failed_to_read_file",
-                                    path = ?path,
-                                    error = %e,
-                                );
-                                continue;
-                            }
-                        };
-                        
-                        if is_base_conf(&content) {
-                            self.process_init_file(&path).await?;
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Bootstrap and load user configuration resources (all other resources)
-    async fn bootstrap_user_conf(&self) -> Result<()> {
-        let mut stack = vec![self.root.clone()];
-        while let Some(dir) = stack.pop() {
-            let mut entries = fs::read_dir(&dir)
-                .await
-                .with_context(|| format!("Failed to read directory {:?}", dir))?;
-
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else {
-                    // Only process non-base conf files
-                    if path.extension()
-                        .and_then(|ext| ext.to_str())
-                        .map(|ext| ext == "yml" || ext == "yaml")
-                        .unwrap_or(false)
-                    {
-                        let content = match Self::read_file(&path).await {
-                            Ok(c) => c,
-                            Err(e) => {
-                                tracing::warn!(
-                                    component = "file_system_loader",
-                                    event = "failed_to_read_file",
-                                    path = ?path,
-                                    error = %e,
-                                );
-                                continue;
-                            }
-                        };
-                        
-                        if !is_base_conf(&content) {
-                            self.process_init_file(&path).await?;
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Set ready state after initialization
-    async fn set_ready(&self) {
-        self.dispatcher.set_ready();
-    }
-
-    /// Main run loop for watching configuration changes
-    async fn run(&self) -> Result<()> {
+    pub async fn run_watcher(&self) -> Result<()> {
         // Start watching for changes
         let (tx, mut rx) = mpsc::channel::<Result<Event>>(128);
         let tx_watch = tx.clone();
@@ -574,3 +463,4 @@ impl ConfigLoader for FileSystemConfigLoader {
         Ok(())
     }
 }
+
