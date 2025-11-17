@@ -7,6 +7,7 @@ use super::store::EventStore;
 use super::traits::{EventDispatch, Versionable};
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
 use crate::core::conf_sync::traits::ResourceChange;
+use crate::core::utils;
 
 pub struct ServerCache<T: Versionable + Resource + Send + Sync> {
     // wait for init complete
@@ -221,8 +222,9 @@ impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T>
     where
         T: Resource + Send + 'static,
     {
-        let version = resource.get_version();
+        let mut version = resource.get_version();
         if resource.get_version() == 0 {
+            version = utils::next_resource_version();
             tracing::warn!(
                 component = "cache_client",
                 event = "apply_change",
@@ -230,7 +232,7 @@ impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T>
                 kind = std::any::type_name::<T>(),
                 name = ?resource.name_any(),
                 namespace = ?resource.namespace(),
-                version = 0,
+                version = version,
                 "Applying change to cache with version 0"
             );
         } else {

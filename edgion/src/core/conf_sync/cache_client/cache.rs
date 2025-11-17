@@ -85,7 +85,7 @@ impl<T: Versionable + Resource +  Clone + Send + 'static> EventDispatch<T> for C
             );
         } else {
             tracing::info!(
-                component = "cache_server",
+                component = "cache_client",
                 event = "apply_change",
                 change = ?change,
                 kind = std::any::type_name::<T>(),
