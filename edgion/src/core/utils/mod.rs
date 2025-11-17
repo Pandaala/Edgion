@@ -51,6 +51,38 @@ pub fn check_need_version(input: &str) -> Option<u64> {
     }
 }
 
+/// Format resource info as kind/namespace/name/resource_version
+///
+/// This function extracts key information from a Kubernetes resource for logging/debugging purposes.
+/// For cluster-scoped resources (without namespace), the namespace field is omitted.
+pub fn format_resource_info<T: kube::Resource>(resource: &T) -> String {
+    use kube::ResourceExt;
+    
+    let kind = std::any::type_name::<T>()
+        .split("::")
+        .last()
+        .unwrap_or("Unknown");
+    let namespace = resource.namespace();
+    let name = resource.name_any();
+    let resource_version = resource
+        .meta()
+        .resource_version
+        .as_deref()
+        .unwrap_or("N/A");
+    
+    if let Some(ns) = namespace {
+        format!(
+            "kind={}, namespace={}, name={}, resource_version={}",
+            kind, ns, name, resource_version
+        )
+    } else {
+        format!(
+            "kind={}, name={}, resource_version={}",
+            kind, name, resource_version
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{check_need_version, next_resource_version};

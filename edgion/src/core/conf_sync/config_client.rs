@@ -2,6 +2,7 @@ use crate::core::conf_sync::cache_client::ClientCache;
 use crate::core::conf_sync::cache_server::{EventDispatch, ListData, Versionable};
 use crate::core::conf_sync::config_server::GatewayClassKey;
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
+use crate::core::utils::format_resource_info;
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
 };
@@ -184,11 +185,7 @@ impl ConfigClient {
             list_data.resource_version
         );
         for (idx, gc) in list_data.data.iter().enumerate() {
-            println!(
-                "  [{}] {}",
-                idx,
-                serde_json::to_string(gc).unwrap_or_else(|_| "serialization error".to_string())
-            );
+            println!("  [{}] {}", idx, format_resource_info(gc));
         }
 
         let list_data = self.list_edgion_gateway_config();
@@ -198,11 +195,7 @@ impl ConfigClient {
             list_data.resource_version
         );
         for (idx, egw) in list_data.data.iter().enumerate() {
-            println!(
-                "  [{}] {}",
-                idx,
-                serde_json::to_string(egw).unwrap_or_else(|_| "serialization error".to_string())
-            );
+            println!("  [{}] {}", idx, format_resource_info(egw));
         }
 
         // Gateways
@@ -213,11 +206,7 @@ impl ConfigClient {
             list_data.resource_version
         );
         for (idx, gw) in list_data.data.iter().enumerate() {
-            println!(
-                "  [{}] {}",
-                idx,
-                serde_json::to_string(gw).unwrap_or_else(|_| "serialization error".to_string())
-            );
+            println!("  [{}] {}", idx, format_resource_info(gw));
         }
 
         // HTTP Routes
@@ -228,11 +217,7 @@ impl ConfigClient {
             list_data.resource_version
         );
         for (idx, route) in list_data.data.iter().enumerate() {
-            println!(
-                "  [{}] {}",
-                idx,
-                serde_json::to_string(route).unwrap_or_else(|_| "serialization error".to_string())
-            );
+            println!("  [{}] {}", idx, format_resource_info(route));
         }
 
         // Services
@@ -243,11 +228,7 @@ impl ConfigClient {
             list_data.resource_version
         );
         for (idx, svc) in list_data.data.iter().enumerate() {
-            println!(
-                "  [{}] {}",
-                idx,
-                serde_json::to_string(svc).unwrap_or_else(|_| "serialization error".to_string())
-            );
+            println!("  [{}] {}", idx, format_resource_info(svc));
         }
 
         // Endpoint Slices
@@ -258,11 +239,7 @@ impl ConfigClient {
             list_data.resource_version
         );
         for (idx, es) in list_data.data.iter().enumerate() {
-            println!(
-                "  [{}] {}",
-                idx,
-                serde_json::to_string(es).unwrap_or_else(|_| "serialization error".to_string())
-            );
+            println!("  [{}] {}", idx, format_resource_info(es));
         }
 
         // Edgion TLS
@@ -273,11 +250,7 @@ impl ConfigClient {
             list_data.resource_version
         );
         for (idx, tls) in list_data.data.iter().enumerate() {
-            println!(
-                "  [{}] {}",
-                idx,
-                serde_json::to_string(tls).unwrap_or_else(|_| "serialization error".to_string())
-            );
+            println!("  [{}] {}", idx, format_resource_info(tls));
         }
 
         // Secrets
@@ -288,11 +261,7 @@ impl ConfigClient {
             list_data.resource_version
         );
         for (idx, secret) in list_data.data.iter().enumerate() {
-            println!(
-                "  [{}] {}",
-                idx,
-                serde_json::to_string(secret).unwrap_or_else(|_| "serialization error".to_string())
-            );
+            println!("  [{}] {}", idx, format_resource_info(secret));
         }
 
         println!("=== End ConfigHub Config ===\n");

@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use crate::core::conf_sync::cache_server::{
     EventDispatch, ListData, ServerCache, WatchResponse,
 };
+use crate::core::utils::format_resource_info;
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
 };
@@ -682,11 +683,7 @@ impl ConfigServer {
                 list_data.resource_version
             );
             for (idx, gc) in list_data.data.iter().enumerate() {
-                println!(
-                    "  [{}] {}",
-                    idx,
-                    serde_json::to_string(gc).unwrap_or_else(|_| "serialization error".to_string())
-                );
+                println!("  [{}] {}", idx, format_resource_info(gc));
             }
         } else {
             println!("GatewayClasses: not found");
@@ -699,12 +696,7 @@ impl ConfigServer {
                 list_data.resource_version
             );
             for (idx, egwc) in list_data.data.iter().enumerate() {
-                println!(
-                    "  [{}] {}",
-                    idx,
-                    serde_json::to_string(egwc)
-                        .unwrap_or_else(|_| "serialization error".to_string())
-                );
+                println!("  [{}] {}", idx, format_resource_info(egwc));
             }
         } else {
             println!("EdgionGatewayConfigs: not found");
@@ -718,11 +710,7 @@ impl ConfigServer {
                 list_data.resource_version
             );
             for (idx, gw) in list_data.data.iter().enumerate() {
-                println!(
-                    "  [{}] {}",
-                    idx,
-                    serde_json::to_string(gw).unwrap_or_else(|_| "serialization error".to_string())
-                );
+                println!("  [{}] {}", idx, format_resource_info(gw));
             }
         } else {
             println!("Gateways: not found");
@@ -736,12 +724,7 @@ impl ConfigServer {
                 list_data.resource_version
             );
             for (idx, route) in list_data.data.iter().enumerate() {
-                println!(
-                    "  [{}] {}",
-                    idx,
-                    serde_json::to_string(route)
-                        .unwrap_or_else(|_| "serialization error".to_string())
-                );
+                println!("  [{}] {}", idx, format_resource_info(route));
             }
         } else {
             println!("HTTPRoutes: not found");
@@ -755,12 +738,7 @@ impl ConfigServer {
                 list_data.resource_version
             );
             for (idx, svc) in list_data.data.iter().enumerate() {
-                println!(
-                    "  [{}] {}",
-                    idx,
-                    serde_json::to_string(svc)
-                        .unwrap_or_else(|_| "serialization error".to_string())
-                );
+                println!("  [{}] {}", idx, format_resource_info(svc));
             }
         } else {
             println!("Services: not found");
@@ -774,11 +752,7 @@ impl ConfigServer {
                 list_data.resource_version
             );
             for (idx, es) in list_data.data.iter().enumerate() {
-                println!(
-                    "  [{}] {}",
-                    idx,
-                    serde_json::to_string(es).unwrap_or_else(|_| "serialization error".to_string())
-                );
+                println!("  [{}] {}", idx, format_resource_info(es));
             }
         } else {
             println!("EndpointSlices: not found");
@@ -792,12 +766,7 @@ impl ConfigServer {
                 list_data.resource_version
             );
             for (idx, tls) in list_data.data.iter().enumerate() {
-                println!(
-                    "  [{}] {}",
-                    idx,
-                    serde_json::to_string(tls)
-                        .unwrap_or_else(|_| "serialization error".to_string())
-                );
+                println!("  [{}] {}", idx, format_resource_info(tls));
             }
         } else {
             println!("EdgionTls: not found");
@@ -811,12 +780,7 @@ impl ConfigServer {
                 list_data.resource_version
             );
             for (idx, secret) in list_data.data.iter().enumerate() {
-                println!(
-                    "  [{}] {}",
-                    idx,
-                    serde_json::to_string(secret)
-                        .unwrap_or_else(|_| "serialization error".to_string())
-                );
+                println!("  [{}] {}", idx, format_resource_info(secret));
             }
         } else {
             println!("Secrets: not found");

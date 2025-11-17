@@ -122,6 +122,20 @@ impl FileSystemConfigLoader {
             return Ok(());
         }
 
+        // Only process .yml or .yaml files
+        let extension = path.extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("");
+        if extension != "yml" && extension != "yaml" {
+            tracing::debug!(
+                component = "file_system_loader",
+                event = "skip_non_yaml_file",
+                path = ?path,
+                extension = extension,
+            );
+            return Ok(());
+        }
+
         let content = Self::read_file(path).await?;
         self.cache
             .lock()
