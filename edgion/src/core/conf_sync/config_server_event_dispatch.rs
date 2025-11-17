@@ -99,15 +99,6 @@ impl EventDispatcher for ConfigServer {
         data: String,
         resource_version: Option<u64>,
     ) {
-        tracing::debug!(
-            component = "config_server",
-            event = "resource_change",
-            change = ?change,
-            resource_type = ?resource_type,
-            resource_version = ?resource_version,
-            data_preview = %data.chars().take(200).collect::<String>(),
-            "Applying resource change"
-        );
 
         let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
         
@@ -128,6 +119,11 @@ impl EventDispatcher for ConfigServer {
                 if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut gateway_classes = self.gateway_classes.write().unwrap();
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "GatewayClass",
+                        gateway_class_keys = ?gateway_class_keys,
+                    );
                     for key in gateway_class_keys {
                         let cache = gateway_classes
                             .entry(key.clone())
@@ -142,10 +138,16 @@ impl EventDispatcher for ConfigServer {
                     }
                 }
             }
+
             ResourceKind::EdgionGatewayConfig => {
                 if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut edgion_gateway_configs = self.edgion_gateway_configs.write().unwrap();
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "EdgionGatewayConfig",
+                        gateway_class_keys = ?gateway_class_keys,
+                    );
                     for key in gateway_class_keys {
                         let cache = edgion_gateway_configs
                             .entry(key.clone())
@@ -160,10 +162,16 @@ impl EventDispatcher for ConfigServer {
                     }
                 }
             }
+            
             ResourceKind::Gateway => {
                 if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut gateways = self.gateways.write().unwrap();
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "Gateway",
+                        gateway_class_keys = ?gateway_class_keys,
+                    );
                     for key in gateway_class_keys {
                         let cache = gateways
                             .entry(key.clone())
@@ -181,6 +189,11 @@ impl EventDispatcher for ConfigServer {
             ResourceKind::HTTPRoute => {
                 if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "HTTPRoute",
+                        gateway_class_keys = ?gateway_class_keys,
+                    );
                     let mut routes = self.routes.write().unwrap();
                     for key in gateway_class_keys {
                         let cache = routes
@@ -199,6 +212,11 @@ impl EventDispatcher for ConfigServer {
             ResourceKind::Service => {
                 if let Ok(resource) = serde_json::from_str::<Service>(&data) {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "Service",
+                        gateway_class_keys = ?gateway_class_keys,
+                    );
                     let mut services = self.services.write().unwrap();
                     for key in gateway_class_keys {
                         let cache = services
@@ -217,6 +235,11 @@ impl EventDispatcher for ConfigServer {
             ResourceKind::EndpointSlice => {
                 if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "EndpointSlice",
+                        gateway_class_keys = ?gateway_class_keys,
+                    );
                     let mut endpoint_slices = self.endpoint_slices.write().unwrap();
                     for key in gateway_class_keys {
                         let cache = endpoint_slices
@@ -236,6 +259,11 @@ impl EventDispatcher for ConfigServer {
                 if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut edgion_tls = self.edgion_tls.write().unwrap();
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "EdgionTls",
+                        gateway_class_keys = ?gateway_class_keys,
+                    );
                     for key in gateway_class_keys {
                         let cache = edgion_tls
                             .entry(key.clone())
@@ -254,6 +282,11 @@ impl EventDispatcher for ConfigServer {
                 if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
                     let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
                     let mut secrets = self.secrets.write().unwrap();
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "Secret",
+                        gateway_class_keys = ?gateway_class_keys,
+                    );
                     for key in gateway_class_keys {
                         let cache = secrets
                             .entry(key.clone())
