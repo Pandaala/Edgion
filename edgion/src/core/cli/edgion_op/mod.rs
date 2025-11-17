@@ -41,6 +41,14 @@ impl EdgionOpCli {
                     // Get all gateway class keys
                     let gateway_classes = config_server.list_all_gateway_class_keys();
                     
+                    tracing::debug!(
+                        component = COMPONENT_EDGION_OPERATOR,
+                        event = "config_summary",
+                        gateway_class_count = gateway_classes.len(),
+                        gateway_class_keys = ?gateway_classes,
+                        "Found gateway classes"
+                    );
+                    
                     if gateway_classes.is_empty() {
                         tracing::debug!(
                             component = COMPONENT_EDGION_OPERATOR,
@@ -52,6 +60,12 @@ impl EdgionOpCli {
                     
                     // Print each gateway class config
                     for key in gateway_classes {
+                        tracing::debug!(
+                            component = COMPONENT_EDGION_OPERATOR,
+                            event = "print_config",
+                            gateway_class_key = %key,
+                            "Printing config for gateway class"
+                        );
                         config_server.print_config(&key).await;
                     }
                 }

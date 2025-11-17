@@ -122,7 +122,10 @@ impl EventDispatcher for ConfigServer {
                     tracing::info!(
                         component = "config_server",
                         kind = "GatewayClass",
+                        gateway_class_name = ?resource.metadata.name,
                         gateway_class_keys = ?gateway_class_keys,
+                        change = ?change,
+                        "Processing GatewayClass resource"
                     );
                     for key in gateway_class_keys {
                         let cache = gateway_classes

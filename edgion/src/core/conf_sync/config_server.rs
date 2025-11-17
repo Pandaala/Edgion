@@ -462,7 +462,15 @@ impl ConfigServer {
     /// List all gateway class keys currently configured
     pub fn list_all_gateway_class_keys(&self) -> Vec<String> {
         let gateway_classes = self.gateway_classes.read().unwrap();
-        gateway_classes.keys().cloned().collect()
+        let keys: Vec<String> = gateway_classes.keys().cloned().collect();
+        tracing::debug!(
+            component = "config_server",
+            event = "list_all_gateway_class_keys",
+            count = keys.len(),
+            keys = ?keys,
+            "Listing all gateway class keys"
+        );
+        keys
     }
 
     pub fn list_edgion_gateway_configs(&self, key: &str) -> Option<ListData<EdgionGatewayConfig>> {
