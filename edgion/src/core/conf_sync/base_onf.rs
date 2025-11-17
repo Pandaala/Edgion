@@ -78,4 +78,16 @@ impl GatewayClassBaseConf {
     pub fn clear_edgion_gateway_config(&mut self) {
         self.edgion_gateway_config = None;
     }
+
+    pub fn gateway_class(&self) -> Option<&GatewayClass> {
+        self.gateway_class.as_ref()
+    }
+
+    pub fn edgion_gateway_config(&self) -> Option<&EdgionGatewayConfig> {
+        self.edgion_gateway_config.as_ref()
+    }
+
+    pub fn gateways(&self) -> &Vec<Gateway> {
+        &self.gateways
+    }
 }

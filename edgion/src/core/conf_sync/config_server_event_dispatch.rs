@@ -82,11 +82,11 @@ impl ConfigServer {
     }
 
     fn fallback_gateway_class_keys(&self) -> Vec<String> {
-        let gateway_classes = self.gateway_classes.read().unwrap();
-        if gateway_classes.is_empty() {
-            vec![DEFAULT_GATEWAY_CLASS_KEY.to_string()]
+        // Use configured gateway_class if available, otherwise use default
+        if let Some(gc) = self.gateway_class() {
+            vec![gc.clone()]
         } else {
-            gateway_classes.keys().cloned().collect()
+            vec![DEFAULT_GATEWAY_CLASS_KEY.to_string()]
         }
     }
 }
@@ -256,20 +256,8 @@ impl EventDispatcher for ConfigServer {
     fn set_ready(&self) {
         use crate::core::conf_sync::EventDispatch;
 
-        let mut gateway_classes = self.gateway_classes.write().unwrap();
-        for cache in gateway_classes.values_mut() {
-            cache.set_ready();
-        }
-
-        let mut edgion_gateway_configs = self.edgion_gateway_configs.write().unwrap();
-        for cache in edgion_gateway_configs.values_mut() {
-            cache.set_ready();
-        }
-
-        let mut gateways = self.gateways.write().unwrap();
-        for cache in gateways.values_mut() {
-            cache.set_ready();
-        }
+        // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) don't have caches
+        // They are stored in base_conf and don't need set_ready
 
         let mut routes = self.routes.write().unwrap();
         for cache in routes.values_mut() {
