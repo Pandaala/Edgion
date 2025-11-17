@@ -66,6 +66,54 @@ impl EventDispatcher for ConfigServer {
             }
             ResourceKind::HTTPRoute => {
                 if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
+                    // 检查 HTTPRoute 引用的 gateway 是否存在于 base_conf 中
+                    let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
+                        if let Some(first_ref) = parent_refs.first() {
+                            // 获取 gateway 的 namespace（如果没有指定，使用 HTTPRoute 的 namespace）
+                            let gateway_namespace = first_ref.namespace.as_ref()
+                                .or_else(|| resource.metadata.namespace.as_ref());
+                            let gateway_name = Some(&first_ref.name);
+                            
+                            let base_conf = self.base_conf.read().unwrap();
+                            base_conf.has_gateway(gateway_namespace, gateway_name)
+                        } else {
+                            // 没有 parent_refs，无法判断
+                            false
+                        }
+                    } else {
+                        // 没有 parent_refs，无法判断
+                        false
+                    };
+
+                    if !gateway_exists {
+                        let (gateway_info, message) = if let Some(parent_refs) = &resource.spec.parent_refs {
+                            if let Some(first_ref) = parent_refs.first() {
+                                let info = format!(
+                                    "namespace={:?}, name={}",
+                                    first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
+                                    first_ref.name
+                                );
+                                (info, "HTTPRoute references a Gateway that does not exist in base_conf, skipping")
+                            } else {
+                                ("no parent_refs".to_string(), "HTTPRoute has empty parent_refs, skipping")
+                            }
+                        } else {
+                            ("no parent_refs".to_string(), "HTTPRoute has no parent_refs, skipping")
+                        };
+
+                        tracing::info!(
+                            component = "config_server",
+                            change = ?change,
+                            kind = "HTTPRoute",
+                            route_name = ?resource.metadata.name,
+                            route_namespace = ?resource.metadata.namespace,
+                            gateway = gateway_info,
+                            "{}",
+                            message
+                        );
+                        return;
+                    }
+
                     tracing::info!(
                         component = "config_server",
                         change = ?change,
@@ -112,6 +160,54 @@ impl EventDispatcher for ConfigServer {
             }
             ResourceKind::EdgionTls => {
                 if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
+                    // 检查 EdgionTls 引用的 gateway 是否存在于 base_conf 中
+                    let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
+                        if let Some(first_ref) = parent_refs.first() {
+                            // 获取 gateway 的 namespace（如果没有指定，使用 EdgionTls 的 namespace）
+                            let gateway_namespace = first_ref.namespace.as_ref()
+                                .or_else(|| resource.metadata.namespace.as_ref());
+                            let gateway_name = Some(&first_ref.name);
+                            
+                            let base_conf = self.base_conf.read().unwrap();
+                            base_conf.has_gateway(gateway_namespace, gateway_name)
+                        } else {
+                            // 没有 parent_refs，无法判断
+                            false
+                        }
+                    } else {
+                        // 没有 parent_refs，无法判断
+                        false
+                    };
+
+                    if !gateway_exists {
+                        let (gateway_info, message) = if let Some(parent_refs) = &resource.spec.parent_refs {
+                            if let Some(first_ref) = parent_refs.first() {
+                                let info = format!(
+                                    "namespace={:?}, name={}",
+                                    first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
+                                    first_ref.name
+                                );
+                                (info, "EdgionTls references a Gateway that does not exist in base_conf, skipping")
+                            } else {
+                                ("no parent_refs".to_string(), "EdgionTls has empty parent_refs, skipping")
+                            }
+                        } else {
+                            ("no parent_refs".to_string(), "EdgionTls has no parent_refs, skipping")
+                        };
+
+                        tracing::info!(
+                            component = "config_server",
+                            change = ?change,
+                            kind = "EdgionTls",
+                            tls_name = ?resource.metadata.name,
+                            tls_namespace = ?resource.metadata.namespace,
+                            gateway = gateway_info,
+                            "{}",
+                            message
+                        );
+                        return;
+                    }
+
                     tracing::info!(
                         component = "config_server",
                         kind = "EdgionTls",

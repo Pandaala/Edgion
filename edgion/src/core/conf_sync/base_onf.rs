@@ -90,4 +90,15 @@ impl GatewayClassBaseConf {
     pub fn gateways(&self) -> &Vec<Gateway> {
         &self.gateways
     }
+
+    /// 检查指定的 gateway 是否存在于 gateway_map 中
+    /// namespace 和 name 用于构建 key: {namespace}/{name} 或 {name}
+    pub fn has_gateway(&self, namespace: Option<&String>, name: Option<&String>) -> bool {
+        let key = if let Some(ns) = namespace {
+            format!("{}/{}", ns, name.unwrap_or(&"".to_string()))
+        } else {
+            name.unwrap_or(&"".to_string()).clone()
+        };
+        self.gateway_map.contains_key(&key)
+    }
 }

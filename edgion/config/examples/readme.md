@@ -53,6 +53,78 @@ HTTPRoute(spec.parentRefs[0].name) ──> ConfigCenter.routes[gatewayName]
 
 完整示例可参考：
 
-- `config/examples/edgion_gateway_config__public.yaml`
-- `config/examples/gateway.yaml`
-- `config/examples/httproute.yaml`（若有）
+- `config/examples/_public-gateway_EdgionGatewayConfig.yaml` - EdgionGatewayConfig（cluster-scoped）
+- `config/examples/_edgion-gateway-public_GatewayClass.yaml` - GatewayClass（cluster-scoped）
+- `config/examples/default_gateway1_Gateway.yaml` - Gateway（namespace-scoped）
+- `config/examples/test1_public-route1_HTTPRoute.yaml` - HTTPRoute（namespace-scoped）
+
+## 6. 文件命名规范
+
+为了确保文件系统配置加载器能正确识别和处理配置文件，**所有配置文件必须遵循严格的命名规范**：
+
+### 6.1 命名格式
+
+- **有 namespace 的资源**：`{namespace}_{name}_{kind}.yaml`
+  - 示例：`default_gateway1_Gateway.yaml`
+  - 示例：`test1_public-route1_HTTPRoute.yaml`（注意：name 中的连字符 `-` 在文件名中保持不变）
+
+- **Cluster-scoped 资源**（无 namespace）：`_{name}_{kind}.yaml`
+  - 示例：`_edgion-gateway-public_GatewayClass.yaml`
+  - 示例：`_public-gateway_EdgionGatewayConfig.yaml`
+
+### 6.2 命名规则说明
+
+1. **文件名必须与文件内容完全匹配**：
+   - `namespace` 必须与 YAML 文件中的 `metadata.namespace` 完全一致
+   - `name` 必须与 YAML 文件中的 `metadata.name` 完全一致（包括连字符和下划线）
+   - `kind` 必须与 YAML 文件中的 `kind` 完全一致
+
+2. **文件扩展名**：只支持 `.yaml` 或 `.yml`
+
+3. **Cluster-scoped 资源**：如果资源没有 `namespace` 字段（如 `GatewayClass`），文件名必须以 `_` 开头
+
+### 6.3 文件内容要求
+
+1. **必须是有效的 YAML 格式**
+2. **必须包含完整的资源定义**：
+   - `kind` 字段（必需）
+   - `metadata.name` 字段（必需）
+   - `metadata.namespace` 字段（对于 namespace-scoped 资源必需）
+
+3. **文件名与内容必须一致**：如果文件名与文件内容中的 metadata 不匹配，文件将被跳过并记录错误日志
+
+### 6.4 错误处理
+
+如果文件名不符合规范，系统会：
+- 记录 `ERROR` 级别的日志
+- 在日志中明确提示应该使用的文件名格式
+- 跳过该文件，不进行任何处理
+
+### 6.5 示例
+
+**正确的文件命名**：
+```
+# 文件：default_gateway1_Gateway.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gateway1
+  namespace: default
+spec:
+  ...
+```
+
+```
+# 文件：_edgion-gateway-public_GatewayClass.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: edgion-gateway-public
+spec:
+  ...
+```
+
+**错误的文件命名**（将被跳过）：
+- `gateway1.yaml` - 缺少 namespace 和 kind
+- `default_gateway1.yaml` - 缺少 kind
+- `gateway1_Gateway.yaml` - 缺少 namespace（应该是 `default_gateway1_Gateway.yaml`）
