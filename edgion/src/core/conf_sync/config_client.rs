@@ -50,7 +50,7 @@ impl ConfigClient {
     ) where
         T: Clone + Versionable + Resource + Send + 'static,
     {
-        let mut cache = cache.write().unwrap();
+        let cache = cache.read().unwrap();
         cache.apply_change(change, resource);
     }
 

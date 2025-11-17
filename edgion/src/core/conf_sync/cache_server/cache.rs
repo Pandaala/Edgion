@@ -17,7 +17,7 @@ pub struct ServerCache<T: Versionable + Resource + Send + Sync> {
     store: Arc<RwLock<EventStore<T>>>,
 
     // pending watch requests
-    watchers: Vec<WatchClient<T>>,
+    watchers: RwLock<Vec<WatchClient<T>>>,
 
     // shared notify for broadcasting events to all watchers
     notify: Arc<Notify>,
@@ -31,7 +31,7 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
         Self {
             ready: RwLock::new(false),
             store: Arc::new(RwLock::new(EventStore::new(capacity as usize))),
-            watchers: Vec::new(),
+            watchers: RwLock::new(Vec::new()),
             notify: Arc::new(Notify::new()),
         }
     }
@@ -139,7 +139,7 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
     /// 1. First checks if client is behind and sends initial data
     /// 2. Then loops waiting for notifications and sends updates
     pub fn watch(
-        &mut self,
+        &self,
         client_id: String,
         client_name: String,
         from_version: u64,
@@ -147,13 +147,17 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
     where
         T: Clone + Send + Sync + 'static,
     {
+        let watchers_len = {
+            let watchers = self.watchers.read().unwrap();
+            watchers.len()
+        };
         println!(
             "[CenterCache] new watch request client_id={} client_name={} from_version={} ready={} pending_watchers={}",
             client_id,
             client_name,
             from_version,
             *self.ready.read().unwrap(),
-            self.watchers.len()
+            watchers_len
         );
         // Use bounded channel for data to provide backpressure
         let (data_tx, data_rx) = mpsc::channel(100);
@@ -163,20 +167,28 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
         let store = self.get_store();
 
         let watcher = WatchClient {
-            client_id,
-            client_name,
+            client_id: client_id.clone(),
+            client_name: client_name.clone(),
             from_version,
             sender: data_tx,
             watch_start_time: SystemTime::now(),
             send_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             last_send_time: Arc::new(RwLock::new(None)),
         };
-        self.watchers.push(watcher.clone());
+        
+        let watcher_clone = watcher.clone();
+        {
+            let mut watchers = self.watchers.write().unwrap();
+            watchers.push(watcher_clone.clone());
+        }
 
         println!(
             "[CenterCache] watcher registered client_id={} total_watchers={}",
             watcher.client_id,
-            self.watchers.len()
+            {
+                let watchers = self.watchers.read().unwrap();
+                watchers.len()
+            }
         );
 
         // Start the watcher task - only needs store
@@ -218,7 +230,7 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
 }
 
 impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T> for ServerCache<T> {
-    fn apply_change(&mut self, change: ResourceChange, resource: T)
+    fn apply_change(&self, change: ResourceChange, resource: T)
     where
         T: Resource + Send + 'static,
     {
@@ -265,7 +277,7 @@ impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T>
         }
     }
 
-    fn set_ready(&mut self) {
+    fn set_ready(&self) {
         *self.ready.write().unwrap() = true;
     }
 }

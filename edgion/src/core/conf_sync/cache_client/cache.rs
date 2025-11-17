@@ -1,39 +1,42 @@
 use crate::core::conf_sync::cache_server::{EventDispatch, ListData, Versionable};
 use crate::core::conf_sync::traits::ResourceChange;
 use std::collections::HashMap;
+use std::sync::RwLock;
 use kube::{Resource, ResourceExt};
 
 
 pub struct ClientCache<T> where T: kube::Resource {
     // data
-    data: HashMap<String, T>,
+    data: RwLock<HashMap<String, T>>,
 
     // version
-    resource_version: u64,
+    resource_version: RwLock<u64>,
 }
 
 impl<T: Versionable + Resource> ClientCache<T> {
     pub fn new() -> Self {
         Self {
-            data: HashMap::new(),
-            resource_version: 0,
+            data: RwLock::new(HashMap::new()),
+            resource_version: RwLock::new(0),
         }
     }
 
     /// Get current resource version
     pub fn get_resource_version(&self) -> u64 {
-        self.resource_version
+        *self.resource_version.read().unwrap()
     }
 
     /// Set current resource version
-    pub fn set_resource_version(&mut self, version: u64) {
-        self.resource_version = version;
+    pub fn set_resource_version(&self, version: u64) {
+        *self.resource_version.write().unwrap() = version;
     }
 
     /// List all data - returns all resources in the cache with resource version
-    pub fn list(&self) -> ListData<&T> {
-        let data: Vec<&T> = self.data.values().collect();
-        ListData::new(data, self.resource_version)
+    pub fn list(&self) -> ListData<T>
+    where
+        T: Clone,
+    {
+        self.list_owned()
     }
 
     /// List all data as owned values (cloned)
@@ -41,33 +44,44 @@ impl<T: Versionable + Resource> ClientCache<T> {
     where
         T: Clone,
     {
-        let data: Vec<T> = self.data.values().cloned().collect();
-        ListData::new(data, self.resource_version)
+        let data = {
+            let data_guard = self.data.read().unwrap();
+            data_guard.values().cloned().collect()
+        };
+        let resource_version = *self.resource_version.read().unwrap();
+        ListData::new(data, resource_version)
     }
 
     /// Get a resource by key
-    pub fn get(&self, key: &str) -> Option<&T> {
-        self.data.get(key)
+    pub fn get(&self, key: &str) -> Option<T>
+    where
+        T: Clone,
+    {
+        let data = self.data.read().unwrap();
+        data.get(key).cloned()
     }
 
     /// Get all keys
     pub fn keys(&self) -> Vec<String> {
-        self.data.keys().cloned().collect()
+        let data = self.data.read().unwrap();
+        data.keys().cloned().collect()
     }
 
     /// Check if cache is empty
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        let data = self.data.read().unwrap();
+        data.is_empty()
     }
 
     /// Get the number of resources in the cache
     pub fn len(&self) -> usize {
-        self.data.len()
+        let data = self.data.read().unwrap();
+        data.len()
     }
 }
 
 impl<T: Versionable + Resource +  Clone + Send + 'static> EventDispatch<T> for ClientCache<T> {
-    fn apply_change(&mut self, change: ResourceChange, resource: T)
+    fn apply_change(&self, change: ResourceChange, resource: T)
     where
         T: Send + 'static,
     {
@@ -98,22 +112,25 @@ impl<T: Versionable + Resource +  Clone + Send + 'static> EventDispatch<T> for C
 
         match change {
             ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                self.data.insert(version.to_string(), resource);
-                if version > self.resource_version {
-                    self.resource_version = version;
+                let mut data = self.data.write().unwrap();
+                data.insert(version.to_string(), resource);
+                let mut resource_version = self.resource_version.write().unwrap();
+                if version > *resource_version {
+                    *resource_version = version;
                 }
             }
             ResourceChange::EventDelete => {
-                self.data.remove(&version.to_string());
-                if version > self.resource_version {
-                    self.resource_version = version;
+                let mut data = self.data.write().unwrap();
+                data.remove(&version.to_string());
+                let mut resource_version = self.resource_version.write().unwrap();
+                if version > *resource_version {
+                    *resource_version = version;
                 }
-                drop(resource);
             }
         }
     }
 
-    fn set_ready(&mut self) {
+    fn set_ready(&self) {
         // HubCache doesn't need ready state, but we keep the method for trait compatibility
     }
 }

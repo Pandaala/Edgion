@@ -4,7 +4,7 @@ use std::sync::RwLock;
 use tokio::sync::mpsc;
 
 use crate::core::conf_sync::cache_server::{
-    EventDispatch, ListData, ServerCache, WatchResponse,
+    ListData, ServerCache, WatchResponse,
 };
 use crate::core::utils::format_resource_info;
 use crate::types::{
@@ -35,13 +35,11 @@ pub enum ResourceItem {
 pub struct ConfigServer {
     gateway_class: Option<String>,
     pub base_conf: RwLock<GatewayClassBaseConf>,
-    pub routes: RwLock<ServerCache<HTTPRoute>>,
-    pub services: RwLock<ServerCache<Service>>,
-    pub endpoint_slices: RwLock<ServerCache<EndpointSlice>>,
-
-    // this two should bond, otherwise, different gateway client will get all secrets.
-    pub edgion_tls: RwLock<ServerCache<EdgionTls>>,
-    pub secrets: RwLock<ServerCache<Secret>>,
+    pub routes: ServerCache<HTTPRoute>,
+    pub services: ServerCache<Service>,
+    pub endpoint_slices: ServerCache<EndpointSlice>,
+    pub edgion_tls: ServerCache<EdgionTls>,
+    pub secrets: ServerCache<Secret>,
 }
 
 pub struct ListDataSimple {
@@ -60,11 +58,11 @@ impl ConfigServer {
         Self {
             gateway_class,
             base_conf: RwLock::new(GatewayClassBaseConf::new()),
-            routes: RwLock::new(ServerCache::new(200)),
-            services: RwLock::new(ServerCache::new(200)),
-            endpoint_slices: RwLock::new(ServerCache::new(200)),
-            edgion_tls: RwLock::new(ServerCache::new(200)),
-            secrets: RwLock::new(ServerCache::new(200)),
+            routes: ServerCache::new(200),
+            services: ServerCache::new(200),
+            endpoint_slices: ServerCache::new(200),
+            edgion_tls: ServerCache::new(200),
+            secrets: ServerCache::new(200),
         }
     }
     
@@ -310,32 +308,27 @@ impl ConfigServer {
 
     /// List HTTP routes
     pub fn list_routes(&self) -> ListData<HTTPRoute> {
-        let routes = self.routes.read().unwrap();
-        routes.list_owned()
+        self.routes.list_owned()
     }
 
     /// List services
     pub fn list_services(&self) -> ListData<Service> {
-        let services = self.services.read().unwrap();
-        services.list_owned()
+        self.services.list_owned()
     }
 
     /// List endpoint slices
     pub fn list_endpoint_slices(&self) -> ListData<EndpointSlice> {
-        let endpoint_slices = self.endpoint_slices.read().unwrap();
-        endpoint_slices.list_owned()
+        self.endpoint_slices.list_owned()
     }
 
     /// List Edgion TLS
     pub fn list_edgion_tls(&self) -> ListData<EdgionTls> {
-        let edgion_tls = self.edgion_tls.read().unwrap();
-        edgion_tls.list_owned()
+        self.edgion_tls.list_owned()
     }
 
     /// List secrets
     pub fn list_secrets(&self) -> ListData<Secret> {
-        let secrets = self.secrets.read().unwrap();
-        secrets.list_owned()
+        self.secrets.list_owned()
     }
 
 
@@ -346,8 +339,7 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<HTTPRoute>> {
-        let mut routes = self.routes.write().unwrap();
-        routes.watch(client_id, client_name, from_version)
+        self.routes.watch(client_id, client_name, from_version)
     }
 
     /// Watch services
@@ -357,8 +349,7 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<Service>> {
-        let mut services = self.services.write().unwrap();
-        services.watch(client_id, client_name, from_version)
+        self.services.watch(client_id, client_name, from_version)
     }
 
     /// Watch endpoint slices
@@ -368,8 +359,7 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<EndpointSlice>> {
-        let mut endpoint_slices = self.endpoint_slices.write().unwrap();
-        endpoint_slices.watch(client_id, client_name, from_version)
+        self.endpoint_slices.watch(client_id, client_name, from_version)
     }
 
     /// Watch Edgion TLS
@@ -379,8 +369,7 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<EdgionTls>> {
-        let mut edgion_tls = self.edgion_tls.write().unwrap();
-        edgion_tls.watch(client_id, client_name, from_version)
+        self.edgion_tls.watch(client_id, client_name, from_version)
     }
 
     /// Watch secrets
@@ -390,8 +379,7 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<Secret>> {
-        let mut secrets = self.secrets.write().unwrap();
-        secrets.watch(client_id, client_name, from_version)
+        self.secrets.watch(client_id, client_name, from_version)
     }
 
     /// Print all configuration for a specific gateway class key

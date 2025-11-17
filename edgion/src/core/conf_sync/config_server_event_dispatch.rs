@@ -72,7 +72,7 @@ impl ResolveGatewayClassKeysForItem for Secret {
 impl ConfigServer {
     fn execute_change_on_cache<T>(
         change: ResourceChange,
-        cache: &mut ServerCache<T>,
+        cache: &ServerCache<T>,
         resource: T,
         resource_version: Option<u64>,
     ) where
@@ -142,10 +142,9 @@ impl EventDispatcher for ConfigServer {
                         kind = "HTTPRoute",
                         "Applying HTTPRoute resource change"
                     );
-                    let mut routes = self.routes.write().unwrap();
                     Self::execute_change_on_cache::<HTTPRoute>(
                         change,
-                        &mut routes,
+                        &self.routes,
                         resource,
                         resource_version,
                     );
@@ -158,10 +157,9 @@ impl EventDispatcher for ConfigServer {
                         kind = "Service",
                         "Applying Service resource change"
                     );
-                    let mut services = self.services.write().unwrap();
                     Self::execute_change_on_cache::<Service>(
                         change,
-                        &mut services,
+                        &self.services,
                         resource,
                         resource_version,
                     );
@@ -174,10 +172,9 @@ impl EventDispatcher for ConfigServer {
                         kind = "EndpointSlice",
                         "Applying EndpointSlice resource change"
                     );
-                    let mut endpoint_slices = self.endpoint_slices.write().unwrap();
                     Self::execute_change_on_cache::<EndpointSlice>(
                         change,
-                        &mut endpoint_slices,
+                        &self.endpoint_slices,
                         resource,
                         resource_version,
                     );
@@ -190,10 +187,9 @@ impl EventDispatcher for ConfigServer {
                         kind = "EdgionTls",
                         "Applying EdgionTls resource change"
                     );
-                    let mut edgion_tls = self.edgion_tls.write().unwrap();
                     Self::execute_change_on_cache::<EdgionTls>(
                         change,
-                        &mut edgion_tls,
+                        &self.edgion_tls,
                         resource,
                         resource_version,
                     );
@@ -206,10 +202,9 @@ impl EventDispatcher for ConfigServer {
                         kind = "Secret",
                         "Applying Secret resource change"
                     );
-                    let mut secrets = self.secrets.write().unwrap();
                     Self::execute_change_on_cache::<Secret>(
                         change,
-                        &mut secrets,
+                        &self.secrets,
                         resource,
                         resource_version,
                     );
@@ -224,20 +219,11 @@ impl EventDispatcher for ConfigServer {
         // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) don't have caches
         // They are stored in base_conf and don't need set_ready
 
-        let mut routes = self.routes.write().unwrap();
-        routes.set_ready();
-
-        let mut services = self.services.write().unwrap();
-        services.set_ready();
-
-        let mut endpoint_slices = self.endpoint_slices.write().unwrap();
-        endpoint_slices.set_ready();
-
-        let mut edgion_tls = self.edgion_tls.write().unwrap();
-        edgion_tls.set_ready();
-
-        let mut secrets = self.secrets.write().unwrap();
-        secrets.set_ready();
+        self.routes.set_ready();
+        self.services.set_ready();
+        self.endpoint_slices.set_ready();
+        self.edgion_tls.set_ready();
+        self.secrets.set_ready();
     }
 
     fn apply_base_conf(
