@@ -114,80 +114,26 @@ impl EventDispatcher for ConfigServer {
         
         let resource_type = resource_type.unwrap();
 
+        // Skip base conf resources - they should be handled by apply_base_conf
         match resource_type {
-            ResourceKind::GatewayClass => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
-                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
-                    let mut gateway_classes = self.gateway_classes.write().unwrap();
-                    tracing::info!(
-                        component = "config_server",
-                        kind = "GatewayClass",
-                        gateway_class_name = ?resource.metadata.name,
-                        gateway_class_keys = ?gateway_class_keys,
-                        change = ?change,
-                        "Processing GatewayClass resource"
-                    );
-                    for key in gateway_class_keys {
-                        let cache = gateway_classes
-                            .entry(key.clone())
-                            .or_insert_with(|| ServerCache::new(200));
-                        
-                        Self::execute_change_on_cache::<GatewayClass>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
-                    }
-                }
+            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
+                tracing::debug!(
+                    component = "config_server",
+                    event = "skip_base_conf_in_apply_resource_change",
+                    resource_type = ?resource_type,
+                    "Base conf resources should be handled by apply_base_conf, skipping apply_resource_change"
+                );
+                return;
             }
+            _ => {}
+        }
 
-            ResourceKind::EdgionGatewayConfig => {
-                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
-                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
-                    let mut edgion_gateway_configs = self.edgion_gateway_configs.write().unwrap();
-                    tracing::info!(
-                        component = "config_server",
-                        kind = "EdgionGatewayConfig",
-                        gateway_class_keys = ?gateway_class_keys,
-                    );
-                    for key in gateway_class_keys {
-                        let cache = edgion_gateway_configs
-                            .entry(key.clone())
-                            .or_insert_with(|| ServerCache::new(200));
-                        
-                        Self::execute_change_on_cache::<EdgionGatewayConfig>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
-                    }
-                }
-            }
-            
-            ResourceKind::Gateway => {
-                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
-                    let gateway_class_keys = resource.resolve_gateway_class_keys_for_item(self);
-                    let mut gateways = self.gateways.write().unwrap();
-                    tracing::info!(
-                        component = "config_server",
-                        kind = "Gateway",
-                        gateway_class_keys = ?gateway_class_keys,
-                    );
-                    for key in gateway_class_keys {
-                        let cache = gateways
-                            .entry(key.clone())
-                            .or_insert_with(|| ServerCache::new(200));
-                        
-                        Self::execute_change_on_cache::<Gateway>(
-                            change,
-                            cache,
-                            resource.clone(),
-                            resource_version,
-                        );
-                    }
-                }
+        match resource_type {
+            // Base conf resources are handled by apply_base_conf, not here
+            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
+                // This should never be reached due to the early return above,
+                // but included for match exhaustiveness
+                unreachable!("Base conf resources should have been handled earlier")
             }
             ResourceKind::HTTPRoute => {
                 if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
@@ -356,7 +302,7 @@ impl EventDispatcher for ConfigServer {
         change: ResourceChange,
         resource_type: Option<ResourceKind>,
         data: String,
-        resource_version: Option<u64>,
+        _resource_version: Option<u64>,
     ) {
         let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
         
