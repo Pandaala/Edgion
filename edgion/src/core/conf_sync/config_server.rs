@@ -53,6 +53,12 @@ pub struct EventDataSimple {
     pub err: Option<String>,
 }
 
+pub struct BaseConfData {
+    pub gateway_class: String,
+    pub edgion_gateway_config: String,
+    pub gateways: String,
+}
+
 impl ConfigServer {
     pub fn new(gateway_class: Option<String>) -> Self {
         Self {
@@ -69,6 +75,39 @@ impl ConfigServer {
     /// Get the configured gateway class name
     pub fn gateway_class(&self) -> Option<&String> {
         self.gateway_class.as_ref()
+    }
+
+    /// Get base configuration for a specific gateway class
+    /// Returns the base conf data as JSON strings
+    pub fn get_base_conf(&self, gateway_class: &str) -> Result<BaseConfData, String> {
+        // Verify gateway class matches if configured
+        if let Some(ref configured_gc) = self.gateway_class {
+            if configured_gc != gateway_class {
+                return Err(format!(
+                    "Gateway class mismatch: expected {}, got {}",
+                    configured_gc, gateway_class
+                ));
+            }
+        }
+
+        let base_conf = self.base_conf.read().unwrap();
+        
+        let gateway_class_json = base_conf.gateway_class()
+            .and_then(|gc| serde_json::to_string(gc).ok())
+            .unwrap_or_default();
+        
+        let edgion_gateway_config_json = base_conf.edgion_gateway_config()
+            .and_then(|egwc| serde_json::to_string(egwc).ok())
+            .unwrap_or_default();
+        
+        let gateways_json = serde_json::to_string(base_conf.gateways())
+            .map_err(|e| format!("Failed to serialize gateways: {}", e))?;
+
+        Ok(BaseConfData {
+            gateway_class: gateway_class_json,
+            edgion_gateway_config: edgion_gateway_config_json,
+            gateways: gateways_json,
+        })
     }
 
     pub fn list(

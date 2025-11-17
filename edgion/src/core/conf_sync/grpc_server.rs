@@ -3,9 +3,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-use crate::core::conf_sync::config_server::ConfigServer;
+use crate::core::conf_sync::config_server::{ConfigServer, BaseConfData};
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
+    GetBaseConfRequest, GetBaseConfResponse,
     ListRequest, ListResponse, ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
 };
 use crate::types::ResourceKind;
@@ -159,6 +160,27 @@ impl ConfigSync for ConfigSyncServer {
         Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
             rx,
         )))
+    }
+
+    async fn get_base_conf(
+        &self,
+        request: Request<GetBaseConfRequest>,
+    ) -> Result<Response<GetBaseConfResponse>, Status> {
+        let req = request.into_inner();
+
+        println!(
+            "[ConfigSyncServer::get_base_conf] gateway_class={}",
+            req.gateway_class
+        );
+
+        let base_conf_data = self.config_server.get_base_conf(&req.gateway_class)
+            .map_err(|e| Status::internal(format!("Failed to get base conf: {}", e)))?;
+
+        Ok(Response::new(GetBaseConfResponse {
+            gateway_class: base_conf_data.gateway_class,
+            edgion_gateway_config: base_conf_data.edgion_gateway_config,
+            gateways: base_conf_data.gateways,
+        }))
     }
 }
 

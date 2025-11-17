@@ -9,6 +9,10 @@ service ConfigSync {
     
     // Watch for changes to resources of a specific kind
     rpc Watch(WatchRequest) returns (stream WatchResponse);
+    
+    // Get base configuration (GatewayClass, EdgionGatewayConfig, Gateway) for a gateway class
+    // This is a one-time fetch, not affected by list/watch
+    rpc GetBaseConf(GetBaseConfRequest) returns (GetBaseConfResponse);
 }
 
 // Resource kind enumeration
@@ -50,5 +54,17 @@ message WatchResponse {
     string data = 1;
     uint64 resource_version = 2;
     string err = 3;
+}
+
+// Get base conf request
+message GetBaseConfRequest {
+    string gateway_class = 1;
+}
+
+// Get base conf response
+message GetBaseConfResponse {
+    string gateway_class = 1;  // JSON serialized GatewayClass, empty if not set
+    string edgion_gateway_config = 2;  // JSON serialized EdgionGatewayConfig, empty if not set
+    string gateways = 3;  // JSON serialized array of Gateway
 }
 
