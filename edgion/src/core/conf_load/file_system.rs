@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use notify::{event::{ModifyKind, RenameMode}, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::fs;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -37,8 +37,27 @@ impl FileSystemConfigLoader {
         root: P,
         dispatcher: Arc<dyn EventDispatcher>,
     ) -> Arc<Self> {
+        let root_path = root.into();
+        
+        // 将 root 转换为绝对路径
+        let root_abs = if root_path.is_absolute() {
+            root_path
+        } else {
+            // 相对路径转换为绝对路径
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&root_path))
+                .unwrap_or(root_path)
+        };
+        
+        tracing::info!(
+            component = "file_system_loader",
+            event = "init",
+            root = ?root_abs,
+            "Initialized FileSystemConfigLoader with absolute root path"
+        );
+        
         let loader = Arc::new(Self {
-            root: root.into(),
+            root: root_abs,
             dispatcher,
             resource_to_files: Arc::new(Mutex::new(HashMap::new())),
             files_to_resource: Arc::new(RwLock::new(HashMap::new())),
@@ -129,10 +148,6 @@ impl FileSystemConfigLoader {
                     .unwrap_or_else(|| path.to_path_buf())
             }
         }
-    }
-
-    async fn process_new_file(&self, path: &Path) -> Result<()> {
-        self.process_file(path).await
     }
 
     /// 读取文件并存储到内部映射
@@ -340,16 +355,6 @@ impl FileSystemConfigLoader {
         Ok(())
     }
 
-    async fn process_removed_file(&self, path: &Path) -> Result<()> {
-        // 直接调用 process_file,由它自动判断(文件不存在会触发 delete)
-        self.process_file(path).await
-    }
-
-    async fn process_updated_file(&self, path: &Path) -> Result<()> {
-        // 直接调用 process_file,由它自动判断(文件存在会触发 update 或 add)
-        self.process_file(path).await
-    }
-    
     /// Check for duplicate resources (multiple files pointing to the same resource)
     async fn check_duplicate_resources(&self) {
         let resource_to_files = self.resource_to_files.lock().await;
@@ -393,141 +398,30 @@ impl FileSystemConfigLoader {
     }
 
     async fn handle_event(&self, event: Event) -> Result<()> {
-        match event.kind {
-            EventKind::Create(_) => {
-                // 新文件创建
-                for path in event.paths.clone() {
-                    self.process_new_file(&path).await?;
-                }
+        // 提取所有路径，只处理在监控目录 root 下的文件
+        // process_file 会自动判断是 add/update/delete
+        for path in event.paths {
+            // 只处理在监控目录下的路径
+            if !path.starts_with(&self.root) {
+                tracing::debug!(
+                    component = "file_system_loader",
+                    event = "skip_path_outside_root",
+                    path = ?path,
+                    root = ?self.root,
+                    "Skipping path outside of monitored root directory"
+                );
+                continue;
             }
-            EventKind::Modify(modify_kind) => match modify_kind {
-                ModifyKind::Data(_) | ModifyKind::Metadata(_) => {
-                    // 文件内容或元数据修改
-                    for path in event.paths.clone() {
-                        self.process_updated_file(&path).await?;
-                    }
-                }
-                ModifyKind::Name(rename_mode) => {
-                    // 文件重命名
-                    let paths = event.paths.clone();
-                    match rename_mode {
-                        RenameMode::Both => {
-                            // 同时提供旧路径和新路径
-                            if paths.len() == 2 {
-                                let old = paths[0].clone();
-                                let new = paths[1].clone();
-                                self.process_removed_file(&old).await?;
-                                self.process_new_file(&new).await?;
-                            } else {
-                                tracing::warn!(
-                                    component = "file_system_loader",
-                                    event = "unexpected_rename_paths",
-                                    path_count = paths.len(),
-                                    "Expected 2 paths for RenameMode::Both, got {}",
-                                    paths.len()
-                                );
-                            }
-                        }
-                        RenameMode::From => {
-                            // 旧路径(文件被移走)
-                            for from_path in paths.clone() {
-                                tracing::debug!(
-                                    component = "file_system_loader",
-                                    event = "rename_from",
-                                    path = ?from_path,
-                                    "Received RenameMode::From event"
-                                );
-                                self.process_removed_file(&from_path).await?;
-                            }
-                        }
-                        RenameMode::To => {
-                            // 新路径(文件被移入)
-                            for to_path in paths.clone() {
-                                tracing::debug!(
-                                    component = "file_system_loader",
-                                    event = "rename_to",
-                                    path = ?to_path,
-                                    "Received RenameMode::To event"
-                                );
-                                self.process_new_file(&to_path).await?;
-                            }
-                        }
-                        RenameMode::Any => {
-                            // 通用处理
-                            let path_count = paths.len();
-                            if path_count == 2 {
-                                let old = paths[0].clone();
-                                let new = paths[1].clone();
-                                self.process_removed_file(&old).await?;
-                                self.process_new_file(&new).await?;
-                            } else if path_count == 1 {
-                                // 单个路径,检查文件是否存在来决定是添加还是删除
-                                for path in paths {
-                                    let normalized_path = self.normalize_path(&path).await;
-                                    let files_to_resource = self.files_to_resource.read().await;
-                                    let was_tracked = files_to_resource.contains_key(&normalized_path);
-                                    drop(files_to_resource);
-                                    
-                                    let is_in_watched_dir = path.starts_with(&self.root);
-                                    
-                                    if path.exists() && is_in_watched_dir {
-                                        // 文件存在,判断是新增还是更新
-                                        if was_tracked {
-                                            self.process_updated_file(&path).await?;
-                                        } else {
-                                            self.process_new_file(&path).await?;
-                                        }
-                                    } else if was_tracked {
-                                        // 文件不存在但之前被跟踪,处理为删除
-                                        self.process_removed_file(&path).await?;
-                                    }
-                                }
-                            } else {
-                                tracing::warn!(
-                                    component = "file_system_loader",
-                                    event = "unexpected_rename_any",
-                                    path_count = path_count,
-                                    "RenameMode::Any with {} paths, skipping",
-                                    path_count
-                                );
-                            }
-                        }
-                        RenameMode::Other => {
-                            // 未知重命名模式
-                            tracing::warn!(
-                                component = "file_system_loader",
-                                event = "unknown_rename_mode",
-                                path_count = paths.len(),
-                                "Unknown rename mode, attempting to handle"
-                            );
-                            if paths.len() == 2 {
-                                let old = paths[0].clone();
-                                let new = paths[1].clone();
-                                self.process_removed_file(&old).await?;
-                                self.process_new_file(&new).await?;
-                            } else {
-                                for path in paths {
-                                    self.process_updated_file(&path).await?;
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            },
-            EventKind::Remove(_) => {
-                // 文件删除
-                for path in event.paths.clone() {
-                    tracing::debug!(
-                        component = "file_system_loader",
-                        event = "remove_event",
-                        path = ?path,
-                        "Received Remove event"
-                    );
-                    self.process_removed_file(&path).await?;
-                }
-            }
-            _ => {}
+
+            tracing::debug!(
+                component = "file_system_loader",
+                event = "handle_event",
+                path = ?path,
+                event_kind = ?event.kind,
+                "Processing file event"
+            );
+
+            self.process_file(&path).await?;
         }
         Ok(())
     }
