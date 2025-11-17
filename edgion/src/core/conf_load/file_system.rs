@@ -132,25 +132,97 @@ impl FileSystemConfigLoader {
     }
 
     async fn process_new_file(&self, path: &Path) -> Result<()> {
-        self.process_file_with_change(path, ResourceChange::EventAdd)
-            .await
+        self.process_file(path).await
     }
 
+    /// 读取文件并存储到内部映射
+    /// 返回: (metadata, content, existed_before)
+    async fn load_and_store_file(&self, path: &Path) -> Result<Option<(ResourceMetadata, String, bool)>> {
+        // 只处理 .yml 或 .yaml 文件
+        let extension = path.extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("");
+        if extension != "yml" && extension != "yaml" {
+            return Ok(None);
+        }
+
+        if !path.exists() || !path.is_file() {
+            return Ok(None);
+        }
+
+        let normalized_path = self.normalize_path(path).await;
+        let content = Self::read_file(path).await?;
+        
+        let metadata = match extract_resource_metadata(&content) {
+            Some(m) => m,
+            None => {
+                tracing::warn!(
+                    component = "file_system_loader",
+                    event = "failed_to_extract_metadata",
+                    path = ?path,
+                    "Failed to extract resource metadata from file"
+                );
+                return Ok(None);
+            }
+        };
+
+        // 检查 files_to_resource 中是否已存在该文件
+        let mut files_to_resource = self.files_to_resource.write().await;
+        let existed_before = files_to_resource.contains_key(&normalized_path);
+        
+        // 更新 files_to_resource,存储 metadata 和 content
+        let file_info = FileInfo {
+            metadata: metadata.clone(),
+            content: content.clone(),
+        };
+        files_to_resource.insert(normalized_path.clone(), file_info);
+        drop(files_to_resource);
+
+        // 更新 resource_to_files
+        let mut resource_to_files = self.resource_to_files.lock().await;
+        let files = resource_to_files.entry(metadata.clone()).or_insert_with(Vec::new);
+        if !files.contains(&normalized_path) {
+            files.push(normalized_path.clone());
+        }
+        drop(resource_to_files);
+
+        Ok(Some((metadata, content, existed_before)))
+    }
+
+    /// 处理初始化阶段的文件加载，固定使用 InitAdd
     async fn process_init_file(&self, path: &Path) -> Result<()> {
-        self.process_file_with_change(path, ResourceChange::InitAdd)
-            .await
-    }
-
-    async fn process_file_with_change(
-        &self,
-        path: &Path,
-        change: ResourceChange,
-    ) -> Result<()> {
+        let result = self.load_and_store_file(path).await?;
+        
+        let Some((metadata, content, _existed_before)) = result else {
+            return Ok(());
+        };
 
         tracing::info!(
             component = "file_system_loader",
+            event = "init_file",
             path = ?path,
-            change = ?change,
+            kind = ?metadata.kind,
+            namespace = ?metadata.namespace,
+            name = ?metadata.name,
+            "Loading file during initialization"
+        );
+
+        // 使用 InitAdd
+        let use_base_conf = is_base_conf(&content);
+        self.dispatch_change(ResourceChange::InitAdd, content, use_base_conf).await;
+        Ok(())
+    }
+
+    /// 处理文件变化，自动判断是 add/update/delete
+    async fn process_file(
+        &self,
+        path: &Path,
+    ) -> Result<()> {
+
+        tracing::debug!(
+            component = "file_system_loader",
+            path = ?path,
+            "Processing file"
         );
 
         // Normalize path for consistent tracking
@@ -218,59 +290,16 @@ impl FileSystemConfigLoader {
             return Ok(());
         }
 
-        // 只处理 .yml 或 .yaml 文件
-        let extension = path.extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
-        if extension != "yml" && extension != "yaml" {
-            tracing::debug!(
-                component = "file_system_loader",
-                event = "skip_non_yaml_file",
-                path = ?path,
-                extension = extension,
-            );
+        // 尝试读取并存储文件
+        let result = self.load_and_store_file(path).await?;
+        
+        let Some((metadata, content, existed_before)) = result else {
+            // 文件不存在或不是有效的 yaml 文件
             return Ok(());
-        }
-
-        // 文件存在,读取内容
-        let content = Self::read_file(path).await?;
-        
-        // 提取 resource metadata
-        let metadata = match extract_resource_metadata(&content) {
-            Some(m) => m,
-            None => {
-                tracing::warn!(
-                    component = "file_system_loader",
-                    event = "failed_to_extract_metadata",
-                    path = ?path,
-                    "Failed to extract resource metadata from file"
-                );
-                return Ok(());
-            }
         };
 
-        // 检查 files_to_resource 中是否已存在该文件
-        let mut files_to_resource = self.files_to_resource.write().await;
-        let existed_before = files_to_resource.contains_key(&normalized_path);
-        
-        // 更新 files_to_resource,存储 metadata 和 content
-        let file_info = FileInfo {
-            metadata: metadata.clone(),
-            content: content.clone(),
-        };
-        files_to_resource.insert(normalized_path.clone(), file_info);
-        drop(files_to_resource);
-
-        // 更新 resource_to_files
-        let mut resource_to_files = self.resource_to_files.lock().await;
-        let files = resource_to_files.entry(metadata.clone()).or_insert_with(Vec::new);
-        if !files.contains(&normalized_path) {
-            files.push(normalized_path.clone());
-        }
-        drop(resource_to_files);
-
-        // 根据是否存在决定触发 add 还是 update
-        let actual_change = if existed_before {
+        // 根据文件之前是否存在，自动判断触发 add 还是 update
+        let change = if existed_before {
             ResourceChange::EventUpdate
         } else {
             ResourceChange::EventAdd
@@ -283,42 +312,42 @@ impl FileSystemConfigLoader {
         if let Some(ns) = namespace_str {
             tracing::info!(
                 component = "file_system_loader",
-                event = "processing_file",
+                event = "file_change",
                 path = ?path,
-                change = ?actual_change,
+                change = ?change,
                 kind = kind_str,
                 namespace = ns,
                 name = name_str,
                 existed_before = existed_before,
-                "Processing resource file"
+                "Processing resource file change"
             );
         } else {
             tracing::info!(
                 component = "file_system_loader",
-                event = "processing_file",
+                event = "file_change",
                 path = ?path,
-                change = ?actual_change,
+                change = ?change,
                 kind = kind_str,
                 name = name_str,
                 existed_before = existed_before,
-                "Processing cluster-scoped resource file"
+                "Processing cluster-scoped resource file change"
             );
         }
         
         // Determine if this is a base conf resource
         let use_base_conf = is_base_conf(&content);
-        self.dispatch_change(actual_change, content, use_base_conf).await;
+        self.dispatch_change(change, content, use_base_conf).await;
         Ok(())
     }
 
     async fn process_removed_file(&self, path: &Path) -> Result<()> {
-        // 简化为直接调用 process_file_with_change,由它处理文件不存在的情况
-        self.process_file_with_change(path, ResourceChange::EventDelete).await
+        // 直接调用 process_file,由它自动判断(文件不存在会触发 delete)
+        self.process_file(path).await
     }
 
     async fn process_updated_file(&self, path: &Path) -> Result<()> {
-        // 简化为直接调用 process_file_with_change,由它处理文件更新的情况
-        self.process_file_with_change(path, ResourceChange::EventUpdate).await
+        // 直接调用 process_file,由它自动判断(文件存在会触发 update 或 add)
+        self.process_file(path).await
     }
     
     /// Check for duplicate resources (multiple files pointing to the same resource)
