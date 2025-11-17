@@ -331,22 +331,116 @@ impl FileSystemConfigLoader {
                         }
                     }
                 } else {
-                    // No remaining files, check if it's a directory
-                    let cache = self.cache.lock().await;
-                    let has_children = cache.keys().any(|entry| entry.starts_with(path));
-                    drop(cache);
-                    
-                    if has_children {
-                        log_directory_not_supported(path);
+                    // No remaining files in resource_to_files, but check cache for other files defining same resource
+                    if let Some((metadata, _)) = &resource_metadata {
+                        // Try to find any file in cache that defines the same resource
+                        let cache = self.cache.lock().await;
+                        let mut found_content: Option<String> = None;
+                        let mut found_path: Option<PathBuf> = None;
+                        
+                        for (cached_path, cached_content) in cache.iter() {
+                            if let Some(cached_metadata) = extract_resource_metadata(cached_content) {
+                                if cached_metadata.kind == metadata.kind
+                                    && cached_metadata.namespace == metadata.namespace
+                                    && cached_metadata.name == metadata.name
+                                {
+                                    // Found a file with same resource
+                                    found_content = Some(cached_content.clone());
+                                    found_path = Some(cached_path.clone());
+                                    tracing::debug!(
+                                        component = "file_system_loader",
+                                        event = "found_same_resource_in_cache",
+                                        path = ?path,
+                                        cached_path = ?cached_path,
+                                        "Found same resource in cache"
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                        drop(cache);
+                        
+                        if let Some(content) = found_content {
+                            // Check if the found file is still in resource_to_files (might be a duplicate)
+                            // We need to check this before removing the current file from mapping
+                            let resource_to_files_check = self.resource_to_files.lock().await;
+                            let mut duplicate_files = Vec::new();
+                            
+                            for (check_metadata, files) in resource_to_files_check.iter() {
+                                if check_metadata.kind == metadata.kind
+                                    && check_metadata.namespace == metadata.namespace
+                                    && check_metadata.name == metadata.name
+                                {
+                                    // Found the resource in mapping, check if found_path is in it
+                                    // Note: files in resource_to_files are already normalized
+                                    if let Some(ref fp) = found_path {
+                                        let normalized_found = self.normalize_path(fp).await;
+                                        if files.contains(&normalized_found) {
+                                            // Get all files except the one being removed
+                                            // Files in resource_to_files are already normalized, so we can compare directly
+                                            duplicate_files = files.iter()
+                                                .filter(|p| p != &&normalized_path)
+                                                .cloned()
+                                                .collect();
+                                            
+                                            // Update resource_metadata with duplicate files
+                                            resource_metadata = Some((metadata.clone(), duplicate_files.clone()));
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                            drop(resource_to_files_check);
+                            
+                            if !duplicate_files.is_empty() {
+                                // There are other files in resource_to_files, we'll handle update later
+                                tracing::info!(
+                                    component = "file_system_loader",
+                                    event = "found_duplicate_in_mapping",
+                                    path = ?path,
+                                    duplicate_count = duplicate_files.len(),
+                                    "Found duplicate resource in resource_to_files mapping, will update instead of delete"
+                                );
+                            } else {
+                                tracing::info!(
+                                    component = "file_system_loader",
+                                    event = "using_cached_duplicate_for_deletion",
+                                    path = ?path,
+                                    "File not in cache but found duplicate resource in cache, using it for deletion"
+                                );
+                            }
+                            Some(content)
+                        } else {
+                            // Cannot find content, but we have metadata
+                            tracing::warn!(
+                                component = "file_system_loader",
+                                event = "file_not_in_cache_and_missing",
+                                path = ?path,
+                                kind = ?metadata.kind,
+                                namespace = ?metadata.namespace,
+                                name = ?metadata.name,
+                                "File removed but not found in cache and file doesn't exist, cannot delete resource without content"
+                            );
+                            None
+                        }
                     } else {
-                        tracing::warn!(
-                            component = "file_system_loader",
-                            event = "file_not_in_cache_and_missing",
-                            path = ?path,
-                            "File removed but not found in cache and file doesn't exist, cannot delete resource"
-                        );
+                        // No metadata found, check if it's a directory
+                        let cache = self.cache.lock().await;
+                        let has_children = cache.keys().any(|entry| entry.starts_with(path));
+                        drop(cache);
+                        
+                        if has_children {
+                            log_directory_not_supported(path);
+                        } else {
+                            tracing::warn!(
+                                component = "file_system_loader",
+                                event = "file_not_in_cache_and_missing",
+                                path = ?path,
+                                "File removed but not found in cache and file doesn't exist, cannot delete resource"
+                            );
+                        }
+                        None
                     }
-                    None
                 }
             } else {
                 // Not found in resource_to_files, check if it's a directory
