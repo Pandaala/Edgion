@@ -67,21 +67,24 @@ impl Loader {
     }
 
     pub async fn run(self) -> Result<()> {
+
+        tracing::info!("====> start connect...");
         // Connect to configuration source
         self.inner.connect().await?;
 
+        tracing::info!("====> start bootstrap base conf...");
         // Bootstrap base configuration resources first
         self.inner.bootstrap_base_conf().await?;
-        
+
+        tracing::info!("====> start bootstrap user conf...");
         // Bootstrap user configuration resources
         self.inner.bootstrap_user_conf().await?;
 
-        tracing::info!("Bootstrapped, set ready");
-
+        tracing::info!("====> Bootstrapped, set ready");
         // Set ready state
         self.inner.set_ready().await;
         
-        tracing::info!("Loader running...");
+        tracing::info!("====> Loader running...");
         // Start watching for changes
         self.inner.run().await
     }

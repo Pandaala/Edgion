@@ -1,5 +1,6 @@
 use super::types::{EventType, WatcherEvent};
 use std::collections::HashMap;
+use kube::{Resource, ResourceExt};
 
 /// Event storage - circular queue
 pub struct EventStore<T> {
@@ -9,7 +10,7 @@ pub struct EventStore<T> {
     end_index: usize,
     resource_version: u64,
     expire_version: u64,
-    data: HashMap<String, T>,
+    data: HashMap<String, T>, // Key: namespace/name or name (for cluster-scoped resources)
 }
 
 impl<T> EventStore<T> {
@@ -19,8 +20,12 @@ impl<T> EventStore<T> {
     }
 
     // init add do not apply any events
-    pub fn init_add(&mut self, version: u64, resource: T) {
-        self.data.insert(version.to_string(), resource);
+    pub fn init_add(&mut self, version: u64, resource: T)
+    where
+        T: Resource,
+    {
+        let key = Self::resource_key(&resource);
+        self.data.insert(key, resource);
         if version > self.resource_version {
             self.resource_version = version;
         }
@@ -28,14 +33,18 @@ impl<T> EventStore<T> {
 
     pub fn apply_event(&mut self, event_type: EventType, resource: T, version: u64)
     where
-        T: Clone,
+        T: Clone + Resource,
     {
+        let key = Self::resource_key(&resource);
         match event_type {
             EventType::Add | EventType::Update => {
-                self.data.insert(version.to_string(), resource.clone());
+                // Use namespace/name as key to ensure uniqueness
+                // If resource already exists, it will be replaced (update)
+                self.data.insert(key, resource.clone());
             }
             EventType::Delete => {
-                self.data.remove(&version.to_string());
+                // Remove by namespace/name key, not version
+                self.data.remove(&key);
             }
         }
 
@@ -50,6 +59,21 @@ impl<T> EventStore<T> {
         };
 
         self.mut_update(event);
+    }
+
+    /// Generate a unique key for a resource based on namespace and name
+    fn resource_key(resource: &T) -> String
+    where
+        T: Resource,
+    {
+        let namespace = resource.namespace();
+        let name = resource.name_any();
+        
+        if let Some(ns) = namespace {
+            format!("{}/{}", ns, name)
+        } else {
+            name
+        }
     }
 
     pub fn snapshot_owned(&self) -> (Vec<T>, u64)
@@ -145,8 +169,68 @@ impl<T: Clone> EventStore<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kube::api::ObjectMeta;
 
-    fn make_store() -> EventStore<String> {
+    // Test resource type that implements Resource trait
+    #[derive(Debug, Clone)]
+    struct TestResource {
+        name: String,
+        namespace: Option<String>,
+        metadata: ObjectMeta,
+    }
+
+    impl PartialEq for TestResource {
+        fn eq(&self, other: &Self) -> bool {
+            self.name == other.name && self.namespace == other.namespace
+        }
+    }
+
+    impl Eq for TestResource {}
+
+    impl kube::Resource for TestResource {
+        type DynamicType = ();
+        type Scope = kube::core::ClusterResourceScope;
+
+        fn kind(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+            "TestResource".into()
+        }
+
+        fn group(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+            "test.example.com".into()
+        }
+
+        fn version(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+            "v1".into()
+        }
+
+        fn plural(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+            "testresources".into()
+        }
+
+        fn meta(&self) -> &ObjectMeta {
+            &self.metadata
+        }
+
+        fn meta_mut(&mut self) -> &mut ObjectMeta {
+            &mut self.metadata
+        }
+    }
+
+    impl TestResource {
+        fn new(name: &str, namespace: Option<&str>) -> Self {
+            Self {
+                name: name.to_string(),
+                namespace: namespace.map(|s| s.to_string()),
+                metadata: ObjectMeta {
+                    name: Some(name.to_string()),
+                    namespace: namespace.map(|s| s.to_string()),
+                    ..Default::default()
+                },
+            }
+        }
+    }
+
+    fn make_store() -> EventStore<TestResource> {
         EventStore::new(10)
     }
 
@@ -164,19 +248,20 @@ mod tests {
     fn apply_event_adds_data_and_updates_version() {
         let mut store = make_store();
 
-        store.apply_event(EventType::Add, "alpha".to_string(), 1);
+        let resource = TestResource::new("alpha", Some("default"));
+        store.apply_event(EventType::Add, resource.clone(), 1);
 
         let (snapshot, version) = store.snapshot_owned();
         assert_eq!(version, 1);
         assert_eq!(snapshot.len(), 1);
-        assert!(snapshot.contains(&"alpha".to_string()));
+        assert!(snapshot.contains(&resource));
 
         let (current_version, events_opt) = store.get_events_from_resource_version(0).unwrap();
         let events = events_opt.expect("expected events");
         assert_eq!(current_version, 1);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].resource_version, 1);
-        assert_eq!(events[0].data, "alpha");
+        assert_eq!(events[0].data, resource);
         assert!(matches!(events[0].event_type, EventType::Add));
     }
 
@@ -184,14 +269,16 @@ mod tests {
     fn get_events_filters_by_requested_version() {
         let mut store = make_store();
 
-        store.apply_event(EventType::Add, "alpha".to_string(), 1);
-        store.apply_event(EventType::Update, "beta".to_string(), 2);
+        let alpha = TestResource::new("alpha", Some("default"));
+        let beta = TestResource::new("beta", Some("default"));
+        store.apply_event(EventType::Add, alpha, 1);
+        store.apply_event(EventType::Update, beta.clone(), 2);
 
         let (_, events_opt) = store.get_events_from_resource_version(1).unwrap();
         let events = events_opt.expect("expected events for version > 1");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].resource_version, 2);
-        assert_eq!(events[0].data, "beta");
+        assert_eq!(events[0].data, beta);
         assert!(matches!(events[0].event_type, EventType::Update));
 
         let (_, events_opt) = store.get_events_from_resource_version(2).unwrap();
@@ -203,10 +290,11 @@ mod tests {
 
     #[test]
     fn stale_version_error_when_events_expired() {
-        let mut store: EventStore<String> = EventStore::new(50);
+        let mut store: EventStore<TestResource> = EventStore::new(50);
 
         for version in 1..=60 {
-            store.apply_event(EventType::Add, format!("v{version}"), version);
+            let resource = TestResource::new(&format!("v{}", version), Some("default"));
+            store.apply_event(EventType::Add, resource, version);
         }
 
         let err = store
@@ -223,10 +311,11 @@ mod tests {
 
     #[test]
     fn multiple_wraps_over_capacity() {
-        let mut store: EventStore<String> = EventStore::new(50);
+        let mut store: EventStore<TestResource> = EventStore::new(50);
 
         for version in 1..=120 {
-            store.apply_event(EventType::Add, format!("value-{version}"), version);
+            let resource = TestResource::new(&format!("value-{}", version), Some("default"));
+            store.apply_event(EventType::Add, resource, version);
         }
 
         let (current_version, events_opt) = store.get_events_from_resource_version(110).unwrap();
@@ -236,7 +325,7 @@ mod tests {
         assert_eq!(versions, (111..=120).collect::<Vec<_>>());
 
         for (offset, event) in events.iter().enumerate() {
-            assert_eq!(event.data, format!("value-{}", 111 + offset as u64));
+            assert_eq!(event.data.name, format!("value-{}", 111 + offset as u64));
         }
 
         let err = store
@@ -249,11 +338,31 @@ mod tests {
     fn version_unexpect_error_when_requesting_future_version() {
         let mut store = make_store();
 
-        store.apply_event(EventType::Add, "alpha".to_string(), 1);
+        let resource = TestResource::new("alpha", Some("default"));
+        store.apply_event(EventType::Add, resource, 1);
 
         let err = store
             .get_events_from_resource_version(99)
             .expect_err("requesting future version should error");
         assert_eq!(err, "VersionUnexpect");
+    }
+
+    #[test]
+    fn duplicate_resource_replaces_existing() {
+        let mut store = make_store();
+
+        // Add same resource twice with different versions
+        let resource1 = TestResource::new("test-route", Some("default"));
+        let resource2 = TestResource::new("test-route", Some("default"));
+        
+        store.apply_event(EventType::Add, resource1.clone(), 1);
+        store.apply_event(EventType::Add, resource2.clone(), 2);
+
+        // Should only have one entry (the latest)
+        let (snapshot, version) = store.snapshot_owned();
+        assert_eq!(version, 2);
+        assert_eq!(snapshot.len(), 1);
+        // The key should be "default/test-route", so only one entry exists
+        assert_eq!(snapshot[0].name, "test-route");
     }
 }

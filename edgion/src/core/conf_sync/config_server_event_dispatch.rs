@@ -68,6 +68,7 @@ impl EventDispatcher for ConfigServer {
                 if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
                     tracing::info!(
                         component = "config_server",
+                        change = ?change,
                         kind = "HTTPRoute",
                         "Applying HTTPRoute resource change"
                     );

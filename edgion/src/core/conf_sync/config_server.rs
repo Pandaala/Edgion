@@ -326,25 +326,6 @@ impl ConfigServer {
         Ok(rx)
     }
 
-    /// List gateway classes
-    /// List all gateway class keys currently configured
-    /// Returns the configured gateway class name if set
-    pub fn list_all_gateway_class_keys(&self) -> Vec<String> {
-        let keys: Vec<String> = if let Some(ref gc) = self.gateway_class {
-            vec![gc.clone()]
-        } else {
-            Vec::new()
-        };
-        tracing::debug!(
-            component = "config_server",
-            event = "list_all_gateway_class_keys",
-            count = keys.len(),
-            keys = ?keys,
-            "Listing all gateway class keys"
-        );
-        keys
-    }
-
     /// List HTTP routes
     pub fn list_routes(&self) -> ListData<HTTPRoute> {
         self.routes.list_owned()
@@ -422,8 +403,8 @@ impl ConfigServer {
     }
 
     /// Print all configuration for a specific gateway class key
-    pub async fn print_config(&self, key: &GatewayClassKey) {
-        println!("=== ConfigCenter Config for GatewayClassKey: {} ===", key);
+    pub async fn print_config(&self) {
+        println!("\n==========================");
 
         // Base conf resources are stored in base_conf
         let base_conf = self.base_conf.read().unwrap();
@@ -510,8 +491,6 @@ impl ConfigServer {
                 println!("  [{}] {}", idx, format_resource_info(secret));
             }
         }
-
-        println!("=== End ConfigCenter Config ===\n");
     }
 }
 

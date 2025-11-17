@@ -1,0 +1,39 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: public_route_ccc
+  namespace: test
+spec:
+  parentRefs:
+    - name: gateway1
+      namespace: default
+      sectionName: https18443
+
+  hostnames:
+    - "ccc.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /ccc/doc/
+        - path:
+            type: PathPrefix
+            value: /ccc/api
+      backendRefs:
+        - name: ccc-service
+          port: 30001
+
+    - matches:
+        - path:
+            type: PathPrefix
+            value: ccc/123
+        - path:
+            type: Exact
+            value: /bbb/{id1}/ccc/{id2}/eee
+      backendRefs:
+        - name: ccc-service
+          port: 30002
+          weight: 1
+        - name: ddd-service
+          port: 30003
+          weight: 3

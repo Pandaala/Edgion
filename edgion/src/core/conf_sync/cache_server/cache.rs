@@ -349,7 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn event_add_stores_resource_and_updates_version() {
-        let mut cache = ServerCache::<TestResource>::new(10);
+        let cache = ServerCache::<TestResource>::new(10);
         let resource = TestResource {
             name: "foo",
             version: 1,
@@ -374,7 +374,7 @@ mod tests {
 
     #[tokio::test]
     async fn event_update_replaces_existing_resource() {
-        let mut cache = ServerCache::<TestResource>::new(10);
+        let cache = ServerCache::<TestResource>::new(10);
         let original = TestResource {
             name: "foo",
             version: 1,
@@ -414,7 +414,7 @@ mod tests {
 
     #[tokio::test]
     async fn event_delete_removes_resource() {
-        let mut cache = ServerCache::<TestResource>::new(10);
+        let cache = ServerCache::<TestResource>::new(10);
         let resource = TestResource {
             name: "foo",
             version: 42,
