@@ -69,7 +69,7 @@ pub fn is_base_conf(content: &str) -> bool {
 }
 
 /// Resource metadata extracted from YAML/JSON content
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResourceMetadata {
     pub kind: Option<String>,
     pub namespace: Option<String>,
