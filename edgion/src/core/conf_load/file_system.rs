@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 use crate::core::conf_load::ConfigLoader;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::EventDispatcher;
-use crate::core::utils::is_base_conf;
+use crate::core::utils::{extract_resource_metadata, is_base_conf};
 use crate::types::ResourceKind;
 
 pub struct FileSystemConfigLoader {
@@ -151,6 +151,36 @@ impl FileSystemConfigLoader {
             .await
             .insert(path.to_path_buf(), content.clone());
         
+        // Extract resource metadata for logging
+        if let Some(metadata) = extract_resource_metadata(&content) {
+            let kind_str = metadata.kind.as_deref().unwrap_or("Unknown");
+            let name_str = metadata.name.as_deref().unwrap_or("Unknown");
+            let namespace_str = metadata.namespace.as_deref();
+            
+            if let Some(ns) = namespace_str {
+                tracing::info!(
+                    component = "file_system_loader",
+                    event = "processing_file",
+                    path = ?path,
+                    change = ?change,
+                    kind = kind_str,
+                    namespace = ns,
+                    name = name_str,
+                    "Processing resource file"
+                );
+            } else {
+                tracing::info!(
+                    component = "file_system_loader",
+                    event = "processing_file",
+                    path = ?path,
+                    change = ?change,
+                    kind = kind_str,
+                    name = name_str,
+                    "Processing cluster-scoped resource file"
+                );
+            }
+        }
+        
         // Determine if this is a base conf resource
         let use_base_conf = is_base_conf(&content);
         self.dispatch_change(change, content, use_base_conf).await;
@@ -168,14 +198,47 @@ impl FileSystemConfigLoader {
         let mut cache = self.cache.lock().await;
         if let Some(old) = cache.remove(path) {
             let use_base_conf = is_base_conf(&old);
-            drop(cache);
-            tracing::info!(
-                component = "file_system_loader",
-                event = "file_removed",
-                path = ?path,
-                use_base_conf = use_base_conf,
-                "File found in cache, dispatching delete event"
-            );
+            
+            // Extract resource metadata for logging
+            if let Some(metadata) = extract_resource_metadata(&old) {
+                let kind_str = metadata.kind.as_deref().unwrap_or("Unknown");
+                let name_str = metadata.name.as_deref().unwrap_or("Unknown");
+                let namespace_str = metadata.namespace.as_deref();
+                
+                drop(cache);
+                if let Some(ns) = namespace_str {
+                    tracing::info!(
+                        component = "file_system_loader",
+                        event = "file_removed",
+                        path = ?path,
+                        use_base_conf = use_base_conf,
+                        kind = kind_str,
+                        namespace = ns,
+                        name = name_str,
+                        "File found in cache, dispatching delete event"
+                    );
+                } else {
+                    tracing::info!(
+                        component = "file_system_loader",
+                        event = "file_removed",
+                        path = ?path,
+                        use_base_conf = use_base_conf,
+                        kind = kind_str,
+                        name = name_str,
+                        "File found in cache, dispatching delete event (cluster-scoped)"
+                    );
+                }
+            } else {
+                drop(cache);
+                tracing::info!(
+                    component = "file_system_loader",
+                    event = "file_removed",
+                    path = ?path,
+                    use_base_conf = use_base_conf,
+                    "File found in cache, dispatching delete event (metadata extraction failed)"
+                );
+            }
+            
             self.dispatch_change(ResourceChange::EventDelete, old, use_base_conf).await;
         } else {
             let has_children = cache.keys().any(|entry| entry.starts_with(path));

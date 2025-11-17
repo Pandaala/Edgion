@@ -68,6 +68,54 @@ pub fn is_base_conf(content: &str) -> bool {
     }
 }
 
+/// Resource metadata extracted from YAML/JSON content
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceMetadata {
+    pub kind: Option<String>,
+    pub namespace: Option<String>,
+    pub name: Option<String>,
+}
+
+/// Extract kind, namespace, and name from YAML or JSON content without requiring a specific type
+///
+/// This function parses the content as YAML/JSON and extracts:
+/// - `kind` from the top-level `kind` field
+/// - `namespace` from `metadata.namespace`
+/// - `name` from `metadata.name`
+///
+/// Returns `None` if the content cannot be parsed, otherwise returns `Some(ResourceMetadata)`
+/// with the extracted fields (which may be `None` if not present).
+pub fn extract_resource_metadata(content: &str) -> Option<ResourceMetadata> {
+    // Try parsing as YAML first
+    let value: serde_yaml::Value = match serde_yaml::from_str(content) {
+        Ok(v) => v,
+        Err(_) => {
+            // Fallback to JSON if YAML parsing fails
+            serde_json::from_str(content).ok()?
+        }
+    };
+
+    let kind = value.get("kind")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let metadata = value.get("metadata")?;
+    
+    let namespace = metadata.get("namespace")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let name = metadata.get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Some(ResourceMetadata {
+        kind,
+        namespace,
+        name,
+    })
+}
+
 /// Format resource info as kind/namespace/name/resource_version
 ///
 /// This function extracts key information from a Kubernetes resource for logging/debugging purposes.
@@ -102,7 +150,7 @@ pub fn format_resource_info<T: kube::Resource>(resource: &T) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_need_version, next_resource_version};
+    use super::{check_need_version, extract_resource_metadata, next_resource_version};
     use std::thread;
 
     #[test]
@@ -155,5 +203,61 @@ metadata:
 "#;
 
         assert!(check_need_version(sample).is_some());
+    }
+
+    #[test]
+    fn extract_resource_metadata_from_yaml() {
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: test-route
+  namespace: default
+spec:
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+"#;
+        let metadata = extract_resource_metadata(yaml).unwrap();
+        assert_eq!(metadata.kind, Some("HTTPRoute".to_string()));
+        assert_eq!(metadata.namespace, Some("default".to_string()));
+        assert_eq!(metadata.name, Some("test-route".to_string()));
+    }
+
+    #[test]
+    fn extract_resource_metadata_from_json() {
+        let json = r#"{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "GatewayClass",
+  "metadata": {
+    "name": "test-class"
+  }
+}"#;
+        let metadata = extract_resource_metadata(json).unwrap();
+        assert_eq!(metadata.kind, Some("GatewayClass".to_string()));
+        assert_eq!(metadata.namespace, None); // Cluster-scoped resource
+        assert_eq!(metadata.name, Some("test-class".to_string()));
+    }
+
+    #[test]
+    fn extract_resource_metadata_missing_fields() {
+        let yaml = r#"
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+"#;
+        let metadata = extract_resource_metadata(yaml).unwrap();
+        assert_eq!(metadata.kind, Some("Service".to_string()));
+        assert_eq!(metadata.namespace, None);
+        assert_eq!(metadata.name, Some("test-service".to_string()));
+    }
+
+    #[test]
+    fn extract_resource_metadata_invalid_content() {
+        let invalid = "not yaml or json content";
+        assert!(extract_resource_metadata(invalid).is_none());
     }
 }
