@@ -60,11 +60,11 @@ impl ConfigServer {
         Self {
             gateway_class,
             base_conf: RwLock::new(GatewayClassBaseConf::new()),
-            routes: RwLock::new(ServerCache::new(1000)),
-            services: RwLock::new(ServerCache::new(1000)),
-            endpoint_slices: RwLock::new(ServerCache::new(1000)),
-            edgion_tls: RwLock::new(ServerCache::new(1000)),
-            secrets: RwLock::new(ServerCache::new(1000)),
+            routes: RwLock::new(ServerCache::new(200)),
+            services: RwLock::new(ServerCache::new(200)),
+            endpoint_slices: RwLock::new(ServerCache::new(200)),
+            edgion_tls: RwLock::new(ServerCache::new(200)),
+            secrets: RwLock::new(ServerCache::new(200)),
         }
     }
     
