@@ -14,13 +14,19 @@ use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::EventDispatcher;
 use crate::core::utils::{extract_resource_metadata, is_base_conf, ResourceMetadata};
 
+#[derive(Clone)]
+struct FileInfo {
+    metadata: ResourceMetadata,
+    content: String,
+}
+
 pub struct FileSystemConfigLoader {
     root: PathBuf,
     dispatcher: Arc<dyn EventDispatcher>,
     // Track resource metadata to file paths mapping for duplicate detection
     // Key: ResourceMetadata (kind/namespace/name), Value: Vec<PathBuf> (file paths)
     resource_to_files: Arc<Mutex<HashMap<ResourceMetadata, Vec<PathBuf>>>>,
-    files_to_resource: Arc<RwLock<HashMap<PathBuf, ResourceMetadata>>>,
+    files_to_resource: Arc<RwLock<HashMap<PathBuf, FileInfo>>>,
 }
 
 // TODO: Support nested directory watch and propagation. Currently only flat file
@@ -160,12 +166,15 @@ impl FileSystemConfigLoader {
                 "File does not exist, processing as deletion"
             );
 
-            // 从 files_to_resource 中获取旧的 resource metadata
+            // 从 files_to_resource 中获取旧的文件信息
             let mut files_to_resource = self.files_to_resource.write().await;
-            let old_metadata = files_to_resource.remove(&normalized_path);
+            let old_file_info = files_to_resource.remove(&normalized_path);
             drop(files_to_resource);
 
-            if let Some(metadata) = old_metadata {
+            if let Some(file_info) = old_file_info {
+                let metadata = file_info.metadata.clone();
+                let content = file_info.content.clone();
+                
                 // 从 resource_to_files 中删除该文件
                 let mut resource_to_files = self.resource_to_files.lock().await;
                 
@@ -177,9 +186,6 @@ impl FileSystemConfigLoader {
                         resource_to_files.remove(&metadata);
                         drop(resource_to_files);
                         
-                        // 尝试读取文件内容以触发delete事件
-                        // 由于文件已删除,我们需要从其他途径获取内容
-                        // 这里假设我们无法获取内容,可能需要其他机制来处理
                         tracing::info!(
                             component = "file_system_loader",
                             event = "resource_deleted",
@@ -187,8 +193,12 @@ impl FileSystemConfigLoader {
                             kind = ?metadata.kind,
                             namespace = ?metadata.namespace,
                             name = ?metadata.name,
-                            "Resource has no more files, triggering delete event (但无法获取文件内容)"
+                            "Resource has no more files, triggering delete event"
                         );
+                        
+                        // 触发 delete 事件
+                        let use_base_conf = is_base_conf(&content);
+                        self.dispatch_change(ResourceChange::EventDelete, content, use_base_conf).await;
                     } else {
                         let remaining_count = files.len();
                         drop(resource_to_files);
@@ -243,8 +253,12 @@ impl FileSystemConfigLoader {
         let mut files_to_resource = self.files_to_resource.write().await;
         let existed_before = files_to_resource.contains_key(&normalized_path);
         
-        // 更新 files_to_resource
-        files_to_resource.insert(normalized_path.clone(), metadata.clone());
+        // 更新 files_to_resource,存储 metadata 和 content
+        let file_info = FileInfo {
+            metadata: metadata.clone(),
+            content: content.clone(),
+        };
+        files_to_resource.insert(normalized_path.clone(), file_info);
         drop(files_to_resource);
 
         // 更新 resource_to_files
