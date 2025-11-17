@@ -155,58 +155,32 @@ impl FileSystemConfigLoader {
 
     /// 验证文件名是否符合命名规范: namespace_name_kind.yaml
     /// 对于 cluster-scoped 资源（namespace 为 None），格式为: _name_kind.yaml
-    fn validate_filename_format(&self, path: &Path, metadata: &ResourceMetadata) -> bool {
+    /// 返回期望的文件名，如果验证通过返回 None，如果失败返回期望的文件名
+    fn validate_filename_format(&self, path: &Path, metadata: &ResourceMetadata) -> Option<String> {
+        // 获取文件名（不含路径）
         let file_name = match path.file_name().and_then(|n| n.to_str()) {
             Some(name) => name,
-            None => return false,
+            None => return None,
         };
 
-        // 移除扩展名
-        let name_without_ext = file_name
-            .strip_suffix(".yaml")
-            .or_else(|| file_name.strip_suffix(".yml"))
-            .unwrap_or(file_name);
-
-        // 解析文件名：namespace_name_kind.yaml 或 _name_kind.yaml
-        // name 部分可能包含下划线，所以从末尾开始解析
-        // 最后一部分是 kind，倒数第二部分是 name，如果有第三部分则是 namespace
-        let parts: Vec<&str> = name_without_ext.split('_').collect();
-        
-        let (expected_namespace, expected_name, expected_kind) = if parts.len() < 2 {
-            return false;
-        } else if name_without_ext.starts_with('_') && parts.len() >= 3 {
-            // 格式: _name_kind (cluster-scoped，以 _ 开头)
-            // parts[0] 是空字符串，parts[1..len-1] 是 name，parts[len-1] 是 kind
-            let kind = parts.last().unwrap().to_string();
-            let name = parts[1..parts.len()-1].join("_");
-            (None, Some(name), Some(kind))
-        } else if parts.len() >= 3 {
-            // 格式: namespace_name_kind
-            // parts[0] 是 namespace，parts[1..len-1] 是 name，parts[len-1] 是 kind
-            let namespace = parts[0].to_string();
-            let kind = parts.last().unwrap().to_string();
-            let name = parts[1..parts.len()-1].join("_");
-            (Some(namespace), Some(name), Some(kind))
+        // 根据 metadata 构建期望的文件名
+        let expected_name = if let (Some(ns), Some(name), Some(kind)) = 
+            (metadata.namespace.as_ref(), metadata.name.as_ref(), metadata.kind.as_ref()) {
+            format!("{}_{}_{}.yaml", ns, name, kind)
+        } else if let (Some(name), Some(kind)) = (metadata.name.as_ref(), metadata.kind.as_ref()) {
+            // cluster-scoped 资源
+            format!("_{}_{}.yaml", name, kind)
         } else {
-            return false;
+            return None;
         };
 
-        // 验证 namespace 匹配
-        if expected_namespace != metadata.namespace {
-            return false;
+        // 如果文件名匹配，返回 None（表示验证通过）
+        // 如果不匹配，返回期望的文件名
+        if file_name == expected_name {
+            None
+        } else {
+            Some(expected_name)
         }
-
-        // 验证 name 匹配（忽略大小写和连字符/下划线差异）
-        let normalize_name = |s: &str| s.replace("-", "").replace("_", "").to_lowercase();
-        let expected_name_norm = expected_name.as_ref().map(|n| normalize_name(n));
-        let actual_name_norm = metadata.name.as_ref().map(|n| normalize_name(n));
-        
-        if expected_name_norm != actual_name_norm {
-            return false;
-        }
-
-        // 验证 kind 匹配
-        expected_kind == metadata.kind
     }
 
     /// 读取文件并存储到内部映射
@@ -241,26 +215,18 @@ impl FileSystemConfigLoader {
         };
 
         // 验证文件名格式是否符合规范: namespace_name_kind.yaml
-        if !self.validate_filename_format(path, &metadata) {
-            let expected_name = if let (Some(ns), Some(name), Some(kind)) = 
-                (metadata.namespace.as_ref(), metadata.name.as_ref(), metadata.kind.as_ref()) {
-                format!("{}_{}_{}.yaml", ns, name, kind)
-            } else if let (Some(name), Some(kind)) = (metadata.name.as_ref(), metadata.kind.as_ref()) {
-                format!("_{}_{}.yaml", name, kind)
-            } else {
-                "unknown".to_string()
-            };
-
-            tracing::warn!(
+        if let Some(expected_filename) = self.validate_filename_format(path, &metadata) {
+            tracing::error!(
                 component = "file_system_loader",
                 event = "filename_format_mismatch",
                 path = ?path,
                 actual_filename = ?path.file_name(),
-                expected_filename = expected_name,
+                expected_filename = expected_filename,
                 kind = ?metadata.kind,
                 namespace = ?metadata.namespace,
                 name = ?metadata.name,
-                "File name does not match required format: namespace_name_kind.yaml (or _name_kind.yaml for cluster-scoped resources). Skipping file."
+                "File name does not match required format. Your file should be named: {}",
+                expected_filename
             );
             return Ok(None);
         }
@@ -491,6 +457,14 @@ impl FileSystemConfigLoader {
                     root = ?self.root,
                     "Skipping path outside of monitored root directory"
                 );
+                continue;
+            }
+
+            // 只处理 .yaml 或 .yml 文件，其他文件直接跳过
+            let extension = path.extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("");
+            if extension != "yml" && extension != "yaml" {
                 continue;
             }
 
