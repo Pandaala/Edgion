@@ -277,6 +277,22 @@ impl EventDispatcher for ConfigServer {
         match resource_type {
             ResourceKind::GatewayClass => {
                 if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
+                    // Filter by configured gateway class name
+                    if let Some(configured_gc) = &self.gateway_class {
+                        if let Some(name) = &resource.metadata.name {
+                            if name != configured_gc {
+                                tracing::debug!(
+                                    component = "config_server",
+                                    event = "skip_gateway_class_mismatch",
+                                    configured = %configured_gc,
+                                    received = %name,
+                                    "Skipping GatewayClass mismatch"
+                                );
+                                return;
+                            }
+                        }
+                    }
+
                     tracing::info!(
                         component = "config_server",
                         kind = "GatewayClass",
@@ -288,17 +304,80 @@ impl EventDispatcher for ConfigServer {
                     match change {
                         ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
                             let mut base_conf = self.base_conf.write().unwrap();
+                            
+                            // Check if existing EdgionGatewayConfig matches the new GatewayClass
+                            // If GatewayClass has parametersRef, validate the match
+                            // If GatewayClass has no parametersRef, clear any existing config
+                            if let Some(existing_config) = base_conf.edgion_gateway_config() {
+                                let config_name = existing_config.metadata.name.as_deref().unwrap_or("");
+                                let should_keep = if let Some(ref params) = resource.spec.parameters_ref {
+                                    // Check group, kind, and name
+                                    params.group == "example.com" &&
+                                    params.kind == "EdgionGatewayConfig" &&
+                                    params.name == config_name &&
+                                    // EdgionGatewayConfig is cluster-scoped, so namespace should be None
+                                    params.namespace.is_none()
+                                } else {
+                                    // GatewayClass has no parametersRef, so no config should exist
+                                    false
+                                };
+                                
+                                if !should_keep {
+                                    tracing::info!(
+                                        component = "config_server",
+                                        event = "clear_mismatched_config",
+                                        config_name = %config_name,
+                                        "Clearing EdgionGatewayConfig that does not match new GatewayClass parametersRef"
+                                    );
+                                    base_conf.clear_edgion_gateway_config();
+                                }
+                            }
+
                             base_conf.set_gateway_class(resource);
                         }
                         ResourceChange::EventDelete => {
                             let mut base_conf = self.base_conf.write().unwrap();
                             base_conf.clear_gateway_class();
+                            // Also clear config as it's no longer referenced
+                            base_conf.clear_edgion_gateway_config();
                         }
                     }
                 }
             }
             ResourceKind::EdgionGatewayConfig => {
                 if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
+                    // Check against existing GatewayClass
+                    let should_load = {
+                        let base_conf = self.base_conf.read().unwrap();
+                        if let Some(gc) = base_conf.gateway_class() {
+                            if let Some(ref params) = gc.spec.parameters_ref {
+                                // Check group, kind, name, and namespace
+                                params.group == "example.com" &&
+                                params.kind == "EdgionGatewayConfig" &&
+                                params.name == resource.metadata.name.as_deref().unwrap_or("") &&
+                                // EdgionGatewayConfig is cluster-scoped, so namespace should be None
+                                params.namespace.is_none()
+                            } else {
+                                // GatewayClass has no parametersRef, so no config should be loaded
+                                false
+                            }
+                        } else {
+                            // GatewayClass not loaded yet, allow loading for now
+                            // It will be validated when GatewayClass is loaded (reverse check)
+                            true
+                        }
+                    };
+
+                    if !should_load {
+                        tracing::debug!(
+                            component = "config_server",
+                            event = "skip_config_mismatch",
+                            config_name = ?resource.metadata.name,
+                            "Skipping EdgionGatewayConfig not referenced by current GatewayClass"
+                        );
+                        return;
+                    }
+                    
                     tracing::info!(
                         component = "config_server",
                         kind = "EdgionGatewayConfig",
@@ -321,6 +400,20 @@ impl EventDispatcher for ConfigServer {
             }
             ResourceKind::Gateway => {
                 if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
+                    // Filter by gateway class name in spec
+                    if let Some(configured_gc) = &self.gateway_class {
+                        if resource.spec.gateway_class_name != *configured_gc {
+                            tracing::debug!(
+                                component = "config_server",
+                                event = "skip_gateway_class_mismatch",
+                                configured = %configured_gc,
+                                received = %resource.spec.gateway_class_name,
+                                "Skipping Gateway with mismatched gatewayClassName"
+                            );
+                            return;
+                        }
+                    }
+
                     tracing::info!(
                         component = "config_server",
                         kind = "Gateway",

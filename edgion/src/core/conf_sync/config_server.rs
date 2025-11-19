@@ -33,7 +33,7 @@ pub enum ResourceItem {
 // 2、内部不做细分的全新配置，实际的权限配置全部由RBAC来控制他能取到哪些，取到哪些，就把哪些全部同步到对应的网关。（此处如果给予全部service/secret可见，那么对应的网关就可见）
 // 3、只会处理对应route信息里的有些parentRefs是对应的，不然就不会处理
 pub struct ConfigServer {
-    gateway_class: Option<String>,
+    pub(crate) gateway_class: Option<String>,
     pub base_conf: RwLock<GatewayClassBaseConf>,
     pub routes: ServerCache<HTTPRoute>,
     pub services: ServerCache<Service>,

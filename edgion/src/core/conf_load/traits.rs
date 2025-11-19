@@ -1,3 +1,4 @@
+use crate::types::ResourceKind;
 use async_trait::async_trait;
 
 #[async_trait]
@@ -6,7 +7,8 @@ pub trait ConfigLoader: Send + Sync {
     async fn connect(&self) -> anyhow::Result<()>;
 
     /// Bootstrap and load base configuration resources (GatewayClass, EdgionGatewayConfig, Gateway)
-    async fn bootstrap_base_conf(&self) -> anyhow::Result<()>;
+    /// If kind is specified, only load resources of that kind
+    async fn bootstrap_base_conf(&self, kind: Option<ResourceKind>) -> anyhow::Result<()>;
 
     /// Bootstrap and load user configuration resources (all other resources)
     async fn bootstrap_user_conf(&self) -> anyhow::Result<()>;

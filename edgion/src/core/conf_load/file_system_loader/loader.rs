@@ -12,6 +12,7 @@ use tokio::time::{interval, Duration};
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::EventDispatcher;
 use crate::core::utils::{extract_resource_metadata, is_base_conf, ResourceMetadata};
+use crate::types::ResourceKind;
 
 use super::types::FileInfo;
 
@@ -255,12 +256,23 @@ impl FileSystemConfigLoader {
     }
 
     /// 处理初始化阶段的文件加载，固定使用 InitAdd
-    pub async fn process_init_file(&self, path: &Path) -> Result<()> {
+    /// 如果指定了 filter_kind，则只处理匹配该类型的资源
+    pub async fn process_init_file(&self, path: &Path, filter_kind: Option<ResourceKind>) -> Result<()> {
         let result = self.load_and_store_file(path).await?;
         
         let Some((metadata, content, _existed_before)) = result else {
             return Ok(());
         };
+
+        // Check kind filter if specified
+        if let Some(target_kind) = filter_kind {
+            let current_kind = metadata.kind.as_deref()
+                .and_then(|k| ResourceKind::from_str_name(k));
+            
+            if current_kind != Some(target_kind) {
+                return Ok(());
+            }
+        }
 
         tracing::info!(
             component = "file_system_loader",

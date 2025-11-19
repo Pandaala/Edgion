@@ -101,7 +101,8 @@ impl ConfigLoader for EtcdConfigLoader {
     }
 
     /// Bootstrap and load base configuration resources (GatewayClass, EdgionGatewayConfig, Gateway)
-    async fn bootstrap_base_conf(&self) -> Result<()> {
+    /// If kind is specified, only load resources of that kind
+    async fn bootstrap_base_conf(&self, _kind: Option<crate::types::ResourceKind>) -> Result<()> {
         let mut client_guard = self.client.lock().await;
         let client = client_guard
             .as_mut()

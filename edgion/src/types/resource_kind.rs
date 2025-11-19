@@ -45,6 +45,11 @@ impl ResourceKind {
         }
     }
 
+    /// Convert a kind string (e.g., "GatewayClass") to ResourceKind
+    pub fn from_str_name(kind_str: &str) -> Option<Self> {
+        Self::from_kind_str(kind_str)
+    }
+
     /// Convert ResourceKind to string for match statement
     fn as_str(&self) -> &'static str {
         match self {

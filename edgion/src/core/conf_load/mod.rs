@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::{Args, ValueEnum};
 use std::path::PathBuf;
 use crate::core::conf_sync::traits::{EventDispatcher};
+use crate::types::ResourceKind;
 
 pub mod etcd;
 pub mod file_system_loader;
@@ -73,8 +74,18 @@ impl Loader {
         self.inner.connect().await?;
 
         tracing::info!("====> start bootstrap base conf...");
-        // Bootstrap base configuration resources first
-        self.inner.bootstrap_base_conf().await?;
+        // Bootstrap base configuration resources in order:
+        // 1. GatewayClass (must be loaded first)
+        tracing::info!("====> loading GatewayClass...");
+        self.inner.bootstrap_base_conf(Some(ResourceKind::GatewayClass)).await?;
+        
+        // 2. EdgionGatewayConfig (referenced by GatewayClass)
+        tracing::info!("====> loading EdgionGatewayConfig...");
+        self.inner.bootstrap_base_conf(Some(ResourceKind::EdgionGatewayConfig)).await?;
+        
+        // 3. Gateway (uses GatewayClass)
+        tracing::info!("====> loading Gateway...");
+        self.inner.bootstrap_base_conf(Some(ResourceKind::Gateway)).await?;
 
         tracing::info!("====> start bootstrap user conf...");
         // Bootstrap user configuration resources

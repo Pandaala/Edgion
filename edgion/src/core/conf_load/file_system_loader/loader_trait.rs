@@ -18,9 +18,11 @@ impl ConfigLoader for FileSystemConfigLoader {
     }
 
     /// Bootstrap and load base configuration resources (GatewayClass, EdgionGatewayConfig, Gateway)
-    async fn bootstrap_base_conf(&self) -> Result<()> {
+    /// If kind is specified, only load resources of that kind
+    async fn bootstrap_base_conf(&self, kind: Option<crate::types::ResourceKind>) -> Result<()> {
         let root = self.root();
         let mut stack = vec![root.clone()];
+
         while let Some(dir) = stack.pop() {
             let mut entries = fs::read_dir(&dir)
                 .await
@@ -31,7 +33,7 @@ impl ConfigLoader for FileSystemConfigLoader {
                 if path.is_dir() {
                     stack.push(path);
                 } else {
-                    // Only process base conf files
+                    // Only process YAML files
                     if path.extension()
                         .and_then(|ext| ext.to_str())
                         .map(|ext| ext == "yml" || ext == "yaml")
@@ -42,7 +44,7 @@ impl ConfigLoader for FileSystemConfigLoader {
                             Err(e) => {
                                 tracing::warn!(
                                     component = "file_system_loader",
-                                    event = "failed to read base conf",
+                                    event = "failed to read file",
                                     path = ?path,
                                     error = %e,
                                 );
@@ -50,9 +52,18 @@ impl ConfigLoader for FileSystemConfigLoader {
                             }
                         };
                         
-                        if is_base_conf(&content) {
-                            self.process_init_file(&path).await?;
+                        // Check if this file matches the kind filter
+                        if let Some(target_kind) = kind {
+                            if let Some(content_kind) = crate::types::ResourceKind::from_content(&content) {
+                                if content_kind != target_kind {
+                                    continue;
+                                }
+                            } else {
+                                continue;
+                            }
                         }
+
+                        self.process_init_file(&path, kind).await?;
                     }
                 }
             }
@@ -95,7 +106,7 @@ impl ConfigLoader for FileSystemConfigLoader {
                         };
                         
                         if !is_base_conf(&content) {
-                            self.process_init_file(&path).await?;
+                            self.process_init_file(&path, None).await?;
                         }
                     }
                 }
