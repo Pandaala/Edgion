@@ -78,12 +78,12 @@ pub struct LoggingConfig {
 /// Loader configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
 pub struct LoaderConfig {
-    /// Loader type: filesystem or etcd
+    /// Loader type: localpath or etcd
     #[arg(long = "loader-type", value_name = "TYPE")]
     #[serde(rename = "type", default)]
     pub loader_type: Option<String>,
     
-    /// Configuration directory for filesystem loader
+    /// Configuration directory for localpath loader
     #[arg(long = "loader-dir", value_name = "DIR")]
     #[serde(default)]
     pub dir: Option<String>,
@@ -133,7 +133,7 @@ fn default_buffer_size() -> usize {
 }
 
 fn default_loader_type() -> String {
-    "filesystem".to_string()
+    "localpath".to_string()
 }
 
 fn default_debug_enabled() -> bool {
@@ -299,7 +299,7 @@ impl EdgionOpConfig {
         
         let loader = match self.loader_type().as_str() {
             "etcd" => LoaderKind::Etcd,
-            _ => LoaderKind::Filesystem,
+            _ => LoaderKind::LocalPath,
         };
         
         LoaderArgs {

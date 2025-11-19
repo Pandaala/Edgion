@@ -12,21 +12,21 @@ pub mod traits;
 pub use traits::ConfigLoader;
 
 pub use etcd::EtcdConfigLoader;
-pub use file_system_loader::FileSystemConfigLoader;
+pub use file_system_loader::LocalPathLoader;
 
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
 pub enum LoaderKind {
-    Filesystem,
+    LocalPath,
     Etcd,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct LoaderArgs {
-    /// Configuration loader type (currently only filesystem is supported)
-    #[arg(long, value_enum, value_name = "TYPE", default_value = "filesystem")]
+    /// Configuration loader type (currently only localpath is supported)
+    #[arg(long, value_enum, value_name = "TYPE", default_value = "local_path")]
     pub loader: LoaderKind,
 
-    /// Root directory for filesystem loader
+    /// Root directory for localpath loader
     #[arg(long, value_name = "DIR")]
     pub dir: Option<String>,
 
@@ -46,12 +46,12 @@ pub struct Loader {
 impl Loader {
     pub fn from_args(args: &LoaderArgs, dispatcher: Arc<dyn EventDispatcher>) -> Result<Self> {
         match args.loader {
-            LoaderKind::Filesystem => {
-                const DEFAULT_FILESYSTEM_DIR: &str = "edgion/config/examples";
+            LoaderKind::LocalPath => {
+                const DEFAULT_LOCAL_PATH_DIR: &str = "edgion/config/examples";
                 let dir = args
                     .dir
                     .clone()
-                    .unwrap_or_else(|| DEFAULT_FILESYSTEM_DIR.to_string());
+                    .unwrap_or_else(|| DEFAULT_LOCAL_PATH_DIR.to_string());
                 let path = PathBuf::from(&dir);
                 if !path.exists() {
                     return Err(anyhow::anyhow!(
@@ -60,7 +60,7 @@ impl Loader {
                     ));
                 }
 
-                let loader = FileSystemConfigLoader::new(path, dispatcher);
+                let loader = LocalPathLoader::new(path, dispatcher);
                 Ok(Self { inner: loader })
             }
             LoaderKind::Etcd => Err(anyhow::anyhow!("etcd loader is not currently supported")),

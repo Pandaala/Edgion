@@ -4,13 +4,13 @@ use tokio::fs;
 use crate::core::conf_load::ConfigLoader;
 use crate::types::ResourceKind;
 
-use super::loader::FileSystemConfigLoader;
+use super::loader::LocalPathLoader;
 
 #[async_trait::async_trait]
-impl ConfigLoader for FileSystemConfigLoader {
-    /// Connect to filesystem (no-op for filesystem loader)
+impl ConfigLoader for LocalPathLoader {
+    /// Connect to localpath (no-op for localpath loader)
     async fn connect(&self) -> Result<()> {
-        // Filesystem doesn't need connection setup
+        // LOCAL_PATH doesn't need connection setup
         if !self.root().exists() {
             return Err(anyhow!("Config directory {:?} does not exist", self.root()));
         }
@@ -19,7 +19,7 @@ impl ConfigLoader for FileSystemConfigLoader {
 
     /// Bootstrap and load base configuration resources (GatewayClass, EdgionGatewayConfig, Gateway)
     /// If kind is specified, only load resources of that kind
-    async fn bootstrap_base_conf(&self, kind: Option<crate::types::ResourceKind>) -> Result<()> {
+    async fn bootstrap_base_conf(&self, kind: Option<ResourceKind>) -> Result<()> {
         let root = self.root();
         let mut stack = vec![root.clone()];
 
@@ -39,7 +39,7 @@ impl ConfigLoader for FileSystemConfigLoader {
                         .map(|ext| ext == "yml" || ext == "yaml")
                         .unwrap_or(false)
                     {
-                        let content = match FileSystemConfigLoader::read_file(&path).await {
+                        let content = match LocalPathLoader::read_file(&path).await {
                             Ok(c) => c,
                             Err(e) => {
                                 tracing::warn!(
@@ -92,7 +92,7 @@ impl ConfigLoader for FileSystemConfigLoader {
                         .map(|ext| ext == "yml" || ext == "yaml")
                         .unwrap_or(false)
                     {
-                        let content = match FileSystemConfigLoader::read_file(&path).await {
+                        let content = match LocalPathLoader::read_file(&path).await {
                             Ok(c) => c,
                             Err(e) => {
                                 tracing::warn!(

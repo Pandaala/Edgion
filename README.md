@@ -31,7 +31,7 @@ cargo run --bin edgion-op -- \
 --gateway-class public-gateway \
 --grpc-listen 127.0.0.1:50061 \
 --admin-listen 127.0.0.1:8080 \
---loader-type filesystem \
+--loader-type localpath \
 --loader-dir config/examples \
 --log-level debug
 

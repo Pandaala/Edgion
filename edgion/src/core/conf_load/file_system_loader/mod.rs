@@ -1,7 +1,7 @@
 pub mod types;
 pub mod loader;
-pub mod loader_trait;
+pub mod loader_impl;
 
-pub use loader::FileSystemConfigLoader;
+pub use loader::LocalPathLoader;
 pub use types::FileInfo;
 

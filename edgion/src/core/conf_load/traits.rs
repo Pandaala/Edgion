@@ -3,7 +3,7 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait ConfigLoader: Send + Sync {
-    /// Connect to the configuration source (e.g., etcd cluster, filesystem)
+    /// Connect to the configuration source (e.g., etcd cluster, localpath)
     async fn connect(&self) -> anyhow::Result<()>;
 
     /// Bootstrap and load base configuration resources (GatewayClass, EdgionGatewayConfig, Gateway)

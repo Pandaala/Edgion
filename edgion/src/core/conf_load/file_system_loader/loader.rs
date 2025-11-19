@@ -16,7 +16,7 @@ use crate::types::ResourceKind;
 
 use super::types::FileInfo;
 
-pub struct FileSystemConfigLoader {
+pub struct LocalPathLoader {
     root: PathBuf,
     dispatcher: Arc<dyn EventDispatcher>,
     // Track resource metadata to file paths mapping for duplicate detection
@@ -25,10 +25,10 @@ pub struct FileSystemConfigLoader {
     files_to_resource: Arc<RwLock<HashMap<PathBuf, FileInfo>>>,
 }
 
-// TODO: Support nested directory watch and propagation. Currently only flat file
+// TODO: Support nested directory watch and propagation? Currently only flat file
 // updates inside the root directory are handled; directory-level operations are
 // ignored with an error log.
-impl FileSystemConfigLoader {
+impl LocalPathLoader {
     pub fn new<P: Into<PathBuf>>(
         root: P,
         dispatcher: Arc<dyn EventDispatcher>,
@@ -49,7 +49,7 @@ impl FileSystemConfigLoader {
             component = "file_system_loader",
             event = "init",
             root = ?root_abs,
-            "Initialized FileSystemConfigLoader with absolute root path"
+            "Initialized LocalPathConfigLoader with absolute root path"
         );
         
         let loader = Arc::new(Self {
@@ -77,7 +77,7 @@ impl FileSystemConfigLoader {
         tokio::spawn(async move {
             if let Err(err) = self.run_watcher().await {
                 eprintln!(
-                    "[FileSystemConfigLoader] watcher exited with error for {:?}: {}",
+                    "[LocalPathConfigLoader] watcher exited with error for {:?}: {}",
                     root, err
                 );
             }
@@ -530,14 +530,14 @@ impl FileSystemConfigLoader {
                 Ok(event) => {
                     if let Err(err) = self.handle_event(event).await {
                         eprintln!(
-                            "[FileSystemConfigLoader] failed to handle event in {:?}: {}",
+                            "[LocalPathConfigLoader] failed to handle event in {:?}: {}",
                             self.root, err
                         );
                     }
                 }
                 Err(err) => {
                     eprintln!(
-                        "[FileSystemConfigLoader] watcher error in {:?}: {}",
+                        "[LocalPathConfigLoader] watcher error in {:?}: {}",
                         self.root, err
                     );
                 }
