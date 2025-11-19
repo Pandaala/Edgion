@@ -439,7 +439,7 @@ impl EventDispatcher for ConfigClient {
             return;
         };
 
-        let log_error = |kind: &str, err: &serde_json::Error| {
+        let log_error = |kind: &str, err: &serde_yaml::Error| {
             eprintln!(
                 "[HUB] apply_resource_change {:?}: Failed to parse {}: {} (data: {})",
                 change,
@@ -450,7 +450,7 @@ impl EventDispatcher for ConfigClient {
         };
 
         match resource_type {
-            ResourceKind::GatewayClass => match serde_json::from_str::<GatewayClass>(&data) {
+            ResourceKind::GatewayClass => match serde_yaml::from_str::<GatewayClass>(&data) {
                 Ok(resource) => {
                     let mut base_conf = self.base_conf.write().unwrap();
                     match change {
@@ -465,7 +465,7 @@ impl EventDispatcher for ConfigClient {
                 Err(e) => log_error("GatewayClass", &e),
             },
             ResourceKind::EdgionGatewayConfig => {
-                match serde_json::from_str::<EdgionGatewayConfig>(&data) {
+                match serde_yaml::from_str::<EdgionGatewayConfig>(&data) {
                     Ok(resource) => {
                         let mut base_conf = self.base_conf.write().unwrap();
                         match change {
@@ -480,7 +480,7 @@ impl EventDispatcher for ConfigClient {
                     Err(e) => log_error("EdgionGatewayConfig", &e),
                 }
             }
-            ResourceKind::Gateway => match serde_json::from_str::<Gateway>(&data) {
+            ResourceKind::Gateway => match serde_yaml::from_str::<Gateway>(&data) {
                 Ok(resource) => {
                     let mut base_conf = self.base_conf.write().unwrap();
                     match change {
@@ -497,31 +497,31 @@ impl EventDispatcher for ConfigClient {
                 }
                 Err(e) => log_error("Gateway", &e),
             },
-            ResourceKind::HTTPRoute => match serde_json::from_str::<HTTPRoute>(&data) {
+            ResourceKind::HTTPRoute => match serde_yaml::from_str::<HTTPRoute>(&data) {
                 Ok(resource) => {
                     Self::apply_change_to_cache(&self.routes, change, resource);
                 }
                 Err(e) => log_error("HTTPRoute", &e),
             },
-            ResourceKind::Service => match serde_json::from_str::<Service>(&data) {
+            ResourceKind::Service => match serde_yaml::from_str::<Service>(&data) {
                 Ok(resource) => {
                     Self::apply_change_to_cache(&self.services, change, resource);
                 }
                 Err(e) => log_error("Service", &e),
             },
-            ResourceKind::EndpointSlice => match serde_json::from_str::<EndpointSlice>(&data) {
+            ResourceKind::EndpointSlice => match serde_yaml::from_str::<EndpointSlice>(&data) {
                 Ok(resource) => {
                     Self::apply_change_to_cache(&self.endpoint_slices, change, resource);
                 }
                 Err(e) => log_error("EndpointSlice", &e),
             },
-            ResourceKind::EdgionTls => match serde_json::from_str::<EdgionTls>(&data) {
+            ResourceKind::EdgionTls => match serde_yaml::from_str::<EdgionTls>(&data) {
                 Ok(resource) => {
                     Self::apply_change_to_cache(&self.edgion_tls, change, resource);
                 }
                 Err(e) => log_error("EdgionTls", &e),
             },
-            ResourceKind::Secret => match serde_json::from_str::<Secret>(&data) {
+            ResourceKind::Secret => match serde_yaml::from_str::<Secret>(&data) {
                 Ok(resource) => {
                     Self::apply_change_to_cache(&self.secrets, change, resource);
                 }
@@ -544,27 +544,5 @@ impl EventDispatcher for ConfigClient {
 
     fn set_ready(&self) {
         // HubCache doesn't need ready state
-    }
-
-    fn should_load_edgion_gateway_config(&self, config_name: &str) -> bool {
-        let base_conf = self.base_conf.read().unwrap();
-        if let Some(gc) = base_conf.gateway_class() {
-            if let Some(ref params) = gc.spec.parameters_ref {
-                // Check group, kind, name, and namespace
-                params.group == "example.com" &&
-                params.kind == "EdgionGatewayConfig" &&
-                params.name == config_name &&
-                // EdgionGatewayConfig is cluster-scoped, so namespace should be None
-                params.namespace.is_none()
-            } else {
-                // GatewayClass has no parametersRef, so no config should be loaded
-                false
-            }
-        } else {
-            // GatewayClass not loaded yet
-            // Client should wait for GatewayClass to be loaded first
-            // Don't load EdgionGatewayConfig until GatewayClass is available
-            false
-        }
     }
 }

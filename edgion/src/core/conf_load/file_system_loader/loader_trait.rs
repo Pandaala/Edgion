@@ -3,7 +3,6 @@ use tokio::fs;
 
 use crate::core::conf_load::ConfigLoader;
 use crate::core::utils::is_base_conf;
-use crate::types::ResourceKind;
 
 use super::loader::FileSystemConfigLoader;
 
@@ -58,28 +57,6 @@ impl ConfigLoader for FileSystemConfigLoader {
                             if let Some(content_kind) = crate::types::ResourceKind::from_content(&content) {
                                 if content_kind != target_kind {
                                     continue;
-                                }
-                                
-                                // For EdgionGatewayConfig, check if it's referenced by GatewayClass
-                                if content_kind == crate::types::ResourceKind::EdgionGatewayConfig {
-                                    // Parse the config name from content
-                                    if let Ok(config) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
-                                        if let Some(name) = config.get("metadata")
-                                            .and_then(|m| m.get("name"))
-                                            .and_then(|n| n.as_str())
-                                        {
-                                            if !self.dispatcher().should_load_edgion_gateway_config(name) {
-                                                tracing::debug!(
-                                                    component = "file_system_loader",
-                                                    event = "skip_config_not_referenced",
-                                                    path = ?path,
-                                                    config_name = name,
-                                                    "Skipping EdgionGatewayConfig not referenced by GatewayClass parametersRef"
-                                                );
-                                                continue;
-                                            }
-                                        }
-                                    }
                                 }
                             } else {
                                 continue;

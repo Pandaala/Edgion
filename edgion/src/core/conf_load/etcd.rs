@@ -125,28 +125,6 @@ impl ConfigLoader for EtcdConfigLoader {
                             if content_kind != target_kind {
                                 continue;
                             }
-                            
-                            // For EdgionGatewayConfig, check if it's referenced by GatewayClass
-                            if content_kind == ResourceKind::EdgionGatewayConfig {
-                                // Parse the config name from content
-                                if let Ok(config) = serde_yaml::from_str::<serde_yaml::Value>(&value) {
-                                    if let Some(name) = config.get("metadata")
-                                        .and_then(|m| m.get("name"))
-                                        .and_then(|n| n.as_str())
-                                    {
-                                        if !self.dispatcher.should_load_edgion_gateway_config(name) {
-                                            tracing::debug!(
-                                                component = "etcd_loader",
-                                                event = "skip_config_not_referenced",
-                                                key = ?kv.key(),
-                                                config_name = name,
-                                                "Skipping EdgionGatewayConfig not referenced by GatewayClass parametersRef"
-                                            );
-                                            continue;
-                                        }
-                                    }
-                                }
-                            }
                         } else {
                             continue;
                         }

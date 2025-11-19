@@ -93,31 +93,14 @@ impl FileSystemConfigLoader {
     }
 
     async fn dispatch_change(&self, change: ResourceChange, data: String, use_base_conf: bool) {
-        // Convert YAML to JSON for dispatcher
-        let json_data = match Self::yaml_to_json(&data) {
-            Ok(json) => json,
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to convert YAML to JSON: {}, skipping file",
-                    e
-                );
-                return;
-            }
-        };
-        
+        // Pass YAML data directly to dispatcher
         if use_base_conf {
             self.dispatcher
-                .apply_base_conf(change, None, json_data, None);
+                .apply_base_conf(change, None, data, None);
         } else {
             self.dispatcher
-                .apply_resource_change(change, None, json_data, None);
+                .apply_resource_change(change, None, data, None);
         }
-    }
-    
-    fn yaml_to_json(yaml_str: &str) -> Result<String> {
-        let value: serde_yaml::Value = serde_yaml::from_str(yaml_str)?;
-        let json_str = serde_json::to_string(&value)?;
-        Ok(json_str)
     }
 
     pub async fn read_file(path: &Path) -> Result<String> {

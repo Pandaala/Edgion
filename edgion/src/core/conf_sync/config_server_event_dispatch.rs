@@ -65,7 +65,7 @@ impl EventDispatcher for ConfigServer {
                 unreachable!("Base conf resources should have been handled earlier")
             }
             ResourceKind::HTTPRoute => {
-                if let Ok(resource) = serde_json::from_str::<HTTPRoute>(&data) {
+                if let Ok(resource) = serde_yaml::from_str::<HTTPRoute>(&data) {
                     // 检查 HTTPRoute 引用的 gateway 是否存在于 base_conf 中
                     let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
                         if let Some(first_ref) = parent_refs.first() {
@@ -129,7 +129,7 @@ impl EventDispatcher for ConfigServer {
                 }
             }
             ResourceKind::Service => {
-                if let Ok(resource) = serde_json::from_str::<Service>(&data) {
+                if let Ok(resource) = serde_yaml::from_str::<Service>(&data) {
                     tracing::info!(
                         component = "config_server",
                         kind = "Service",
@@ -144,7 +144,7 @@ impl EventDispatcher for ConfigServer {
                 }
             }
             ResourceKind::EndpointSlice => {
-                if let Ok(resource) = serde_json::from_str::<EndpointSlice>(&data) {
+                if let Ok(resource) = serde_yaml::from_str::<EndpointSlice>(&data) {
                     tracing::info!(
                         component = "config_server",
                         kind = "EndpointSlice",
@@ -159,7 +159,7 @@ impl EventDispatcher for ConfigServer {
                 }
             }
             ResourceKind::EdgionTls => {
-                if let Ok(resource) = serde_json::from_str::<EdgionTls>(&data) {
+                if let Ok(resource) = serde_yaml::from_str::<EdgionTls>(&data) {
                     // 检查 EdgionTls 引用的 gateway 是否存在于 base_conf 中
                     let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
                         if let Some(first_ref) = parent_refs.first() {
@@ -222,7 +222,7 @@ impl EventDispatcher for ConfigServer {
                 }
             }
             ResourceKind::Secret => {
-                if let Ok(resource) = serde_json::from_str::<Secret>(&data) {
+                if let Ok(resource) = serde_yaml::from_str::<Secret>(&data) {
                     tracing::info!(
                         component = "config_server",
                         kind = "Secret",
@@ -276,7 +276,7 @@ impl EventDispatcher for ConfigServer {
         // Only process base conf resources
         match resource_type {
             ResourceKind::GatewayClass => {
-                if let Ok(resource) = serde_json::from_str::<GatewayClass>(&data) {
+                if let Ok(resource) = serde_yaml::from_str::<GatewayClass>(&data) {
                     // Filter by configured gateway class name
                     if let Some(configured_gc) = &self.gateway_class {
                         if let Some(name) = &resource.metadata.name {
@@ -345,7 +345,7 @@ impl EventDispatcher for ConfigServer {
                 }
             }
             ResourceKind::EdgionGatewayConfig => {
-                if let Ok(resource) = serde_json::from_str::<EdgionGatewayConfig>(&data) {
+                if let Ok(resource) = serde_yaml::from_str::<EdgionGatewayConfig>(&data) {
                     // Check against existing GatewayClass
                     let should_load = {
                         let base_conf = self.base_conf.read().unwrap();
@@ -408,7 +408,7 @@ impl EventDispatcher for ConfigServer {
                 }
             }
             ResourceKind::Gateway => {
-                if let Ok(resource) = serde_json::from_str::<Gateway>(&data) {
+                if let Ok(resource) = serde_yaml::from_str::<Gateway>(&data) {
                     // Filter by gateway class name in spec
                     if let Some(configured_gc) = &self.gateway_class {
                         if resource.spec.gateway_class_name != *configured_gc {
@@ -454,36 +454,6 @@ impl EventDispatcher for ConfigServer {
                     resource_type = ?resource_type,
                     "apply_base_conf called with non-base-conf resource type"
                 );
-            }
-        }
-    }
-
-    fn should_load_edgion_gateway_config(&self, config_name: &str) -> bool {
-        let base_conf = self.base_conf.read().unwrap();
-        if let Some(gc) = base_conf.gateway_class() {
-            if let Some(ref params) = gc.spec.parameters_ref {
-                // Check group, kind, name, and namespace
-                params.group == "example.com" &&
-                params.kind == "EdgionGatewayConfig" &&
-                params.name == config_name &&
-                // EdgionGatewayConfig is cluster-scoped, so namespace should be None
-                params.namespace.is_none()
-            } else {
-                // GatewayClass has no parametersRef, so no config should be loaded
-                false
-            }
-        } else {
-            // GatewayClass not loaded yet
-            // If gateway_class is configured, we should wait for the matching GatewayClass
-            // If gateway_class is not configured, allow loading for now (will be validated later)
-            if self.gateway_class.is_some() {
-                // GatewayClass is configured but not loaded yet (probably skipped due to mismatch)
-                // Don't load EdgionGatewayConfig
-                false
-            } else {
-                // No gateway_class filter, allow loading for now
-                // It will be validated when GatewayClass is loaded (reverse check)
-                true
             }
         }
     }

@@ -126,11 +126,39 @@ impl ConfigSyncClient {
             "Init base_conf"
         );
 
-        // Parse JSON data and build GatewayClassBaseConf in ConfigClient
+        // Parse JSON data from gRPC and convert to YAML for application layer
+        // gRPC uses JSON for performance, but application layer expects YAML
+        let gateway_class_yaml = if !base_conf_response.gateway_class.is_empty() {
+            let json_value: serde_json::Value = serde_json::from_str(&base_conf_response.gateway_class)
+                .map_err(|e| tonic::Status::internal(format!("Failed to parse gateway_class JSON: {}", e)))?;
+            serde_yaml::to_string(&json_value)
+                .map_err(|e| tonic::Status::internal(format!("Failed to convert gateway_class to YAML: {}", e)))?
+        } else {
+            String::new()
+        };
+        
+        let edgion_gateway_config_yaml = if !base_conf_response.edgion_gateway_config.is_empty() {
+            let json_value: serde_json::Value = serde_json::from_str(&base_conf_response.edgion_gateway_config)
+                .map_err(|e| tonic::Status::internal(format!("Failed to parse edgion_gateway_config JSON: {}", e)))?;
+            serde_yaml::to_string(&json_value)
+                .map_err(|e| tonic::Status::internal(format!("Failed to convert edgion_gateway_config to YAML: {}", e)))?
+        } else {
+            String::new()
+        };
+        
+        let gateways_yaml = if !base_conf_response.gateways.is_empty() {
+            let json_value: serde_json::Value = serde_json::from_str(&base_conf_response.gateways)
+                .map_err(|e| tonic::Status::internal(format!("Failed to parse gateways JSON: {}", e)))?;
+            serde_yaml::to_string(&json_value)
+                .map_err(|e| tonic::Status::internal(format!("Failed to convert gateways to YAML: {}", e)))?
+        } else {
+            String::new()
+        };
+        
         let base_conf = ConfigClient::parse_base_conf_from_json(
-            base_conf_response.gateway_class,
-            base_conf_response.edgion_gateway_config,
-            base_conf_response.gateways,
+            gateway_class_yaml,
+            edgion_gateway_config_yaml,
+            gateways_yaml,
         );
 
         // Initialize base_conf in ConfigClient
@@ -182,7 +210,7 @@ impl ConfigSyncClient {
             "Syncing resource"
         );
 
-        // Parse the JSON data - list returns an array of resources
+        // Parse the JSON data - list returns a JSON array of resources (gRPC uses JSON for performance)
         let resources: Vec<serde_json::Value> =
             serde_json::from_str(&list_response.data).map_err(|e| {
                 tracing::error!(
@@ -203,14 +231,15 @@ impl ConfigSyncClient {
         let hub = &self.config_client;
         for (idx, resource) in resources.iter().enumerate() {
             // Each resource in the list should be added/updated
-            let data_str = serde_json::to_string(&resource).map_err(|e| {
+            // Convert JSON to YAML for application layer (which expects YAML from file system loader)
+            let data_str = serde_yaml::to_string(&resource).map_err(|e| {
                 tracing::error!(
                     kind = ?kind,
                     index = idx,
                     error = %e,
-                    "Failed to serialize resource"
+                    "Failed to convert JSON to YAML"
                 );
-                tonic::Status::internal(format!("Failed to serialize resource: {}", e))
+                tonic::Status::internal(format!("Failed to convert JSON to YAML: {}", e))
             })?;
 
             hub.apply_resource_change(
@@ -307,7 +336,7 @@ impl ConfigSyncClient {
                             // Update from_version for next reconnect
                             from_version = watch_response.resource_version;
 
-                            // Parse the events from the watch response
+                            // Parse the events from the watch response (JSON format from gRPC)
                             let events: Vec<serde_json::Value> = match serde_json::from_str(&watch_response.data) {
                                 Ok(events) => events,
                                 Err(e) => {
@@ -319,12 +348,13 @@ impl ConfigSyncClient {
                             let hub = &hub_clone;
                             for event in events {
                                 if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
-                                    let data_str = match serde_json::to_string(
+                                    // Convert JSON to YAML for application layer
+                                    let data_str = match serde_yaml::to_string(
                                         &event.get("data").unwrap_or(&serde_json::Value::Null),
                                     ) {
                                         Ok(s) => s,
                                         Err(e) => {
-                                            tracing::error!(error = %e, "Failed to serialize event data");
+                                            tracing::error!(error = %e, "Failed to convert event data JSON to YAML");
                                             continue;
                                         }
                                     };
