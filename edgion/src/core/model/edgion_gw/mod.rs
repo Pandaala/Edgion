@@ -40,8 +40,7 @@ pub async fn start(operator_addr: String, gateway_class: String) -> Result<()> {
         gateway_class.clone(),
         "edgion-gateway".to_string(),
         Duration::from_secs(10),
-    );
-    client.connect().await?;
+    ).await?;
 
     // Initialize base configuration and sync all resources
     client.init().await?;

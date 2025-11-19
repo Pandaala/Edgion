@@ -1,11 +1,9 @@
 use crate::core::conf_load::LoaderArgs;
 use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::grpc_client::ConfigSyncClient;
-use crate::core::utils::net::{normalize_grpc_endpoint, parse_optional_listen_addr};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::time::Duration;
-use tokio::signal;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -47,9 +45,7 @@ impl EdgionGwCli {
             self.gateway_class.clone(),
             "edgion-gateway".to_string(),
             Duration::from_secs(10),
-        );
-        
-        sync_client.connect().await?;
+        ).await?;
 
         sync_client.init().await?;
 

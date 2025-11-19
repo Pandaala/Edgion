@@ -20,43 +20,86 @@ pub struct ConfigSyncClient {
     client_id: String,
     client_name: String,
     grpc_server_connect_timeout: Duration,
-    conf_client_handle: Option<ConfigSyncClientService<Channel>>,
+    conf_client_handle: ConfigSyncClientService<Channel>,
 }
 
 impl ConfigSyncClient {
-    /// Create a new ConfigSync client without connecting to server
-    pub fn new(
+    /// Create a new ConfigSync client and connect to server with retry
+    /// Retries connection up to 3 times with 2 second intervals
+    pub async fn new(
         grpc_server_addr: &str,
         gateway_class_key: String,
         client_name: String,
         timeout: Duration,
-    ) -> Self {
+    ) -> Result<Self, tonic::transport::Error> {
         let config_client = Arc::new(ConfigClient::new(gateway_class_key));
         let client_id = Uuid::new_v4().to_string();
-        Self {
-            grpc_server_addr: grpc_server_addr.to_string(),
-            config_client,
-            client_id,
-            client_name,
-            grpc_server_connect_timeout: timeout,
-            conf_client_handle: None,
+        
+        // Try to connect with retry logic: 3 attempts, 2 seconds apart
+        const MAX_RETRIES: u32 = 3;
+        const RETRY_INTERVAL_SECS: u64 = 2;
+        
+        let mut last_error = None;
+        for attempt in 1..=MAX_RETRIES {
+            tracing::info!(
+                attempt = attempt,
+                max_retries = MAX_RETRIES,
+                server_addr = grpc_server_addr,
+                "Attempting to connect to gRPC server"
+            );
+            
+            match Self::create_client_internal(grpc_server_addr, timeout).await {
+                Ok(client) => {
+                    tracing::info!(
+                        server_addr = grpc_server_addr,
+                        "Successfully connected to gRPC server"
+                    );
+                    
+                    return Ok(Self {
+                        grpc_server_addr: grpc_server_addr.to_string(),
+                        config_client,
+                        client_id,
+                        client_name,
+                        grpc_server_connect_timeout: timeout,
+                        conf_client_handle: client,
+                    });
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES {
+                        tracing::warn!(
+                            attempt = attempt,
+                            max_retries = MAX_RETRIES,
+                            error = %last_error.as_ref().unwrap(),
+                            retry_in_secs = RETRY_INTERVAL_SECS,
+                            "Failed to connect, will retry"
+                        );
+                        tokio::time::sleep(Duration::from_secs(RETRY_INTERVAL_SECS)).await;
+                    }
+                }
+            }
         }
+        
+        let err = last_error.unwrap();
+        tracing::error!(
+            server_addr = grpc_server_addr,
+            error = %err,
+            "Failed to connect to gRPC server after {} attempts",
+            MAX_RETRIES
+        );
+        Err(err)
     }
 
-    /// Connect to the gRPC server
-    pub async fn connect(&mut self) -> Result<(), tonic::transport::Error> {
-        let endpoint = tonic::transport::Endpoint::from_shared(self.grpc_server_addr.clone())?
-            .timeout(self.grpc_server_connect_timeout)
-            .connect_timeout(self.grpc_server_connect_timeout);
+    /// Internal helper to create a client
+    async fn create_client_internal(
+        addr: &str,
+        timeout: Duration,
+    ) -> Result<ConfigSyncClientService<Channel>, tonic::transport::Error> {
+        let endpoint = tonic::transport::Endpoint::from_shared(addr.to_string())?
+            .timeout(timeout)
+            .connect_timeout(timeout);
         let channel = endpoint.connect().await?;
-        let client = ConfigSyncClientService::new(channel);
-        self.conf_client_handle = Some(client);
-        Ok(())
-    }
-
-    /// Check if the client is connected
-    pub fn is_connected(&self) -> bool {
-        self.conf_client_handle.is_some()
+        Ok(ConfigSyncClientService::new(channel))
     }
 
     /// Get a reference to the ConfigHub
@@ -69,16 +112,11 @@ impl ConfigSyncClient {
         &mut self,
         gateway_class_key: &str,
     ) -> Result<(), tonic::Status> {
-        let client = self
-            .conf_client_handle
-            .as_mut()
-            .ok_or_else(|| tonic::Status::failed_precondition("Client not connected"))?;
-
         let request = tonic::Request::new(GetBaseConfRequest {
             gateway_class: gateway_class_key.to_string(),
         });
 
-        let response = client.get_base_conf(request).await?;
+        let response = self.conf_client_handle.get_base_conf(request).await?;
         let base_conf_response = response.into_inner();
 
         tracing::info!(
@@ -219,7 +257,7 @@ impl ConfigSyncClient {
 
             loop {
                 // Connect and create watch stream
-                let mut client = match Self::create_client(&grpc_server_addr, grpc_server_connect_timeout).await {
+                let mut client = match Self::create_client_internal(&grpc_server_addr, grpc_server_connect_timeout).await {
                     Ok(c) => c,
                     Err(e) => {
                         tracing::error!(
@@ -349,18 +387,6 @@ impl ConfigSyncClient {
         Ok(())
     }
 
-    /// Helper method to create a new client
-    async fn create_client(
-        addr: &str,
-        timeout: Duration,
-    ) -> Result<ConfigSyncClientService<Channel>, tonic::transport::Error> {
-        let endpoint = tonic::transport::Endpoint::from_shared(addr.to_string())?
-            .timeout(timeout)
-            .connect_timeout(timeout);
-        let channel = endpoint.connect().await?;
-        Ok(ConfigSyncClientService::new(channel))
-    }
-
     /// Sync all resource types from server (excluding base_conf resources)
     pub async fn sync_all(&mut self) -> Result<(), tonic::Status> {
         let hub = &self.config_client;
@@ -413,17 +439,12 @@ impl ConfigSyncClient {
         key: String,
         kind: ResourceKind,
     ) -> Result<ListResponse, tonic::Status> {
-        let client = self
-            .conf_client_handle
-            .as_mut()
-            .ok_or_else(|| tonic::Status::failed_precondition("Client not connected"))?;
-
         let request = tonic::Request::new(ListRequest {
             key,
             kind: resource_kind_to_proto(kind) as i32,
         });
 
-        let response = client.list(request).await?;
+        let response = self.conf_client_handle.list(request).await?;
         Ok(response.into_inner())
     }
 
@@ -437,11 +458,6 @@ impl ConfigSyncClient {
         client_name: String,
         from_version: u64,
     ) -> Result<mpsc::Receiver<WatchResponse>, tonic::Status> {
-        let client = self
-            .conf_client_handle
-            .as_mut()
-            .ok_or_else(|| tonic::Status::failed_precondition("Client not connected"))?;
-
         tracing::info!(
             key = %key,
             kind = ?kind,
@@ -457,7 +473,7 @@ impl ConfigSyncClient {
             from_version,
         });
 
-        let mut stream = client.watch(request).await?.into_inner();
+        let mut stream = self.conf_client_handle.watch(request).await?.into_inner();
 
         // Convert stream to mpsc::Receiver
         let (tx, rx) = mpsc::channel(100);
