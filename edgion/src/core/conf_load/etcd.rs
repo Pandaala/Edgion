@@ -9,7 +9,6 @@ use tokio::task::JoinHandle;
 
 use crate::core::conf_load::{ConfigLoader};
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
-use crate::core::utils::is_base_conf;
 use crate::types::ResourceKind;
 
 #[derive(Clone)]
@@ -51,34 +50,68 @@ impl EtcdConfigLoader {
         })
     }
 
-    async fn dispatch_change(&self, change: ResourceChange, payload: String, use_base_conf: bool) {
-        if use_base_conf {
-            self.dispatcher.apply_base_conf(change, self.resource_kind, payload, None);
-        } else {
-            self.dispatcher.apply_resource_change(change, self.resource_kind, payload, None);
-        }
-    }
 
 
     async fn handle_put(&self, key: String, value: String) {
-        let use_base_conf = is_base_conf(&value);
+        // Determine if this is a base conf resource
+        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&value) {
+            matches!(
+                kind,
+                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+            )
+        } else {
+            false
+        };
+        
         let mut cache = self.cache.lock().await;
         if let Some(old) = cache.remove(&key) {
+            // Determine if old value was base conf resource
+            let old_is_base_conf = if let Some(kind) = ResourceKind::from_content(&old) {
+                matches!(
+                    kind,
+                    ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                )
+            } else {
+                false
+            };
+            
             drop(cache);
-            self.dispatch_change(ResourceChange::EventDelete, old, use_base_conf).await;
+            if old_is_base_conf {
+                self.dispatcher.apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old, None);
+            } else {
+                self.dispatcher.apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old, None);
+            }
             cache = self.cache.lock().await;
         }
         cache.insert(key, value.clone());
         drop(cache);
-        self.dispatch_change(ResourceChange::EventAdd, value, use_base_conf).await;
+        
+        if is_base_conf {
+            self.dispatcher.apply_base_conf(ResourceChange::EventAdd, self.resource_kind, value, None);
+        } else {
+            self.dispatcher.apply_resource_change(ResourceChange::EventAdd, self.resource_kind, value, None);
+        }
     }
 
     async fn handle_delete(&self, key: String) {
         let mut cache = self.cache.lock().await;
         if let Some(old) = cache.remove(&key) {
-            let use_base_conf = is_base_conf(&old);
+            // Determine if this is a base conf resource
+            let is_base_conf = if let Some(kind) = ResourceKind::from_content(&old) {
+                matches!(
+                    kind,
+                    ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                )
+            } else {
+                false
+            };
+            
             drop(cache);
-            self.dispatch_change(ResourceChange::EventDelete, old, use_base_conf).await;
+            if is_base_conf {
+                self.dispatcher.apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old, None);
+            } else {
+                self.dispatcher.apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old, None);
+            }
         }
     }
 }
@@ -118,7 +151,17 @@ impl ConfigLoader for EtcdConfigLoader {
 
         for kv in resp.kvs() {
             if let Ok(value) = String::from_utf8(kv.value().to_vec()) {
-                if is_base_conf(&value) {
+                // Determine if this is a base conf resource
+                let is_base_conf = if let Some(content_kind) = ResourceKind::from_content(&value) {
+                    matches!(
+                        content_kind,
+                        ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                    )
+                } else {
+                    false
+                };
+                
+                if is_base_conf {
                     // Check kind filter if specified
                     if let Some(target_kind) = kind {
                         if let Some(content_kind) = ResourceKind::from_content(&value) {
@@ -134,7 +177,7 @@ impl ConfigLoader for EtcdConfigLoader {
                     cache_guard.insert(key, value.clone());
                     drop(cache_guard);
                     // Use InitAdd for bootstrap phase
-                    self.dispatch_change(ResourceChange::InitAdd, value, true).await;
+                    self.dispatcher.apply_base_conf(ResourceChange::InitAdd, kind, value, None);
                     cache_guard = self.cache.lock().await;
                 }
             }
@@ -161,12 +204,22 @@ impl ConfigLoader for EtcdConfigLoader {
 
         for kv in resp.kvs() {
             if let Ok(value) = String::from_utf8(kv.value().to_vec()) {
-                if !is_base_conf(&value) {
+                // Only process non-base-conf resources
+                let is_base_conf = if let Some(kind) = ResourceKind::from_content(&value) {
+                    matches!(
+                        kind,
+                        ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                    )
+                } else {
+                    false
+                };
+                
+                if !is_base_conf {
                     let key = String::from_utf8_lossy(kv.key()).to_string();
                     cache_guard.insert(key, value.clone());
                     drop(cache_guard);
                     // Use InitAdd for bootstrap phase
-                    self.dispatch_change(ResourceChange::InitAdd, value, false).await;
+                    self.dispatcher.apply_resource_change(ResourceChange::InitAdd, None, value, None);
                     cache_guard = self.cache.lock().await;
                 }
             }

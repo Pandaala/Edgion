@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use tokio::fs;
 
 use crate::core::conf_load::ConfigLoader;
-use crate::core::utils::is_base_conf;
+use crate::types::ResourceKind;
 
 use super::loader::FileSystemConfigLoader;
 
@@ -105,7 +105,17 @@ impl ConfigLoader for FileSystemConfigLoader {
                             }
                         };
                         
-                        if !is_base_conf(&content) {
+                        // Only process non-base-conf resources
+                        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
+                            matches!(
+                                kind,
+                                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                            )
+                        } else {
+                            false
+                        };
+                        
+                        if !is_base_conf {
                             self.process_init_file(&path, None).await?;
                         }
                     }

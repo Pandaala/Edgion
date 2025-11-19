@@ -11,7 +11,7 @@ use tokio::time::{interval, Duration};
 
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::EventDispatcher;
-use crate::core::utils::{extract_resource_metadata, is_base_conf, ResourceMetadata};
+use crate::core::utils::{extract_resource_metadata, ResourceMetadata};
 use crate::types::ResourceKind;
 
 use super::types::FileInfo;
@@ -92,16 +92,6 @@ impl FileSystemConfigLoader {
         &self.dispatcher
     }
 
-    async fn dispatch_change(&self, change: ResourceChange, data: String, use_base_conf: bool) {
-        // Pass YAML data directly to dispatcher
-        if use_base_conf {
-            self.dispatcher
-                .apply_base_conf(change, None, data, None);
-        } else {
-            self.dispatcher
-                .apply_resource_change(change, None, data, None);
-        }
-    }
 
     pub async fn read_file(path: &Path) -> Result<String> {
         let content = fs::read_to_string(path)
@@ -268,8 +258,23 @@ impl FileSystemConfigLoader {
         );
 
         // 使用 InitAdd
-        let use_base_conf = is_base_conf(&content);
-        self.dispatch_change(ResourceChange::InitAdd, content, use_base_conf).await;
+        // Determine if this is a base conf resource
+        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
+            matches!(
+                kind,
+                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+            )
+        } else {
+            false
+        };
+        
+        if is_base_conf {
+            self.dispatcher
+                .apply_base_conf(ResourceChange::InitAdd, None, content, None);
+        } else {
+            self.dispatcher
+                .apply_resource_change(ResourceChange::InitAdd, None, content, None);
+        }
         Ok(())
     }
 
@@ -326,8 +331,23 @@ impl FileSystemConfigLoader {
                         );
                         
                         // 触发 delete 事件
-                        let use_base_conf = is_base_conf(&content);
-                        self.dispatch_change(ResourceChange::EventDelete, content, use_base_conf).await;
+                        // Determine if this is a base conf resource
+                        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
+                            matches!(
+                                kind,
+                                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                            )
+                        } else {
+                            false
+                        };
+                        
+                        if is_base_conf {
+                            self.dispatcher
+                                .apply_base_conf(ResourceChange::EventDelete, None, content, None);
+                        } else {
+                            self.dispatcher
+                                .apply_resource_change(ResourceChange::EventDelete, None, content, None);
+                        }
                     } else {
                         let remaining_count = files.len();
                         drop(resource_to_files);
@@ -392,8 +412,22 @@ impl FileSystemConfigLoader {
         }
         
         // Determine if this is a base conf resource
-        let use_base_conf = is_base_conf(&content);
-        self.dispatch_change(change, content, use_base_conf).await;
+        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
+            matches!(
+                kind,
+                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+            )
+        } else {
+            false
+        };
+        
+        if is_base_conf {
+            self.dispatcher
+                .apply_base_conf(change, None, content, None);
+        } else {
+            self.dispatcher
+                .apply_resource_change(change, None, content, None);
+        }
         Ok(())
     }
 
