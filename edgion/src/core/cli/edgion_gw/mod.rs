@@ -3,7 +3,9 @@ use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::grpc_client::ConfigSyncClient;
 use anyhow::{anyhow, Result};
 use clap::Parser;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::signal;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -47,8 +49,48 @@ impl EdgionGwCli {
             Duration::from_secs(10),
         ).await?;
 
+        // Initialize base configuration and sync all resources
         sync_client.init().await?;
+        
+        // Start watching for changes
+        sync_client.start_watch_all().await?;
+
+        let mut gateway = EdgionGw::new(sync_client);
+
+        tracing::info!(server_addr = server_addr, "Connected to operator");
+
+        gateway.serve().await?;
+        gateway.shutdown().await;
 
         Ok(())
+    }
+}
+
+pub struct EdgionGw {
+    sync_client: ConfigSyncClient,
+}
+
+impl EdgionGw {
+    pub fn new(sync_client: ConfigSyncClient) -> Self {
+        Self { sync_client }
+    }
+
+    pub async fn serve(&self) -> Result<()> {
+        tracing::info!("Gateway started, waiting for shutdown signal");
+
+        signal::ctrl_c()
+            .await
+            .expect("failed to listen for ctrl_c signal");
+
+        tracing::info!("Shutdown signal received");
+        Ok(())
+    }
+
+    pub async fn shutdown(&mut self) {
+        // ConfigSyncClient will be automatically dropped when EdgionGw is dropped
+    }
+
+    pub fn config_client(&self) -> Arc<ConfigClient> {
+        self.sync_client.get_config_client()
     }
 }
