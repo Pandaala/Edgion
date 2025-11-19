@@ -322,6 +322,98 @@ impl ConfigClient {
 
         println!("=== End ConfigHub Config ===\n");
     }
+
+    /// Print all configuration (async version, similar to ConfigServer::print_config)
+    /// Only prints non-empty sections
+    pub async fn print_config_async(&self) {
+        println!("\n==========================");
+
+        // Base conf resources are stored in base_conf
+        let base_conf = self.base_conf.read().unwrap();
+        if let Some(gc) = base_conf.gateway_class() {
+            println!("GatewayClass:");
+            println!("  [0] {}", format_resource_info(gc));
+        }
+
+        if let Some(egwc) = base_conf.edgion_gateway_config() {
+            println!("EdgionGatewayConfig:");
+            println!("  [0] {}", format_resource_info(egwc));
+        }
+
+        let gateways = base_conf.gateways();
+        if !gateways.is_empty() {
+            println!("Gateways (count: {}):", gateways.len());
+            for (idx, gw) in gateways.iter().enumerate() {
+                println!("  [{}] {}", idx, format_resource_info(gw));
+            }
+        }
+        drop(base_conf);
+
+        // HTTP Routes
+        let list_data = self.list_routes();
+        if !list_data.data.is_empty() {
+            println!(
+                "HTTPRoutes (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
+            for (idx, route) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, format_resource_info(route));
+            }
+        }
+
+        // Services
+        let list_data = self.list_services();
+        if !list_data.data.is_empty() {
+            println!(
+                "Services (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
+            for (idx, svc) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, format_resource_info(svc));
+            }
+        }
+
+        // Endpoint Slices
+        let list_data = self.list_endpoint_slices();
+        if !list_data.data.is_empty() {
+            println!(
+                "EndpointSlices (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
+            for (idx, es) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, format_resource_info(es));
+            }
+        }
+
+        // Edgion TLS
+        let list_data = self.list_edgion_tls();
+        if !list_data.data.is_empty() {
+            println!(
+                "EdgionTls (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
+            for (idx, tls) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, format_resource_info(tls));
+            }
+        }
+
+        // Secrets
+        let list_data = self.list_secrets();
+        if !list_data.data.is_empty() {
+            println!(
+                "Secrets (count: {}, version: {}):",
+                list_data.data.len(),
+                list_data.resource_version
+            );
+            for (idx, secret) in list_data.data.iter().enumerate() {
+                println!("  [{}] {}", idx, format_resource_info(secret));
+            }
+        }
+    }
 }
 
 pub struct ListDataSimple {
