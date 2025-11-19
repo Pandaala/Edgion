@@ -1,6 +1,7 @@
 use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::proto::{
-    config_sync_client::ConfigSyncClient as ConfigSyncClientService, ListRequest, ListResponse,
+    config_sync_client::ConfigSyncClient as ConfigSyncClientService, 
+    GetBaseConfRequest, ListRequest, ListResponse,
     ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
 };
 use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
@@ -9,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tonic::transport::Channel;
+use tracing;
 use uuid::Uuid;
 
 /// gRPC client for ConfigSync service
@@ -24,7 +26,7 @@ pub struct ConfigSyncClient {
 impl ConfigSyncClient {
     /// Create a new ConfigSync client without connecting to server
     pub fn new(
-        grpc_server_addr: String,
+        grpc_server_addr: &str,
         gateway_class_key: String,
         client_name: String,
         timeout: Duration,
@@ -32,7 +34,7 @@ impl ConfigSyncClient {
         let config_client = Arc::new(ConfigClient::new(gateway_class_key));
         let client_id = Uuid::new_v4().to_string();
         Self {
-            grpc_server_addr,
+            grpc_server_addr: grpc_server_addr.to_string(),
             config_client,
             client_id,
             client_name,
@@ -62,6 +64,71 @@ impl ConfigSyncClient {
         self.config_client.clone()
     }
 
+    /// Fetch and initialize base configuration from server
+    async fn fetch_and_init_base_conf(
+        &mut self,
+        gateway_class_key: &str,
+    ) -> Result<(), tonic::Status> {
+        let client = self
+            .conf_client_handle
+            .as_mut()
+            .ok_or_else(|| tonic::Status::failed_precondition("Client not connected"))?;
+
+        let request = tonic::Request::new(GetBaseConfRequest {
+            gateway_class: gateway_class_key.to_string(),
+        });
+
+        let response = client.get_base_conf(request).await?;
+        let base_conf_response = response.into_inner();
+
+        tracing::info!(
+            gateway_class_bytes = base_conf_response.gateway_class.len(),
+            edgion_gateway_config_bytes = base_conf_response.edgion_gateway_config.len(),
+            gateways_bytes = base_conf_response.gateways.len(),
+            "Init base_conf"
+        );
+
+        // Parse JSON data and build GatewayClassBaseConf in ConfigClient
+        let base_conf = ConfigClient::parse_base_conf_from_json(
+            base_conf_response.gateway_class,
+            base_conf_response.edgion_gateway_config,
+            base_conf_response.gateways,
+        );
+
+        // Initialize base_conf in ConfigClient
+        self.config_client.init_base_conf(base_conf);
+
+        tracing::info!("Base configuration initialized");
+        Ok(())
+    }
+
+    /// Initialize base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
+    /// and sync all other resources (HTTPRoute, Service, etc.)
+    pub async fn init(&mut self) -> Result<(), tonic::Status> {
+        let key = self.config_client.get_gateway_class_key().clone();
+
+        // Step 1: Get base configuration
+        self.fetch_and_init_base_conf(&key).await?;
+
+        // Step 2: List and sync all other resources
+        let resource_kinds = vec![
+            ResourceKind::HTTPRoute,
+            ResourceKind::Service,
+            ResourceKind::EndpointSlice,
+            ResourceKind::EdgionTls,
+            ResourceKind::Secret,
+        ];
+
+        for kind in resource_kinds {
+            if let Err(e) = self.sync_resource(key.clone(), kind).await {
+                tracing::error!(kind = ?kind, error = %e, "Failed to init sync");
+            }
+        }
+
+        tracing::info!("All resources initialized");
+        Ok(())
+    }
+
     /// Sync all resources of a specific kind from server
     pub async fn sync_resource(
         &mut self,
@@ -70,38 +137,40 @@ impl ConfigSyncClient {
     ) -> Result<(), tonic::Status> {
         let list_response = self.list(key.clone(), kind).await?;
 
-        println!(
-            "[CLIENT] Syncing {:?}: received {} bytes, version {}",
-            kind,
-            list_response.data.len(),
-            list_response.resource_version
+        tracing::info!(
+            kind = ?kind,
+            bytes = list_response.data.len(),
+            version = list_response.resource_version,
+            "Syncing resource"
         );
 
         // Parse the JSON data - list returns an array of resources
         let resources: Vec<serde_json::Value> =
             serde_json::from_str(&list_response.data).map_err(|e| {
-                eprintln!(
-                    "[CLIENT] Failed to parse list response for {:?}: {} (data: {})",
-                    kind,
-                    e,
-                    &list_response.data[..list_response.data.len().min(200)]
+                tracing::error!(
+                    kind = ?kind,
+                    error = %e,
+                    data_preview = %&list_response.data[..list_response.data.len().min(200)],
+                    "Failed to parse list response"
                 );
                 tonic::Status::internal(format!("Failed to parse list response: {}", e))
             })?;
 
-        println!(
-            "[CLIENT] Parsed {} resources for {:?}",
-            resources.len(),
-            kind
+        tracing::info!(
+            kind = ?kind,
+            count = resources.len(),
+            "Parsed resources"
         );
 
         let hub = &self.config_client;
         for (idx, resource) in resources.iter().enumerate() {
             // Each resource in the list should be added/updated
             let data_str = serde_json::to_string(&resource).map_err(|e| {
-                eprintln!(
-                    "[CLIENT] Failed to serialize resource {} for {:?}: {}",
-                    idx, kind, e
+                tracing::error!(
+                    kind = ?kind,
+                    index = idx,
+                    error = %e,
+                    "Failed to serialize resource"
                 );
                 tonic::Status::internal(format!("Failed to serialize resource: {}", e))
             })?;
@@ -114,7 +183,7 @@ impl ConfigSyncClient {
             );
         }
 
-        println!("[CLIENT] Finished syncing {:?}", kind);
+        tracing::info!(kind = ?kind, "Finished syncing");
         Ok(())
     }
 
@@ -135,9 +204,11 @@ impl ConfigSyncClient {
             let mut from_version = {
                 let hub = &hub_clone;
                 match kind_clone {
-                    ResourceKind::GatewayClass => hub.list_gateway_classes().resource_version,
-                    ResourceKind::EdgionGatewayConfig => hub.list_edgion_gateway_config().resource_version,
-                    ResourceKind::Gateway => hub.list_gateways().resource_version,
+                    // Base conf resources should not be watched
+                    ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
+                        tracing::warn!(kind = ?kind_clone, "Attempted to watch base_conf resource, which should not be watched");
+                        return;
+                    }
                     ResourceKind::HTTPRoute => hub.list_routes().resource_version,
                     ResourceKind::Service => hub.list_services().resource_version,
                     ResourceKind::EndpointSlice => hub.list_endpoint_slices().resource_version,
@@ -151,9 +222,11 @@ impl ConfigSyncClient {
                 let mut client = match Self::create_client(&grpc_server_addr, grpc_server_connect_timeout).await {
                     Ok(c) => c,
                     Err(e) => {
-                        eprintln!(
-                            "[CLIENT] Failed to create client for watch (kind={:?}, client_id={}): {}",
-                            kind_clone, client_id, e
+                        tracing::error!(
+                            kind = ?kind_clone,
+                            client_id = %client_id,
+                            error = %e,
+                            "Failed to create client for watch"
                         );
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         continue;
@@ -171,18 +244,22 @@ impl ConfigSyncClient {
                 let mut stream = match client.watch(request).await {
                     Ok(response) => response.into_inner(),
                     Err(e) => {
-                        eprintln!(
-                            "[CLIENT] Failed to start watch (kind={:?}, client_id={}): {}",
-                            kind_clone, client_id, e
+                        tracing::error!(
+                            kind = ?kind_clone,
+                            client_id = %client_id,
+                            error = %e,
+                            "Failed to start watch"
                         );
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         continue;
                     }
                 };
 
-                println!(
-                    "[CLIENT] Watch started for {:?} (client_id={}, from_version={})",
-                    kind_clone, client_id, from_version
+                tracing::info!(
+                    kind = ?kind_clone,
+                    client_id = %client_id,
+                    from_version = from_version,
+                    "Watch started"
                 );
 
                 // Process stream messages
@@ -196,7 +273,7 @@ impl ConfigSyncClient {
                             let events: Vec<serde_json::Value> = match serde_json::from_str(&watch_response.data) {
                                 Ok(events) => events,
                                 Err(e) => {
-                                    eprintln!("[CLIENT] Failed to parse watch response events: {}", e);
+                                    tracing::error!(error = %e, "Failed to parse watch response events");
                                     continue;
                                 }
                             };
@@ -209,7 +286,7 @@ impl ConfigSyncClient {
                                     ) {
                                         Ok(s) => s,
                                         Err(e) => {
-                                            eprintln!("[CLIENT] Failed to serialize event data: {}", e);
+                                            tracing::error!(error = %e, "Failed to serialize event data");
                                             continue;
                                         }
                                     };
@@ -244,17 +321,20 @@ impl ConfigSyncClient {
                         }
                         Ok(None) => {
                             // Stream ended
-                            eprintln!(
-                                "[CLIENT] Watch stream ended for {:?} (client_id={}), reconnecting...",
-                                kind_clone, client_id
+                            tracing::info!(
+                                kind = ?kind_clone,
+                                client_id = %client_id,
+                                "Watch stream ended, reconnecting"
                             );
                             break;
                         }
                         Err(e) => {
                             // Stream error
-                            eprintln!(
-                                "[CLIENT] Watch stream error for {:?} (client_id={}): {}, reconnecting...",
-                                kind_clone, client_id, e
+                            tracing::error!(
+                                kind = ?kind_clone,
+                                client_id = %client_id,
+                                error = %e,
+                                "Watch stream error, reconnecting"
                             );
                             break;
                         }
@@ -281,15 +361,13 @@ impl ConfigSyncClient {
         Ok(ConfigSyncClientService::new(channel))
     }
 
-    /// Sync all resource types from server
+    /// Sync all resource types from server (excluding base_conf resources)
     pub async fn sync_all(&mut self) -> Result<(), tonic::Status> {
         let hub = &self.config_client;
         let key = hub.get_gateway_class_key().clone();
 
+        // Only sync non-base_conf resources
         let resource_kinds = vec![
-            ResourceKind::GatewayClass,
-            ResourceKind::EdgionGatewayConfig,
-            ResourceKind::Gateway,
             ResourceKind::HTTPRoute,
             ResourceKind::Service,
             ResourceKind::EndpointSlice,
@@ -299,22 +377,20 @@ impl ConfigSyncClient {
 
         for kind in resource_kinds {
             if let Err(e) = self.sync_resource(key.clone(), kind).await {
-                eprintln!("Failed to sync {:?}: {}", kind, e);
+                tracing::error!(kind = ?kind, error = %e, "Failed to sync");
             }
         }
 
         Ok(())
     }
 
-    /// Start watching all resource types and automatically sync to ConfigHub
+    /// Start watching all resource types and automatically sync to ConfigHub (excluding base_conf resources)
     pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
         let hub = &self.config_client;
         let key = hub.get_gateway_class_key().clone();
 
+        // Only watch non-base_conf resources
         let resource_kinds = vec![
-            ResourceKind::GatewayClass,
-            ResourceKind::EdgionGatewayConfig,
-            ResourceKind::Gateway,
             ResourceKind::HTTPRoute,
             ResourceKind::Service,
             ResourceKind::EndpointSlice,
@@ -324,7 +400,7 @@ impl ConfigSyncClient {
 
         for kind in resource_kinds {
             if let Err(e) = self.start_watch_sync(key.clone(), kind).await {
-                eprintln!("Failed to start watch for {:?}: {}", kind, e);
+                tracing::error!(kind = ?kind, error = %e, "Failed to start watch");
             }
         }
 
@@ -366,9 +442,12 @@ impl ConfigSyncClient {
             .as_mut()
             .ok_or_else(|| tonic::Status::failed_precondition("Client not connected"))?;
 
-        println!(
-            "start watch for {:?} kind={:?} client_id={:?} client_name={:?}",
-            key, kind, client_id, client_name
+        tracing::info!(
+            key = %key,
+            kind = ?kind,
+            client_id = %client_id,
+            client_name = %client_name,
+            "Start watch"
         );
         let request = tonic::Request::new(WatchRequest {
             key,
@@ -392,7 +471,7 @@ impl ConfigSyncClient {
                         }
                     }
                     Err(e) => {
-                        eprintln!("Error receiving watch response: {}", e);
+                        tracing::error!(error = %e, "Error receiving watch response");
                         break;
                     }
                 }

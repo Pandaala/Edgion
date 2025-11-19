@@ -40,6 +40,56 @@ impl ConfigClient {
         &self.gateway_class_key
     }
 
+    /// Parse JSON strings and build GatewayClassBaseConf
+    pub fn parse_base_conf_from_json(
+        gateway_class_json: String,
+        edgion_gateway_config_json: String,
+        gateways_json: String,
+    ) -> GatewayClassBaseConf {
+        let mut base_conf = GatewayClassBaseConf::new();
+
+        // Parse and set GatewayClass
+        if !gateway_class_json.is_empty() {
+            if let Ok(items) = serde_json::from_str::<Vec<GatewayClass>>(&gateway_class_json) {
+                if let Some(gc) = items.into_iter().next() {
+                    println!("[ConfigClient] Parsed GatewayClass");
+                    base_conf.set_gateway_class(gc);
+                }
+            }
+        }
+
+        // Parse and set EdgionGatewayConfig
+        if !edgion_gateway_config_json.is_empty() {
+            if let Ok(items) = serde_json::from_str::<Vec<EdgionGatewayConfig>>(&edgion_gateway_config_json) {
+                if let Some(egc) = items.into_iter().next() {
+                    println!("[ConfigClient] Parsed EdgionGatewayConfig");
+                    base_conf.set_edgion_gateway_config(egc);
+                }
+            }
+        }
+
+        // Parse and add Gateways
+        if !gateways_json.is_empty() {
+            if let Ok(gateways) = serde_json::from_str::<Vec<Gateway>>(&gateways_json) {
+                for gateway in gateways {
+                    println!("[ConfigClient] Parsed Gateway");
+                    base_conf.add_gateway(gateway);
+                }
+            }
+        }
+
+        base_conf
+    }
+
+    /// Initialize base configuration with parsed objects
+    pub fn init_base_conf(
+        &self,
+        new_base_conf: GatewayClassBaseConf,
+    ) {
+        let mut base_conf = self.base_conf.write().unwrap();
+        *base_conf = new_base_conf;
+    }
+
     fn apply_change_to_cache<T>(
         cache: &ClientCache<T>,
         change: ResourceChange,

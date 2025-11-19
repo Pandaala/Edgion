@@ -39,15 +39,19 @@ impl EdgionGwCli {
     pub async fn run(&self) -> Result<()> {
         let _config_client = ConfigClient::new(self.gateway_class.clone());
 
-        if let Some(server_addr) = &self.server_addr {
-            let mut sync_client = ConfigSyncClient::new(
-                server_addr.clone(),
-                self.gateway_class.clone(),
-                "edgion-gateway".to_string(),
-                Duration::from_secs(10),
-            );
-            sync_client.connect().await?;
-        }
+        let server_addr = self.server_addr.as_deref()
+            .ok_or_else(|| anyhow!("server_addr is required, please provide --server-addr"))?;
+
+        let mut sync_client = ConfigSyncClient::new(
+            server_addr,
+            self.gateway_class.clone(),
+            "edgion-gateway".to_string(),
+            Duration::from_secs(10),
+        );
+        
+        sync_client.connect().await?;
+
+        sync_client.init().await?;
 
         Ok(())
     }

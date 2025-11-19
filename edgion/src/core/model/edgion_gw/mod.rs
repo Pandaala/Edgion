@@ -36,14 +36,17 @@ impl EdgionGw {
 
 pub async fn start(operator_addr: String, gateway_class: String) -> Result<()> {
     let mut client = ConfigSyncClient::new(
-        operator_addr.clone(),
+        operator_addr.as_str(),
         gateway_class.clone(),
         "edgion-gateway".to_string(),
         Duration::from_secs(10),
     );
     client.connect().await?;
 
-    client.sync_all().await?;
+    // Initialize base configuration and sync all resources
+    client.init().await?;
+    
+    // Start watching for changes
     client.start_watch_all().await?;
 
     let mut gateway = EdgionGw::new(client);
