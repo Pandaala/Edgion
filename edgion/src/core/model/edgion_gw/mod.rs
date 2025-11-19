@@ -2,8 +2,8 @@ use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::grpc_client::ConfigSyncClient;
 use anyhow::Result;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::signal;
-use tokio::sync::Mutex;
 
 pub struct EdgionGw {
     sync_client: ConfigSyncClient,
@@ -29,14 +29,19 @@ impl EdgionGw {
         // ConfigSyncClient will be automatically dropped when EdgionGw is dropped
     }
 
-    pub fn config_client(&self) -> Arc<Mutex<ConfigClient>> {
+    pub fn config_client(&self) -> Arc<ConfigClient> {
         self.sync_client.get_config_client()
     }
 }
 
 pub async fn start(operator_addr: String, gateway_class: String) -> Result<()> {
-    let mut client =
-        ConfigSyncClient::connect(operator_addr.clone(), gateway_class.clone()).await?;
+    let mut client = ConfigSyncClient::new(
+        operator_addr.clone(),
+        gateway_class.clone(),
+        "edgion-gateway".to_string(),
+        Duration::from_secs(10),
+    );
+    client.connect().await?;
 
     client.sync_all().await?;
     client.start_watch_all().await?;

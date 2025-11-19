@@ -124,88 +124,161 @@ impl ConfigSyncClient {
         key: String,
         kind: ResourceKind,
     ) -> Result<(), tonic::Status> {
-        let hub = &self.config_client;
-        let from_version = match kind {
-            ResourceKind::GatewayClass => hub.list_gateway_classes().resource_version,
-            ResourceKind::EdgionGatewayConfig => hub.list_edgion_gateway_config().resource_version,
-            ResourceKind::Gateway => hub.list_gateways().resource_version,
-            ResourceKind::HTTPRoute => hub.list_routes().resource_version,
-            ResourceKind::Service => hub.list_services().resource_version,
-            ResourceKind::EndpointSlice => hub.list_endpoint_slices().resource_version,
-            ResourceKind::EdgionTls => hub.list_edgion_tls().resource_version,
-            ResourceKind::Secret => hub.list_secrets().resource_version,
-        };
-
-        let mut receiver = self
-            .watch(
-                key.clone(),
-                kind,
-                self.client_id.clone(),
-                self.client_name.clone(),
-                from_version,
-            )
-            .await?;
-
         let hub_clone = self.config_client.clone();
         let kind_clone = kind;
+        let client_id = self.client_id.clone();
+        let client_name = self.client_name.clone();
+        let grpc_server_addr = self.grpc_server_addr.clone();
+        let grpc_server_connect_timeout = self.grpc_server_connect_timeout;
 
         tokio::spawn(async move {
-            while let Some(watch_response) = receiver.recv().await {
-                // Parse the events from the watch response
-                // Watch response contains a JSON array of events with type, data, and resource_version
-                let events: Vec<serde_json::Value> =
-                    match serde_json::from_str(&watch_response.data) {
-                        Ok(events) => events,
-                        Err(e) => {
-                            eprintln!("Failed to parse watch response events: {}", e);
-                            continue;
-                        }
-                    };
-
+            let mut from_version = {
                 let hub = &hub_clone;
-                for event in events {
-                    if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
-                        let data_str = match serde_json::to_string(
-                            &event.get("data").unwrap_or(&serde_json::Value::Null),
-                        ) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                eprintln!("Failed to serialize event data: {}", e);
-                                continue;
-                            }
-                        };
-                        let resource_version = event
-                            .get("resource_version")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(watch_response.resource_version);
+                match kind_clone {
+                    ResourceKind::GatewayClass => hub.list_gateway_classes().resource_version,
+                    ResourceKind::EdgionGatewayConfig => hub.list_edgion_gateway_config().resource_version,
+                    ResourceKind::Gateway => hub.list_gateways().resource_version,
+                    ResourceKind::HTTPRoute => hub.list_routes().resource_version,
+                    ResourceKind::Service => hub.list_services().resource_version,
+                    ResourceKind::EndpointSlice => hub.list_endpoint_slices().resource_version,
+                    ResourceKind::EdgionTls => hub.list_edgion_tls().resource_version,
+                    ResourceKind::Secret => hub.list_secrets().resource_version,
+                }
+            };
 
-                        match event_type {
-                            "add" => hub.apply_resource_change(
-                                ResourceChange::EventAdd,
-                                Some(kind_clone),
-                                data_str,
-                                Some(resource_version),
-                            ),
-                            "update" => hub.apply_resource_change(
-                                ResourceChange::EventUpdate,
-                                Some(kind_clone),
-                                data_str,
-                                Some(resource_version),
-                            ),
-                            "delete" => hub.apply_resource_change(
-                                ResourceChange::EventDelete,
-                                Some(kind_clone),
-                                data_str,
-                                Some(resource_version),
-                            ),
-                            _ => {}
+            loop {
+                // Connect and create watch stream
+                let mut client = match Self::create_client(&grpc_server_addr, grpc_server_connect_timeout).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!(
+                            "[CLIENT] Failed to create client for watch (kind={:?}, client_id={}): {}",
+                            kind_clone, client_id, e
+                        );
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        continue;
+                    }
+                };
+
+                let request = tonic::Request::new(WatchRequest {
+                    key: key.clone(),
+                    kind: resource_kind_to_proto(kind_clone) as i32,
+                    client_id: client_id.clone(),
+                    client_name: client_name.clone(),
+                    from_version,
+                });
+
+                let mut stream = match client.watch(request).await {
+                    Ok(response) => response.into_inner(),
+                    Err(e) => {
+                        eprintln!(
+                            "[CLIENT] Failed to start watch (kind={:?}, client_id={}): {}",
+                            kind_clone, client_id, e
+                        );
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        continue;
+                    }
+                };
+
+                println!(
+                    "[CLIENT] Watch started for {:?} (client_id={}, from_version={})",
+                    kind_clone, client_id, from_version
+                );
+
+                // Process stream messages
+                loop {
+                    match stream.message().await {
+                        Ok(Some(watch_response)) => {
+                            // Update from_version for next reconnect
+                            from_version = watch_response.resource_version;
+
+                            // Parse the events from the watch response
+                            let events: Vec<serde_json::Value> = match serde_json::from_str(&watch_response.data) {
+                                Ok(events) => events,
+                                Err(e) => {
+                                    eprintln!("[CLIENT] Failed to parse watch response events: {}", e);
+                                    continue;
+                                }
+                            };
+
+                            let hub = &hub_clone;
+                            for event in events {
+                                if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                                    let data_str = match serde_json::to_string(
+                                        &event.get("data").unwrap_or(&serde_json::Value::Null),
+                                    ) {
+                                        Ok(s) => s,
+                                        Err(e) => {
+                                            eprintln!("[CLIENT] Failed to serialize event data: {}", e);
+                                            continue;
+                                        }
+                                    };
+                                    let resource_version = event
+                                        .get("resource_version")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(watch_response.resource_version);
+
+                                    match event_type {
+                                        "add" => hub.apply_resource_change(
+                                            ResourceChange::EventAdd,
+                                            Some(kind_clone),
+                                            data_str,
+                                            Some(resource_version),
+                                        ),
+                                        "update" => hub.apply_resource_change(
+                                            ResourceChange::EventUpdate,
+                                            Some(kind_clone),
+                                            data_str,
+                                            Some(resource_version),
+                                        ),
+                                        "delete" => hub.apply_resource_change(
+                                            ResourceChange::EventDelete,
+                                            Some(kind_clone),
+                                            data_str,
+                                            Some(resource_version),
+                                        ),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            // Stream ended
+                            eprintln!(
+                                "[CLIENT] Watch stream ended for {:?} (client_id={}), reconnecting...",
+                                kind_clone, client_id
+                            );
+                            break;
+                        }
+                        Err(e) => {
+                            // Stream error
+                            eprintln!(
+                                "[CLIENT] Watch stream error for {:?} (client_id={}): {}, reconnecting...",
+                                kind_clone, client_id, e
+                            );
+                            break;
                         }
                     }
                 }
+
+                // Wait before reconnecting
+                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         });
 
         Ok(())
+    }
+
+    /// Helper method to create a new client
+    async fn create_client(
+        addr: &str,
+        timeout: Duration,
+    ) -> Result<ConfigSyncClientService<Channel>, tonic::transport::Error> {
+        let endpoint = tonic::transport::Endpoint::from_shared(addr.to_string())?
+            .timeout(timeout)
+            .connect_timeout(timeout);
+        let channel = endpoint.connect().await?;
+        Ok(ConfigSyncClientService::new(channel))
     }
 
     /// Sync all resource types from server
@@ -278,8 +351,9 @@ impl ConfigSyncClient {
         Ok(response.into_inner())
     }
 
-    /// Watch for changes to resources of a specific kind
-    pub async fn watch(
+    /// Watch for changes to resources of a specific kind (internal use only)
+    #[allow(dead_code)]
+    async fn watch(
         &mut self,
         key: String,
         kind: ResourceKind,

@@ -4,6 +4,7 @@ use crate::core::conf_sync::grpc_client::ConfigSyncClient;
 use crate::core::utils::net::{normalize_grpc_endpoint, parse_optional_listen_addr};
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
+use std::time::Duration;
 use tokio::signal;
 
 #[derive(Parser, Debug)]
@@ -36,9 +37,17 @@ impl EdgionGwCli {
     }
 
     pub async fn run(&self) -> Result<()> {
-        let config_client = ConfigClient::new(self.gateway_class.clone());
+        let _config_client = ConfigClient::new(self.gateway_class.clone());
 
-        let sync_client = ConfigSyncClient::connect(self.server_addr.clone(), self.gateway_class.clone()).await?;
+        if let Some(server_addr) = &self.server_addr {
+            let mut sync_client = ConfigSyncClient::new(
+                server_addr.clone(),
+                self.gateway_class.clone(),
+                "edgion-gateway".to_string(),
+                Duration::from_secs(10),
+            );
+            sync_client.connect().await?;
+        }
 
         Ok(())
     }
