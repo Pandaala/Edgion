@@ -13,50 +13,48 @@ use uuid::Uuid;
 
 /// gRPC client for ConfigSync service
 pub struct ConfigSyncClient {
-    client: ConfigSyncClientService<Channel>,
+    grpc_server_addr: String,
     config_client: Arc<ConfigClient>,
     client_id: String,
     client_name: String,
+    grpc_server_connect_timeout: Duration,
+    conf_client_handle: Option<ConfigSyncClientService<Channel>>,
 }
 
 impl ConfigSyncClient {
-    /// Create a new ConfigSync client connected to the given address
-    pub async fn connect(
-        addr: String,
+    /// Create a new ConfigSync client without connecting to server
+    pub fn new(
+        grpc_server_addr: String,
         gateway_class_key: String,
-    ) -> Result<Self, tonic::transport::Error> {
-        let client = ConfigSyncClientService::connect(addr).await?;
+        client_name: String,
+        timeout: Duration,
+    ) -> Self {
         let config_client = Arc::new(ConfigClient::new(gateway_class_key));
         let client_id = Uuid::new_v4().to_string();
-        let client_name = "config-sync-client".to_string();
-        Ok(Self {
-            client,
+        Self {
+            grpc_server_addr,
             config_client,
             client_id,
             client_name,
-        })
+            grpc_server_connect_timeout: timeout,
+            conf_client_handle: None,
+        }
     }
 
-    /// Create a new ConfigSync client with custom timeout
-    pub async fn connect_with_timeout(
-        addr: String,
-        gateway_class_key: String,
-        timeout: Duration,
-    ) -> Result<Self, tonic::transport::Error> {
-        let endpoint = tonic::transport::Endpoint::from_shared(addr)?
-            .timeout(timeout)
-            .connect_timeout(timeout);
+    /// Connect to the gRPC server
+    pub async fn connect(&mut self) -> Result<(), tonic::transport::Error> {
+        let endpoint = tonic::transport::Endpoint::from_shared(self.grpc_server_addr.clone())?
+            .timeout(self.grpc_server_connect_timeout)
+            .connect_timeout(self.grpc_server_connect_timeout);
         let channel = endpoint.connect().await?;
         let client = ConfigSyncClientService::new(channel);
-        let config_client = Arc::new(ConfigClient::new(gateway_class_key));
-        let client_id = Uuid::new_v4().to_string();
-        let client_name = "config-sync-client".to_string();
-        Ok(Self {
-            client,
-            config_client,
-            client_id,
-            client_name,
-        })
+        self.conf_client_handle = Some(client);
+        Ok(())
+    }
+
+    /// Check if the client is connected
+    pub fn is_connected(&self) -> bool {
+        self.conf_client_handle.is_some()
     }
 
     /// Get a reference to the ConfigHub
@@ -266,12 +264,17 @@ impl ConfigSyncClient {
         key: String,
         kind: ResourceKind,
     ) -> Result<ListResponse, tonic::Status> {
+        let client = self
+            .conf_client_handle
+            .as_mut()
+            .ok_or_else(|| tonic::Status::failed_precondition("Client not connected"))?;
+
         let request = tonic::Request::new(ListRequest {
             key,
             kind: resource_kind_to_proto(kind) as i32,
         });
 
-        let response = self.client.list(request).await?;
+        let response = client.list(request).await?;
         Ok(response.into_inner())
     }
 
@@ -284,6 +287,11 @@ impl ConfigSyncClient {
         client_name: String,
         from_version: u64,
     ) -> Result<mpsc::Receiver<WatchResponse>, tonic::Status> {
+        let client = self
+            .conf_client_handle
+            .as_mut()
+            .ok_or_else(|| tonic::Status::failed_precondition("Client not connected"))?;
+
         println!(
             "start watch for {:?} kind={:?} client_id={:?} client_name={:?}",
             key, kind, client_id, client_name
@@ -296,7 +304,7 @@ impl ConfigSyncClient {
             from_version,
         });
 
-        let mut stream = self.client.watch(request).await?.into_inner();
+        let mut stream = client.watch(request).await?.into_inner();
 
         // Convert stream to mpsc::Receiver
         let (tx, rx) = mpsc::channel(100);
