@@ -362,9 +362,18 @@ impl EventDispatcher for ConfigServer {
                                 false
                             }
                         } else {
-                            // GatewayClass not loaded yet, allow loading for now
-                            // It will be validated when GatewayClass is loaded (reverse check)
-                            true
+                            // GatewayClass not loaded yet
+                            // If gateway_class is configured, we should wait for the matching GatewayClass
+                            // If gateway_class is not configured, allow loading for now (will be validated later)
+                            if self.gateway_class.is_some() {
+                                // GatewayClass is configured but not loaded yet (probably skipped due to mismatch)
+                                // Don't load EdgionGatewayConfig
+                                false
+                            } else {
+                                // No gateway_class filter, allow loading for now
+                                // It will be validated when GatewayClass is loaded (reverse check)
+                                true
+                            }
                         }
                     };
 
@@ -445,6 +454,36 @@ impl EventDispatcher for ConfigServer {
                     resource_type = ?resource_type,
                     "apply_base_conf called with non-base-conf resource type"
                 );
+            }
+        }
+    }
+
+    fn should_load_edgion_gateway_config(&self, config_name: &str) -> bool {
+        let base_conf = self.base_conf.read().unwrap();
+        if let Some(gc) = base_conf.gateway_class() {
+            if let Some(ref params) = gc.spec.parameters_ref {
+                // Check group, kind, name, and namespace
+                params.group == "example.com" &&
+                params.kind == "EdgionGatewayConfig" &&
+                params.name == config_name &&
+                // EdgionGatewayConfig is cluster-scoped, so namespace should be None
+                params.namespace.is_none()
+            } else {
+                // GatewayClass has no parametersRef, so no config should be loaded
+                false
+            }
+        } else {
+            // GatewayClass not loaded yet
+            // If gateway_class is configured, we should wait for the matching GatewayClass
+            // If gateway_class is not configured, allow loading for now (will be validated later)
+            if self.gateway_class.is_some() {
+                // GatewayClass is configured but not loaded yet (probably skipped due to mismatch)
+                // Don't load EdgionGatewayConfig
+                false
+            } else {
+                // No gateway_class filter, allow loading for now
+                // It will be validated when GatewayClass is loaded (reverse check)
+                true
             }
         }
     }

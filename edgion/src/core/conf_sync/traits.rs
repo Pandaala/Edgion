@@ -28,4 +28,8 @@ pub trait EventDispatcher: Send + Sync {
     );
 
     fn set_ready(&self);
+
+    /// Check if an EdgionGatewayConfig should be loaded based on GatewayClass parametersRef
+    /// Returns true if the config should be loaded, false otherwise
+    fn should_load_edgion_gateway_config(&self, config_name: &str) -> bool;
 }

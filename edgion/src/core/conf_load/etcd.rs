@@ -102,7 +102,7 @@ impl ConfigLoader for EtcdConfigLoader {
 
     /// Bootstrap and load base configuration resources (GatewayClass, EdgionGatewayConfig, Gateway)
     /// If kind is specified, only load resources of that kind
-    async fn bootstrap_base_conf(&self, _kind: Option<crate::types::ResourceKind>) -> Result<()> {
+    async fn bootstrap_base_conf(&self, kind: Option<crate::types::ResourceKind>) -> Result<()> {
         let mut client_guard = self.client.lock().await;
         let client = client_guard
             .as_mut()
@@ -119,6 +119,39 @@ impl ConfigLoader for EtcdConfigLoader {
         for kv in resp.kvs() {
             if let Ok(value) = String::from_utf8(kv.value().to_vec()) {
                 if is_base_conf(&value) {
+                    // Check kind filter if specified
+                    if let Some(target_kind) = kind {
+                        if let Some(content_kind) = ResourceKind::from_content(&value) {
+                            if content_kind != target_kind {
+                                continue;
+                            }
+                            
+                            // For EdgionGatewayConfig, check if it's referenced by GatewayClass
+                            if content_kind == ResourceKind::EdgionGatewayConfig {
+                                // Parse the config name from content
+                                if let Ok(config) = serde_yaml::from_str::<serde_yaml::Value>(&value) {
+                                    if let Some(name) = config.get("metadata")
+                                        .and_then(|m| m.get("name"))
+                                        .and_then(|n| n.as_str())
+                                    {
+                                        if !self.dispatcher.should_load_edgion_gateway_config(name) {
+                                            tracing::debug!(
+                                                component = "etcd_loader",
+                                                event = "skip_config_not_referenced",
+                                                key = ?kv.key(),
+                                                config_name = name,
+                                                "Skipping EdgionGatewayConfig not referenced by GatewayClass parametersRef"
+                                            );
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            continue;
+                        }
+                    }
+                    
                     let key = String::from_utf8_lossy(kv.key()).to_string();
                     cache_guard.insert(key, value.clone());
                     drop(cache_guard);

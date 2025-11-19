@@ -453,4 +453,26 @@ impl EventDispatcher for ConfigClient {
     fn set_ready(&self) {
         // HubCache doesn't need ready state
     }
+
+    fn should_load_edgion_gateway_config(&self, config_name: &str) -> bool {
+        let base_conf = self.base_conf.read().unwrap();
+        if let Some(gc) = base_conf.gateway_class() {
+            if let Some(ref params) = gc.spec.parameters_ref {
+                // Check group, kind, name, and namespace
+                params.group == "example.com" &&
+                params.kind == "EdgionGatewayConfig" &&
+                params.name == config_name &&
+                // EdgionGatewayConfig is cluster-scoped, so namespace should be None
+                params.namespace.is_none()
+            } else {
+                // GatewayClass has no parametersRef, so no config should be loaded
+                false
+            }
+        } else {
+            // GatewayClass not loaded yet
+            // Client should wait for GatewayClass to be loaded first
+            // Don't load EdgionGatewayConfig until GatewayClass is available
+            false
+        }
+    }
 }
