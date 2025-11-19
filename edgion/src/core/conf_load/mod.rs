@@ -16,6 +16,7 @@ pub use file_system_loader::LocalPathLoader;
 
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
 pub enum LoaderKind {
+    NotSupport,
     LocalPath,
     Etcd,
 }
@@ -23,7 +24,7 @@ pub enum LoaderKind {
 #[derive(Args, Debug, Clone)]
 pub struct LoaderArgs {
     /// Configuration loader type (currently only localpath is supported)
-    #[arg(long, value_enum, value_name = "TYPE", default_value = "local_path")]
+    #[arg(long, value_enum, value_name = "TYPE")]
     pub loader: LoaderKind,
 
     /// Root directory for localpath loader
@@ -64,6 +65,7 @@ impl Loader {
                 Ok(Self { inner: loader })
             }
             LoaderKind::Etcd => Err(anyhow::anyhow!("etcd loader is not currently supported")),
+            LoaderKind::NotSupport => Err(anyhow::anyhow!("not support loader")),
         }
     }
 

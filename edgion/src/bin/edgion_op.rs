@@ -4,7 +4,7 @@ use edgion::EdgionOpCli;
 async fn main() {
     let cli = EdgionOpCli::parse_args();
     if let Err(err) = cli.run().await {
-        eprintln!("Error: {err}");
+        tracing::error!("{}", err);
         std::process::exit(1);
     }
 }

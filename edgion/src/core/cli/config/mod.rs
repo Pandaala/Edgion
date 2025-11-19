@@ -299,7 +299,9 @@ impl EdgionOpConfig {
         
         let loader = match self.loader_type().as_str() {
             "etcd" => LoaderKind::Etcd,
-            _ => LoaderKind::LocalPath,
+            "localpath" => LoaderKind::LocalPath,
+            "local_path" => LoaderKind::LocalPath,
+            _ => LoaderKind::NotSupport,
         };
         
         LoaderArgs {
