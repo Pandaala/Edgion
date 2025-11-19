@@ -1,4 +1,5 @@
 use crate::core::conf_load::LoaderArgs;
+use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::grpc_client::ConfigSyncClient;
 use crate::core::utils::net::{normalize_grpc_endpoint, parse_optional_listen_addr};
 use anyhow::{anyhow, Context, Result};
@@ -35,38 +36,9 @@ impl EdgionGwCli {
     }
 
     pub async fn run(&self) -> Result<()> {
-        self.run_external().await
-    }
+        let config_client = ConfigClient::new(self.gateway_class.clone());
 
-    async fn run_external(&self) -> Result<()> {
-        let server_addr = self
-            .server_addr
-            .as_ref()
-            .ok_or_else(|| anyhow!("--server-addr is required when --with-operator is not set"))?;
-
-        let server_endpoint = normalize_grpc_endpoint(server_addr);
-        let mut client =
-            ConfigSyncClient::connect(server_endpoint.clone(), self.gateway_class.clone())
-                .await
-                .with_context(|| format!("failed to connect to operator at {}", server_endpoint))?;
-
-        client
-            .sync_all()
-            .await
-            .context("failed to perform initial configuration sync")?;
-        client
-            .start_watch_all()
-            .await
-            .context("failed to start configuration watches")?;
-
-        let config_client = client.get_config_client();
-
-        println!("[gateway] connected to operator {}", server_endpoint);
-        println!("[gateway] press Ctrl+C to stop");
-
-        signal::ctrl_c()
-            .await
-            .expect("failed to listen for ctrl_c signal");
+        let sync_client = ConfigSyncClient::connect(self.server_addr.clone(), self.gateway_class.clone()).await?;
 
         Ok(())
     }

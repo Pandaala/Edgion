@@ -7,14 +7,14 @@ use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
 use crate::types::ResourceKind;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tonic::transport::Channel;
 use uuid::Uuid;
 
 /// gRPC client for ConfigSync service
 pub struct ConfigSyncClient {
     client: ConfigSyncClientService<Channel>,
-    config_client: Arc<Mutex<ConfigClient>>,
+    config_client: Arc<ConfigClient>,
     client_id: String,
     client_name: String,
 }
@@ -26,7 +26,7 @@ impl ConfigSyncClient {
         gateway_class_key: String,
     ) -> Result<Self, tonic::transport::Error> {
         let client = ConfigSyncClientService::connect(addr).await?;
-        let config_client = Arc::new(Mutex::new(ConfigClient::new(gateway_class_key)));
+        let config_client = Arc::new(ConfigClient::new(gateway_class_key));
         let client_id = Uuid::new_v4().to_string();
         let client_name = "config-sync-client".to_string();
         Ok(Self {
@@ -48,7 +48,7 @@ impl ConfigSyncClient {
             .connect_timeout(timeout);
         let channel = endpoint.connect().await?;
         let client = ConfigSyncClientService::new(channel);
-        let config_client = Arc::new(Mutex::new(ConfigClient::new(gateway_class_key)));
+        let config_client = Arc::new(ConfigClient::new(gateway_class_key));
         let client_id = Uuid::new_v4().to_string();
         let client_name = "config-sync-client".to_string();
         Ok(Self {
@@ -60,7 +60,7 @@ impl ConfigSyncClient {
     }
 
     /// Get a reference to the ConfigHub
-    pub fn get_config_client(&self) -> Arc<Mutex<ConfigClient>> {
+    pub fn get_config_client(&self) -> Arc<ConfigClient> {
         self.config_client.clone()
     }
 
@@ -97,7 +97,7 @@ impl ConfigSyncClient {
             kind
         );
 
-        let hub = self.config_client.lock().await;
+        let hub = &self.config_client;
         for (idx, resource) in resources.iter().enumerate() {
             // Each resource in the list should be added/updated
             let data_str = serde_json::to_string(&resource).map_err(|e| {
@@ -126,7 +126,7 @@ impl ConfigSyncClient {
         key: String,
         kind: ResourceKind,
     ) -> Result<(), tonic::Status> {
-        let hub = self.config_client.lock().await;
+        let hub = &self.config_client;
         let from_version = match kind {
             ResourceKind::GatewayClass => hub.list_gateway_classes().resource_version,
             ResourceKind::EdgionGatewayConfig => hub.list_edgion_gateway_config().resource_version,
@@ -137,7 +137,6 @@ impl ConfigSyncClient {
             ResourceKind::EdgionTls => hub.list_edgion_tls().resource_version,
             ResourceKind::Secret => hub.list_secrets().resource_version,
         };
-        drop(hub);
 
         let mut receiver = self
             .watch(
@@ -165,7 +164,7 @@ impl ConfigSyncClient {
                         }
                     };
 
-                let hub = hub_clone.lock().await;
+                let hub = &hub_clone;
                 for event in events {
                     if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
                         let data_str = match serde_json::to_string(
@@ -213,9 +212,8 @@ impl ConfigSyncClient {
 
     /// Sync all resource types from server
     pub async fn sync_all(&mut self) -> Result<(), tonic::Status> {
-        let hub = self.config_client.lock().await;
+        let hub = &self.config_client;
         let key = hub.get_gateway_class_key().clone();
-        drop(hub);
 
         let resource_kinds = vec![
             ResourceKind::GatewayClass,
@@ -239,9 +237,8 @@ impl ConfigSyncClient {
 
     /// Start watching all resource types and automatically sync to ConfigHub
     pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
-        let hub = self.config_client.lock().await;
+        let hub = &self.config_client;
         let key = hub.get_gateway_class_key().clone();
-        drop(hub);
 
         let resource_kinds = vec![
             ResourceKind::GatewayClass,
