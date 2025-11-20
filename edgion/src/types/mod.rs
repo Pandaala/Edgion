@@ -8,6 +8,7 @@ pub mod schema;
 
 pub use self::edgion_gateway_config::*;
 pub use self::edgion_tls::*;
+pub use self::err::{EdError, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 pub use self::gateway_api_types::*;
 pub use self::global_def::*;
 pub use self::resource_kind::ResourceKind;

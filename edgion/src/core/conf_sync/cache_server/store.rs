@@ -1,4 +1,5 @@
 use super::types::{EventType, WatcherEvent};
+use crate::types::{WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 use kube::{Resource, ResourceExt};
 use std::collections::HashMap;
 
@@ -129,13 +130,13 @@ impl<T: Clone> EventStore<T> {
         from_version: u64,
     ) -> Result<(u64, Option<Vec<WatcherEvent<T>>>), String> {
         if from_version > self.resource_version {
-            return Err("VersionUnexpect".to_owned());
+            return Err(WATCH_ERR_VERSION_UNEXPECTED.to_owned());
         } else if from_version == self.resource_version {
             return Ok((self.resource_version, None));
         }
 
         if from_version != 0 && from_version < self.expire_version {
-            return Err("TooOldVersion".to_owned());
+            return Err(WATCH_ERR_TOO_OLD_VERSION.to_owned());
         }
 
         if self.capacity == 0 || self.end_index == self.start_index {
