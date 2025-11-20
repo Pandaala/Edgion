@@ -56,7 +56,11 @@ async fn config_server_and_client_stay_in_sync_via_watch() {
         .expect("watch receiver");
 
     // Step 2: create a config client (hub) that will receive server events
-    let client = Arc::new(Mutex::new(ConfigClient::new(key.clone())));
+    let client = Arc::new(Mutex::new(ConfigClient::new(
+        key.clone(),
+        "test-client-id".to_string(),
+        "test-client-name".to_string(),
+    )));
     let client_for_watch = client.clone();
 
     // Step 3: spawn a task to consume watch events and apply them to the client
@@ -149,7 +153,11 @@ async fn config_client_stays_consistent_during_long_watch_window() {
         )
         .expect("watch receiver");
 
-    let client = Arc::new(Mutex::new(ConfigClient::new(key.clone())));
+    let client = Arc::new(Mutex::new(ConfigClient::new(
+        key.clone(),
+        "test-client-id".to_string(),
+        "test-client-name".to_string(),
+    )));
     let client_for_watch = client.clone();
 
     // Watcher task: consume events for 30 seconds, applying them to the client cache
@@ -356,7 +364,11 @@ async fn multiple_clients_relist_after_stale_watch_error() {
     // This test needs to be rewritten to use apply_base_conf() instead
     let server = Arc::new(Mutex::new(ConfigServer::new(None)));
 
-    let fast_client = Arc::new(Mutex::new(ConfigClient::new(key.clone())));
+    let fast_client = Arc::new(Mutex::new(ConfigClient::new(
+        key.clone(),
+        "fast-client-id".to_string(),
+        "fast-client-name".to_string(),
+    )));
     // GatewayClass watch is no longer supported - using HTTPRoute as placeholder
     let fast_watch_rx = {
         let guard = server.lock().await;
@@ -416,7 +428,11 @@ async fn multiple_clients_relist_after_stale_watch_error() {
             .expect("stale watch receiver")
     };
 
-    let stale_client = Arc::new(Mutex::new(ConfigClient::new(key.clone())));
+    let stale_client = Arc::new(Mutex::new(ConfigClient::new(
+        key.clone(),
+        "stale-client-id".to_string(),
+        "stale-client-name".to_string(),
+    )));
 
     let error_event = stale_watch_rx
         .recv()
@@ -498,7 +514,11 @@ async fn replace_client_with_snapshot(
     items: Vec<GatewayClass>,
 ) {
     let mut guard = client.lock().await;
-    *guard = ConfigClient::new(key.to_string());
+    *guard = ConfigClient::new(
+        key.to_string(),
+        "replaced-client-id".to_string(),
+        "replaced-client-name".to_string(),
+    );
 
     for item in items {
         let resource_version = item

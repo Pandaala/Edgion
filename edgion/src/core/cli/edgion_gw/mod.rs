@@ -69,8 +69,6 @@ impl EdgionGwCli {
 
         init_logging(log_config).await?;
 
-        let _config_client = ConfigClient::new(self.gateway_class.clone());
-
         let server_addr = self
             .server_addr
             .as_deref()

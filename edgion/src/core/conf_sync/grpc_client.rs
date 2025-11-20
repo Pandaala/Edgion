@@ -5,13 +5,7 @@ use crate::core::conf_sync::proto::{
     ListRequest, ListResponse, WatchRequest, WatchResponse,
 };
 use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ResourceChange};
-use crate::types::{
-    EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
-};
-use k8s_openapi::api::core::v1::{Secret, Service};
-use k8s_openapi::api::discovery::v1::EndpointSlice;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
+use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass, ResourceKind};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -38,8 +32,12 @@ impl ConfigSyncClient {
         client_name: String,
         timeout: Duration,
     ) -> Result<Self, tonic::transport::Error> {
-        let config_client = Arc::new(ConfigClient::new(gateway_class_key));
         let client_id = Uuid::new_v4().to_string();
+        let config_client = Arc::new(ConfigClient::new(
+            gateway_class_key,
+            client_id.clone(),
+            client_name.clone(),
+        ));
 
         // Try to connect with retry logic: 3 attempts, 2 seconds apart
         const MAX_RETRIES: u32 = 3;
@@ -60,6 +58,15 @@ impl ConfigSyncClient {
                         server_addr = grpc_server_addr,
                         "Successfully connected to gRPC server"
                     );
+
+                    // Set gRPC client for each cache
+                    config_client.routes().set_grpc_client(client.clone());
+                    config_client.services().set_grpc_client(client.clone());
+                    config_client
+                        .endpoint_slices()
+                        .set_grpc_client(client.clone());
+                    config_client.edgion_tls().set_grpc_client(client.clone());
+                    config_client.secrets().set_grpc_client(client.clone());
 
                     return Ok(Self {
                         grpc_server_addr: grpc_server_addr.to_string(),
@@ -205,19 +212,9 @@ impl ConfigSyncClient {
     /// Sync all resources of a specific kind from server
     pub async fn sync_resource(
         &mut self,
-        key: String,
+        _key: String,
         kind: ResourceKind,
     ) -> Result<(), tonic::Status> {
-        let list_response = self.list(key.clone(), kind).await?;
-
-        tracing::info!(
-            kind = ?kind,
-            bytes = list_response.data.len(),
-            version = list_response.resource_version,
-            "Syncing resource"
-        );
-
-        let hub = &self.config_client;
         match kind {
             ResourceKind::Unspecified => {
                 return Err(tonic::Status::invalid_argument(
@@ -232,53 +229,91 @@ impl ConfigSyncClient {
                 ));
             }
             ResourceKind::HTTPRoute => {
-                apply_resource_list::<HTTPRoute>(
-                    hub,
-                    kind,
-                    &list_response.data,
-                    list_response.resource_version,
-                )?;
+                self.config_client.routes().sync().await?;
             }
             ResourceKind::Service => {
-                apply_resource_list::<Service>(
-                    hub,
-                    kind,
-                    &list_response.data,
-                    list_response.resource_version,
-                )?;
+                self.config_client.services().sync().await?;
             }
             ResourceKind::EndpointSlice => {
-                apply_resource_list::<EndpointSlice>(
-                    hub,
-                    kind,
-                    &list_response.data,
-                    list_response.resource_version,
-                )?;
+                self.config_client.endpoint_slices().sync().await?;
             }
             ResourceKind::EdgionTls => {
-                apply_resource_list::<EdgionTls>(
-                    hub,
-                    kind,
-                    &list_response.data,
-                    list_response.resource_version,
-                )?;
+                self.config_client.edgion_tls().sync().await?;
             }
             ResourceKind::Secret => {
-                apply_resource_list::<Secret>(
-                    hub,
-                    kind,
-                    &list_response.data,
-                    list_response.resource_version,
-                )?;
+                self.config_client.secrets().sync().await?;
             }
         }
 
-        tracing::info!(kind = ?kind, "Finished syncing");
         Ok(())
     }
 
     /// Start watching a specific resource kind and automatically sync to ConfigHub
     pub async fn start_watch_sync(
+        &mut self,
+        _key: String,
+        kind: ResourceKind,
+    ) -> Result<(), tonic::Status> {
+        match kind {
+            ResourceKind::Unspecified => {
+                return Err(tonic::Status::invalid_argument(
+                    "Cannot watch unspecified resource kind",
+                ));
+            }
+            // Base conf resources should not be watched
+            ResourceKind::GatewayClass
+            | ResourceKind::EdgionGatewayConfig
+            | ResourceKind::Gateway => {
+                return Err(tonic::Status::invalid_argument(
+                    "Base conf resources should not be watched",
+                ));
+            }
+            ResourceKind::HTTPRoute => {
+                self.config_client.routes().start_watch().await?;
+            }
+            ResourceKind::Service => {
+                self.config_client.services().start_watch().await?;
+            }
+            ResourceKind::EndpointSlice => {
+                self.config_client.endpoint_slices().start_watch().await?;
+            }
+            ResourceKind::EdgionTls => {
+                self.config_client.edgion_tls().start_watch().await?;
+            }
+            ResourceKind::Secret => {
+                self.config_client.secrets().start_watch().await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Start watching all resource types (kept for compatibility, but implementation removed)
+    pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
+        let hub = &self.config_client;
+        let key = hub.get_gateway_class_key().clone();
+
+        // Only watch non-base_conf resources
+        let resource_kinds = vec![
+            ResourceKind::HTTPRoute,
+            ResourceKind::Service,
+            ResourceKind::EndpointSlice,
+            ResourceKind::EdgionTls,
+            ResourceKind::Secret,
+        ];
+
+        for kind in resource_kinds {
+            if let Err(e) = self.start_watch_sync(key.clone(), kind).await {
+                tracing::error!(kind = ?kind, error = %e, "Failed to start watch");
+            }
+        }
+
+        Ok(())
+    }
+
+    // The old implementation is now replaced by individual cache watch methods
+    #[allow(dead_code)]
+    async fn start_watch_sync_old(
         &mut self,
         key: String,
         kind: ResourceKind,
@@ -454,29 +489,6 @@ impl ConfigSyncClient {
         Ok(())
     }
 
-    /// Start watching all resource types and automatically sync to ConfigHub (excluding base_conf resources)
-    pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
-        let hub = &self.config_client;
-        let key = hub.get_gateway_class_key().clone();
-
-        // Only watch non-base_conf resources
-        let resource_kinds = vec![
-            ResourceKind::HTTPRoute,
-            ResourceKind::Service,
-            ResourceKind::EndpointSlice,
-            ResourceKind::EdgionTls,
-            ResourceKind::Secret,
-        ];
-
-        for kind in resource_kinds {
-            if let Err(e) = self.start_watch_sync(key.clone(), kind).await {
-                tracing::error!(kind = ?kind, error = %e, "Failed to start watch");
-            }
-        }
-
-        Ok(())
-    }
-
     /// List resources of a specific kind
     pub async fn list(
         &mut self,
@@ -540,47 +552,4 @@ impl ConfigSyncClient {
 
         Ok(rx)
     }
-}
-
-fn apply_resource_list<T>(
-    hub: &Arc<ConfigClient>,
-    kind: ResourceKind,
-    data: &str,
-    resource_version: u64,
-) -> Result<(), tonic::Status>
-where
-    T: DeserializeOwned + Serialize,
-{
-    let resources: Vec<T> = serde_json::from_str(data).map_err(|e| {
-        tracing::error!(
-            kind = ?kind,
-            error = %e,
-            data_preview = %&data[..data.len().min(200)],
-            "Failed to parse list response"
-        );
-        tonic::Status::internal(format!("Failed to parse list response: {}", e))
-    })?;
-
-    tracing::info!(kind = ?kind, count = resources.len(), "Parsed resources");
-
-    for (idx, resource) in resources.into_iter().enumerate() {
-        let data_str = serde_yaml::to_string(&resource).map_err(|e| {
-            tracing::error!(
-                kind = ?kind,
-                index = idx,
-                error = %e,
-                "Failed to convert resource to YAML"
-            );
-            tonic::Status::internal(format!("Failed to convert resource to YAML: {}", e))
-        })?;
-
-        hub.apply_resource_change(
-            ResourceChange::InitAdd,
-            Some(kind),
-            data_str,
-            Some(resource_version),
-        );
-    }
-
-    Ok(())
 }

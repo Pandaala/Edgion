@@ -24,16 +24,57 @@ pub struct ConfigClient {
 }
 
 impl ConfigClient {
-    pub fn new(gateway_class_key: GatewayClassKey) -> Self {
+    pub fn new(gateway_class_key: GatewayClassKey, client_id: String, client_name: String) -> Self {
         Self {
-            gateway_class_key,
+            gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(GatewayClassBaseConf::new()),
-            routes: ClientCache::new(),
-            services: ClientCache::new(),
-            endpoint_slices: ClientCache::new(),
-            edgion_tls: ClientCache::new(),
-            secrets: ClientCache::new(),
+            routes: ClientCache::new(
+                gateway_class_key.clone(),
+                client_id.clone(),
+                client_name.clone(),
+            ),
+            services: ClientCache::new(
+                gateway_class_key.clone(),
+                client_id.clone(),
+                client_name.clone(),
+            ),
+            endpoint_slices: ClientCache::new(
+                gateway_class_key.clone(),
+                client_id.clone(),
+                client_name.clone(),
+            ),
+            edgion_tls: ClientCache::new(
+                gateway_class_key.clone(),
+                client_id.clone(),
+                client_name.clone(),
+            ),
+            secrets: ClientCache::new(gateway_class_key, client_id, client_name),
         }
+    }
+
+    /// Get routes cache for direct access
+    pub fn routes(&self) -> &ClientCache<HTTPRoute> {
+        &self.routes
+    }
+
+    /// Get services cache for direct access
+    pub fn services(&self) -> &ClientCache<Service> {
+        &self.services
+    }
+
+    /// Get endpoint_slices cache for direct access
+    pub fn endpoint_slices(&self) -> &ClientCache<EndpointSlice> {
+        &self.endpoint_slices
+    }
+
+    /// Get edgion_tls cache for direct access
+    pub fn edgion_tls(&self) -> &ClientCache<EdgionTls> {
+        &self.edgion_tls
+    }
+
+    /// Get secrets cache for direct access
+    pub fn secrets(&self) -> &ClientCache<Secret> {
+        &self.secrets
     }
 
     pub fn get_gateway_class_key(&self) -> &GatewayClassKey {
