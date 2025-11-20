@@ -1,6 +1,6 @@
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{ConfigServer, ConfigServerEventDispatcher, EventDispatch, ServerCache, Versionable};
-use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind};
+use crate::types::prelude_resources::*;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::Resource;
@@ -245,8 +245,8 @@ impl ConfigServer {
                                 let config_name = existing_config.metadata.name.as_deref().unwrap_or("");
                                 let should_keep = if let Some(ref params) = resource.spec.parameters_ref {
                                     // Check group, kind, and name
-                                    params.group == "example.com" &&
-                                        params.kind == "EdgionGatewayConfig" &&
+                                    params.group == EDGION_GATEWAY_CONFIG_GROUP &&
+                                        params.kind == EDGION_GATEWAY_CONFIG_KIND &&
                                         params.name == config_name &&
                                         // EdgionGatewayConfig is cluster-scoped, so namespace should be None
                                         params.namespace.is_none()
@@ -285,8 +285,8 @@ impl ConfigServer {
                         if let Some(gc) = base_conf.gateway_class() {
                             if let Some(ref params) = gc.spec.parameters_ref {
                                 // Check group, kind, name, and namespace
-                                params.group == "example.com" &&
-                                    params.kind == "EdgionGatewayConfig" &&
+                                params.group == EDGION_GATEWAY_CONFIG_GROUP &&
+                                    params.kind == EDGION_GATEWAY_CONFIG_KIND &&
                                     params.name == resource.metadata.name.as_deref().unwrap_or("") &&
                                     // EdgionGatewayConfig is cluster-scoped, so namespace should be None
                                     params.namespace.is_none()
@@ -322,7 +322,7 @@ impl ConfigServer {
 
                     tracing::info!(
                         component = "config_server",
-                        kind = "EdgionGatewayConfig",
+                        kind = EDGION_GATEWAY_CONFIG_KIND,
                         event = "apply_base_conf",
                         edgion_gateway_config_name = ?resource.metadata.name,
                         change = ?change,

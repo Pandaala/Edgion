@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
 use crate::core::conf_sync::cache_server::{ListData, ServerCache, WatchResponse};
 use crate::core::utils::format_resource_info;
-use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind};
+use crate::types::prelude_resources::*;
 use anyhow::Result;
 
 pub type GatewayClassKey = String;

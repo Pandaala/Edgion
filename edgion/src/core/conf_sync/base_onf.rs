@@ -1,4 +1,4 @@
-use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass};
+use crate::types::prelude_resources::*;
 use std::collections::HashMap;
 
 pub struct GatewayClassBaseConf {

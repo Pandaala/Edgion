@@ -1,5 +1,5 @@
 use crate::core::conf_sync::cache_client::GrpcSyncable;
-use crate::types::{EdgionTls, HTTPRoute, ResourceKind};
+use crate::types::prelude_resources::*;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 

@@ -3,7 +3,7 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::core::ObjectMeta;
 
 use super::traits::Versionable;
-use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute};
+use crate::types::prelude_resources::*;
 
 /// Helper function to extract version from Kubernetes resource_version string
 /// Returns 0 if resource_version is None or cannot be parsed

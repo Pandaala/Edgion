@@ -2,7 +2,7 @@ use crate::core::conf_sync::config_server::ConfigServer;
 use crate::core::conf_sync::grpc_client::ConfigSyncClient;
 use crate::core::conf_sync::grpc_server::ConfigSyncServer;
 use crate::core::conf_sync::traits::{ConfigServerEventDispatcher, ResourceChange};
-use crate::types::{HTTPRoute, ResourceKind};
+use crate::types::prelude_resources::*;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;

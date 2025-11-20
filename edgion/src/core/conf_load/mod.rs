@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::core::conf_sync::traits::ConfigServerEventDispatcher;
-use crate::types::ResourceKind;
+use crate::types::prelude_resources::*;
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use std::path::PathBuf;

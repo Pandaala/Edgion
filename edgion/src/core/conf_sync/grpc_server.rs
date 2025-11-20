@@ -6,7 +6,7 @@ use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
     GetBaseConfRequest, GetBaseConfResponse, ListRequest, ListResponse, WatchRequest, WatchResponse,
 };
-use crate::types::ResourceKind;
+use crate::types::prelude_resources::*;
 
 /// Server wrapper for WatcherMgr
 pub struct ConfigSyncServer {

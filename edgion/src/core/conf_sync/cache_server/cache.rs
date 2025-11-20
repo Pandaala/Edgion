@@ -1,5 +1,4 @@
 use kube::{Resource, ResourceExt};
-use std::cmp::PartialEq;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};

@@ -4,7 +4,7 @@ use crate::core::conf_sync::cache_server::{EventDispatch, ListData, Versionable}
 use crate::core::conf_sync::config_server::GatewayClassKey;
 use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ResourceChange};
 use crate::core::utils::format_resource_info;
-use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind};
+use crate::types::prelude_resources::*;
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;

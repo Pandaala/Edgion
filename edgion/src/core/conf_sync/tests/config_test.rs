@@ -12,7 +12,7 @@ use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::config_server::EventDataSimple;
 use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ConfigServerEventDispatcher, ResourceChange};
 use crate::core::conf_sync::{ConfigServer, EventDispatch};
-use crate::types::{GatewayClass, GatewayClassSpec, ResourceKind};
+use crate::types::prelude_resources::*;
 
 fn sample_gateway_class(name: &str, version: u64) -> GatewayClass {
     let mut gc = GatewayClass::new(

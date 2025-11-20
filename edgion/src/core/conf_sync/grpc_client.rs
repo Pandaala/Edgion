@@ -3,7 +3,12 @@ use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, GetBaseConfRequest,
 };
-use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass, ResourceKind, ResourceKind::*};
+use crate::types::prelude_resources::*;
+use crate::types::ResourceKind::*;
+// Re-import types to shadow the enum variants with the same name
+use crate::types::resources::{
+    EdgionGatewayConfig, Gateway, GatewayClass,
+};
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;
@@ -159,7 +164,13 @@ impl ConfigSyncClient {
         self.fetch_and_init_base_conf(&key).await?;
 
         // Step 2: List and sync all other resources
-        let resource_kinds = vec![HTTPRoute, Service, EndpointSlice, EdgionTls, Secret];
+        let resource_kinds = vec![
+            HTTPRoute,
+            Service,
+            EndpointSlice,
+            EdgionTls,
+            Secret,
+        ];
 
         for kind in resource_kinds {
             if let Err(e) = self.sync_resource(key.clone(), kind).await {
@@ -242,7 +253,13 @@ impl ConfigSyncClient {
         let key = hub.get_gateway_class_key().clone();
 
         // Only watch non-base_conf resources
-        let resource_kinds = vec![HTTPRoute, Service, EndpointSlice, EdgionTls, Secret];
+        let resource_kinds = vec![
+            HTTPRoute,
+            Service,
+            EndpointSlice,
+            EdgionTls,
+            Secret,
+        ];
 
         for kind in resource_kinds {
             if let Err(e) = self.start_watch_sync(key.clone(), kind).await {

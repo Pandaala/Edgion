@@ -1,15 +1,19 @@
-pub mod edgion_gateway_config;
-pub mod edgion_tls;
 pub mod err;
-pub mod gateway_api_types;
 pub mod global_def;
 pub mod resource_kind;
+pub mod resources;
 pub mod schema;
 
-pub use self::edgion_gateway_config::*;
-pub use self::edgion_tls::*;
 pub use self::err::{EdError, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
-pub use self::gateway_api_types::*;
 pub use self::global_def::*;
 pub use self::resource_kind::ResourceKind;
+pub use self::resources::*;
 pub use self::schema::*;
+
+pub mod prelude_resources {
+    // Re-export all resource types
+    pub use super::resources::*;
+    
+    // Re-export ResourceKind enum
+    pub use super::resource_kind::ResourceKind;
+}

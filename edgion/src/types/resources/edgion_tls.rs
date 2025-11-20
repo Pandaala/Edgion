@@ -1,9 +1,16 @@
-use crate::types::{ParentReference, SecretObjectReference};
+use super::gateway::SecretObjectReference;
+use super::http_route::ParentReference;
 use k8s_openapi::api::core::v1::SecretReference;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// API group for EdgionTls
+pub const EDGION_TLS_GROUP: &str = "edgion.io";
+
+/// Kind for EdgionTls
+pub const EDGION_TLS_KIND: &str = "EdgionTls";
 
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[kube(
