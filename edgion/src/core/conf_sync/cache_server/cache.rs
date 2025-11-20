@@ -291,13 +291,15 @@ mod tests {
     use super::*;
     use crate::core::conf_sync::traits::ResourceChange;
     use crate::core::conf_sync::EventDispatch;
-    use kube::api::{DynamicObject, ObjectMeta};
+    use crate::types::{ResourceKind, ResourceMeta};
+    use kube::api::ObjectMeta;
+    use serde::{Deserialize, Serialize};
     use tokio::task::yield_now;
     use tokio::time::{sleep, Duration};
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestResource {
-        name: &'static str,
+        name: String,
         version: u64,
         metadata: ObjectMeta,
     }
@@ -310,11 +312,21 @@ mod tests {
 
     impl Eq for TestResource {}
 
-    impl Versionable for TestResource {
+    impl ResourceMeta for TestResource {
         fn get_version(&self) -> u64 {
             self.version
         }
+        
+        fn resource_kind() -> ResourceKind {
+            ResourceKind::Unspecified
+        }
+        
+        fn kind_name() -> &'static str {
+            "TestResource"
+        }
     }
+
+    impl Versionable for TestResource {}
 
     impl kube::Resource for TestResource {
         type DynamicType = ();
@@ -355,7 +367,7 @@ mod tests {
     async fn event_add_stores_resource_and_updates_version() {
         let cache = ServerCache::<TestResource>::new(10);
         let resource = TestResource {
-            name: "foo",
+            name: "foo".to_string(),
             version: 1,
             metadata: ObjectMeta {
                 name: Some("test-resource".to_string()),
@@ -377,7 +389,7 @@ mod tests {
     async fn event_update_replaces_existing_resource() {
         let cache = ServerCache::<TestResource>::new(10);
         let original = TestResource {
-            name: "foo",
+            name: "foo".to_string(),
             version: 1,
             metadata: ObjectMeta {
                 name: Some("test-resource".to_string()),
@@ -386,7 +398,7 @@ mod tests {
             },
         };
         let updated = TestResource {
-            name: "foo-updated",
+            name: "foo-updated".to_string(),
             version: 1,
             metadata: ObjectMeta {
                 name: Some("test-resource".to_string()),
@@ -411,7 +423,7 @@ mod tests {
     async fn event_delete_removes_resource() {
         let cache = ServerCache::<TestResource>::new(10);
         let resource = TestResource {
-            name: "foo",
+            name: "foo".to_string(),
             version: 42,
             metadata: ObjectMeta {
                 name: Some("test-resource".to_string()),

@@ -177,7 +177,10 @@ mod tests {
     use kube::api::ObjectMeta;
 
     // Test resource type that implements Resource trait
-    #[derive(Debug, Clone)]
+    use crate::types::{ResourceKind, ResourceMeta};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestResource {
         name: String,
         namespace: Option<String>,
@@ -191,6 +194,20 @@ mod tests {
     }
 
     impl Eq for TestResource {}
+
+    impl ResourceMeta for TestResource {
+        fn get_version(&self) -> u64 {
+            0 // Test resource doesn't track versions
+        }
+        
+        fn resource_kind() -> ResourceKind {
+            ResourceKind::Unspecified
+        }
+        
+        fn kind_name() -> &'static str {
+            "TestResource"
+        }
+    }
 
     impl kube::Resource for TestResource {
         type DynamicType = ();
