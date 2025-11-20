@@ -108,8 +108,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_init_logging() {
+        // Use temp directory to avoid creating test_logs in the project
+        let temp_dir = std::env::temp_dir().join("edgion_test_logs");
         let config = LogConfig {
-            log_dir: PathBuf::from("test_logs"),
+            log_dir: temp_dir,
             file_prefix: "test".to_string(),
             json_format: true,
             console: false,
