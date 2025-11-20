@@ -27,11 +27,15 @@ impl EdgionOpCli {
 
     /// Spawn a background task to periodically print all gateway class configs in debug mode
     /// This can be easily removed in the future if not needed
-    fn spawn_debug_config_printer(config_server: Arc<ConfigServer>, log_level: String, enabled: bool) {
+    fn spawn_debug_config_printer(
+        config_server: Arc<ConfigServer>,
+        log_level: String,
+        enabled: bool,
+    ) {
         if !enabled {
             return;
         }
-        
+
         tokio::spawn(async move {
             if log_level == "debug" || log_level == "trace" {
                 let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
@@ -64,10 +68,10 @@ impl EdgionOpCli {
 
         let config_server = Arc::new(ConfigServer::new(config.gateway_class()));
         let sync_server = ConfigSyncServer::new(config_server.clone());
-        
+
         // Clone config_server before moving into loader
         let debug_config_server = config_server.clone();
-        
+
         let loader_args = config.to_loader_args();
         let loader = Loader::from_args(
             &loader_args,
@@ -94,10 +98,7 @@ impl EdgionOpCli {
         );
 
         // Run both services concurrently using tokio::join!
-        let (sync_result, loader_result) = tokio::join!(
-            sync_server.serve(addr),
-            loader.run()
-        );
+        let (sync_result, loader_result) = tokio::join!(sync_server.serve(addr), loader.run());
 
         // Check results - if either service fails, return error
         if let Err(e) = &sync_result {
@@ -108,7 +109,7 @@ impl EdgionOpCli {
                 "gRPC server failed"
             );
         }
-        
+
         if let Err(e) = &loader_result {
             tracing::error!(
                 component = COMPONENT_EDGION_OPERATOR,

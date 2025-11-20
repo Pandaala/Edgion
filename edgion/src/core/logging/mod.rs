@@ -15,19 +15,19 @@ pub use writer::{log_worker, AsyncLogWriter};
 pub struct LogConfig {
     /// Log directory path
     pub log_dir: PathBuf,
-    
+
     /// Log file name prefix
     pub file_prefix: String,
-    
+
     /// Whether to use JSON format
     pub json_format: bool,
-    
+
     /// Whether to log to console
     pub console: bool,
-    
+
     /// Log level filter (e.g., "info", "debug", "warn")
     pub level: String,
-    
+
     /// Channel buffer size for async logging
     pub buffer_size: usize,
 }
@@ -71,8 +71,8 @@ pub async fn init_logging(config: LogConfig) -> Result<()> {
     });
 
     // Build env filter
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.level));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
 
     // Create async log layer
     let async_layer = AsyncLogLayer {

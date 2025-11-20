@@ -3,15 +3,13 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::sync::RwLock;
 use tokio::sync::mpsc;
 
-use crate::core::conf_sync::cache_server::{
-    ListData, ServerCache, WatchResponse,
-};
+use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
+use crate::core::conf_sync::cache_server::{ListData, ServerCache, WatchResponse};
 use crate::core::utils::format_resource_info;
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
 };
 use anyhow::Result;
-use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
 
 pub type GatewayClassKey = String;
 
@@ -71,7 +69,7 @@ impl ConfigServer {
             secrets: ServerCache::new(200),
         }
     }
-    
+
     /// Get the configured gateway class name
     pub fn gateway_class(&self) -> Option<&String> {
         self.gateway_class.as_ref()
@@ -91,15 +89,17 @@ impl ConfigServer {
         }
 
         let base_conf = self.base_conf.read().unwrap();
-        
-        let gateway_class_json = base_conf.gateway_class()
+
+        let gateway_class_json = base_conf
+            .gateway_class()
             .and_then(|gc| serde_json::to_string(gc).ok())
             .unwrap_or_default();
-        
-        let edgion_gateway_config_json = base_conf.edgion_gateway_config()
+
+        let edgion_gateway_config_json = base_conf
+            .edgion_gateway_config()
             .and_then(|egwc| serde_json::to_string(egwc).ok())
             .unwrap_or_default();
-        
+
         let gateways_json = serde_json::to_string(base_conf.gateways())
             .map_err(|e| format!("Failed to serialize gateways: {}", e))?;
 
@@ -116,8 +116,13 @@ impl ConfigServer {
         kind: &ResourceKind,
     ) -> Result<ListDataSimple, String> {
         let (data_json, resource_version) = match kind {
-            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
-                return Err(format!("Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are not available via list/watch API"));
+            ResourceKind::Unspecified => {
+                return Err("Resource kind unspecified".to_string());
+            }
+            ResourceKind::GatewayClass
+            | ResourceKind::EdgionGatewayConfig
+            | ResourceKind::Gateway => {
+                return Err("Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are not available via list/watch API".to_string());
             }
             ResourceKind::HTTPRoute => {
                 let list_data = self.list_routes();
@@ -173,12 +178,16 @@ impl ConfigServer {
         );
 
         match kind {
-            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
-                return Err(format!("Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are not available via list/watch API"));
+            ResourceKind::Unspecified => {
+                return Err("Resource kind unspecified".to_string());
+            }
+            ResourceKind::GatewayClass
+            | ResourceKind::EdgionGatewayConfig
+            | ResourceKind::Gateway => {
+                return Err("Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are not available via list/watch API".to_string());
             }
             ResourceKind::HTTPRoute => {
-                let mut receiver = self
-                    .watch_routes(client_id, client_name, from_version);
+                let mut receiver = self.watch_routes(client_id, client_name, from_version);
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -206,8 +215,7 @@ impl ConfigServer {
                 });
             }
             ResourceKind::Service => {
-                let mut receiver = self
-                    .watch_services(client_id, client_name, from_version);
+                let mut receiver = self.watch_services(client_id, client_name, from_version);
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -235,8 +243,7 @@ impl ConfigServer {
                 });
             }
             ResourceKind::EndpointSlice => {
-                let mut receiver = self
-                    .watch_endpoint_slices(client_id, client_name, from_version);
+                let mut receiver = self.watch_endpoint_slices(client_id, client_name, from_version);
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -264,8 +271,7 @@ impl ConfigServer {
                 });
             }
             ResourceKind::EdgionTls => {
-                let mut receiver = self
-                    .watch_edgion_tls(client_id, client_name, from_version);
+                let mut receiver = self.watch_edgion_tls(client_id, client_name, from_version);
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -293,8 +299,7 @@ impl ConfigServer {
                 });
             }
             ResourceKind::Secret => {
-                let mut receiver = self
-                    .watch_secrets(client_id, client_name, from_version);
+                let mut receiver = self.watch_secrets(client_id, client_name, from_version);
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -351,7 +356,6 @@ impl ConfigServer {
         self.secrets.list_owned()
     }
 
-
     /// Watch HTTP routes
     pub fn watch_routes(
         &self,
@@ -379,7 +383,8 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<EndpointSlice>> {
-        self.endpoint_slices.watch(client_id, client_name, from_version)
+        self.endpoint_slices
+            .watch(client_id, client_name, from_version)
     }
 
     /// Watch Edgion TLS

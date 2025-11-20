@@ -1,8 +1,7 @@
 use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::proto::{
-    config_sync_client::ConfigSyncClient as ConfigSyncClientService, 
-    GetBaseConfRequest, ListRequest, ListResponse,
-    ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
+    config_sync_client::ConfigSyncClient as ConfigSyncClientService, GetBaseConfRequest,
+    ListRequest, ListResponse, WatchRequest, WatchResponse,
 };
 use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ResourceChange};
 use crate::types::ResourceKind;
@@ -34,11 +33,11 @@ impl ConfigSyncClient {
     ) -> Result<Self, tonic::transport::Error> {
         let config_client = Arc::new(ConfigClient::new(gateway_class_key));
         let client_id = Uuid::new_v4().to_string();
-        
+
         // Try to connect with retry logic: 3 attempts, 2 seconds apart
         const MAX_RETRIES: u32 = 3;
         const RETRY_INTERVAL_SECS: u64 = 2;
-        
+
         let mut last_error = None;
         for attempt in 1..=MAX_RETRIES {
             tracing::info!(
@@ -47,14 +46,14 @@ impl ConfigSyncClient {
                 server_addr = grpc_server_addr,
                 "Attempting to connect to gRPC server"
             );
-            
+
             match Self::create_client_internal(grpc_server_addr, timeout).await {
                 Ok(client) => {
                     tracing::info!(
                         server_addr = grpc_server_addr,
                         "Successfully connected to gRPC server"
                     );
-                    
+
                     return Ok(Self {
                         grpc_server_addr: grpc_server_addr.to_string(),
                         config_client,
@@ -79,7 +78,7 @@ impl ConfigSyncClient {
                 }
             }
         }
-        
+
         let err = last_error.unwrap();
         tracing::error!(
             server_addr = grpc_server_addr,
@@ -129,32 +128,47 @@ impl ConfigSyncClient {
         // Parse JSON data from gRPC and convert to YAML for application layer
         // gRPC uses JSON for performance, but application layer expects YAML
         let gateway_class_yaml = if !base_conf_response.gateway_class.is_empty() {
-            let json_value: serde_json::Value = serde_json::from_str(&base_conf_response.gateway_class)
-                .map_err(|e| tonic::Status::internal(format!("Failed to parse gateway_class JSON: {}", e)))?;
-            serde_yaml::to_string(&json_value)
-                .map_err(|e| tonic::Status::internal(format!("Failed to convert gateway_class to YAML: {}", e)))?
+            let json_value: serde_json::Value =
+                serde_json::from_str(&base_conf_response.gateway_class).map_err(|e| {
+                    tonic::Status::internal(format!("Failed to parse gateway_class JSON: {}", e))
+                })?;
+            serde_yaml::to_string(&json_value).map_err(|e| {
+                tonic::Status::internal(format!("Failed to convert gateway_class to YAML: {}", e))
+            })?
         } else {
             String::new()
         };
-        
+
         let edgion_gateway_config_yaml = if !base_conf_response.edgion_gateway_config.is_empty() {
-            let json_value: serde_json::Value = serde_json::from_str(&base_conf_response.edgion_gateway_config)
-                .map_err(|e| tonic::Status::internal(format!("Failed to parse edgion_gateway_config JSON: {}", e)))?;
-            serde_yaml::to_string(&json_value)
-                .map_err(|e| tonic::Status::internal(format!("Failed to convert edgion_gateway_config to YAML: {}", e)))?
+            let json_value: serde_json::Value =
+                serde_json::from_str(&base_conf_response.edgion_gateway_config).map_err(|e| {
+                    tonic::Status::internal(format!(
+                        "Failed to parse edgion_gateway_config JSON: {}",
+                        e
+                    ))
+                })?;
+            serde_yaml::to_string(&json_value).map_err(|e| {
+                tonic::Status::internal(format!(
+                    "Failed to convert edgion_gateway_config to YAML: {}",
+                    e
+                ))
+            })?
         } else {
             String::new()
         };
-        
+
         let gateways_yaml = if !base_conf_response.gateways.is_empty() {
             let json_value: serde_json::Value = serde_json::from_str(&base_conf_response.gateways)
-                .map_err(|e| tonic::Status::internal(format!("Failed to parse gateways JSON: {}", e)))?;
-            serde_yaml::to_string(&json_value)
-                .map_err(|e| tonic::Status::internal(format!("Failed to convert gateways to YAML: {}", e)))?
+                .map_err(|e| {
+                    tonic::Status::internal(format!("Failed to parse gateways JSON: {}", e))
+                })?;
+            serde_yaml::to_string(&json_value).map_err(|e| {
+                tonic::Status::internal(format!("Failed to convert gateways to YAML: {}", e))
+            })?
         } else {
             String::new()
         };
-        
+
         let base_conf = ConfigClient::parse_base_conf_from_json(
             gateway_class_yaml,
             edgion_gateway_config_yaml,
@@ -271,8 +285,14 @@ impl ConfigSyncClient {
             let mut from_version = {
                 let hub = &hub_clone;
                 match kind_clone {
+                    ResourceKind::Unspecified => {
+                        tracing::warn!(kind = ?kind_clone, "Unspecified resource kind cannot be watched");
+                        return;
+                    }
                     // Base conf resources should not be watched
-                    ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
+                    ResourceKind::GatewayClass
+                    | ResourceKind::EdgionGatewayConfig
+                    | ResourceKind::Gateway => {
                         tracing::warn!(kind = ?kind_clone, "Attempted to watch base_conf resource, which should not be watched");
                         return;
                     }
@@ -286,7 +306,12 @@ impl ConfigSyncClient {
 
             loop {
                 // Connect and create watch stream
-                let mut client = match Self::create_client_internal(&grpc_server_addr, grpc_server_connect_timeout).await {
+                let mut client = match Self::create_client_internal(
+                    &grpc_server_addr,
+                    grpc_server_connect_timeout,
+                )
+                .await
+                {
                     Ok(c) => c,
                     Err(e) => {
                         tracing::error!(
@@ -302,7 +327,7 @@ impl ConfigSyncClient {
 
                 let request = tonic::Request::new(WatchRequest {
                     key: key.clone(),
-                    kind: resource_kind_to_proto(kind_clone) as i32,
+                    kind: kind_clone as i32,
                     client_id: client_id.clone(),
                     client_name: client_name.clone(),
                     from_version,
@@ -337,7 +362,9 @@ impl ConfigSyncClient {
                             from_version = watch_response.resource_version;
 
                             // Parse the events from the watch response (JSON format from gRPC)
-                            let events: Vec<serde_json::Value> = match serde_json::from_str(&watch_response.data) {
+                            let events: Vec<serde_json::Value> = match serde_json::from_str(
+                                &watch_response.data,
+                            ) {
                                 Ok(events) => events,
                                 Err(e) => {
                                     tracing::error!(error = %e, "Failed to parse watch response events");
@@ -347,7 +374,8 @@ impl ConfigSyncClient {
 
                             let hub = &hub_clone;
                             for event in events {
-                                if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                                if let Some(event_type) = event.get("type").and_then(|v| v.as_str())
+                                {
                                     // Convert JSON to YAML for application layer
                                     let data_str = match serde_yaml::to_string(
                                         &event.get("data").unwrap_or(&serde_json::Value::Null),
@@ -471,7 +499,7 @@ impl ConfigSyncClient {
     ) -> Result<ListResponse, tonic::Status> {
         let request = tonic::Request::new(ListRequest {
             key,
-            kind: resource_kind_to_proto(kind) as i32,
+            kind: kind as i32,
         });
 
         let response = self.conf_client_handle.list(request).await?;
@@ -497,7 +525,7 @@ impl ConfigSyncClient {
         );
         let request = tonic::Request::new(WatchRequest {
             key,
-            kind: resource_kind_to_proto(kind) as i32,
+            kind: kind as i32,
             client_id,
             client_name,
             from_version,
@@ -525,19 +553,5 @@ impl ConfigSyncClient {
         });
 
         Ok(rx)
-    }
-}
-
-/// Convert our ResourceKind to proto ResourceKind
-fn resource_kind_to_proto(kind: ResourceKind) -> ProtoResourceKind {
-    match kind {
-        ResourceKind::GatewayClass => ProtoResourceKind::GatewayClass,
-        ResourceKind::EdgionGatewayConfig => ProtoResourceKind::GatewayClassSpec,
-        ResourceKind::Gateway => ProtoResourceKind::Gateway,
-        ResourceKind::HTTPRoute => ProtoResourceKind::HttpRoute,
-        ResourceKind::Service => ProtoResourceKind::Service,
-        ResourceKind::EndpointSlice => ProtoResourceKind::EndpointSlice,
-        ResourceKind::EdgionTls => ProtoResourceKind::EdgionTls,
-        ResourceKind::Secret => ProtoResourceKind::Secret,
     }
 }

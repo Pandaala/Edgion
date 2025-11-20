@@ -1,6 +1,6 @@
 use super::types::{EventType, WatcherEvent};
-use std::collections::HashMap;
 use kube::{Resource, ResourceExt};
+use std::collections::HashMap;
 
 /// Event storage - circular queue
 pub struct EventStore<T> {
@@ -72,7 +72,7 @@ impl<T> EventStore<T> {
     {
         let namespace = resource.namespace();
         let name = resource.name_any();
-        
+
         if let Some(ns) = namespace {
             format!("{}/{}", ns, name)
         } else {
@@ -358,7 +358,7 @@ mod tests {
         // Add same resource twice with different versions
         let resource1 = TestResource::new("test-route", Some("default"));
         let resource2 = TestResource::new("test-route", Some("default"));
-        
+
         store.apply_event(EventType::Add, resource1.clone(), 1);
         store.apply_event(EventType::Add, resource2.clone(), 2);
 

@@ -1,8 +1,8 @@
+use crate::core::logging::writer::AsyncLogWriter;
 use serde_json::json;
 use tracing::{Event, Subscriber};
-use tracing_subscriber::Layer;
 use tracing_subscriber::registry::LookupSpan;
-use crate::core::logging::writer::AsyncLogWriter;
+use tracing_subscriber::Layer;
 
 /// Custom tracing layer for async logging
 ///
@@ -21,8 +21,8 @@ where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
-        use tracing::field::{Field, Visit};
         use std::collections::HashMap;
+        use tracing::field::{Field, Visit};
 
         // Visitor to collect all fields
         struct FieldVisitor {
@@ -31,38 +31,28 @@ where
 
         impl Visit for FieldVisitor {
             fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                self.fields.insert(
-                    field.name().to_string(),
-                    format!("{:?}", value),
-                );
+                self.fields
+                    .insert(field.name().to_string(), format!("{:?}", value));
             }
 
             fn record_str(&mut self, field: &Field, value: &str) {
-                self.fields.insert(
-                    field.name().to_string(),
-                    value.to_string(),
-                );
+                self.fields
+                    .insert(field.name().to_string(), value.to_string());
             }
 
             fn record_i64(&mut self, field: &Field, value: i64) {
-                self.fields.insert(
-                    field.name().to_string(),
-                    value.to_string(),
-                );
+                self.fields
+                    .insert(field.name().to_string(), value.to_string());
             }
 
             fn record_u64(&mut self, field: &Field, value: u64) {
-                self.fields.insert(
-                    field.name().to_string(),
-                    value.to_string(),
-                );
+                self.fields
+                    .insert(field.name().to_string(), value.to_string());
             }
 
             fn record_bool(&mut self, field: &Field, value: bool) {
-                self.fields.insert(
-                    field.name().to_string(),
-                    value.to_string(),
-                );
+                self.fields
+                    .insert(field.name().to_string(), value.to_string());
             }
         }
 
@@ -98,7 +88,8 @@ where
             log_json.to_string()
         } else {
             // Plain text format
-            let fields_str: Vec<String> = visitor.fields
+            let fields_str: Vec<String> = visitor
+                .fields
                 .iter()
                 .map(|(k, v)| {
                     // Special handling for 'message' field

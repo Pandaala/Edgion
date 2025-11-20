@@ -5,4 +5,3 @@ pub struct FileInfo {
     pub metadata: ResourceMetadata,
     pub content: String,
 }
-

@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass};
+use std::collections::HashMap;
 
 pub struct GatewayClassBaseConf {
     gateway_class: Option<GatewayClass>,
@@ -29,11 +29,15 @@ impl GatewayClassBaseConf {
     pub fn add_gateway(&mut self, gateway: Gateway) {
         // Generate a key for the gateway (namespace/name)
         let key = if let Some(namespace) = &gateway.metadata.namespace {
-            format!("{}/{}", namespace, gateway.metadata.name.as_deref().unwrap_or(""))
+            format!(
+                "{}/{}",
+                namespace,
+                gateway.metadata.name.as_deref().unwrap_or("")
+            )
         } else {
             gateway.metadata.name.as_deref().unwrap_or("").to_string()
         };
-        
+
         // Check if gateway already exists
         if !self.gateway_map.contains_key(&key) {
             self.gateway_map.insert(key.clone(), ());
@@ -59,7 +63,7 @@ impl GatewayClassBaseConf {
         } else {
             name.unwrap_or(&"".to_string()).clone()
         };
-        
+
         self.gateway_map.remove(&key);
         self.gateways.retain(|g| {
             let existing_key = if let Some(ns) = &g.metadata.namespace {

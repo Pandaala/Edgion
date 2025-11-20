@@ -34,7 +34,8 @@ impl ConfigLoader for LocalPathLoader {
                     stack.push(path);
                 } else {
                     // Only process YAML files
-                    if path.extension()
+                    if path
+                        .extension()
                         .and_then(|ext| ext.to_str())
                         .map(|ext| ext == "yml" || ext == "yaml")
                         .unwrap_or(false)
@@ -51,10 +52,12 @@ impl ConfigLoader for LocalPathLoader {
                                 continue;
                             }
                         };
-                        
+
                         // Check if this file matches the kind filter
                         if let Some(target_kind) = kind {
-                            if let Some(content_kind) = crate::types::ResourceKind::from_content(&content) {
+                            if let Some(content_kind) =
+                                crate::types::ResourceKind::from_content(&content)
+                            {
                                 if content_kind != target_kind {
                                     continue;
                                 }
@@ -87,7 +90,8 @@ impl ConfigLoader for LocalPathLoader {
                     stack.push(path);
                 } else {
                     // Only process non-base conf files
-                    if path.extension()
+                    if path
+                        .extension()
                         .and_then(|ext| ext.to_str())
                         .map(|ext| ext == "yml" || ext == "yaml")
                         .unwrap_or(false)
@@ -104,17 +108,20 @@ impl ConfigLoader for LocalPathLoader {
                                 continue;
                             }
                         };
-                        
+
                         // Only process non-base-conf resources
-                        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
+                        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content)
+                        {
                             matches!(
                                 kind,
-                                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                                ResourceKind::GatewayClass
+                                    | ResourceKind::EdgionGatewayConfig
+                                    | ResourceKind::Gateway
                             )
                         } else {
                             false
                         };
-                        
+
                         if !is_base_conf {
                             self.process_init_file(&path, None).await?;
                         }
@@ -143,4 +150,3 @@ impl ConfigLoader for LocalPathLoader {
         }
     }
 }
-

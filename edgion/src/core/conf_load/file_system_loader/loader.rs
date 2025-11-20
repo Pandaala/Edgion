@@ -36,7 +36,7 @@ impl LocalPathLoader {
         dispatcher: Arc<dyn ConfigServerEventDispatcher>,
     ) -> Arc<Self> {
         let root_path = root.into();
-        
+
         // 将 root 转换为绝对路径
         let root_abs = if root_path.is_absolute() {
             root_path
@@ -46,14 +46,14 @@ impl LocalPathLoader {
                 .map(|cwd| cwd.join(&root_path))
                 .unwrap_or(root_path)
         };
-        
+
         tracing::info!(
             component = "file_system_loader",
             event = "init",
             root = ?root_abs,
             "Initialized LocalPathConfigLoader with absolute root path"
         );
-        
+
         let loader = Arc::new(Self {
             root: root_abs,
             dispatcher,
@@ -61,7 +61,7 @@ impl LocalPathLoader {
             files_to_resource: Arc::new(RwLock::new(HashMap::new())),
             enable_resource_version_fix: true,
         });
-        
+
         // Spawn duplicate detection task
         let loader_clone = loader.clone();
         tokio::spawn(async move {
@@ -71,7 +71,7 @@ impl LocalPathLoader {
                 loader_clone.check_duplicate_resources().await;
             }
         });
-        
+
         loader
     }
 
@@ -95,14 +95,13 @@ impl LocalPathLoader {
         &self.dispatcher
     }
 
-
     pub async fn read_file(path: &Path) -> Result<String> {
         let content = fs::read_to_string(path)
             .await
             .with_context(|| format!("Failed to read file {:?}", path))?;
         Ok(content)
     }
-    
+
     /// Normalize a path to its absolute canonical form
     /// This ensures that relative and absolute paths pointing to the same file are treated as identical
     async fn normalize_path(&self, path: &Path) -> PathBuf {
@@ -110,7 +109,7 @@ impl LocalPathLoader {
         if let Ok(canonical) = fs::canonicalize(path).await {
             return canonical;
         }
-        
+
         // If canonicalize fails (e.g., file doesn't exist), try to make it absolute
         if path.is_absolute() {
             path.to_path_buf()
@@ -141,8 +140,11 @@ impl LocalPathLoader {
         };
 
         // 根据 metadata 构建期望的文件名
-        let expected_name = if let (Some(ns), Some(name), Some(kind)) = 
-            (metadata.namespace.as_ref(), metadata.name.as_ref(), metadata.kind.as_ref()) {
+        let expected_name = if let (Some(ns), Some(name), Some(kind)) = (
+            metadata.namespace.as_ref(),
+            metadata.name.as_ref(),
+            metadata.kind.as_ref(),
+        ) {
             format!("{}_{}_{}.yaml", ns, name, kind)
         } else if let (Some(name), Some(kind)) = (metadata.name.as_ref(), metadata.kind.as_ref()) {
             // cluster-scoped 资源
@@ -162,11 +164,12 @@ impl LocalPathLoader {
 
     /// 读取文件并存储到内部映射
     /// 返回: (metadata, content, existed_before)
-    async fn load_and_store_file(&self, path: &Path) -> Result<Option<(ResourceMetadata, String, bool)>> {
+    async fn load_and_store_file(
+        &self,
+        path: &Path,
+    ) -> Result<Option<(ResourceMetadata, String, bool)>> {
         // 只处理 .yml 或 .yaml 文件
-        let extension = path.extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
+        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
         if extension != "yml" && extension != "yaml" {
             return Ok(None);
         }
@@ -177,7 +180,7 @@ impl LocalPathLoader {
 
         let normalized_path = self.normalize_path(path).await;
         let content = Self::read_file(path).await?;
-        
+
         let metadata = match extract_resource_metadata(&content) {
             Some(m) => m,
             None => {
@@ -211,7 +214,7 @@ impl LocalPathLoader {
         // 检查 files_to_resource 中是否已存在该文件
         let mut files_to_resource = self.files_to_resource.write().await;
         let existed_before = files_to_resource.contains_key(&normalized_path);
-        
+
         // 更新 files_to_resource,存储 metadata 和 content
         let file_info = FileInfo {
             metadata: metadata.clone(),
@@ -222,7 +225,9 @@ impl LocalPathLoader {
 
         // 更新 resource_to_files
         let mut resource_to_files = self.resource_to_files.lock().await;
-        let files = resource_to_files.entry(metadata.clone()).or_insert_with(Vec::new);
+        let files = resource_to_files
+            .entry(metadata.clone())
+            .or_insert_with(Vec::new);
         if !files.contains(&normalized_path) {
             files.push(normalized_path.clone());
         }
@@ -233,18 +238,24 @@ impl LocalPathLoader {
 
     /// 处理初始化阶段的文件加载，固定使用 InitAdd
     /// 如果指定了 filter_kind，则只处理匹配该类型的资源
-    pub async fn process_init_file(&self, path: &Path, filter_kind: Option<ResourceKind>) -> Result<()> {
+    pub async fn process_init_file(
+        &self,
+        path: &Path,
+        filter_kind: Option<ResourceKind>,
+    ) -> Result<()> {
         let result = self.load_and_store_file(path).await?;
-        
+
         let Some((metadata, content, _existed_before)) = result else {
             return Ok(());
         };
 
         // Check kind filter if specified
         if let Some(target_kind) = filter_kind {
-            let current_kind = metadata.kind.as_deref()
-                .and_then(|k| ResourceKind::from_str_name(k));
-            
+            let current_kind = metadata
+                .kind
+                .as_deref()
+                .and_then(|k| ResourceKind::from_kind_name(k));
+
             if current_kind != Some(target_kind) {
                 return Ok(());
             }
@@ -265,12 +276,14 @@ impl LocalPathLoader {
         let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
             matches!(
                 kind,
-                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                ResourceKind::GatewayClass
+                    | ResourceKind::EdgionGatewayConfig
+                    | ResourceKind::Gateway
             )
         } else {
             false
         };
-        
+
         if is_base_conf {
             self.dispatcher
                 .apply_base_conf(ResourceChange::InitAdd, None, content);
@@ -283,7 +296,6 @@ impl LocalPathLoader {
 
     /// 处理文件变化，自动判断是 add/update/delete
     pub async fn process_file(&self, path: &Path) -> Result<()> {
-
         tracing::debug!(
             component = "file_system_loader",
             path = ?path,
@@ -311,18 +323,18 @@ impl LocalPathLoader {
             if let Some(file_info) = old_file_info {
                 let metadata = file_info.metadata.clone();
                 let content = file_info.content.clone();
-                
+
                 // 从 resource_to_files 中删除该文件
                 let mut resource_to_files = self.resource_to_files.lock().await;
-                
+
                 if let Some(files) = resource_to_files.get_mut(&metadata) {
                     files.retain(|p| p != &normalized_path);
-                    
+
                     // 如果 vec 为空,触发 delete 事件
                     if files.is_empty() {
                         resource_to_files.remove(&metadata);
                         drop(resource_to_files);
-                        
+
                         tracing::info!(
                             component = "file_system_loader",
                             event = "resource_deleted",
@@ -332,24 +344,33 @@ impl LocalPathLoader {
                             name = ?metadata.name,
                             "Resource has no more files, triggering delete event"
                         );
-                        
+
                         // 触发 delete 事件
                         // Determine if this is a base conf resource
-                        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
+                        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content)
+                        {
                             matches!(
                                 kind,
-                                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                                ResourceKind::GatewayClass
+                                    | ResourceKind::EdgionGatewayConfig
+                                    | ResourceKind::Gateway
                             )
                         } else {
                             false
                         };
-                        
+
                         if is_base_conf {
-                            self.dispatcher
-                                .apply_base_conf(ResourceChange::EventDelete, None, content);
+                            self.dispatcher.apply_base_conf(
+                                ResourceChange::EventDelete,
+                                None,
+                                content,
+                            );
                         } else {
-                            self.dispatcher
-                                .apply_resource_change(ResourceChange::EventDelete, None, content);
+                            self.dispatcher.apply_resource_change(
+                                ResourceChange::EventDelete,
+                                None,
+                                content,
+                            );
                         }
                     } else {
                         let remaining_count = files.len();
@@ -366,13 +387,13 @@ impl LocalPathLoader {
                     drop(resource_to_files);
                 }
             }
-            
+
             return Ok(());
         }
 
         // 尝试读取并存储文件
         let result = self.load_and_store_file(path).await?;
-        
+
         let Some((metadata, content, existed_before)) = result else {
             // 文件不存在或不是有效的 yaml 文件
             return Ok(());
@@ -388,7 +409,7 @@ impl LocalPathLoader {
         let kind_str = metadata.kind.as_deref().unwrap_or("Unknown");
         let name_str = metadata.name.as_deref().unwrap_or("Unknown");
         let namespace_str = metadata.namespace.as_deref();
-        
+
         if let Some(ns) = namespace_str {
             tracing::info!(
                 component = "file_system_loader",
@@ -413,23 +434,23 @@ impl LocalPathLoader {
                 "Processing cluster-scoped resource file change"
             );
         }
-        
+
         // Determine if this is a base conf resource
         let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
             matches!(
                 kind,
-                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                ResourceKind::GatewayClass
+                    | ResourceKind::EdgionGatewayConfig
+                    | ResourceKind::Gateway
             )
         } else {
             false
         };
-        
+
         if is_base_conf {
-            self.dispatcher
-                .apply_base_conf(change, None, content);
+            self.dispatcher.apply_base_conf(change, None, content);
         } else {
-            self.dispatcher
-                .apply_resource_change(change, None, content);
+            self.dispatcher.apply_resource_change(change, None, content);
         }
         Ok(())
     }
@@ -437,17 +458,16 @@ impl LocalPathLoader {
     /// Check for duplicate resources (multiple files pointing to the same resource)
     async fn check_duplicate_resources(&self) {
         let resource_to_files = self.resource_to_files.lock().await;
-        
+
         for (metadata, files) in resource_to_files.iter() {
             if files.len() > 1 {
                 let kind_str = metadata.kind.as_deref().unwrap_or("Unknown");
                 let name_str = metadata.name.as_deref().unwrap_or("Unknown");
                 let namespace_str = metadata.namespace.as_deref();
-                
-                let files_str: Vec<String> = files.iter()
-                    .map(|p| p.display().to_string())
-                    .collect();
-                
+
+                let files_str: Vec<String> =
+                    files.iter().map(|p| p.display().to_string()).collect();
+
                 if let Some(ns) = namespace_str {
                     tracing::error!(
                         component = "file_system_loader",
@@ -493,9 +513,7 @@ impl LocalPathLoader {
             }
 
             // 只处理 .yaml 或 .yml 文件，其他文件直接跳过
-            let extension = path.extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("");
+            let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
             if extension != "yml" && extension != "yaml" {
                 continue;
             }
@@ -550,4 +568,3 @@ impl LocalPathLoader {
         Ok(())
     }
 }
-

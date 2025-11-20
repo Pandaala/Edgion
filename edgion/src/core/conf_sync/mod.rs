@@ -16,6 +16,6 @@ pub use grpc_client::ConfigSyncClient;
 pub use grpc_server::ConfigSyncServer;
 pub use traits::ConfigServerEventDispatcher;
 
+mod base_onf;
 #[cfg(test)]
 mod tests;
-mod base_onf;

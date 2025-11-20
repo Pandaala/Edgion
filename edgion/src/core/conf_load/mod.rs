@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
+use crate::core::conf_sync::traits::ConfigServerEventDispatcher;
+use crate::types::ResourceKind;
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use std::path::PathBuf;
-use crate::core::conf_sync::traits::{ConfigServerEventDispatcher};
-use crate::types::ResourceKind;
 
 pub mod etcd;
 pub mod file_system_loader;
@@ -45,7 +45,10 @@ pub struct Loader {
 }
 
 impl Loader {
-    pub fn from_args(args: &LoaderArgs, dispatcher: Arc<dyn ConfigServerEventDispatcher>) -> Result<Self> {
+    pub fn from_args(
+        args: &LoaderArgs,
+        dispatcher: Arc<dyn ConfigServerEventDispatcher>,
+    ) -> Result<Self> {
         match args.loader {
             LoaderKind::LocalPath => {
                 const DEFAULT_LOCAL_PATH_DIR: &str = "edgion/config/examples";
@@ -70,7 +73,6 @@ impl Loader {
     }
 
     pub async fn run(self) -> Result<()> {
-
         tracing::info!("====> start connect...");
         // Connect to configuration source
         self.inner.connect().await?;
@@ -79,26 +81,32 @@ impl Loader {
         // Bootstrap base configuration resources in order:
         // 1. GatewayClass (must be loaded first)
         tracing::info!("====> loading GatewayClass...");
-        self.inner.bootstrap_base_conf(Some(ResourceKind::GatewayClass)).await?;
-        
+        self.inner
+            .bootstrap_base_conf(Some(ResourceKind::GatewayClass))
+            .await?;
+
         // 2. EdgionGatewayConfig (referenced by GatewayClass)
         tracing::info!("====> loading EdgionGatewayConfig...");
-        self.inner.bootstrap_base_conf(Some(ResourceKind::EdgionGatewayConfig)).await?;
-        
+        self.inner
+            .bootstrap_base_conf(Some(ResourceKind::EdgionGatewayConfig))
+            .await?;
+
         // 3. Gateway (uses GatewayClass)
         tracing::info!("====> loading Gateway...");
-        self.inner.bootstrap_base_conf(Some(ResourceKind::Gateway)).await?;
+        self.inner
+            .bootstrap_base_conf(Some(ResourceKind::Gateway))
+            .await?;
 
         tracing::info!("====> start bootstrap user conf...");
         // Bootstrap user configuration resources
         self.inner.bootstrap_user_conf().await?;
-        
+
         self.inner.set_enable_resource_version_fix();
-        
+
         tracing::info!("====> Bootstrapped, set ready");
         // Set ready state
         self.inner.set_ready().await;
-        
+
         tracing::info!("====> Loader running...");
         // Start watching for changes
         self.inner.run().await

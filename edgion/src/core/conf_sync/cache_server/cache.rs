@@ -1,7 +1,7 @@
+use kube::{Resource, ResourceExt};
 use std::cmp::PartialEq;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
-use kube::{Resource, ResourceExt};
 use tokio::sync::{mpsc, Notify};
 
 use super::store::EventStore;
@@ -183,7 +183,7 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
             send_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             last_send_time: Arc::new(RwLock::new(None)),
         };
-        
+
         let watcher_clone = watcher.clone();
         {
             let mut watchers = self.watchers.write().unwrap();
@@ -237,7 +237,9 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
     }
 }
 
-impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T> for ServerCache<T> {
+impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T>
+    for ServerCache<T>
+{
     fn apply_change(&self, change: ResourceChange, mut resource: T)
     where
         T: Resource + Send + 'static,
@@ -272,7 +274,6 @@ impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T>
                 return;
             }
         }
-
 
         match change {
             ResourceChange::InitAdd => {
@@ -374,10 +375,7 @@ mod tests {
             },
         };
 
-        cache.apply_change(
-            ResourceChange::EventAdd,
-            resource.clone(),
-        );
+        cache.apply_change(ResourceChange::EventAdd, resource.clone());
         wait_for_async_store_update().await;
 
         let snapshot = cache.list_owned();
@@ -408,16 +406,10 @@ mod tests {
             },
         };
 
-        cache.apply_change(
-            ResourceChange::EventAdd,
-            original.clone(),
-        );
+        cache.apply_change(ResourceChange::EventAdd, original.clone());
         wait_for_async_store_update().await;
 
-        cache.apply_change(
-            ResourceChange::EventUpdate,
-            updated.clone(),
-        );
+        cache.apply_change(ResourceChange::EventUpdate, updated.clone());
         wait_for_async_store_update().await;
 
         let snapshot = cache.list_owned();
@@ -439,16 +431,10 @@ mod tests {
             },
         };
 
-        cache.apply_change(
-            ResourceChange::EventAdd,
-            resource.clone(),
-        );
+        cache.apply_change(ResourceChange::EventAdd, resource.clone());
         wait_for_async_store_update().await;
 
-        cache.apply_change(
-            ResourceChange::EventDelete,
-            resource.clone(),
-        );
+        cache.apply_change(ResourceChange::EventDelete, resource.clone());
         wait_for_async_store_update().await;
 
         let snapshot = cache.list_owned();

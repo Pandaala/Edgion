@@ -1,13 +1,11 @@
-use std::convert::TryFrom;
 use std::sync::Arc;
-use std::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-use crate::core::conf_sync::config_server::{ConfigServer, BaseConfData};
+use crate::core::conf_sync::config_server::ConfigServer;
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
-    GetBaseConfRequest, GetBaseConfResponse,
-    ListRequest, ListResponse, ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
+    GetBaseConfRequest, GetBaseConfResponse, ListRequest, ListResponse, WatchRequest,
+    WatchResponse,
 };
 use crate::types::ResourceKind;
 
@@ -64,14 +62,14 @@ impl ConfigSync for ConfigSyncServer {
     async fn list(&self, request: Request<ListRequest>) -> Result<Response<ListResponse>, Status> {
         let req = request.into_inner();
 
-        // Convert proto ResourceKind to our ResourceKind
-        let proto_kind = ProtoResourceKind::try_from(req.kind)
-            .map_err(|_| Status::invalid_argument("Invalid resource kind"))?;
-        let resource_kind = proto_to_resource_kind(proto_kind)
+        // Convert incoming kind to ResourceKind
+        let resource_kind = parse_resource_kind(req.kind)
             .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
         // Get WatcherMgr and call list
-        let list_data = self.config_server.list(&req.key, &resource_kind)
+        let list_data = self
+            .config_server
+            .list(&req.key, &resource_kind)
             .map_err(|e| Status::internal(format!("Failed to list resources: {}", e)))?;
 
         Ok(Response::new(ListResponse {
@@ -88,10 +86,8 @@ impl ConfigSync for ConfigSyncServer {
     ) -> Result<Response<Self::WatchStream>, Status> {
         let req = request.into_inner();
 
-        // Convert proto ResourceKind to our ResourceKind
-        let proto_kind = ProtoResourceKind::try_from(req.kind)
-            .map_err(|_| Status::invalid_argument("Invalid resource kind"))?;
-        let resource_kind = proto_to_resource_kind(proto_kind)
+        // Convert incoming kind to ResourceKind
+        let resource_kind = parse_resource_kind(req.kind)
             .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
         let client_id_log = req.client_id.clone();
@@ -173,7 +169,9 @@ impl ConfigSync for ConfigSyncServer {
             req.gateway_class
         );
 
-        let base_conf_data = self.config_server.get_base_conf(&req.gateway_class)
+        let base_conf_data = self
+            .config_server
+            .get_base_conf(&req.gateway_class)
             .map_err(|e| Status::internal(format!("Failed to get base conf: {}", e)))?;
 
         Ok(Response::new(GetBaseConfResponse {
@@ -184,17 +182,9 @@ impl ConfigSync for ConfigSyncServer {
     }
 }
 
-/// Convert proto ResourceKind to our ResourceKind
-fn proto_to_resource_kind(kind: ProtoResourceKind) -> Option<ResourceKind> {
-    match kind {
-        ProtoResourceKind::Unspecified => None,
-        ProtoResourceKind::GatewayClass => Some(ResourceKind::GatewayClass),
-        ProtoResourceKind::GatewayClassSpec => Some(ResourceKind::EdgionGatewayConfig),
-        ProtoResourceKind::Gateway => Some(ResourceKind::Gateway),
-        ProtoResourceKind::HttpRoute => Some(ResourceKind::HTTPRoute),
-        ProtoResourceKind::Service => Some(ResourceKind::Service),
-        ProtoResourceKind::EndpointSlice => Some(ResourceKind::EndpointSlice),
-        ProtoResourceKind::EdgionTls => Some(ResourceKind::EdgionTls),
-        ProtoResourceKind::Secret => Some(ResourceKind::Secret),
-    }
+fn parse_resource_kind(kind: i32) -> Option<ResourceKind> {
+    ResourceKind::try_from(kind).ok().and_then(|k| match k {
+        ResourceKind::Unspecified => None,
+        _ => Some(k),
+    })
 }

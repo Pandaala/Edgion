@@ -1,8 +1,8 @@
+use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
 use crate::core::conf_sync::cache_client::ClientCache;
 use crate::core::conf_sync::cache_server::{EventDispatch, ListData, Versionable};
 use crate::core::conf_sync::config_server::GatewayClassKey;
-use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
-use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ConfigServerEventDispatcher, ResourceChange};
+use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ResourceChange};
 use crate::core::utils::format_resource_info;
 use crate::types::{
     EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
@@ -10,8 +10,8 @@ use crate::types::{
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use std::sync::RwLock;
 use kube::Resource;
+use std::sync::RwLock;
 
 pub struct ConfigClient {
     gateway_class_key: GatewayClassKey,
@@ -60,7 +60,9 @@ impl ConfigClient {
 
         // Parse and set EdgionGatewayConfig
         if !edgion_gateway_config_json.is_empty() {
-            if let Ok(items) = serde_json::from_str::<Vec<EdgionGatewayConfig>>(&edgion_gateway_config_json) {
+            if let Ok(items) =
+                serde_json::from_str::<Vec<EdgionGatewayConfig>>(&edgion_gateway_config_json)
+            {
                 if let Some(egc) = items.into_iter().next() {
                     println!("[ConfigClient] Parsed EdgionGatewayConfig");
                     base_conf.set_edgion_gateway_config(egc);
@@ -82,19 +84,13 @@ impl ConfigClient {
     }
 
     /// Initialize base configuration with parsed objects
-    pub fn init_base_conf(
-        &self,
-        new_base_conf: GatewayClassBaseConf,
-    ) {
+    pub fn init_base_conf(&self, new_base_conf: GatewayClassBaseConf) {
         let mut base_conf = self.base_conf.write().unwrap();
         *base_conf = new_base_conf;
     }
 
-    fn apply_change_to_cache<T>(
-        cache: &ClientCache<T>,
-        change: ResourceChange,
-        resource: T,
-    ) where
+    fn apply_change_to_cache<T>(cache: &ClientCache<T>, change: ResourceChange, resource: T)
+    where
         T: Clone + Versionable + Resource + Send + 'static,
     {
         cache.apply_change(change, resource);
@@ -113,9 +109,13 @@ impl ConfigClient {
         }
 
         let (data_json, resource_version) = match kind {
+            ResourceKind::Unspecified => {
+                return Err("Resource kind unspecified".to_string());
+            }
             ResourceKind::GatewayClass => {
                 let base_conf = self.base_conf.read().unwrap();
-                let data: Vec<GatewayClass> = base_conf.gateway_class()
+                let data: Vec<GatewayClass> = base_conf
+                    .gateway_class()
                     .map(|gc| vec![gc.clone()])
                     .unwrap_or_default();
                 let json = serde_json::to_string(&data)
@@ -125,7 +125,8 @@ impl ConfigClient {
             }
             ResourceKind::EdgionGatewayConfig => {
                 let base_conf = self.base_conf.read().unwrap();
-                let data: Vec<EdgionGatewayConfig> = base_conf.edgion_gateway_config()
+                let data: Vec<EdgionGatewayConfig> = base_conf
+                    .edgion_gateway_config()
                     .map(|egwc| vec![egwc.clone()])
                     .unwrap_or_default();
                 let json = serde_json::to_string(&data)
@@ -177,34 +178,6 @@ impl ConfigClient {
             data: data_json,
             resource_version,
         })
-    }
-
-    /// List gateway classes
-    pub fn list_gateway_classes(&self) -> ListData<GatewayClass> {
-        let base_conf = self.base_conf.read().unwrap();
-        let data: Vec<GatewayClass> = base_conf.gateway_class()
-            .map(|gc| vec![gc.clone()])
-            .unwrap_or_default();
-        // Base conf resources don't have version tracking, use 0
-        ListData::new(data, 0)
-    }
-
-    /// List gateway class configs
-    pub fn list_edgion_gateway_config(&self) -> ListData<EdgionGatewayConfig> {
-        let base_conf = self.base_conf.read().unwrap();
-        let data: Vec<EdgionGatewayConfig> = base_conf.edgion_gateway_config()
-            .map(|egwc| vec![egwc.clone()])
-            .unwrap_or_default();
-        // Base conf resources don't have version tracking, use 0
-        ListData::new(data, 0)
-    }
-
-    /// List gateways
-    pub fn list_gateways(&self) -> ListData<Gateway> {
-        let base_conf = self.base_conf.read().unwrap();
-        let data = base_conf.gateways().clone();
-        // Base conf resources don't have version tracking, use 0
-        ListData::new(data, 0)
     }
 
     /// List HTTP routes
@@ -335,7 +308,7 @@ impl ConfigClientEventDispatcher for ConfigClient {
         change: ResourceChange,
         resource_type: Option<ResourceKind>,
         data: String,
-        resource_version: Option<u64>,
+        _resource_version: Option<u64>,
     ) {
         let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
         let Some(resource_type) = resource_type else {
@@ -358,11 +331,20 @@ impl ConfigClientEventDispatcher for ConfigClient {
         };
 
         match resource_type {
+            ResourceKind::Unspecified => {
+                eprintln!(
+                    "[HUB] apply_resource_change {:?}: Unspecified resource kind, skipping (data: {})",
+                    change,
+                    &data[..data.len().min(200)]
+                );
+            }
             ResourceKind::GatewayClass => match serde_yaml::from_str::<GatewayClass>(&data) {
                 Ok(resource) => {
                     let mut base_conf = self.base_conf.write().unwrap();
                     match change {
-                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                        ResourceChange::InitAdd
+                        | ResourceChange::EventAdd
+                        | ResourceChange::EventUpdate => {
                             base_conf.set_gateway_class(resource);
                         }
                         ResourceChange::EventDelete => {
@@ -377,7 +359,9 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     Ok(resource) => {
                         let mut base_conf = self.base_conf.write().unwrap();
                         match change {
-                            ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                            ResourceChange::InitAdd
+                            | ResourceChange::EventAdd
+                            | ResourceChange::EventUpdate => {
                                 base_conf.set_edgion_gateway_config(resource);
                             }
                             ResourceChange::EventDelete => {
@@ -392,7 +376,9 @@ impl ConfigClientEventDispatcher for ConfigClient {
                 Ok(resource) => {
                     let mut base_conf = self.base_conf.write().unwrap();
                     match change {
-                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                        ResourceChange::InitAdd
+                        | ResourceChange::EventAdd
+                        | ResourceChange::EventUpdate => {
                             base_conf.add_gateway(resource);
                         }
                         ResourceChange::EventDelete => {

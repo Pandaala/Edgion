@@ -1,11 +1,13 @@
 use crate::core::conf_sync::cache_server::{EventDispatch, ListData, Versionable};
 use crate::core::conf_sync::traits::ResourceChange;
+use kube::{Resource, ResourceExt};
 use std::collections::HashMap;
 use std::sync::RwLock;
-use kube::{Resource, ResourceExt};
 
-
-pub struct ClientCache<T> where T: kube::Resource {
+pub struct ClientCache<T>
+where
+    T: kube::Resource,
+{
     // data
     data: RwLock<HashMap<String, T>>,
 
@@ -80,7 +82,7 @@ impl<T: Versionable + Resource> ClientCache<T> {
     }
 }
 
-impl<T: Versionable + Resource +  Clone + Send + 'static> EventDispatch<T> for ClientCache<T> {
+impl<T: Versionable + Resource + Clone + Send + 'static> EventDispatch<T> for ClientCache<T> {
     fn apply_change(&self, change: ResourceChange, resource: T)
     where
         T: Send + 'static,

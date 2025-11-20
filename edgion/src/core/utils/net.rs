@@ -29,4 +29,3 @@ pub fn normalize_grpc_endpoint(addr: &str) -> String {
 pub fn default_operator_addr() -> &'static str {
     DEFAULT_OPERATOR_GRPC_ADDR
 }
-

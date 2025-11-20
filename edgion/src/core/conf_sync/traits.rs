@@ -30,7 +30,6 @@ pub trait ConfigServerEventDispatcher: Send + Sync {
     fn set_ready(&self);
 }
 
-
 pub trait ConfigClientEventDispatcher: Send + Sync {
     fn apply_resource_change(
         &self,

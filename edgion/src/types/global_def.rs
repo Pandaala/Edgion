@@ -14,4 +14,3 @@ pub const DEFAULT_CONFIG_DIR: &str = "edgion/config/examples";
 
 // Version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-

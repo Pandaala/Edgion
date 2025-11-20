@@ -7,7 +7,7 @@ use futures::StreamExt;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use crate::core::conf_load::{ConfigLoader};
+use crate::core::conf_load::ConfigLoader;
 use crate::core::conf_sync::traits::{ConfigServerEventDispatcher, ResourceChange};
 use crate::types::ResourceKind;
 
@@ -50,46 +50,61 @@ impl EtcdConfigLoader {
         })
     }
 
-
-
     async fn handle_put(&self, key: String, value: String) {
         // Determine if this is a base conf resource
         let is_base_conf = if let Some(kind) = ResourceKind::from_content(&value) {
             matches!(
                 kind,
-                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                ResourceKind::GatewayClass
+                    | ResourceKind::EdgionGatewayConfig
+                    | ResourceKind::Gateway
             )
         } else {
             false
         };
-        
+
         let mut cache = self.cache.lock().await;
         if let Some(old) = cache.remove(&key) {
             // Determine if old value was base conf resource
             let old_is_base_conf = if let Some(kind) = ResourceKind::from_content(&old) {
                 matches!(
                     kind,
-                    ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                    ResourceKind::GatewayClass
+                        | ResourceKind::EdgionGatewayConfig
+                        | ResourceKind::Gateway
                 )
             } else {
                 false
             };
-            
+
             drop(cache);
             if old_is_base_conf {
-                self.dispatcher.apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old);
+                self.dispatcher.apply_base_conf(
+                    ResourceChange::EventDelete,
+                    self.resource_kind,
+                    old,
+                );
             } else {
-                self.dispatcher.apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old);
+                self.dispatcher.apply_resource_change(
+                    ResourceChange::EventDelete,
+                    self.resource_kind,
+                    old,
+                );
             }
             cache = self.cache.lock().await;
         }
         cache.insert(key, value.clone());
         drop(cache);
-        
+
         if is_base_conf {
-            self.dispatcher.apply_base_conf(ResourceChange::EventAdd, self.resource_kind, value);
+            self.dispatcher
+                .apply_base_conf(ResourceChange::EventAdd, self.resource_kind, value);
         } else {
-            self.dispatcher.apply_resource_change(ResourceChange::EventAdd, self.resource_kind, value);
+            self.dispatcher.apply_resource_change(
+                ResourceChange::EventAdd,
+                self.resource_kind,
+                value,
+            );
         }
     }
 
@@ -100,17 +115,27 @@ impl EtcdConfigLoader {
             let is_base_conf = if let Some(kind) = ResourceKind::from_content(&old) {
                 matches!(
                     kind,
-                    ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                    ResourceKind::GatewayClass
+                        | ResourceKind::EdgionGatewayConfig
+                        | ResourceKind::Gateway
                 )
             } else {
                 false
             };
-            
+
             drop(cache);
             if is_base_conf {
-                self.dispatcher.apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old);
+                self.dispatcher.apply_base_conf(
+                    ResourceChange::EventDelete,
+                    self.resource_kind,
+                    old,
+                );
             } else {
-                self.dispatcher.apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old);
+                self.dispatcher.apply_resource_change(
+                    ResourceChange::EventDelete,
+                    self.resource_kind,
+                    old,
+                );
             }
         }
     }
@@ -155,12 +180,14 @@ impl ConfigLoader for EtcdConfigLoader {
                 let is_base_conf = if let Some(content_kind) = ResourceKind::from_content(&value) {
                     matches!(
                         content_kind,
-                        ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                        ResourceKind::GatewayClass
+                            | ResourceKind::EdgionGatewayConfig
+                            | ResourceKind::Gateway
                     )
                 } else {
                     false
                 };
-                
+
                 if is_base_conf {
                     // Check kind filter if specified
                     if let Some(target_kind) = kind {
@@ -172,12 +199,13 @@ impl ConfigLoader for EtcdConfigLoader {
                             continue;
                         }
                     }
-                    
+
                     let key = String::from_utf8_lossy(kv.key()).to_string();
                     cache_guard.insert(key, value.clone());
                     drop(cache_guard);
                     // Use InitAdd for bootstrap phase
-                    self.dispatcher.apply_base_conf(ResourceChange::InitAdd, kind, value);
+                    self.dispatcher
+                        .apply_base_conf(ResourceChange::InitAdd, kind, value);
                     cache_guard = self.cache.lock().await;
                 }
             }
@@ -208,18 +236,21 @@ impl ConfigLoader for EtcdConfigLoader {
                 let is_base_conf = if let Some(kind) = ResourceKind::from_content(&value) {
                     matches!(
                         kind,
-                        ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
+                        ResourceKind::GatewayClass
+                            | ResourceKind::EdgionGatewayConfig
+                            | ResourceKind::Gateway
                     )
                 } else {
                     false
                 };
-                
+
                 if !is_base_conf {
                     let key = String::from_utf8_lossy(kv.key()).to_string();
                     cache_guard.insert(key, value.clone());
                     drop(cache_guard);
                     // Use InitAdd for bootstrap phase
-                    self.dispatcher.apply_resource_change(ResourceChange::InitAdd, None, value);
+                    self.dispatcher
+                        .apply_resource_change(ResourceChange::InitAdd, None, value);
                     cache_guard = self.cache.lock().await;
                 }
             }
@@ -236,7 +267,6 @@ impl ConfigLoader for EtcdConfigLoader {
 
     /// Main run loop for watching etcd configuration changes
     async fn run(&self) -> Result<()> {
-
         // Start watching for changes
         let mut client_guard = self.client.lock().await;
         let client = client_guard
