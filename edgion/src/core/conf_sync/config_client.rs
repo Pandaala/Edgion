@@ -542,7 +542,10 @@ impl EventDispatcher for ConfigClient {
         self.apply_resource_change(change, resource_type, data, None);
     }
 
+    fn enable_version_fix_mode(&self) {
+        // doesn't need
+    }
     fn set_ready(&self) {
-        // HubCache doesn't need ready state
+        // doesn't need
     }
 }

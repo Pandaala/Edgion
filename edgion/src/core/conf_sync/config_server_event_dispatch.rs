@@ -18,45 +18,14 @@ impl ConfigServer {
     {
         cache.apply_change(change, resource);
     }
-}
 
-impl EventDispatcher for ConfigServer {
-    fn apply_resource_change(
+    fn apply_resource_change_with_resource_type(
         &self,
         change: ResourceChange,
-        resource_type: Option<ResourceKind>,
+        resource_type: ResourceKind,
         data: String,
         resource_version: Option<u64>,
     ) {
-
-        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-        
-        if resource_type.is_none() {
-            tracing::warn!(
-                component = "config_server",
-                event = "unknown_resource_type",
-                data_preview = %data.chars().take(500).collect::<String>(),
-                "Failed to determine resource type from content"
-            );
-            return;
-        }
-        
-        let resource_type = resource_type.unwrap();
-
-        // Skip base conf resources - they should be handled by apply_base_conf
-        match resource_type {
-            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
-                tracing::debug!(
-                    component = "config_server",
-                    event = "skip_base_conf_in_apply_resource_change",
-                    resource_type = ?resource_type,
-                    "Base conf resources should be handled by apply_base_conf, skipping apply_resource_change"
-                );
-                return;
-            }
-            _ => {}
-        }
-
         match resource_type {
             // Base conf resources are handled by apply_base_conf, not here
             ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
@@ -73,7 +42,7 @@ impl EventDispatcher for ConfigServer {
                             let gateway_namespace = first_ref.namespace.as_ref()
                                 .or_else(|| resource.metadata.namespace.as_ref());
                             let gateway_name = Some(&first_ref.name);
-                            
+
                             let base_conf = self.base_conf.read().unwrap();
                             base_conf.has_gateway(gateway_namespace, gateway_name)
                         } else {
@@ -167,7 +136,7 @@ impl EventDispatcher for ConfigServer {
                             let gateway_namespace = first_ref.namespace.as_ref()
                                 .or_else(|| resource.metadata.namespace.as_ref());
                             let gateway_name = Some(&first_ref.name);
-                            
+
                             let base_conf = self.base_conf.read().unwrap();
                             base_conf.has_gateway(gateway_namespace, gateway_name)
                         } else {
@@ -239,27 +208,13 @@ impl EventDispatcher for ConfigServer {
         }
     }
 
-    fn apply_base_conf(
+    fn apply_base_conf_with_resource_type(
         &self,
         change: ResourceChange,
-        resource_type: Option<ResourceKind>,
+        resource_type: ResourceKind,
         data: String,
         _resource_version: Option<u64>,
     ) {
-        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-
-        if resource_type.is_none() {
-            tracing::warn!(
-                component = "config_server",
-                event = "unknown_resource_type",
-                data_preview = %data.chars().take(500).collect::<String>(),
-                "Failed to determine resource type from content in apply_base_conf"
-            );
-            return;
-        }
-
-        let resource_type = resource_type.unwrap();
-
         // Only process base conf resources
         match resource_type {
             ResourceKind::GatewayClass => {
@@ -300,10 +255,10 @@ impl EventDispatcher for ConfigServer {
                                 let should_keep = if let Some(ref params) = resource.spec.parameters_ref {
                                     // Check group, kind, and name
                                     params.group == "example.com" &&
-                                    params.kind == "EdgionGatewayConfig" &&
-                                    params.name == config_name &&
-                                    // EdgionGatewayConfig is cluster-scoped, so namespace should be None
-                                    params.namespace.is_none()
+                                        params.kind == "EdgionGatewayConfig" &&
+                                        params.name == config_name &&
+                                        // EdgionGatewayConfig is cluster-scoped, so namespace should be None
+                                        params.namespace.is_none()
                                 } else {
                                     // GatewayClass has no parametersRef, so no config should exist
                                     false
@@ -340,10 +295,10 @@ impl EventDispatcher for ConfigServer {
                             if let Some(ref params) = gc.spec.parameters_ref {
                                 // Check group, kind, name, and namespace
                                 params.group == "example.com" &&
-                                params.kind == "EdgionGatewayConfig" &&
-                                params.name == resource.metadata.name.as_deref().unwrap_or("") &&
-                                // EdgionGatewayConfig is cluster-scoped, so namespace should be None
-                                params.namespace.is_none()
+                                    params.kind == "EdgionGatewayConfig" &&
+                                    params.name == resource.metadata.name.as_deref().unwrap_or("") &&
+                                    // EdgionGatewayConfig is cluster-scoped, so namespace should be None
+                                    params.namespace.is_none()
                             } else {
                                 // GatewayClass has no parametersRef, so no config should be loaded
                                 false
@@ -445,12 +400,60 @@ impl EventDispatcher for ConfigServer {
         }
     }
 
+}
+
+impl EventDispatcher for ConfigServer {
+
+    fn apply_resource_change(
+        &self,
+        change: ResourceChange,
+        resource_type: Option<ResourceKind>,
+        data: String,
+        resource_version: Option<u64>,
+    ) {
+        if let Some(resource_kind) = resource_type.or_else(|| ResourceKind::from_content(&data)) {
+            self.apply_resource_change_with_resource_type(
+                change,
+                resource_kind,
+                data,
+                resource_version,
+            )
+        } else {
+            tracing::error!("Resource type {:?} does not exist", resource_type);
+            return;
+        }
+    }
+
+
+    fn apply_base_conf(
+        &self,
+        change: ResourceChange,
+        resource_type: Option<ResourceKind>,
+        data: String,
+        resource_version: Option<u64>,
+    ) {
+        if let Some(resource_kind) = resource_type.or_else(|| ResourceKind::from_content(&data)) {
+            self.apply_base_conf_with_resource_type(
+                change,
+                resource_kind,
+                data,
+                resource_version,
+            )
+        } else {
+            tracing::error!("Resource type {:?} does not exist", resource_type);
+            return;
+        }
+    }
+
+    fn enable_version_fix_mode(&self) {
+        self.routes.enable_version_fix_mode();
+        self.services.enable_version_fix_mode();
+        self.endpoint_slices.enable_version_fix_mode();
+        self.edgion_tls.enable_version_fix_mode();
+        self.secrets.enable_version_fix_mode();
+    }
+
     fn set_ready(&self) {
-        use crate::core::conf_sync::EventDispatch;
-
-        // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) don't have caches
-        // They are stored in base_conf and don't need set_ready
-
         self.routes.set_ready();
         self.services.set_ready();
         self.endpoint_slices.set_ready();

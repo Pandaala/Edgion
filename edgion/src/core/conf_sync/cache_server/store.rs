@@ -31,6 +31,10 @@ impl<T> EventStore<T> {
         }
     }
 
+    pub fn get_last_resource_version(&self) -> u64 {
+        self.resource_version
+    }
+
     pub fn apply_event(&mut self, event_type: EventType, resource: T, version: u64)
     where
         T: Clone + Resource,

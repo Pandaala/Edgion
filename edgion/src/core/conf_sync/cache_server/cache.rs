@@ -13,6 +13,8 @@ pub struct ServerCache<T: Versionable + Resource + Send + Sync> {
     // wait for init complete
     ready: RwLock<bool>,
 
+    version_fix_mode: RwLock<bool>,
+
     // Event storage
     store: Arc<RwLock<EventStore<T>>>,
 
@@ -30,10 +32,15 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
     {
         Self {
             ready: RwLock::new(false),
+            version_fix_mode: RwLock::new(false),
             store: Arc::new(RwLock::new(EventStore::new(capacity as usize))),
             watchers: RwLock::new(Vec::new()),
             notify: Arc::new(Notify::new()),
         }
+    }
+
+    pub fn enable_version_fix_mode(&self) {
+        *self.version_fix_mode.write().unwrap() = true;
     }
 
     /// Get a clone of the shared notify for watchers
@@ -230,25 +237,16 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
 }
 
 impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T> for ServerCache<T> {
-    fn apply_change(&self, change: ResourceChange, resource: T)
+    fn apply_change(&self, change: ResourceChange, mut resource: T)
     where
         T: Resource + Send + 'static,
     {
         let mut version = resource.get_version();
-        if resource.get_version() == 0 {
+        let store_guard = self.store.read().unwrap();
+        if resource.get_version() < store_guard.get_last_resource_version() {
             version = utils::next_resource_version();
+            resource.meta_mut().resource_version = Some(version.to_string());
             tracing::warn!(
-                component = "cache_client",
-                event = "apply_change",
-                change = ?change,
-                kind = std::any::type_name::<T>(),
-                name = ?resource.name_any(),
-                namespace = ?resource.namespace(),
-                version = version,
-                "Applying change to cache with version 0"
-            );
-        } else {
-            tracing::info!(
                 component = "cache_server",
                 event = "apply_change",
                 change = ?change,
@@ -256,8 +254,20 @@ impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T>
                 name = ?resource.name_any(),
                 namespace = ?resource.namespace(),
                 version = resource.get_version(),
-                "Applying change to cache"
+                "old version, force change to new version and update"
             );
+        } else {
+            tracing::warn!(
+                component = "cache_server",
+                event = "apply_change",
+                change = ?change,
+                kind = std::any::type_name::<T>(),
+                name = ?resource.name_any(),
+                namespace = ?resource.namespace(),
+                version = version,
+                "version error, it is an old version"
+            );
+            return;
         }
 
         match change {
