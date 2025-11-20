@@ -4,12 +4,12 @@ use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
 use super::store::EventStore;
-use super::traits::{EventDispatch, Versionable};
+use super::traits::{EventDispatch, ResourceMeta};
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::utils;
 
-pub struct ServerCache<T: Versionable + Resource + Send + Sync> {
+pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
     // wait for init complete
     ready: RwLock<bool>,
 
@@ -25,7 +25,7 @@ pub struct ServerCache<T: Versionable + Resource + Send + Sync> {
     notify: Arc<Notify>,
 }
 
-impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
+impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     pub fn new(capacity: u32) -> Self
     where
         T: Clone,
@@ -228,7 +228,7 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
     }
 }
 
-impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T> for ServerCache<T> {
+impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> EventDispatch<T> for ServerCache<T> {
     fn apply_change(&self, change: ResourceChange, mut resource: T)
     where
         T: Resource + Send + 'static,
@@ -326,7 +326,6 @@ mod tests {
         }
     }
 
-    impl Versionable for TestResource {}
 
     impl kube::Resource for TestResource {
         type DynamicType = ();

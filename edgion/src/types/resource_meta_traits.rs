@@ -28,10 +28,6 @@ pub trait ResourceMeta: DeserializeOwned + Send + Sync + 'static {
     fn kind_name() -> &'static str;
 }
 
-/// Deprecated: Use ResourceMeta instead
-/// 
-/// This is kept for backward compatibility with existing code.
-pub trait Versionable: ResourceMeta {}
 
 /// Helper function to extract version from Kubernetes resource_version string
 /// Returns 0 if resource_version is None or cannot be parsed
@@ -57,8 +53,6 @@ impl ResourceMeta for GatewayClass {
     }
 }
 
-impl Versionable for GatewayClass {}
-
 impl ResourceMeta for EdgionGatewayConfig {
     fn get_version(&self) -> u64 {
         extract_version(&self.metadata)
@@ -72,8 +66,6 @@ impl ResourceMeta for EdgionGatewayConfig {
         "EdgionGatewayConfig"
     }
 }
-
-impl Versionable for EdgionGatewayConfig {}
 
 impl ResourceMeta for Gateway {
     fn get_version(&self) -> u64 {
@@ -89,8 +81,6 @@ impl ResourceMeta for Gateway {
     }
 }
 
-impl Versionable for Gateway {}
-
 impl ResourceMeta for HTTPRoute {
     fn get_version(&self) -> u64 {
         extract_version(&self.metadata)
@@ -104,8 +94,6 @@ impl ResourceMeta for HTTPRoute {
         "HTTPRoute"
     }
 }
-
-impl Versionable for HTTPRoute {}
 
 impl ResourceMeta for Service {
     fn get_version(&self) -> u64 {
@@ -121,8 +109,6 @@ impl ResourceMeta for Service {
     }
 }
 
-impl Versionable for Service {}
-
 impl ResourceMeta for EndpointSlice {
     fn get_version(&self) -> u64 {
         extract_version(&self.metadata)
@@ -136,8 +122,6 @@ impl ResourceMeta for EndpointSlice {
         "EndpointSlice"
     }
 }
-
-impl Versionable for EndpointSlice {}
 
 impl ResourceMeta for Secret {
     fn get_version(&self) -> u64 {
@@ -153,8 +137,6 @@ impl ResourceMeta for Secret {
     }
 }
 
-impl Versionable for Secret {}
-
 impl ResourceMeta for EdgionTls {
     fn get_version(&self) -> u64 {
         extract_version(&self.metadata)
@@ -168,6 +150,4 @@ impl ResourceMeta for EdgionTls {
         "EdgionTls"
     }
 }
-
-impl Versionable for EdgionTls {}
 

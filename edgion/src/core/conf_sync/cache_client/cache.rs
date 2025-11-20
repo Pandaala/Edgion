@@ -1,4 +1,4 @@
-use crate::core::conf_sync::cache_server::{EventDispatch, ListData, Versionable};
+use crate::core::conf_sync::cache_server::{EventDispatch, ListData};
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::types::{ResourceMeta, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
@@ -32,7 +32,7 @@ where
     client_name: Arc<String>,
 }
 
-impl<T: Versionable + Resource> ClientCache<T> {
+impl<T: ResourceMeta + Resource> ClientCache<T> {
     pub fn new(gateway_class_key: String, client_id: String, client_name: String) -> Self {
         Self {
             cache_data: Arc::new(RwLock::new(CacheData {
@@ -109,7 +109,7 @@ impl<T: Versionable + Resource> ClientCache<T> {
     }
 }
 
-impl<T: Versionable + Resource + Clone + Send + 'static> EventDispatch<T> for ClientCache<T> {
+impl<T: ResourceMeta + Resource + Clone + Send + 'static> EventDispatch<T> for ClientCache<T> {
     fn apply_change(&self, change: ResourceChange, resource: T)
     where
         T: Send + 'static,
@@ -164,7 +164,7 @@ impl<T: Versionable + Resource + Clone + Send + 'static> EventDispatch<T> for Cl
 // Additional methods for ResourceMeta types
 impl<T> ClientCache<T>
 where
-    T: Versionable + Resource + ResourceMeta + Clone + Send + 'static,
+    T: ResourceMeta + Resource + Clone + Send + 'static,
 {
     /// Sync resources from gRPC server
     pub async fn sync(&self) -> Result<(), tonic::Status> {

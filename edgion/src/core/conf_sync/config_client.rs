@@ -1,6 +1,6 @@
 use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
 use crate::core::conf_sync::cache_client::ClientCache;
-use crate::core::conf_sync::cache_server::{EventDispatch, ListData, Versionable};
+use crate::core::conf_sync::cache_server::{EventDispatch, ListData, ResourceMeta};
 use crate::core::conf_sync::config_server::GatewayClassKey;
 use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ResourceChange};
 use crate::core::utils::format_resource_info;
@@ -71,7 +71,7 @@ impl ConfigClient {
 
     fn apply_change_to_cache<T>(cache: &ClientCache<T>, change: ResourceChange, resource: T)
     where
-        T: Clone + Versionable + Resource + Send + 'static,
+        T: Clone + ResourceMeta + Resource + Send + 'static,
     {
         cache.apply_change(change, resource);
     }

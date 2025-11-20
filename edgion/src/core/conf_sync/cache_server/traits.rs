@@ -1,7 +1,7 @@
 use crate::core::conf_sync::traits::ResourceChange;
 
-// Re-export Versionable from types
-pub use crate::types::Versionable;
+// Re-export ResourceMeta from types
+pub use crate::types::ResourceMeta;
 
 /// Trait for handling resource events
 pub trait EventDispatch<T> {

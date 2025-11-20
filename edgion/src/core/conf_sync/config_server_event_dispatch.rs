@@ -1,5 +1,5 @@
 use crate::core::conf_sync::traits::ResourceChange;
-use crate::core::conf_sync::{ConfigServer, ConfigServerEventDispatcher, EventDispatch, ServerCache, Versionable};
+use crate::core::conf_sync::{ConfigServer, ConfigServerEventDispatcher, EventDispatch, ServerCache, ResourceMeta};
 use crate::types::prelude_resources::*;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
@@ -8,7 +8,7 @@ use kube::Resource;
 impl ConfigServer {
     fn execute_change_on_cache<T>(change: ResourceChange, cache: &ServerCache<T>, resource: T)
     where
-        T: Clone + Send + Sync + 'static + Versionable + Resource,
+        T: Clone + Send + Sync + 'static + ResourceMeta + Resource,
     {
         cache.apply_change(change, resource);
     }
