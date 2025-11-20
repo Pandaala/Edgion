@@ -1,17 +1,23 @@
+use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
 use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, GetBaseConfRequest,
     ListRequest, ListResponse, WatchRequest, WatchResponse,
 };
 use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ResourceChange};
-use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass, ResourceKind};
+use crate::types::{
+    EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
+};
+use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::discovery::v1::EndpointSlice;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tonic::transport::Channel;
 use tracing;
 use uuid::Uuid;
-use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
 
 /// gRPC client for ConfigSync service
 pub struct ConfigSyncClient {
@@ -130,7 +136,9 @@ impl ConfigSyncClient {
 
         // Parse and set GatewayClass
         if !base_conf_response.gateway_class.is_empty() {
-            if let Ok(items) = serde_json::from_str::<Vec<GatewayClass>>(&base_conf_response.gateway_class) {
+            if let Ok(items) =
+                serde_json::from_str::<Vec<GatewayClass>>(&base_conf_response.gateway_class)
+            {
                 if let Some(gc) = items.into_iter().next() {
                     println!("[ConfigClient] Parsed GatewayClass");
                     base_conf.set_gateway_class(gc);
@@ -140,9 +148,9 @@ impl ConfigSyncClient {
 
         // Parse and set EdgionGatewayConfig
         if !base_conf_response.edgion_gateway_config.is_empty() {
-            if let Ok(items) =
-                serde_json::from_str::<Vec<EdgionGatewayConfig>>(&base_conf_response.edgion_gateway_config)
-            {
+            if let Ok(items) = serde_json::from_str::<Vec<EdgionGatewayConfig>>(
+                &base_conf_response.edgion_gateway_config,
+            ) {
                 if let Some(egc) = items.into_iter().next() {
                     println!("[ConfigClient] Parsed EdgionGatewayConfig");
                     base_conf.set_edgion_gateway_config(egc);
@@ -152,7 +160,8 @@ impl ConfigSyncClient {
 
         // Parse and add Gateways
         if !base_conf_response.gateways.is_empty() {
-            if let Ok(gateways) = serde_json::from_str::<Vec<Gateway>>(&base_conf_response.gateways) {
+            if let Ok(gateways) = serde_json::from_str::<Vec<Gateway>>(&base_conf_response.gateways)
+            {
                 for gateway in gateways {
                     println!("[ConfigClient] Parsed Gateway");
                     base_conf.add_gateway(gateway);
@@ -208,44 +217,60 @@ impl ConfigSyncClient {
             "Syncing resource"
         );
 
-        // Parse the JSON data - list returns a JSON array of resources (gRPC uses JSON for performance)
-        let resources: Vec<serde_json::Value> =
-            serde_json::from_str(&list_response.data).map_err(|e| {
-                tracing::error!(
-                    kind = ?kind,
-                    error = %e,
-                    data_preview = %&list_response.data[..list_response.data.len().min(200)],
-                    "Failed to parse list response"
-                );
-                tonic::Status::internal(format!("Failed to parse list response: {}", e))
-            })?;
-
-        tracing::info!(
-            kind = ?kind,
-            count = resources.len(),
-            "Parsed resources"
-        );
-
         let hub = &self.config_client;
-        for (idx, resource) in resources.iter().enumerate() {
-            // Each resource in the list should be added/updated
-            // Convert JSON to YAML for application layer (which expects YAML from file system loader)
-            let data_str = serde_yaml::to_string(&resource).map_err(|e| {
-                tracing::error!(
-                    kind = ?kind,
-                    index = idx,
-                    error = %e,
-                    "Failed to convert JSON to YAML"
-                );
-                tonic::Status::internal(format!("Failed to convert JSON to YAML: {}", e))
-            })?;
-
-            hub.apply_resource_change(
-                ResourceChange::InitAdd,
-                Some(kind),
-                data_str,
-                Some(list_response.resource_version),
-            );
+        match kind {
+            ResourceKind::Unspecified => {
+                return Err(tonic::Status::invalid_argument(
+                    "Cannot sync unspecified resource kind",
+                ));
+            }
+            ResourceKind::GatewayClass
+            | ResourceKind::EdgionGatewayConfig
+            | ResourceKind::Gateway => {
+                return Err(tonic::Status::invalid_argument(
+                    "Base conf resources should not be synced via list",
+                ));
+            }
+            ResourceKind::HTTPRoute => {
+                apply_resource_list::<HTTPRoute>(
+                    hub,
+                    kind,
+                    &list_response.data,
+                    list_response.resource_version,
+                )?;
+            }
+            ResourceKind::Service => {
+                apply_resource_list::<Service>(
+                    hub,
+                    kind,
+                    &list_response.data,
+                    list_response.resource_version,
+                )?;
+            }
+            ResourceKind::EndpointSlice => {
+                apply_resource_list::<EndpointSlice>(
+                    hub,
+                    kind,
+                    &list_response.data,
+                    list_response.resource_version,
+                )?;
+            }
+            ResourceKind::EdgionTls => {
+                apply_resource_list::<EdgionTls>(
+                    hub,
+                    kind,
+                    &list_response.data,
+                    list_response.resource_version,
+                )?;
+            }
+            ResourceKind::Secret => {
+                apply_resource_list::<Secret>(
+                    hub,
+                    kind,
+                    &list_response.data,
+                    list_response.resource_version,
+                )?;
+            }
         }
 
         tracing::info!(kind = ?kind, "Finished syncing");
@@ -429,29 +454,6 @@ impl ConfigSyncClient {
         Ok(())
     }
 
-    /// Sync all resource types from server (excluding base_conf resources)
-    pub async fn sync_all(&mut self) -> Result<(), tonic::Status> {
-        let hub = &self.config_client;
-        let key = hub.get_gateway_class_key().clone();
-
-        // Only sync non-base_conf resources
-        let resource_kinds = vec![
-            ResourceKind::HTTPRoute,
-            ResourceKind::Service,
-            ResourceKind::EndpointSlice,
-            ResourceKind::EdgionTls,
-            ResourceKind::Secret,
-        ];
-
-        for kind in resource_kinds {
-            if let Err(e) = self.sync_resource(key.clone(), kind).await {
-                tracing::error!(kind = ?kind, error = %e, "Failed to sync");
-            }
-        }
-
-        Ok(())
-    }
-
     /// Start watching all resource types and automatically sync to ConfigHub (excluding base_conf resources)
     pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
         let hub = &self.config_client;
@@ -538,4 +540,47 @@ impl ConfigSyncClient {
 
         Ok(rx)
     }
+}
+
+fn apply_resource_list<T>(
+    hub: &Arc<ConfigClient>,
+    kind: ResourceKind,
+    data: &str,
+    resource_version: u64,
+) -> Result<(), tonic::Status>
+where
+    T: DeserializeOwned + Serialize,
+{
+    let resources: Vec<T> = serde_json::from_str(data).map_err(|e| {
+        tracing::error!(
+            kind = ?kind,
+            error = %e,
+            data_preview = %&data[..data.len().min(200)],
+            "Failed to parse list response"
+        );
+        tonic::Status::internal(format!("Failed to parse list response: {}", e))
+    })?;
+
+    tracing::info!(kind = ?kind, count = resources.len(), "Parsed resources");
+
+    for (idx, resource) in resources.into_iter().enumerate() {
+        let data_str = serde_yaml::to_string(&resource).map_err(|e| {
+            tracing::error!(
+                kind = ?kind,
+                index = idx,
+                error = %e,
+                "Failed to convert resource to YAML"
+            );
+            tonic::Status::internal(format!("Failed to convert resource to YAML: {}", e))
+        })?;
+
+        hub.apply_resource_change(
+            ResourceChange::InitAdd,
+            Some(kind),
+            data_str,
+            Some(resource_version),
+        );
+    }
+
+    Ok(())
 }
