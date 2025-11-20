@@ -55,27 +55,12 @@ pub struct RaxIterator {
 extern "C" {
     pub fn raxNew() -> *mut Rax;
     pub fn raxFree(rax: *mut Rax);
-    pub fn raxInsert(
-        rax: *mut Rax,
-        s: *const c_uchar,
-        len: c_ulong,
-        data: *mut c_void,
-        old: *mut *mut c_void,
-    ) -> c_int;
-    pub fn raxRemove(
-        rax: *mut Rax,
-        s: *const c_uchar,
-        len: c_ulong,
-        old: *mut *mut c_void,
-    ) -> c_int;
+    pub fn raxInsert(rax: *mut Rax, s: *const c_uchar, len: c_ulong, data: *mut c_void, old: *mut *mut c_void)
+        -> c_int;
+    pub fn raxRemove(rax: *mut Rax, s: *const c_uchar, len: c_ulong, old: *mut *mut c_void) -> c_int;
     pub fn raxFind(rax: *mut Rax, s: *const c_uchar, len: c_ulong) -> *mut c_void;
     pub fn raxStart(it: *mut RaxIterator, rax: *mut Rax);
-    pub fn raxSeek(
-        it: *mut RaxIterator,
-        op: *const c_uchar,
-        ele: *const c_uchar,
-        len: c_ulong,
-    ) -> c_int;
+    pub fn raxSeek(it: *mut RaxIterator, op: *const c_uchar, ele: *const c_uchar, len: c_ulong) -> c_int;
     pub fn raxNext(it: *mut RaxIterator) -> c_int;
     pub fn raxPrev(it: *mut RaxIterator) -> c_int;
     pub fn raxUp(it: *mut RaxIterator) -> c_int;
@@ -132,12 +117,7 @@ pub unsafe fn tree_remove_raw(tree: *mut c_void, buf: *const u8, len: usize) -> 
     if buf.is_null() {
         return -2;
     }
-    raxRemove(
-        tree as *mut Rax,
-        buf as *const c_uchar,
-        len as c_ulong,
-        ptr::null_mut(),
-    )
+    raxRemove(tree as *mut Rax, buf as *const c_uchar, len as c_ulong, ptr::null_mut())
 }
 
 pub unsafe fn tree_new_it_raw(tree: *mut c_void) -> *mut c_void {
@@ -154,23 +134,13 @@ pub unsafe fn tree_new_it_raw(tree: *mut c_void) -> *mut c_void {
     iter_ptr as *mut c_void
 }
 
-pub unsafe fn tree_search_raw(
-    _tree: *mut c_void,
-    iter: *mut c_void,
-    buf: *const u8,
-    len: usize,
-) -> *mut c_void {
+pub unsafe fn tree_search_raw(_tree: *mut c_void, iter: *mut c_void, buf: *const u8, len: usize) -> *mut c_void {
     if iter.is_null() || buf.is_null() {
         return ptr::null_mut();
     }
     static OP_LE: [c_uchar; 3] = [b'<', b'=', 0];
     let iter_ptr = iter as *mut RaxIterator;
-    raxSeek(
-        iter_ptr,
-        OP_LE.as_ptr(),
-        buf as *const c_uchar,
-        len as c_ulong,
-    );
+    raxSeek(iter_ptr, OP_LE.as_ptr(), buf as *const c_uchar, len as c_ulong);
     iter
 }
 
@@ -188,11 +158,7 @@ pub unsafe fn tree_up_raw(iter: *mut c_void, buf: *const u8, len: usize) -> c_in
         if key_len > len {
             continue;
         }
-        let cmp = libc::memcmp(
-            buf as *const c_void,
-            (*iter_ptr).key as *const c_void,
-            key_len,
-        );
+        let cmp = libc::memcmp(buf as *const c_void, (*iter_ptr).key as *const c_void, key_len);
         if cmp != 0 {
             continue;
         }

@@ -83,6 +83,6 @@ pub use radix_tree::RadixTree;
 
 // Re-export C API functions for documentation purposes
 pub use c_api::{
-    radix_tree_destroy, radix_tree_find, radix_tree_insert, radix_tree_new, radix_tree_new_it,
-    radix_tree_remove, radix_tree_search, radix_tree_up,
+    radix_tree_destroy, radix_tree_find, radix_tree_insert, radix_tree_new, radix_tree_new_it, radix_tree_remove,
+    radix_tree_search, radix_tree_up,
 };

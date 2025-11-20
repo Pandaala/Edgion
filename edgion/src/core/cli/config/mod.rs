@@ -199,8 +199,8 @@ impl EdgionOpConfig {
     pub fn load(cli_config: Self) -> Result<Self> {
         // Load from file if specified
         let mut file_config = if let Some(ref config_path) = cli_config.config_file {
-            let content = std::fs::read_to_string(config_path)
-                .context(format!("Failed to read config file: {}", config_path))?;
+            let content =
+                std::fs::read_to_string(config_path).context(format!("Failed to read config file: {}", config_path))?;
 
             toml::from_str::<EdgionOpConfig>(&content)
                 .context(format!("Failed to parse config file: {}", config_path))?
@@ -255,18 +255,12 @@ impl EdgionOpConfig {
 
     /// Get grpc_listen with default fallback
     pub fn grpc_listen(&self) -> String {
-        self.server
-            .grpc_listen
-            .clone()
-            .unwrap_or_else(default_grpc_listen)
+        self.server.grpc_listen.clone().unwrap_or_else(default_grpc_listen)
     }
 
     /// Get admin_listen with default fallback
     pub fn admin_listen(&self) -> String {
-        self.server
-            .admin_listen
-            .clone()
-            .unwrap_or_else(default_admin_listen)
+        self.server.admin_listen.clone().unwrap_or_else(default_admin_listen)
     }
 
     /// Get gateway_class
@@ -281,10 +275,7 @@ impl EdgionOpConfig {
 
     /// Get log_level with default fallback
     pub fn log_level(&self) -> String {
-        self.logging
-            .log_level
-            .clone()
-            .unwrap_or_else(default_log_level)
+        self.logging.log_level.clone().unwrap_or_else(default_log_level)
     }
 
     /// Get json_format with default fallback
@@ -294,10 +285,7 @@ impl EdgionOpConfig {
 
     /// Get loader_type with default fallback
     pub fn loader_type(&self) -> String {
-        self.loader
-            .loader_type
-            .clone()
-            .unwrap_or_else(default_loader_type)
+        self.loader.loader_type.clone().unwrap_or_else(default_loader_type)
     }
 
     /// Convert to LoaderArgs

@@ -20,10 +20,7 @@ async fn hello(
 
     let headers = req.headers();
 
-    let host = headers
-        .get("host")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
+    let host = headers.get("host").and_then(|h| h.to_str().ok()).unwrap_or("");
     resp.push_str(&format!("Host: {}\n", host));
 
     let path = req.uri().path();
@@ -33,11 +30,7 @@ async fn hello(
 
     resp.push_str("\nHeaders:\n");
     for (key, value) in headers {
-        resp.push_str(&format!(
-            "  {}: {}\n",
-            key,
-            value.to_str().unwrap_or("<invalid utf8>")
-        ));
+        resp.push_str(&format!("  {}: {}\n", key, value.to_str().unwrap_or("<invalid utf8>")));
     }
 
     resp.push_str("\n");

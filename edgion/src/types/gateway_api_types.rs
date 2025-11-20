@@ -350,11 +350,7 @@ pub struct ServiceSpec {
     pub cluster_ip: Option<String>,
 
     /// ClusterIPs is a list of IP addresses assigned to this service
-    #[serde(
-        rename = "clusterIPs",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "clusterIPs", default, skip_serializing_if = "Option::is_none")]
     pub cluster_i_ps: Option<Vec<String>>,
 
     /// Type determines how the Service is exposed

@@ -31,34 +31,27 @@ where
 
         impl Visit for FieldVisitor {
             fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                self.fields
-                    .insert(field.name().to_string(), format!("{:?}", value));
+                self.fields.insert(field.name().to_string(), format!("{:?}", value));
             }
 
             fn record_str(&mut self, field: &Field, value: &str) {
-                self.fields
-                    .insert(field.name().to_string(), value.to_string());
+                self.fields.insert(field.name().to_string(), value.to_string());
             }
 
             fn record_i64(&mut self, field: &Field, value: i64) {
-                self.fields
-                    .insert(field.name().to_string(), value.to_string());
+                self.fields.insert(field.name().to_string(), value.to_string());
             }
 
             fn record_u64(&mut self, field: &Field, value: u64) {
-                self.fields
-                    .insert(field.name().to_string(), value.to_string());
+                self.fields.insert(field.name().to_string(), value.to_string());
             }
 
             fn record_bool(&mut self, field: &Field, value: bool) {
-                self.fields
-                    .insert(field.name().to_string(), value.to_string());
+                self.fields.insert(field.name().to_string(), value.to_string());
             }
         }
 
-        let mut visitor = FieldVisitor {
-            fields: HashMap::new(),
-        };
+        let mut visitor = FieldVisitor { fields: HashMap::new() };
 
         // Extract all fields from the event
         event.record(&mut visitor);

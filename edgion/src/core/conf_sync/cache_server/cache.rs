@@ -80,11 +80,8 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
 
     /// Start a watcher task that listens for notifications and sends data
     /// Only needs the store to access data
-    pub fn start_watcher_task(
-        store: Arc<RwLock<EventStore<T>>>,
-        notify: Arc<Notify>,
-        watcher: WatchClient<T>,
-    ) where
+    pub fn start_watcher_task(store: Arc<RwLock<EventStore<T>>>, notify: Arc<Notify>, watcher: WatchClient<T>)
+    where
         T: Clone + Send + Sync + 'static,
     {
         tokio::spawn(async move {
@@ -146,12 +143,7 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
     /// This method will automatically start a watcher task that:
     /// 1. First checks if client is behind and sends initial data
     /// 2. Then loops waiting for notifications and sends updates
-    pub fn watch(
-        &self,
-        client_id: String,
-        client_name: String,
-        from_version: u64,
-    ) -> mpsc::Receiver<WatchResponse<T>>
+    pub fn watch(&self, client_id: String, client_name: String, from_version: u64) -> mpsc::Receiver<WatchResponse<T>>
     where
         T: Clone + Send + Sync + 'static,
     {
@@ -237,9 +229,7 @@ impl<T: Versionable + Resource + Send + Sync> ServerCache<T> {
     }
 }
 
-impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T>
-    for ServerCache<T>
-{
+impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T> for ServerCache<T> {
     fn apply_change(&self, change: ResourceChange, mut resource: T)
     where
         T: Resource + Send + 'static,

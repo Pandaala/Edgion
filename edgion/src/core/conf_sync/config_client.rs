@@ -4,9 +4,7 @@ use crate::core::conf_sync::cache_server::{EventDispatch, ListData, Versionable}
 use crate::core::conf_sync::config_server::GatewayClassKey;
 use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ResourceChange};
 use crate::core::utils::format_resource_info;
-use crate::types::{
-    EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
-};
+use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind};
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
@@ -28,26 +26,10 @@ impl ConfigClient {
         Self {
             gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(GatewayClassBaseConf::new()),
-            routes: ClientCache::new(
-                gateway_class_key.clone(),
-                client_id.clone(),
-                client_name.clone(),
-            ),
-            services: ClientCache::new(
-                gateway_class_key.clone(),
-                client_id.clone(),
-                client_name.clone(),
-            ),
-            endpoint_slices: ClientCache::new(
-                gateway_class_key.clone(),
-                client_id.clone(),
-                client_name.clone(),
-            ),
-            edgion_tls: ClientCache::new(
-                gateway_class_key.clone(),
-                client_id.clone(),
-                client_name.clone(),
-            ),
+            routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            services: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            endpoint_slices: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             secrets: ClientCache::new(gateway_class_key, client_id, client_name),
         }
     }
@@ -94,11 +76,7 @@ impl ConfigClient {
         cache.apply_change(change, resource);
     }
 
-    pub fn list(
-        &self,
-        key: &GatewayClassKey,
-        kind: &ResourceKind,
-    ) -> Result<ListDataSimple, String> {
+    pub fn list(&self, key: &GatewayClassKey, kind: &ResourceKind) -> Result<ListDataSimple, String> {
         if key != &self.gateway_class_key {
             return Err(format!(
                 "Key mismatch: expected {}, got {}",
@@ -112,10 +90,7 @@ impl ConfigClient {
             }
             ResourceKind::GatewayClass => {
                 let base_conf = self.base_conf.read().unwrap();
-                let data: Vec<GatewayClass> = base_conf
-                    .gateway_class()
-                    .map(|gc| vec![gc.clone()])
-                    .unwrap_or_default();
+                let data: Vec<GatewayClass> = base_conf.gateway_class().map(|gc| vec![gc.clone()]).unwrap_or_default();
                 let json = serde_json::to_string(&data)
                     .map_err(|e| format!("Failed to serialize GatewayClass data: {}", e))?;
                 // Base conf resources don't have version tracking, use 0
@@ -135,8 +110,8 @@ impl ConfigClient {
             ResourceKind::Gateway => {
                 let base_conf = self.base_conf.read().unwrap();
                 let data = base_conf.gateways().clone();
-                let json = serde_json::to_string(&data)
-                    .map_err(|e| format!("Failed to serialize Gateway data: {}", e))?;
+                let json =
+                    serde_json::to_string(&data).map_err(|e| format!("Failed to serialize Gateway data: {}", e))?;
                 // Base conf resources don't have version tracking, use 0
                 (json, 0)
             }
@@ -340,9 +315,7 @@ impl ConfigClientEventDispatcher for ConfigClient {
                 Ok(resource) => {
                     let mut base_conf = self.base_conf.write().unwrap();
                     match change {
-                        ResourceChange::InitAdd
-                        | ResourceChange::EventAdd
-                        | ResourceChange::EventUpdate => {
+                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
                             base_conf.set_gateway_class(resource);
                         }
                         ResourceChange::EventDelete => {
@@ -352,31 +325,25 @@ impl ConfigClientEventDispatcher for ConfigClient {
                 }
                 Err(e) => log_error("GatewayClass", &e),
             },
-            ResourceKind::EdgionGatewayConfig => {
-                match serde_yaml::from_str::<EdgionGatewayConfig>(&data) {
-                    Ok(resource) => {
-                        let mut base_conf = self.base_conf.write().unwrap();
-                        match change {
-                            ResourceChange::InitAdd
-                            | ResourceChange::EventAdd
-                            | ResourceChange::EventUpdate => {
-                                base_conf.set_edgion_gateway_config(resource);
-                            }
-                            ResourceChange::EventDelete => {
-                                base_conf.clear_edgion_gateway_config();
-                            }
+            ResourceKind::EdgionGatewayConfig => match serde_yaml::from_str::<EdgionGatewayConfig>(&data) {
+                Ok(resource) => {
+                    let mut base_conf = self.base_conf.write().unwrap();
+                    match change {
+                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                            base_conf.set_edgion_gateway_config(resource);
+                        }
+                        ResourceChange::EventDelete => {
+                            base_conf.clear_edgion_gateway_config();
                         }
                     }
-                    Err(e) => log_error("EdgionGatewayConfig", &e),
                 }
-            }
+                Err(e) => log_error("EdgionGatewayConfig", &e),
+            },
             ResourceKind::Gateway => match serde_yaml::from_str::<Gateway>(&data) {
                 Ok(resource) => {
                     let mut base_conf = self.base_conf.write().unwrap();
                     match change {
-                        ResourceChange::InitAdd
-                        | ResourceChange::EventAdd
-                        | ResourceChange::EventUpdate => {
+                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
                             base_conf.add_gateway(resource);
                         }
                         ResourceChange::EventDelete => {

@@ -8,9 +8,7 @@ pub struct HashHost<T> {
 
 impl<T> HashHost<T> {
     pub fn new() -> HashHost<T> {
-        HashHost {
-            map: HashMap::new(),
-        }
+        HashHost { map: HashMap::new() }
     }
 
     pub fn insert(&mut self, k: &str, v: T) -> bool {

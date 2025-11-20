@@ -95,8 +95,7 @@ impl EdgionGwCli {
 
         // Spawn debug task to print config every 10 seconds in debug mode
         // Check log level to determine if debug mode is enabled
-        let debug_enabled = log_level.to_lowercase().contains("debug")
-            || log_level.to_lowercase().contains("trace");
+        let debug_enabled = log_level.to_lowercase().contains("debug") || log_level.to_lowercase().contains("trace");
 
         Self::spawn_debug_config_printer(config_client, debug_enabled);
 
@@ -121,9 +120,7 @@ impl EdgionGw {
     pub async fn serve(&self) -> Result<()> {
         tracing::info!("Gateway started, waiting for shutdown signal");
 
-        signal::ctrl_c()
-            .await
-            .expect("failed to listen for ctrl_c signal");
+        signal::ctrl_c().await.expect("failed to listen for ctrl_c signal");
 
         tracing::info!("Shutdown signal received");
         Ok(())

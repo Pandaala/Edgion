@@ -78,10 +78,7 @@ pub fn extract_resource_metadata(content: &str) -> Option<ResourceMetadata> {
         }
     };
 
-    let kind = value
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let kind = value.get("kind").and_then(|v| v.as_str()).map(|s| s.to_string());
 
     let metadata = value.get("metadata")?;
 
@@ -90,16 +87,9 @@ pub fn extract_resource_metadata(content: &str) -> Option<ResourceMetadata> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let name = metadata
-        .get("name")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let name = metadata.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-    Some(ResourceMetadata {
-        kind,
-        namespace,
-        name,
-    })
+    Some(ResourceMetadata { kind, namespace, name })
 }
 
 /// Format resource info as kind/namespace/name/resource_version
@@ -109,10 +99,7 @@ pub fn extract_resource_metadata(content: &str) -> Option<ResourceMetadata> {
 pub fn format_resource_info<T: kube::Resource>(resource: &T) -> String {
     use kube::ResourceExt;
 
-    let kind = std::any::type_name::<T>()
-        .split("::")
-        .last()
-        .unwrap_or("Unknown");
+    let kind = std::any::type_name::<T>().split("::").last().unwrap_or("Unknown");
     let namespace = resource.namespace();
     let name = resource.name_any();
     let resource_version = resource.meta().resource_version.as_deref().unwrap_or("N/A");
@@ -123,10 +110,7 @@ pub fn format_resource_info<T: kube::Resource>(resource: &T) -> String {
             kind, ns, name, resource_version
         )
     } else {
-        format!(
-            "kind={}, name={}, resource_version={}",
-            kind, name, resource_version
-        )
+        format!("kind={}, name={}, resource_version={}", kind, name, resource_version)
     }
 }
 
@@ -144,9 +128,7 @@ mod tests {
 
     #[test]
     fn concurrent_calls_are_unique_and_ordered() {
-        let handles: Vec<_> = (0..64)
-            .map(|_| thread::spawn(|| next_resource_version()))
-            .collect();
+        let handles: Vec<_> = (0..64).map(|_| thread::spawn(|| next_resource_version())).collect();
 
         let mut values: Vec<u64> = handles
             .into_iter()

@@ -103,7 +103,6 @@ pub fn set_tls_cert_matcher(matcher: HashHost<Vec<Arc<TlsWithSecret>>>) -> Resul
 }
 
 pub fn match_sni(sni: &str) -> Result<Arc<TlsWithSecret>, EdError> {
-    let tls_cert_matcher =
-        get_tls_cert_matcher().map_err(|e| EdError::InternalError(e.to_string()))?;
+    let tls_cert_matcher = get_tls_cert_matcher().map_err(|e| EdError::InternalError(e.to_string()))?;
     tls_cert_matcher.match_sni(sni)
 }

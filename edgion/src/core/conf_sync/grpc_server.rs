@@ -4,8 +4,7 @@ use tonic::{Request, Response, Status};
 use crate::core::conf_sync::config_server::ConfigServer;
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
-    GetBaseConfRequest, GetBaseConfResponse, ListRequest, ListResponse, WatchRequest,
-    WatchResponse,
+    GetBaseConfRequest, GetBaseConfResponse, ListRequest, ListResponse, WatchRequest, WatchResponse,
 };
 use crate::types::ResourceKind;
 
@@ -28,9 +27,7 @@ impl ConfigSyncServer {
     /// Start the gRPC server on the given address
     pub async fn serve(self, addr: std::net::SocketAddr) -> Result<(), tonic::transport::Error> {
         let service = self.into_service();
-        let server = tonic::transport::Server::builder()
-            .add_service(service)
-            .serve(addr);
+        let server = tonic::transport::Server::builder().add_service(service).serve(addr);
 
         server.await
     }
@@ -42,9 +39,7 @@ impl ConfigSyncServer {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let service = self.into_service();
         let reflection_service = tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!(
-                "config_sync_descriptor"
-            ))
+            .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("config_sync_descriptor"))
             .build_v1()?;
 
         let server = tonic::transport::Server::builder()
@@ -63,8 +58,8 @@ impl ConfigSync for ConfigSyncServer {
         let req = request.into_inner();
 
         // Convert incoming kind to ResourceKind
-        let resource_kind = parse_resource_kind(req.kind)
-            .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
+        let resource_kind =
+            parse_resource_kind(req.kind).ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
         // Get WatcherMgr and call list
         let list_data = self
@@ -80,26 +75,19 @@ impl ConfigSync for ConfigSyncServer {
 
     type WatchStream = tokio_stream::wrappers::ReceiverStream<Result<WatchResponse, Status>>;
 
-    async fn watch(
-        &self,
-        request: Request<WatchRequest>,
-    ) -> Result<Response<Self::WatchStream>, Status> {
+    async fn watch(&self, request: Request<WatchRequest>) -> Result<Response<Self::WatchStream>, Status> {
         let req = request.into_inner();
 
         // Convert incoming kind to ResourceKind
-        let resource_kind = parse_resource_kind(req.kind)
-            .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
+        let resource_kind =
+            parse_resource_kind(req.kind).ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
         let client_id_log = req.client_id.clone();
         let client_name_log = req.client_name.clone();
 
         println!(
             "[ConfigSyncServer::watch] request key={} kind={:?} client_id={} client_name={} from_version={}",
-            req.key,
-            resource_kind,
-            client_id_log,
-            client_name_log,
-            req.from_version
+            req.key, resource_kind, client_id_log, client_name_log, req.from_version
         );
 
         // Get WatcherMgr and call watch
@@ -115,21 +103,14 @@ impl ConfigSync for ConfigSyncServer {
             Ok(receiver) => {
                 println!(
                     "[ConfigSyncServer::watch] watch established key={} kind={:?} client_id={} client_name={}",
-                    req.key,
-                    resource_kind,
-                    client_id_log,
-                    client_name_log
+                    req.key, resource_kind, client_id_log, client_name_log
                 );
                 receiver
             }
             Err(e) => {
                 println!(
                     "[ConfigSyncServer::watch] watch failed key={} kind={:?} client_id={} client_name={} error={}",
-                    req.key,
-                    resource_kind,
-                    client_id_log,
-                    client_name_log,
-                    e
+                    req.key, resource_kind, client_id_log, client_name_log, e
                 );
                 return Err(Status::internal(format!("Failed to start watch: {}", e)));
             }
@@ -153,9 +134,7 @@ impl ConfigSync for ConfigSyncServer {
             }
         });
 
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
-            rx,
-        )))
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
     }
 
     async fn get_base_conf(
@@ -164,10 +143,7 @@ impl ConfigSync for ConfigSyncServer {
     ) -> Result<Response<GetBaseConfResponse>, Status> {
         let req = request.into_inner();
 
-        println!(
-            "[ConfigSyncServer::get_base_conf] gateway_class={}",
-            req.gateway_class
-        );
+        println!("[ConfigSyncServer::get_base_conf] gateway_class={}", req.gateway_class);
 
         let base_conf_data = self
             .config_server

@@ -42,10 +42,7 @@ impl EtcdConfigLoader {
         let prefix = self.prefix.clone();
         tokio::spawn(async move {
             if let Err(err) = self.run().await {
-                eprintln!(
-                    "[EtcdConfigLoader] watcher failed for prefix {}: {}",
-                    prefix, err
-                );
+                eprintln!("[EtcdConfigLoader] watcher failed for prefix {}: {}", prefix, err);
             }
         })
     }
@@ -55,9 +52,7 @@ impl EtcdConfigLoader {
         let is_base_conf = if let Some(kind) = ResourceKind::from_content(&value) {
             matches!(
                 kind,
-                ResourceKind::GatewayClass
-                    | ResourceKind::EdgionGatewayConfig
-                    | ResourceKind::Gateway
+                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
             )
         } else {
             false
@@ -69,9 +64,7 @@ impl EtcdConfigLoader {
             let old_is_base_conf = if let Some(kind) = ResourceKind::from_content(&old) {
                 matches!(
                     kind,
-                    ResourceKind::GatewayClass
-                        | ResourceKind::EdgionGatewayConfig
-                        | ResourceKind::Gateway
+                    ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
                 )
             } else {
                 false
@@ -79,17 +72,11 @@ impl EtcdConfigLoader {
 
             drop(cache);
             if old_is_base_conf {
-                self.dispatcher.apply_base_conf(
-                    ResourceChange::EventDelete,
-                    self.resource_kind,
-                    old,
-                );
+                self.dispatcher
+                    .apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old);
             } else {
-                self.dispatcher.apply_resource_change(
-                    ResourceChange::EventDelete,
-                    self.resource_kind,
-                    old,
-                );
+                self.dispatcher
+                    .apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old);
             }
             cache = self.cache.lock().await;
         }
@@ -100,11 +87,8 @@ impl EtcdConfigLoader {
             self.dispatcher
                 .apply_base_conf(ResourceChange::EventAdd, self.resource_kind, value);
         } else {
-            self.dispatcher.apply_resource_change(
-                ResourceChange::EventAdd,
-                self.resource_kind,
-                value,
-            );
+            self.dispatcher
+                .apply_resource_change(ResourceChange::EventAdd, self.resource_kind, value);
         }
     }
 
@@ -115,9 +99,7 @@ impl EtcdConfigLoader {
             let is_base_conf = if let Some(kind) = ResourceKind::from_content(&old) {
                 matches!(
                     kind,
-                    ResourceKind::GatewayClass
-                        | ResourceKind::EdgionGatewayConfig
-                        | ResourceKind::Gateway
+                    ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
                 )
             } else {
                 false
@@ -125,17 +107,11 @@ impl EtcdConfigLoader {
 
             drop(cache);
             if is_base_conf {
-                self.dispatcher.apply_base_conf(
-                    ResourceChange::EventDelete,
-                    self.resource_kind,
-                    old,
-                );
+                self.dispatcher
+                    .apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old);
             } else {
-                self.dispatcher.apply_resource_change(
-                    ResourceChange::EventDelete,
-                    self.resource_kind,
-                    old,
-                );
+                self.dispatcher
+                    .apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old);
             }
         }
     }
@@ -162,9 +138,7 @@ impl ConfigLoader for EtcdConfigLoader {
     /// If kind is specified, only load resources of that kind
     async fn bootstrap_base_conf(&self, kind: Option<crate::types::ResourceKind>) -> Result<()> {
         let mut client_guard = self.client.lock().await;
-        let client = client_guard
-            .as_mut()
-            .ok_or_else(|| anyhow!("Client not connected"))?;
+        let client = client_guard.as_mut().ok_or_else(|| anyhow!("Client not connected"))?;
 
         let options = GetOptions::new().with_prefix();
         let resp = client
@@ -180,9 +154,7 @@ impl ConfigLoader for EtcdConfigLoader {
                 let is_base_conf = if let Some(content_kind) = ResourceKind::from_content(&value) {
                     matches!(
                         content_kind,
-                        ResourceKind::GatewayClass
-                            | ResourceKind::EdgionGatewayConfig
-                            | ResourceKind::Gateway
+                        ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
                     )
                 } else {
                     false
@@ -204,8 +176,7 @@ impl ConfigLoader for EtcdConfigLoader {
                     cache_guard.insert(key, value.clone());
                     drop(cache_guard);
                     // Use InitAdd for bootstrap phase
-                    self.dispatcher
-                        .apply_base_conf(ResourceChange::InitAdd, kind, value);
+                    self.dispatcher.apply_base_conf(ResourceChange::InitAdd, kind, value);
                     cache_guard = self.cache.lock().await;
                 }
             }
@@ -218,9 +189,7 @@ impl ConfigLoader for EtcdConfigLoader {
     /// Bootstrap and load user configuration resources (all other resources)
     async fn bootstrap_user_conf(&self) -> Result<()> {
         let mut client_guard = self.client.lock().await;
-        let client = client_guard
-            .as_mut()
-            .ok_or_else(|| anyhow!("Client not connected"))?;
+        let client = client_guard.as_mut().ok_or_else(|| anyhow!("Client not connected"))?;
 
         let options = GetOptions::new().with_prefix();
         let resp = client
@@ -236,9 +205,7 @@ impl ConfigLoader for EtcdConfigLoader {
                 let is_base_conf = if let Some(kind) = ResourceKind::from_content(&value) {
                     matches!(
                         kind,
-                        ResourceKind::GatewayClass
-                            | ResourceKind::EdgionGatewayConfig
-                            | ResourceKind::Gateway
+                        ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
                     )
                 } else {
                     false
@@ -269,9 +236,7 @@ impl ConfigLoader for EtcdConfigLoader {
     async fn run(&self) -> Result<()> {
         // Start watching for changes
         let mut client_guard = self.client.lock().await;
-        let client = client_guard
-            .as_mut()
-            .ok_or_else(|| anyhow!("Client not connected"))?;
+        let client = client_guard.as_mut().ok_or_else(|| anyhow!("Client not connected"))?;
 
         let watch_options = WatchOptions::new().with_prefix();
         let (_watcher, mut stream) = client

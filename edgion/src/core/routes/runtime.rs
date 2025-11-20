@@ -11,12 +11,7 @@ pub struct HttpRouteRuntime {
 }
 
 impl HttpRouteRuntime {
-    pub fn new(
-        namespace: String,
-        name: String,
-        rule: HTTPRouteRule,
-        hostname: Vec<String>,
-    ) -> HttpRouteRuntime {
+    pub fn new(namespace: String, name: String, rule: HTTPRouteRule, hostname: Vec<String>) -> HttpRouteRuntime {
         Self {
             namespace,
             name,
@@ -34,11 +29,7 @@ impl RouteRuntime for HttpRouteRuntime {
             for route_match in matches {
                 if let Some(path) = &route_match.path {
                     if let Some(value) = &path.value {
-                        let is_prefix = path
-                            .match_type
-                            .as_deref()
-                            .map(|t| t == "PathPrefix")
-                            .unwrap_or(false);
+                        let is_prefix = path.match_type.as_deref().map(|t| t == "PathPrefix").unwrap_or(false);
                         paths.push((value.clone(), is_prefix));
                     }
                 }

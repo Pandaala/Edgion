@@ -182,10 +182,7 @@ impl RadixPath {
     }
 
     pub fn match_type_str(&self) -> &str {
-        let has_param = self
-            .match_segments
-            .iter()
-            .any(|s| matches!(s, MatchSegment::Param(_)));
+        let has_param = self.match_segments.iter().any(|s| matches!(s, MatchSegment::Param(_)));
         match (self.is_prefix_match, has_param) {
             (true, true) => "ParamPrefix",
             (true, false) => "Prefix",
@@ -340,14 +337,8 @@ mod tests {
     fn test_match_type_str_variants() {
         assert_eq!(RadixPath::new("/api", 0, false).match_type_str(), "Exact");
         assert_eq!(RadixPath::new("/api", 0, true).match_type_str(), "Prefix");
-        assert_eq!(
-            RadixPath::new("/users/{id}", 0, false).match_type_str(),
-            "Param"
-        );
-        assert_eq!(
-            RadixPath::new("/users/{id}", 0, true).match_type_str(),
-            "ParamPrefix"
-        );
+        assert_eq!(RadixPath::new("/users/{id}", 0, false).match_type_str(), "Param");
+        assert_eq!(RadixPath::new("/users/{id}", 0, true).match_type_str(), "ParamPrefix");
     }
 
     #[test]

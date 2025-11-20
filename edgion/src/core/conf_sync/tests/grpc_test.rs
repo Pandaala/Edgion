@@ -108,24 +108,15 @@ async fn test_grpc_sync_httproute() {
     .expect("Failed to create gRPC client");
 
     // Initialize (fetch base conf and sync all resources)
-    grpc_client
-        .init()
-        .await
-        .expect("Failed to initialize client");
+    grpc_client.init().await.expect("Failed to initialize client");
 
     // Step 4: Verify the HTTPRoute was synced
     let config_client = grpc_client.get_config_client();
     let routes = config_client.list_routes();
 
     assert_eq!(routes.data.len(), 1, "Should have 1 HTTPRoute synced");
-    assert_eq!(
-        routes.data[0].metadata.name.as_ref().unwrap(),
-        "test-route-1"
-    );
-    assert_eq!(
-        routes.data[0].metadata.namespace.as_ref().unwrap(),
-        "default"
-    );
+    assert_eq!(routes.data[0].metadata.name.as_ref().unwrap(), "test-route-1");
+    assert_eq!(routes.data[0].metadata.namespace.as_ref().unwrap(), "default");
 
     println!("✅ gRPC sync test passed!");
 }
@@ -162,10 +153,7 @@ async fn test_grpc_watch_httproute() {
     .await
     .expect("Failed to create gRPC client");
 
-    grpc_client
-        .init()
-        .await
-        .expect("Failed to initialize client");
+    grpc_client.init().await.expect("Failed to initialize client");
 
     // Step 4: Start watching HTTPRoute
     grpc_client
@@ -188,10 +176,7 @@ async fn test_grpc_watch_httproute() {
     let config_client = grpc_client.get_config_client();
     let routes = config_client.list_routes();
 
-    assert!(
-        routes.data.len() >= 1,
-        "Should have at least 1 HTTPRoute from watch"
-    );
+    assert!(routes.data.len() >= 1, "Should have at least 1 HTTPRoute from watch");
 
     let found = routes
         .data
@@ -241,10 +226,7 @@ async fn test_grpc_sync_multiple_httproutes() {
     .await
     .expect("Failed to create gRPC client");
 
-    grpc_client
-        .init()
-        .await
-        .expect("Failed to initialize client");
+    grpc_client.init().await.expect("Failed to initialize client");
 
     // Step 4: Verify all HTTPRoutes were synced
     let config_client = grpc_client.get_config_client();
@@ -316,10 +298,7 @@ async fn test_grpc_watch_update_delete() {
 
     let config_client = grpc_client.get_config_client();
     let routes = config_client.list_routes();
-    assert!(
-        routes.data.len() >= 1,
-        "Should still have the route after update"
-    );
+    assert!(routes.data.len() >= 1, "Should still have the route after update");
 
     // Step 5: Test Delete
     let delete_yaml = serde_yaml::to_string(&updated_route).unwrap();
@@ -388,10 +367,7 @@ async fn test_grpc_client_reconnect() {
     )
     .await;
 
-    assert!(
-        result2.is_err(),
-        "Client should fail when server is unavailable"
-    );
+    assert!(result2.is_err(), "Client should fail when server is unavailable");
 
     println!("✅ gRPC client reconnect test passed!");
 }

@@ -55,9 +55,7 @@ impl ConfigLoader for LocalPathLoader {
 
                         // Check if this file matches the kind filter
                         if let Some(target_kind) = kind {
-                            if let Some(content_kind) =
-                                crate::types::ResourceKind::from_content(&content)
-                            {
+                            if let Some(content_kind) = crate::types::ResourceKind::from_content(&content) {
                                 if content_kind != target_kind {
                                     continue;
                                 }
@@ -110,13 +108,10 @@ impl ConfigLoader for LocalPathLoader {
                         };
 
                         // Only process non-base-conf resources
-                        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content)
-                        {
+                        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
                             matches!(
                                 kind,
-                                ResourceKind::GatewayClass
-                                    | ResourceKind::EdgionGatewayConfig
-                                    | ResourceKind::Gateway
+                                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
                             )
                         } else {
                             false

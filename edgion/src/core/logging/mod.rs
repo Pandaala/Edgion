@@ -71,8 +71,7 @@ pub async fn init_logging(config: LogConfig) -> Result<()> {
     });
 
     // Build env filter
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
 
     // Create async log layer
     let async_layer = AsyncLogLayer {
@@ -81,9 +80,7 @@ pub async fn init_logging(config: LogConfig) -> Result<()> {
     };
 
     // Build subscriber with layers
-    let subscriber = tracing_subscriber::registry()
-        .with(env_filter)
-        .with(async_layer);
+    let subscriber = tracing_subscriber::registry().with(env_filter).with(async_layer);
 
     // Add console layer if enabled
     if config.console {

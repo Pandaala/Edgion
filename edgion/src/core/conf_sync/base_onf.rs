@@ -29,11 +29,7 @@ impl GatewayClassBaseConf {
     pub fn add_gateway(&mut self, gateway: Gateway) {
         // Generate a key for the gateway (namespace/name)
         let key = if let Some(namespace) = &gateway.metadata.namespace {
-            format!(
-                "{}/{}",
-                namespace,
-                gateway.metadata.name.as_deref().unwrap_or("")
-            )
+            format!("{}/{}", namespace, gateway.metadata.name.as_deref().unwrap_or(""))
         } else {
             gateway.metadata.name.as_deref().unwrap_or("").to_string()
         };

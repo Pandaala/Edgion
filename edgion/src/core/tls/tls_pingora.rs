@@ -28,8 +28,7 @@ impl TlsCallback {
 
     pub fn new_tls_settings_with_callback() -> Result<TlsSettings> {
         let callback = Box::new(TlsCallback::new());
-        TlsSettings::with_callbacks(callback)
-            .map_err(|e| anyhow!("Failed to create TLS settings: {}", e))
+        TlsSettings::with_callbacks(callback).map_err(|e| anyhow!("Failed to create TLS settings: {}", e))
     }
 
     async fn load_cert_from_sni(&self, ssl: &mut SslRef) -> Result<(), Box<PingoraError>> {
@@ -44,59 +43,30 @@ impl TlsCallback {
         println!("SNI = {:?}", sni);
 
         // Match certificate by SNI
-        let tls_with_secret = match_sni(&sni).map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!("Certificate not found: {}", e),
-            )
-        })?;
+        let tls_with_secret = match_sni(&sni)
+            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Certificate not found: {}", e)))?;
 
         // Load certificate
-        let cert_pem = tls_with_secret.cert_pem().map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!("Failed to get cert PEM: {}", e),
-            )
-        })?;
-        let cert = X509::from_pem(cert_pem.as_bytes()).map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!("Invalid certificate PEM: {}", e),
-            )
-        })?;
+        let cert_pem = tls_with_secret
+            .cert_pem()
+            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to get cert PEM: {}", e)))?;
+        let cert = X509::from_pem(cert_pem.as_bytes())
+            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Invalid certificate PEM: {}", e)))?;
 
-        pingora_core::tls::ext::ssl_use_certificate(ssl, &cert).map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!("Failed to use certificate: {}", e),
-            )
-        })?;
+        pingora_core::tls::ext::ssl_use_certificate(ssl, &cert)
+            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to use certificate: {}", e)))?;
 
         // Load private key
-        let key_pem = tls_with_secret.key_pem().map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!("Failed to get key PEM: {}", e),
-            )
-        })?;
-        let key = PKey::private_key_from_pem(key_pem.as_bytes()).map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!("Invalid private key PEM: {}", e),
-            )
-        })?;
+        let key_pem = tls_with_secret
+            .key_pem()
+            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to get key PEM: {}", e)))?;
+        let key = PKey::private_key_from_pem(key_pem.as_bytes())
+            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Invalid private key PEM: {}", e)))?;
 
-        pingora_core::tls::ext::ssl_use_private_key(ssl, &key).map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!("Failed to use private key: {}", e),
-            )
-        })?;
+        pingora_core::tls::ext::ssl_use_private_key(ssl, &key)
+            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to use private key: {}", e)))?;
 
-        println!(
-            "Successfully loaded TLS certificate and key for SNI: {}",
-            sni
-        );
+        println!("Successfully loaded TLS certificate and key for SNI: {}", sni);
 
         Ok(())
     }

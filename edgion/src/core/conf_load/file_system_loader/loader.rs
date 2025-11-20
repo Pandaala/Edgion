@@ -31,10 +31,7 @@ pub struct LocalPathLoader {
 // updates inside the root directory are handled; directory-level operations are
 // ignored with an error log.
 impl LocalPathLoader {
-    pub fn new<P: Into<PathBuf>>(
-        root: P,
-        dispatcher: Arc<dyn ConfigServerEventDispatcher>,
-    ) -> Arc<Self> {
+    pub fn new<P: Into<PathBuf>>(root: P, dispatcher: Arc<dyn ConfigServerEventDispatcher>) -> Arc<Self> {
         let root_path = root.into();
 
         // 将 root 转换为绝对路径
@@ -164,10 +161,7 @@ impl LocalPathLoader {
 
     /// 读取文件并存储到内部映射
     /// 返回: (metadata, content, existed_before)
-    async fn load_and_store_file(
-        &self,
-        path: &Path,
-    ) -> Result<Option<(ResourceMetadata, String, bool)>> {
+    async fn load_and_store_file(&self, path: &Path) -> Result<Option<(ResourceMetadata, String, bool)>> {
         // 只处理 .yml 或 .yaml 文件
         let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
         if extension != "yml" && extension != "yaml" {
@@ -225,9 +219,7 @@ impl LocalPathLoader {
 
         // 更新 resource_to_files
         let mut resource_to_files = self.resource_to_files.lock().await;
-        let files = resource_to_files
-            .entry(metadata.clone())
-            .or_insert_with(Vec::new);
+        let files = resource_to_files.entry(metadata.clone()).or_insert_with(Vec::new);
         if !files.contains(&normalized_path) {
             files.push(normalized_path.clone());
         }
@@ -238,11 +230,7 @@ impl LocalPathLoader {
 
     /// 处理初始化阶段的文件加载，固定使用 InitAdd
     /// 如果指定了 filter_kind，则只处理匹配该类型的资源
-    pub async fn process_init_file(
-        &self,
-        path: &Path,
-        filter_kind: Option<ResourceKind>,
-    ) -> Result<()> {
+    pub async fn process_init_file(&self, path: &Path, filter_kind: Option<ResourceKind>) -> Result<()> {
         let result = self.load_and_store_file(path).await?;
 
         let Some((metadata, content, _existed_before)) = result else {
@@ -251,10 +239,7 @@ impl LocalPathLoader {
 
         // Check kind filter if specified
         if let Some(target_kind) = filter_kind {
-            let current_kind = metadata
-                .kind
-                .as_deref()
-                .and_then(|k| ResourceKind::from_kind_name(k));
+            let current_kind = metadata.kind.as_deref().and_then(|k| ResourceKind::from_kind_name(k));
 
             if current_kind != Some(target_kind) {
                 return Ok(());
@@ -276,17 +261,14 @@ impl LocalPathLoader {
         let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
             matches!(
                 kind,
-                ResourceKind::GatewayClass
-                    | ResourceKind::EdgionGatewayConfig
-                    | ResourceKind::Gateway
+                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
             )
         } else {
             false
         };
 
         if is_base_conf {
-            self.dispatcher
-                .apply_base_conf(ResourceChange::InitAdd, None, content);
+            self.dispatcher.apply_base_conf(ResourceChange::InitAdd, None, content);
         } else {
             self.dispatcher
                 .apply_resource_change(ResourceChange::InitAdd, None, content);
@@ -347,30 +329,21 @@ impl LocalPathLoader {
 
                         // 触发 delete 事件
                         // Determine if this is a base conf resource
-                        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content)
-                        {
+                        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
                             matches!(
                                 kind,
-                                ResourceKind::GatewayClass
-                                    | ResourceKind::EdgionGatewayConfig
-                                    | ResourceKind::Gateway
+                                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
                             )
                         } else {
                             false
                         };
 
                         if is_base_conf {
-                            self.dispatcher.apply_base_conf(
-                                ResourceChange::EventDelete,
-                                None,
-                                content,
-                            );
+                            self.dispatcher
+                                .apply_base_conf(ResourceChange::EventDelete, None, content);
                         } else {
-                            self.dispatcher.apply_resource_change(
-                                ResourceChange::EventDelete,
-                                None,
-                                content,
-                            );
+                            self.dispatcher
+                                .apply_resource_change(ResourceChange::EventDelete, None, content);
                         }
                     } else {
                         let remaining_count = files.len();
@@ -439,9 +412,7 @@ impl LocalPathLoader {
         let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
             matches!(
                 kind,
-                ResourceKind::GatewayClass
-                    | ResourceKind::EdgionGatewayConfig
-                    | ResourceKind::Gateway
+                ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
             )
         } else {
             false
@@ -465,8 +436,7 @@ impl LocalPathLoader {
                 let name_str = metadata.name.as_deref().unwrap_or("Unknown");
                 let namespace_str = metadata.namespace.as_deref();
 
-                let files_str: Vec<String> =
-                    files.iter().map(|p| p.display().to_string()).collect();
+                let files_str: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
 
                 if let Some(ns) = namespace_str {
                     tracing::error!(
@@ -557,10 +527,7 @@ impl LocalPathLoader {
                     }
                 }
                 Err(err) => {
-                    eprintln!(
-                        "[LocalPathConfigLoader] watcher error in {:?}: {}",
-                        self.root, err
-                    );
+                    eprintln!("[LocalPathConfigLoader] watcher error in {:?}: {}", self.root, err);
                 }
             }
         }

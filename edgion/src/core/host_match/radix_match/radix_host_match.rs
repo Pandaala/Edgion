@@ -140,10 +140,7 @@ impl<T> RadixHostMatchEngine<T> {
         for radix_host in hosts {
             println!(
                 "\n  [Host] pattern='{}', radix_key='{}', is_wildcard={}, wildcard_count={}",
-                radix_host.original,
-                radix_host.radix_key,
-                radix_host.is_wildcard,
-                radix_host.wildcard_count
+                radix_host.original, radix_host.radix_key, radix_host.is_wildcard, radix_host.wildcard_count
             );
 
             let radix_key = radix_host.radix_key.clone();
@@ -165,10 +162,7 @@ impl<T> RadixHostMatchEngine<T> {
                     )
                 })?;
 
-                println!(
-                    "    Inserted radix_key: '{}' -> tree_idx: {}",
-                    radix_key, new_tree_idx
-                );
+                println!("    Inserted radix_key: '{}' -> tree_idx: {}", radix_key, new_tree_idx);
                 next_tree_idx += 1;
                 new_tree_idx
             };
@@ -187,10 +181,7 @@ impl<T> RadixHostMatchEngine<T> {
         println!("\n========== Initialization Complete ==========");
         println!("Summary:");
         println!("  - Total hosts: {}", self.hosts.len());
-        println!(
-            "  - Unique radix tree nodes: {}",
-            self.tree_idx_to_host_idx.len()
-        );
+        println!("  - Unique radix tree nodes: {}", self.tree_idx_to_host_idx.len());
         println!("==============================================\n");
         Ok(())
     }
@@ -217,9 +208,7 @@ mod tests {
 
     impl MockHostRuntime {
         fn new(name: &str, _hosts: Vec<&str>) -> Self {
-            Self {
-                name: name.to_string(),
-            }
+            Self { name: name.to_string() }
         }
 
         fn identifier(&self) -> String {
@@ -265,10 +254,7 @@ mod tests {
     #[test]
     fn test_engine_exact_match() {
         let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
-        let runtime = Arc::new(MockHostRuntime::new(
-            "test",
-            vec!["example.com", "api.example.com"],
-        ));
+        let runtime = Arc::new(MockHostRuntime::new("test", vec!["example.com", "api.example.com"]));
 
         let hosts = vec![
             RadixHost::new("example.com", runtime.clone()),
@@ -309,10 +295,7 @@ mod tests {
     #[test]
     fn test_engine_multiple_wildcards() {
         let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
-        let runtime = Arc::new(MockHostRuntime::new(
-            "test",
-            vec!["*.example.com", "*.*.example.com"],
-        ));
+        let runtime = Arc::new(MockHostRuntime::new("test", vec!["*.example.com", "*.*.example.com"]));
 
         let hosts = vec![
             RadixHost::new("*.example.com", runtime.clone()),

@@ -27,11 +27,7 @@ impl EdgionOpCli {
 
     /// Spawn a background task to periodically print all gateway class configs in debug mode
     /// This can be easily removed in the future if not needed
-    fn spawn_debug_config_printer(
-        config_server: Arc<ConfigServer>,
-        log_level: String,
-        enabled: bool,
-    ) {
+    fn spawn_debug_config_printer(config_server: Arc<ConfigServer>, log_level: String, enabled: bool) {
         if !enabled {
             return;
         }
@@ -73,15 +69,9 @@ impl EdgionOpCli {
         let debug_config_server = config_server.clone();
 
         let loader_args = config.to_loader_args();
-        let loader = Loader::from_args(
-            &loader_args,
-            config_server as Arc<dyn ConfigServerEventDispatcher>,
-        )?;
+        let loader = Loader::from_args(&loader_args, config_server as Arc<dyn ConfigServerEventDispatcher>)?;
 
-        let addr = utils::parse_listen_addr(
-            Some(&config.grpc_listen()),
-            utils::DEFAULT_OPERATOR_GRPC_ADDR,
-        )?;
+        let addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
 
         tracing::info!(
             component = COMPONENT_EDGION_OPERATOR,
@@ -91,11 +81,7 @@ impl EdgionOpCli {
         );
 
         // Spawn debug task to print config every 30 seconds in debug mode
-        Self::spawn_debug_config_printer(
-            debug_config_server,
-            config.log_level(),
-            config.debug.enabled,
-        );
+        Self::spawn_debug_config_printer(debug_config_server, config.log_level(), config.debug.enabled);
 
         // Run both services concurrently using tokio::join!
         let (sync_result, loader_result) = tokio::join!(sync_server.serve(addr), loader.run());

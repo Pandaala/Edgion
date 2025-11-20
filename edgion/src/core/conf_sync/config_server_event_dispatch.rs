@@ -1,10 +1,6 @@
 use crate::core::conf_sync::traits::ResourceChange;
-use crate::core::conf_sync::{
-    ConfigServer, ConfigServerEventDispatcher, EventDispatch, ServerCache, Versionable,
-};
-use crate::types::{
-    EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
-};
+use crate::core::conf_sync::{ConfigServer, ConfigServerEventDispatcher, EventDispatch, ServerCache, Versionable};
+use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind};
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::Resource;
@@ -32,9 +28,7 @@ impl ConfigServer {
                 return;
             }
             // Base conf resources are handled by apply_base_conf, not here
-            ResourceKind::GatewayClass
-            | ResourceKind::EdgionGatewayConfig
-            | ResourceKind::Gateway => {
+            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
                 // This should never be reached due to the early return above,
                 // but included for match exhaustiveness
                 unreachable!("Base conf resources should have been handled earlier")
@@ -63,9 +57,7 @@ impl ConfigServer {
                     };
 
                     if !gateway_exists {
-                        let (gateway_info, message) = if let Some(parent_refs) =
-                            &resource.spec.parent_refs
-                        {
+                        let (gateway_info, message) = if let Some(parent_refs) = &resource.spec.parent_refs {
                             if let Some(first_ref) = parent_refs.first() {
                                 let info = format!(
                                     "namespace={:?}, name={}",
@@ -75,7 +67,10 @@ impl ConfigServer {
                                         .or_else(|| resource.metadata.namespace.as_ref()),
                                     first_ref.name
                                 );
-                                (info, "HTTPRoute references a Gateway that does not exist in base_conf, skipping")
+                                (
+                                    info,
+                                    "HTTPRoute references a Gateway that does not exist in base_conf, skipping",
+                                )
                             } else {
                                 (
                                     "no parent_refs".to_string(),
@@ -83,10 +78,7 @@ impl ConfigServer {
                                 )
                             }
                         } else {
-                            (
-                                "no parent_refs".to_string(),
-                                "HTTPRoute has no parent_refs, skipping",
-                            )
+                            ("no parent_refs".to_string(), "HTTPRoute has no parent_refs, skipping")
                         };
 
                         tracing::info!(
@@ -128,11 +120,7 @@ impl ConfigServer {
                         kind = "EndpointSlice",
                         "Applying EndpointSlice resource change"
                     );
-                    Self::execute_change_on_cache::<EndpointSlice>(
-                        change,
-                        &self.endpoint_slices,
-                        resource,
-                    );
+                    Self::execute_change_on_cache::<EndpointSlice>(change, &self.endpoint_slices, resource);
                 }
             }
             ResourceKind::EdgionTls => {
@@ -159,9 +147,7 @@ impl ConfigServer {
                     };
 
                     if !gateway_exists {
-                        let (gateway_info, message) = if let Some(parent_refs) =
-                            &resource.spec.parent_refs
-                        {
+                        let (gateway_info, message) = if let Some(parent_refs) = &resource.spec.parent_refs {
                             if let Some(first_ref) = parent_refs.first() {
                                 let info = format!(
                                     "namespace={:?}, name={}",
@@ -171,7 +157,10 @@ impl ConfigServer {
                                         .or_else(|| resource.metadata.namespace.as_ref()),
                                     first_ref.name
                                 );
-                                (info, "EdgionTls references a Gateway that does not exist in base_conf, skipping")
+                                (
+                                    info,
+                                    "EdgionTls references a Gateway that does not exist in base_conf, skipping",
+                                )
                             } else {
                                 (
                                     "no parent_refs".to_string(),
@@ -179,10 +168,7 @@ impl ConfigServer {
                                 )
                             }
                         } else {
-                            (
-                                "no parent_refs".to_string(),
-                                "EdgionTls has no parent_refs, skipping",
-                            )
+                            ("no parent_refs".to_string(), "EdgionTls has no parent_refs, skipping")
                         };
 
                         tracing::info!(
@@ -219,12 +205,7 @@ impl ConfigServer {
         }
     }
 
-    fn apply_base_conf_with_resource_type(
-        &self,
-        change: ResourceChange,
-        resource_type: ResourceKind,
-        data: String,
-    ) {
+    fn apply_base_conf_with_resource_type(&self, change: ResourceChange, resource_type: ResourceKind, data: String) {
         // Only process base conf resources
         match resource_type {
             ResourceKind::GatewayClass => {
@@ -254,29 +235,25 @@ impl ConfigServer {
                         "Applying GatewayClass to base_conf"
                     );
                     match change {
-                        ResourceChange::InitAdd
-                        | ResourceChange::EventAdd
-                        | ResourceChange::EventUpdate => {
+                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
                             let mut base_conf = self.base_conf.write().unwrap();
 
                             // Check if existing EdgionGatewayConfig matches the new GatewayClass
                             // If GatewayClass has parametersRef, validate the match
                             // If GatewayClass has no parametersRef, clear any existing config
                             if let Some(existing_config) = base_conf.edgion_gateway_config() {
-                                let config_name =
-                                    existing_config.metadata.name.as_deref().unwrap_or("");
-                                let should_keep =
-                                    if let Some(ref params) = resource.spec.parameters_ref {
-                                        // Check group, kind, and name
-                                        params.group == "example.com" &&
+                                let config_name = existing_config.metadata.name.as_deref().unwrap_or("");
+                                let should_keep = if let Some(ref params) = resource.spec.parameters_ref {
+                                    // Check group, kind, and name
+                                    params.group == "example.com" &&
                                         params.kind == "EdgionGatewayConfig" &&
                                         params.name == config_name &&
                                         // EdgionGatewayConfig is cluster-scoped, so namespace should be None
                                         params.namespace.is_none()
-                                    } else {
-                                        // GatewayClass has no parametersRef, so no config should exist
-                                        false
-                                    };
+                                } else {
+                                    // GatewayClass has no parametersRef, so no config should exist
+                                    false
+                                };
 
                                 if !should_keep {
                                     tracing::info!(
@@ -352,9 +329,7 @@ impl ConfigServer {
                         "Applying EdgionGatewayConfig to base_conf"
                     );
                     match change {
-                        ResourceChange::InitAdd
-                        | ResourceChange::EventAdd
-                        | ResourceChange::EventUpdate => {
+                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
                             let mut base_conf = self.base_conf.write().unwrap();
                             base_conf.set_edgion_gateway_config(resource);
                         }
@@ -391,18 +366,14 @@ impl ConfigServer {
                         "Applying Gateway to base_conf"
                     );
                     match change {
-                        ResourceChange::InitAdd
-                        | ResourceChange::EventAdd
-                        | ResourceChange::EventUpdate => {
+                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
                             let mut base_conf = self.base_conf.write().unwrap();
                             base_conf.add_gateway(resource);
                         }
                         ResourceChange::EventDelete => {
                             let mut base_conf = self.base_conf.write().unwrap();
-                            base_conf.remove_gateway(
-                                resource.metadata.namespace.as_ref(),
-                                resource.metadata.name.as_ref(),
-                            );
+                            base_conf
+                                .remove_gateway(resource.metadata.namespace.as_ref(), resource.metadata.name.as_ref());
                         }
                     }
                 }
@@ -420,12 +391,7 @@ impl ConfigServer {
 }
 
 impl ConfigServerEventDispatcher for ConfigServer {
-    fn apply_resource_change(
-        &self,
-        change: ResourceChange,
-        resource_type: Option<ResourceKind>,
-        data: String,
-    ) {
+    fn apply_resource_change(&self, change: ResourceChange, resource_type: Option<ResourceKind>, data: String) {
         if let Some(resource_kind) = resource_type.or_else(|| ResourceKind::from_content(&data)) {
             self.apply_resource_change_with_resource_type(change, resource_kind, data)
         } else {
@@ -434,12 +400,7 @@ impl ConfigServerEventDispatcher for ConfigServer {
         }
     }
 
-    fn apply_base_conf(
-        &self,
-        change: ResourceChange,
-        resource_type: Option<ResourceKind>,
-        data: String,
-    ) {
+    fn apply_base_conf(&self, change: ResourceChange, resource_type: Option<ResourceKind>, data: String) {
         if let Some(resource_kind) = resource_type.or_else(|| ResourceKind::from_content(&data)) {
             self.apply_base_conf_with_resource_type(change, resource_kind, data)
         } else {

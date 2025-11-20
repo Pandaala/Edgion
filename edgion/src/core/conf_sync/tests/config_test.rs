@@ -10,9 +10,7 @@ use tokio::time::timeout;
 use crate::core::conf_sync::cache_server::ServerCache;
 use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::config_server::EventDataSimple;
-use crate::core::conf_sync::traits::{
-    ConfigClientEventDispatcher, ConfigServerEventDispatcher, ResourceChange,
-};
+use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ConfigServerEventDispatcher, ResourceChange};
 use crate::core::conf_sync::{ConfigServer, EventDispatch};
 use crate::types::{GatewayClass, GatewayClassSpec, ResourceKind};
 
@@ -66,14 +64,10 @@ async fn config_server_and_client_stay_in_sync_via_watch() {
     // Step 3: spawn a task to consume watch events and apply them to the client
     let watcher_task = tokio::spawn(async move {
         if let Ok(Some(event_data)) = timeout(Duration::from_secs(2), watch_rx.recv()).await {
-            let events: Vec<Value> =
-                serde_json::from_str(&event_data.data).expect("valid watcher events");
+            let events: Vec<Value> = serde_json::from_str(&event_data.data).expect("valid watcher events");
 
             for event in events {
-                let event_type = event
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .expect("event type");
+                let event_type = event.get("type").and_then(|v| v.as_str()).expect("event type");
 
                 let change = match event_type {
                     "add" => ResourceChange::EventAdd,
@@ -108,11 +102,7 @@ async fn config_server_and_client_stay_in_sync_via_watch() {
 
     let gc = sample_gateway_class(&key, 1);
     let payload = serde_json::to_string(&gc).expect("serialize gateway class");
-    server.apply_resource_change(
-        ResourceChange::EventAdd,
-        Some(ResourceKind::GatewayClass),
-        payload,
-    );
+    server.apply_resource_change(ResourceChange::EventAdd, Some(ResourceKind::GatewayClass), payload);
 
     // Step 5: wait for the watcher task to finish applying the event
     watcher_task.await.expect("watcher task completed");
@@ -235,11 +225,7 @@ async fn config_client_stays_consistent_during_long_watch_window() {
         gc.spec.description = Some(description.to_string());
 
         let payload = serde_json::to_string(&gc).expect("serialize gateway class");
-        server.apply_resource_change(
-            ResourceChange::EventAdd,
-            Some(ResourceKind::GatewayClass),
-            payload,
-        );
+        server.apply_resource_change(ResourceChange::EventAdd, Some(ResourceKind::GatewayClass), payload);
 
         current_version += 1;
         wait(Duration::from_secs(1), use_realtime).await;
@@ -290,31 +276,19 @@ async fn config_client_stays_consistent_during_long_watch_window() {
                 gc.spec.description = Some(description.to_string());
 
                 let payload = serde_json::to_string(&gc).expect("serialize gateway class");
-                server.apply_resource_change(
-                    ResourceChange::EventAdd,
-                    Some(ResourceKind::GatewayClass),
-                    payload,
-                );
+                server.apply_resource_change(ResourceChange::EventAdd, Some(ResourceKind::GatewayClass), payload);
             }
             Mutation::Update { name, description } => {
                 let mut gc = sample_gateway_class(name, current_version);
                 gc.spec.description = Some(description.to_string());
 
                 let payload = serde_json::to_string(&gc).expect("serialize gateway class");
-                server.apply_resource_change(
-                    ResourceChange::EventUpdate,
-                    Some(ResourceKind::GatewayClass),
-                    payload,
-                );
+                server.apply_resource_change(ResourceChange::EventUpdate, Some(ResourceKind::GatewayClass), payload);
             }
             Mutation::Delete { name } => {
                 let gc = sample_gateway_class(name, current_version);
                 let payload = serde_json::to_string(&gc).expect("serialize gateway class");
-                server.apply_resource_change(
-                    ResourceChange::EventDelete,
-                    Some(ResourceKind::GatewayClass),
-                    payload,
-                );
+                server.apply_resource_change(ResourceChange::EventDelete, Some(ResourceKind::GatewayClass), payload);
             }
         }
 
@@ -383,12 +357,7 @@ async fn multiple_clients_relist_after_stale_watch_error() {
             .expect("fast watch receiver")
     };
 
-    let fast_task = spawn_watch_consumer(
-        fast_watch_rx,
-        fast_client.clone(),
-        Duration::from_secs(3),
-        use_realtime,
-    );
+    let fast_task = spawn_watch_consumer(fast_watch_rx, fast_client.clone(), Duration::from_secs(3), use_realtime);
 
     let initial_event_count: u64 = 30;
     for version in 1..=initial_event_count {
@@ -398,11 +367,7 @@ async fn multiple_clients_relist_after_stale_watch_error() {
         let payload = serde_json::to_string(&gc).expect("serialize gateway class");
         {
             let guard = server.lock().await;
-            guard.apply_resource_change(
-                ResourceChange::EventAdd,
-                Some(ResourceKind::GatewayClass),
-                payload,
-            );
+            guard.apply_resource_change(ResourceChange::EventAdd, Some(ResourceKind::GatewayClass), payload);
         }
         wait(Duration::from_millis(2), use_realtime).await;
     }
@@ -434,14 +399,8 @@ async fn multiple_clients_relist_after_stale_watch_error() {
         "stale-client-name".to_string(),
     )));
 
-    let error_event = stale_watch_rx
-        .recv()
-        .await
-        .expect("stale watcher should emit an error");
-    let err_kind = error_event
-        .err
-        .as_deref()
-        .expect("stale watcher should set err field");
+    let error_event = stale_watch_rx.recv().await.expect("stale watcher should emit an error");
+    let err_kind = error_event.err.as_deref().expect("stale watcher should set err field");
     assert!(
         matches!(err_kind, "TooOldVersion" | "VersionUnexpect"),
         "unexpected watch error: {err_kind}"
@@ -482,11 +441,7 @@ async fn multiple_clients_relist_after_stale_watch_error() {
         let payload = serde_json::to_string(&gc).expect("serialize gateway class");
         {
             let guard = server.lock().await;
-            guard.apply_resource_change(
-                ResourceChange::EventAdd,
-                Some(ResourceKind::GatewayClass),
-                payload,
-            );
+            guard.apply_resource_change(ResourceChange::EventAdd, Some(ResourceKind::GatewayClass), payload);
         }
         wait(Duration::from_millis(2), use_realtime).await;
     }
@@ -495,9 +450,7 @@ async fn multiple_clients_relist_after_stale_watch_error() {
     wait(Duration::from_secs(3), use_realtime).await;
 
     fast_task.await.expect("fast watcher task completed");
-    follow_task
-        .await
-        .expect("stale watcher follow-up task completed");
+    follow_task.await.expect("stale watcher follow-up task completed");
 
     // NOTE: GatewayClass is now stored in base_conf, not available via list API
     // Skip detailed version comparison - this test needs to be rewritten
@@ -508,11 +461,7 @@ async fn multiple_clients_relist_after_stale_watch_error() {
     };
 }
 
-async fn replace_client_with_snapshot(
-    client: &Arc<Mutex<ConfigClient>>,
-    key: &str,
-    items: Vec<GatewayClass>,
-) {
+async fn replace_client_with_snapshot(client: &Arc<Mutex<ConfigClient>>, key: &str, items: Vec<GatewayClass>) {
     let mut guard = client.lock().await;
     *guard = ConfigClient::new(
         key.to_string(),
@@ -543,15 +492,11 @@ async fn apply_watch_events_to_client(client: &Arc<Mutex<ConfigClient>>, event: 
         return;
     }
 
-    let raw_events: Vec<Value> =
-        serde_json::from_str(&event.data).expect("valid watcher events payload");
+    let raw_events: Vec<Value> = serde_json::from_str(&event.data).expect("valid watcher events payload");
 
     let mut parsed_events = Vec::with_capacity(raw_events.len());
     for raw in raw_events {
-        let event_type = raw
-            .get("type")
-            .and_then(|v| v.as_str())
-            .expect("event type");
+        let event_type = raw.get("type").and_then(|v| v.as_str()).expect("event type");
         let change = match event_type {
             "add" => ResourceChange::EventAdd,
             "update" => ResourceChange::EventUpdate,
@@ -560,8 +505,7 @@ async fn apply_watch_events_to_client(client: &Arc<Mutex<ConfigClient>>, event: 
         };
 
         let payload_value = raw.get("data").expect("event data");
-        let payload =
-            serde_json::to_string(payload_value).expect("serialize watcher event payload");
+        let payload = serde_json::to_string(payload_value).expect("serialize watcher event payload");
 
         let resource_version = raw
             .get("resource_version")

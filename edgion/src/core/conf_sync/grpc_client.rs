@@ -47,17 +47,12 @@ impl ConfigSyncClient {
 
             match Self::create_client_internal(grpc_server_addr, timeout).await {
                 Ok(client) => {
-                    tracing::info!(
-                        server_addr = grpc_server_addr,
-                        "Successfully connected to gRPC server"
-                    );
+                    tracing::info!(server_addr = grpc_server_addr, "Successfully connected to gRPC server");
 
                     // Set gRPC client for each cache
                     config_client.routes().set_grpc_client(client.clone()).await;
                     config_client.services().set_grpc_client(client.clone()).await;
-                    config_client
-                        .endpoint_slices()
-                        .set_grpc_client(client.clone()).await;
+                    config_client.endpoint_slices().set_grpc_client(client.clone()).await;
                     config_client.edgion_tls().set_grpc_client(client.clone()).await;
                     config_client.secrets().set_grpc_client(client.clone()).await;
 
@@ -100,10 +95,7 @@ impl ConfigSyncClient {
     }
 
     /// Fetch and initialize base configuration from server
-    async fn fetch_and_init_base_conf(
-        &mut self,
-        gateway_class_key: &str,
-    ) -> Result<(), tonic::Status> {
+    async fn fetch_and_init_base_conf(&mut self, gateway_class_key: &str) -> Result<(), tonic::Status> {
         let request = tonic::Request::new(GetBaseConfRequest {
             gateway_class: gateway_class_key.to_string(),
         });
@@ -122,9 +114,7 @@ impl ConfigSyncClient {
 
         // Parse and set GatewayClass
         if !base_conf_response.gateway_class.is_empty() {
-            if let Ok(items) =
-                serde_json::from_str::<Vec<GatewayClass>>(&base_conf_response.gateway_class)
-            {
+            if let Ok(items) = serde_json::from_str::<Vec<GatewayClass>>(&base_conf_response.gateway_class) {
                 if let Some(gc) = items.into_iter().next() {
                     println!("[ConfigClient] Parsed GatewayClass");
                     base_conf.set_gateway_class(gc);
@@ -134,9 +124,9 @@ impl ConfigSyncClient {
 
         // Parse and set EdgionGatewayConfig
         if !base_conf_response.edgion_gateway_config.is_empty() {
-            if let Ok(items) = serde_json::from_str::<Vec<EdgionGatewayConfig>>(
-                &base_conf_response.edgion_gateway_config,
-            ) {
+            if let Ok(items) =
+                serde_json::from_str::<Vec<EdgionGatewayConfig>>(&base_conf_response.edgion_gateway_config)
+            {
                 if let Some(egc) = items.into_iter().next() {
                     println!("[ConfigClient] Parsed EdgionGatewayConfig");
                     base_conf.set_edgion_gateway_config(egc);
@@ -146,8 +136,7 @@ impl ConfigSyncClient {
 
         // Parse and add Gateways
         if !base_conf_response.gateways.is_empty() {
-            if let Ok(gateways) = serde_json::from_str::<Vec<Gateway>>(&base_conf_response.gateways)
-            {
+            if let Ok(gateways) = serde_json::from_str::<Vec<Gateway>>(&base_conf_response.gateways) {
                 for gateway in gateways {
                     println!("[ConfigClient] Parsed Gateway");
                     base_conf.add_gateway(gateway);
@@ -189,20 +178,12 @@ impl ConfigSyncClient {
     }
 
     /// Sync all resources of a specific kind from server
-    pub async fn sync_resource(
-        &mut self,
-        _key: String,
-        kind: ResourceKind,
-    ) -> Result<(), tonic::Status> {
+    pub async fn sync_resource(&mut self, _key: String, kind: ResourceKind) -> Result<(), tonic::Status> {
         match kind {
             ResourceKind::Unspecified => {
-                return Err(tonic::Status::invalid_argument(
-                    "Cannot sync unspecified resource kind",
-                ));
+                return Err(tonic::Status::invalid_argument("Cannot sync unspecified resource kind"));
             }
-            ResourceKind::GatewayClass
-            | ResourceKind::EdgionGatewayConfig
-            | ResourceKind::Gateway => {
+            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
                 return Err(tonic::Status::invalid_argument(
                     "Base conf resources should not be synced via list",
                 ));
@@ -228,11 +209,7 @@ impl ConfigSyncClient {
     }
 
     /// Start watching a specific resource kind and automatically sync to ConfigHub
-    pub async fn start_watch_sync(
-        &mut self,
-        _key: String,
-        kind: ResourceKind,
-    ) -> Result<(), tonic::Status> {
+    pub async fn start_watch_sync(&mut self, _key: String, kind: ResourceKind) -> Result<(), tonic::Status> {
         match kind {
             ResourceKind::Unspecified => {
                 return Err(tonic::Status::invalid_argument(
@@ -240,9 +217,7 @@ impl ConfigSyncClient {
                 ));
             }
             // Base conf resources should not be watched
-            ResourceKind::GatewayClass
-            | ResourceKind::EdgionGatewayConfig
-            | ResourceKind::Gateway => {
+            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
                 return Err(tonic::Status::invalid_argument(
                     "Base conf resources should not be watched",
                 ));

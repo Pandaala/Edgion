@@ -11,10 +11,7 @@ pub struct ListData<T> {
 
 impl<T> ListData<T> {
     pub fn new(data: Vec<T>, resource_version: u64) -> Self {
-        Self {
-            data,
-            resource_version,
-        }
+        Self { data, resource_version }
     }
 }
 

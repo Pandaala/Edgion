@@ -56,12 +56,7 @@ pub extern "C" fn radix_tree_destroy(t: *mut c_void) -> c_int {
 ///
 /// t must be a valid tree pointer, buf must point to at least len bytes.
 #[no_mangle]
-pub extern "C" fn radix_tree_insert(
-    t: *mut c_void,
-    buf: *const c_uchar,
-    len: c_ulong,
-    idx: c_int,
-) -> c_int {
+pub extern "C" fn radix_tree_insert(t: *mut c_void, buf: *const c_uchar, len: c_ulong, idx: c_int) -> c_int {
     unsafe { tree_insert_raw(t, buf as *const u8, len as usize, idx) }
 }
 
@@ -81,11 +76,7 @@ pub extern "C" fn radix_tree_insert(
 ///
 /// t must be a valid tree pointer, buf must point to at least len bytes.
 #[no_mangle]
-pub extern "C" fn radix_tree_find(
-    t: *mut c_void,
-    buf: *const c_uchar,
-    len: c_ulong,
-) -> *mut c_void {
+pub extern "C" fn radix_tree_find(t: *mut c_void, buf: *const c_uchar, len: c_ulong) -> *mut c_void {
     unsafe { tree_find_raw(t, buf as *const u8, len as usize) }
 }
 
@@ -184,13 +175,7 @@ pub extern "C" fn radix_tree_prev(it: *mut c_void, buf: *const c_uchar, len: c_u
         if key_len > len as usize {
             continue;
         }
-        let cmp = unsafe {
-            libc::memcmp(
-                buf as *const c_void,
-                (*iter_ptr).key as *const c_void,
-                key_len,
-            )
-        };
+        let cmp = unsafe { libc::memcmp(buf as *const c_void, (*iter_ptr).key as *const c_void, key_len) };
         if cmp != 0 {
             continue;
         }
@@ -227,13 +212,7 @@ pub extern "C" fn radix_tree_next(it: *mut c_void, buf: *const c_uchar, len: c_u
     if key_len > len as usize {
         return -1;
     }
-    let cmp = unsafe {
-        libc::memcmp(
-            buf as *const c_void,
-            (*iter_ptr).key as *const c_void,
-            key_len,
-        )
-    };
+    let cmp = unsafe { libc::memcmp(buf as *const c_void, (*iter_ptr).key as *const c_void, key_len) };
     if cmp != 0 {
         return -1;
     }

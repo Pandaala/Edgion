@@ -27,11 +27,7 @@ impl AsyncLogWriter {
 /// - Daily log rotation
 /// - Non-blocking async writes
 /// - Automatic file creation and directory management
-pub async fn log_worker(
-    mut rx: mpsc::Receiver<String>,
-    log_dir: PathBuf,
-    file_prefix: String,
-) -> Result<()> {
+pub async fn log_worker(mut rx: mpsc::Receiver<String>, log_dir: PathBuf, file_prefix: String) -> Result<()> {
     // Ensure log directory exists
     tokio::fs::create_dir_all(&log_dir).await?;
 
@@ -56,11 +52,7 @@ pub async fn log_worker(
             current_date = now_date;
 
             // Archive old log file with date suffix
-            let old_log_path = log_dir.join(format!(
-                "{}.{}.log",
-                file_prefix,
-                current_date.format("%Y-%m-%d")
-            ));
+            let old_log_path = log_dir.join(format!("{}.{}.log", file_prefix, current_date.format("%Y-%m-%d")));
 
             // Rename current log to dated log
             if let Err(e) = tokio::fs::rename(&log_path, &old_log_path).await {

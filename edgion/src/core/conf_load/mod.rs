@@ -45,23 +45,14 @@ pub struct Loader {
 }
 
 impl Loader {
-    pub fn from_args(
-        args: &LoaderArgs,
-        dispatcher: Arc<dyn ConfigServerEventDispatcher>,
-    ) -> Result<Self> {
+    pub fn from_args(args: &LoaderArgs, dispatcher: Arc<dyn ConfigServerEventDispatcher>) -> Result<Self> {
         match args.loader {
             LoaderKind::LocalPath => {
                 const DEFAULT_LOCAL_PATH_DIR: &str = "edgion/config/examples";
-                let dir = args
-                    .dir
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_LOCAL_PATH_DIR.to_string());
+                let dir = args.dir.clone().unwrap_or_else(|| DEFAULT_LOCAL_PATH_DIR.to_string());
                 let path = PathBuf::from(&dir);
                 if !path.exists() {
-                    return Err(anyhow::anyhow!(
-                        "configuration directory {:?} does not exist",
-                        path
-                    ));
+                    return Err(anyhow::anyhow!("configuration directory {:?} does not exist", path));
                 }
 
                 let loader = LocalPathLoader::new(path, dispatcher);
@@ -81,9 +72,7 @@ impl Loader {
         // Bootstrap base configuration resources in order:
         // 1. GatewayClass (must be loaded first)
         tracing::info!("====> loading GatewayClass...");
-        self.inner
-            .bootstrap_base_conf(Some(ResourceKind::GatewayClass))
-            .await?;
+        self.inner.bootstrap_base_conf(Some(ResourceKind::GatewayClass)).await?;
 
         // 2. EdgionGatewayConfig (referenced by GatewayClass)
         tracing::info!("====> loading EdgionGatewayConfig...");
@@ -93,9 +82,7 @@ impl Loader {
 
         // 3. Gateway (uses GatewayClass)
         tracing::info!("====> loading Gateway...");
-        self.inner
-            .bootstrap_base_conf(Some(ResourceKind::Gateway))
-            .await?;
+        self.inner.bootstrap_base_conf(Some(ResourceKind::Gateway)).await?;
 
         tracing::info!("====> start bootstrap user conf...");
         // Bootstrap user configuration resources

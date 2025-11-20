@@ -6,9 +6,7 @@ use tokio::sync::mpsc;
 use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
 use crate::core::conf_sync::cache_server::{ListData, ServerCache, WatchResponse};
 use crate::core::utils::format_resource_info;
-use crate::types::{
-    EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind,
-};
+use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind};
 use anyhow::Result;
 
 pub type GatewayClassKey = String;
@@ -100,8 +98,8 @@ impl ConfigServer {
             .and_then(|egwc| serde_json::to_string(egwc).ok())
             .unwrap_or_default();
 
-        let gateways_json = serde_json::to_string(base_conf.gateways())
-            .map_err(|e| format!("Failed to serialize gateways: {}", e))?;
+        let gateways_json =
+            serde_json::to_string(base_conf.gateways()).map_err(|e| format!("Failed to serialize gateways: {}", e))?;
 
         Ok(BaseConfData {
             gateway_class: gateway_class_json,
@@ -110,18 +108,12 @@ impl ConfigServer {
         })
     }
 
-    pub fn list(
-        &self,
-        _key: &GatewayClassKey,
-        kind: &ResourceKind,
-    ) -> Result<ListDataSimple, String> {
+    pub fn list(&self, _key: &GatewayClassKey, kind: &ResourceKind) -> Result<ListDataSimple, String> {
         let (data_json, resource_version) = match kind {
             ResourceKind::Unspecified => {
                 return Err("Resource kind unspecified".to_string());
             }
-            ResourceKind::GatewayClass
-            | ResourceKind::EdgionGatewayConfig
-            | ResourceKind::Gateway => {
+            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
                 return Err("Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are not available via list/watch API".to_string());
             }
             ResourceKind::HTTPRoute => {
@@ -181,9 +173,7 @@ impl ConfigServer {
             ResourceKind::Unspecified => {
                 return Err("Resource kind unspecified".to_string());
             }
-            ResourceKind::GatewayClass
-            | ResourceKind::EdgionGatewayConfig
-            | ResourceKind::Gateway => {
+            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
                 return Err("Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are not available via list/watch API".to_string());
             }
             ResourceKind::HTTPRoute => {
@@ -383,8 +373,7 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<EndpointSlice>> {
-        self.endpoint_slices
-            .watch(client_id, client_name, from_version)
+        self.endpoint_slices.watch(client_id, client_name, from_version)
     }
 
     /// Watch Edgion TLS

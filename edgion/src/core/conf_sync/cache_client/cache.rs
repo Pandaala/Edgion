@@ -198,11 +198,7 @@ where
             tonic::Status::internal(format!("Failed to parse list response: {}", e))
         })?;
 
-        tracing::info!(
-            kind = T::kind_name(),
-            count = resources.len(),
-            "Parsed resources"
-        );
+        tracing::info!(kind = T::kind_name(), count = resources.len(), "Parsed resources");
 
         // Apply to cache
         for resource in resources {
@@ -230,10 +226,7 @@ where
                 let client = match client_guard.as_mut() {
                     Some(c) => c,
                     None => {
-                        tracing::error!(
-                            kind = T::kind_name(),
-                            "gRPC client not initialized for watch"
-                        );
+                        tracing::error!(kind = T::kind_name(), "gRPC client not initialized for watch");
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         continue;
                     }
@@ -276,9 +269,7 @@ where
                         Ok(Some(watch_response)) => {
                             from_version = watch_response.resource_version;
 
-                            let events: Vec<serde_json::Value> = match serde_json::from_str(
-                                &watch_response.data,
-                            ) {
+                            let events: Vec<serde_json::Value> = match serde_json::from_str(&watch_response.data) {
                                 Ok(events) => events,
                                 Err(e) => {
                                     tracing::error!(error = %e, "Failed to parse watch response events");
@@ -287,8 +278,7 @@ where
                             };
 
                             for event in events {
-                                if let Some(event_type) = event.get("type").and_then(|v| v.as_str())
-                                {
+                                if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
                                     if let Some(event_data) = event.get("data") {
                                         match serde_json::from_value::<T>(event_data.clone()) {
                                             Ok(resource) => {
@@ -306,10 +296,8 @@ where
                                                     | ResourceChange::EventAdd
                                                     | ResourceChange::EventUpdate => {
                                                         let mut cache_data = data.write().unwrap();
-                                                        cache_data
-                                                            .insert(version.to_string(), resource);
-                                                        let mut rv_guard =
-                                                            resource_version.write().unwrap();
+                                                        cache_data.insert(version.to_string(), resource);
+                                                        let mut rv_guard = resource_version.write().unwrap();
                                                         if version > *rv_guard {
                                                             *rv_guard = version;
                                                         }
@@ -317,8 +305,7 @@ where
                                                     ResourceChange::EventDelete => {
                                                         let mut cache_data = data.write().unwrap();
                                                         cache_data.remove(&version.to_string());
-                                                        let mut rv_guard =
-                                                            resource_version.write().unwrap();
+                                                        let mut rv_guard = resource_version.write().unwrap();
                                                         if version > *rv_guard {
                                                             *rv_guard = version;
                                                         }
