@@ -1,8 +1,7 @@
-use crate::core::conf_sync::cache_client::GrpcSyncable;
 use crate::core::conf_sync::cache_server::{EventDispatch, ListData, Versionable};
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::conf_sync::traits::ResourceChange;
-use crate::types::{WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
+use crate::types::{ResourceMeta, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 use kube::{Resource, ResourceExt};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -162,10 +161,10 @@ impl<T: Versionable + Resource + Clone + Send + 'static> EventDispatch<T> for Cl
     }
 }
 
-// Additional methods for GrpcSyncable types
+// Additional methods for ResourceMeta types
 impl<T> ClientCache<T>
 where
-    T: Versionable + Resource + GrpcSyncable + Clone + Send + 'static,
+    T: Versionable + Resource + ResourceMeta + Clone + Send + 'static,
 {
     /// Sync resources from gRPC server
     pub async fn sync(&self) -> Result<(), tonic::Status> {

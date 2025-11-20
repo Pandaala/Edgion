@@ -1,10 +1,7 @@
 use crate::core::conf_sync::traits::ResourceChange;
 
-/// Trait for resources that have a version
-pub trait Versionable {
-    /// Get the resource version
-    fn get_version(&self) -> u64;
-}
+// Re-export Versionable from types
+pub use crate::types::Versionable;
 
 /// Trait for handling resource events
 pub trait EventDispatch<T> {
