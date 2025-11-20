@@ -1,6 +1,6 @@
 use crate::types::ResourceKind;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ResourceChange {
     InitAdd,
     EventAdd,

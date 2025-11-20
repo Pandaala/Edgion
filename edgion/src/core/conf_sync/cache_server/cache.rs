@@ -1,3 +1,4 @@
+use std::cmp::PartialEq;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 use kube::{Resource, ResourceExt};
@@ -257,18 +258,21 @@ impl<T: Versionable + Resource + Clone + Send + Sync + 'static> EventDispatch<T>
                 "old version, force change to new version and update"
             );
         } else {
-            tracing::warn!(
-                component = "cache_server",
-                event = "apply_change",
-                change = ?change,
-                kind = std::any::type_name::<T>(),
-                name = ?resource.name_any(),
-                namespace = ?resource.namespace(),
-                version = version,
-                "version error, it is an old version"
-            );
-            return;
+            if change != ResourceChange::InitAdd {
+                tracing::warn!(
+                    component = "cache_server",
+                    event = "apply_change",
+                    change = ?change,
+                    kind = std::any::type_name::<T>(),
+                    name = ?resource.name_any(),
+                    namespace = ?resource.namespace(),
+                    version = version,
+                    "version error, it is an old version"
+                );
+                return;
+            }
         }
+
 
         match change {
             ResourceChange::InitAdd => {
