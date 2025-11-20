@@ -23,6 +23,8 @@ pub struct LocalPathLoader {
     // Key: ResourceMetadata (kind/namespace/name), Value: Vec<PathBuf> (file paths)
     resource_to_files: Arc<Mutex<HashMap<ResourceMetadata, Vec<PathBuf>>>>,
     files_to_resource: Arc<RwLock<HashMap<PathBuf, FileInfo>>>,
+
+    pub(crate) enable_resource_version_fix: bool,
 }
 
 // TODO: Support nested directory watch and propagation? Currently only flat file
@@ -57,6 +59,7 @@ impl LocalPathLoader {
             dispatcher,
             resource_to_files: Arc::new(Mutex::new(HashMap::new())),
             files_to_resource: Arc::new(RwLock::new(HashMap::new())),
+            enable_resource_version_fix: true,
         });
         
         // Spawn duplicate detection task

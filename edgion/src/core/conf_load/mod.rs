@@ -92,7 +92,9 @@ impl Loader {
         tracing::info!("====> start bootstrap user conf...");
         // Bootstrap user configuration resources
         self.inner.bootstrap_user_conf().await?;
-
+        
+        self.inner.set_enable_resource_version_fix();
+        
         tracing::info!("====> Bootstrapped, set ready");
         // Set ready state
         self.inner.set_ready().await;

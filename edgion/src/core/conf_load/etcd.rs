@@ -275,4 +275,8 @@ impl ConfigLoader for EtcdConfigLoader {
 
         Ok(())
     }
+
+    fn set_enable_resource_version_fix(&self) {
+        // not need
+    }
 }

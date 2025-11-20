@@ -1,6 +1,6 @@
 use crate::core::cli::config::EdgionOpConfig;
 use crate::core::conf_load::Loader;
-use crate::core::conf_sync::{ConfigServer, ConfigSyncServer};
+use crate::core::conf_sync::{ConfigServer, ConfigServerEventDispatcher, ConfigSyncServer};
 use crate::core::logging::init_logging;
 use crate::core::utils;
 use crate::types::{COMPONENT_EDGION_OPERATOR, VERSION};
@@ -71,7 +71,7 @@ impl EdgionOpCli {
         let loader_args = config.to_loader_args();
         let loader = Loader::from_args(
             &loader_args,
-            config_server as Arc<dyn crate::core::conf_sync::traits::ConfigServerEventDispatcher>,
+            config_server as Arc<dyn ConfigServerEventDispatcher>,
         )?;
 
         let addr = utils::parse_listen_addr(

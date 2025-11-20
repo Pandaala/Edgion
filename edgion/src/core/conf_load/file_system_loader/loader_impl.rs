@@ -136,5 +136,11 @@ impl ConfigLoader for LocalPathLoader {
         // Delegate to the internal run method
         self.run_watcher().await
     }
+
+    fn set_enable_resource_version_fix(&self) {
+        if self.enable_resource_version_fix {
+            self.dispatcher().enable_version_fix_mode()
+        }
+    }
 }
 

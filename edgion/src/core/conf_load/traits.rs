@@ -18,4 +18,6 @@ pub trait ConfigLoader: Send + Sync {
 
     /// Main run loop for watching configuration changes
     async fn run(&self) -> anyhow::Result<()>;
+
+    fn set_enable_resource_version_fix(&self);
 }
