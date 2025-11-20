@@ -235,21 +235,13 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> EventDispatch<T
     {
         let mut version = resource.get_version();
         let store_guard = self.store.read().unwrap();
-        if resource.get_version() < store_guard.get_last_resource_version() {
-            version = utils::next_resource_version();
-            resource.meta_mut().resource_version = Some(version.to_string());
-            tracing::warn!(
-                component = "cache_server",
-                event = "apply_change",
-                change = ?change,
-                kind = std::any::type_name::<T>(),
-                name = ?resource.name_any(),
-                namespace = ?resource.namespace(),
-                version = resource.get_version(),
-                "old version, force change to new version and update"
-            );
-        } else {
-            if change != ResourceChange::InitAdd {
+        
+        // Only force version update if resource version is older than store version
+        // and it's not an InitAdd (which is used during initialization)
+        if resource.get_version() < store_guard.get_last_resource_version() && change != ResourceChange::InitAdd {
+            if *self.version_fix_mode.read().unwrap() {
+                version = utils::next_resource_version();
+                resource.meta_mut().resource_version = Some(version.to_string());
                 tracing::warn!(
                     component = "cache_server",
                     event = "apply_change",
@@ -257,8 +249,21 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> EventDispatch<T
                     kind = std::any::type_name::<T>(),
                     name = ?resource.name_any(),
                     namespace = ?resource.namespace(),
-                    version = version,
-                    "version error, it is an old version"
+                    old_version = resource.get_version(),
+                    new_version = version,
+                    "old or same version detected, forcing new version"
+                );
+            } else {
+                tracing::warn!(
+                    component = "cache_server",
+                    event = "apply_change",
+                    change = ?change,
+                    kind = std::any::type_name::<T>(),
+                    name = ?resource.name_any(),
+                    namespace = ?resource.namespace(),
+                    old_version = resource.get_version(),
+                    new_version = version,
+                    "old or same version detected, but version fix mode is not enabled, skipping"
                 );
                 return;
             }
