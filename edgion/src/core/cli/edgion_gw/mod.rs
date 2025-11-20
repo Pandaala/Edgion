@@ -48,7 +48,7 @@ impl EdgionGwCli {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
             loop {
                 interval.tick().await;
-                config_client.print_config_async().await;
+                config_client.print_config();
             }
         });
     }

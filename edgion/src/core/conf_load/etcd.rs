@@ -8,14 +8,14 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::core::conf_load::{ConfigLoader};
-use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
+use crate::core::conf_sync::traits::{ConfigServerEventDispatcher, ResourceChange};
 use crate::types::ResourceKind;
 
 #[derive(Clone)]
 pub struct EtcdConfigLoader {
     endpoints: Vec<String>,
     prefix: String,
-    dispatcher: Arc<dyn EventDispatcher>,
+    dispatcher: Arc<dyn ConfigServerEventDispatcher>,
     resource_kind: Option<ResourceKind>,
     cache: Arc<Mutex<HashMap<String, String>>>,
     client: Arc<Mutex<Option<Client>>>,
@@ -25,7 +25,7 @@ impl EtcdConfigLoader {
     pub fn new(
         endpoints: Vec<String>,
         prefix: impl Into<String>,
-        dispatcher: Arc<dyn EventDispatcher>,
+        dispatcher: Arc<dyn ConfigServerEventDispatcher>,
         resource_kind: Option<ResourceKind>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -77,9 +77,9 @@ impl EtcdConfigLoader {
             
             drop(cache);
             if old_is_base_conf {
-                self.dispatcher.apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old, None);
+                self.dispatcher.apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old);
             } else {
-                self.dispatcher.apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old, None);
+                self.dispatcher.apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old);
             }
             cache = self.cache.lock().await;
         }
@@ -87,9 +87,9 @@ impl EtcdConfigLoader {
         drop(cache);
         
         if is_base_conf {
-            self.dispatcher.apply_base_conf(ResourceChange::EventAdd, self.resource_kind, value, None);
+            self.dispatcher.apply_base_conf(ResourceChange::EventAdd, self.resource_kind, value);
         } else {
-            self.dispatcher.apply_resource_change(ResourceChange::EventAdd, self.resource_kind, value, None);
+            self.dispatcher.apply_resource_change(ResourceChange::EventAdd, self.resource_kind, value);
         }
     }
 
@@ -108,9 +108,9 @@ impl EtcdConfigLoader {
             
             drop(cache);
             if is_base_conf {
-                self.dispatcher.apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old, None);
+                self.dispatcher.apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old);
             } else {
-                self.dispatcher.apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old, None);
+                self.dispatcher.apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old);
             }
         }
     }
@@ -177,7 +177,7 @@ impl ConfigLoader for EtcdConfigLoader {
                     cache_guard.insert(key, value.clone());
                     drop(cache_guard);
                     // Use InitAdd for bootstrap phase
-                    self.dispatcher.apply_base_conf(ResourceChange::InitAdd, kind, value, None);
+                    self.dispatcher.apply_base_conf(ResourceChange::InitAdd, kind, value);
                     cache_guard = self.cache.lock().await;
                 }
             }
@@ -219,7 +219,7 @@ impl ConfigLoader for EtcdConfigLoader {
                     cache_guard.insert(key, value.clone());
                     drop(cache_guard);
                     // Use InitAdd for bootstrap phase
-                    self.dispatcher.apply_resource_change(ResourceChange::InitAdd, None, value, None);
+                    self.dispatcher.apply_resource_change(ResourceChange::InitAdd, None, value);
                     cache_guard = self.cache.lock().await;
                 }
             }

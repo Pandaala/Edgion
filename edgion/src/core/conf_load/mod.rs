@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use std::path::PathBuf;
-use crate::core::conf_sync::traits::{EventDispatcher};
+use crate::core::conf_sync::traits::{ConfigServerEventDispatcher};
 use crate::types::ResourceKind;
 
 pub mod etcd;
@@ -45,7 +45,7 @@ pub struct Loader {
 }
 
 impl Loader {
-    pub fn from_args(args: &LoaderArgs, dispatcher: Arc<dyn EventDispatcher>) -> Result<Self> {
+    pub fn from_args(args: &LoaderArgs, dispatcher: Arc<dyn ConfigServerEventDispatcher>) -> Result<Self> {
         match args.loader {
             LoaderKind::LocalPath => {
                 const DEFAULT_LOCAL_PATH_DIR: &str = "edgion/config/examples";

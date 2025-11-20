@@ -4,7 +4,7 @@ use crate::core::conf_sync::proto::{
     GetBaseConfRequest, ListRequest, ListResponse,
     ResourceKind as ProtoResourceKind, WatchRequest, WatchResponse,
 };
-use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
+use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ResourceChange};
 use crate::types::ResourceKind;
 use std::sync::Arc;
 use std::time::Duration;

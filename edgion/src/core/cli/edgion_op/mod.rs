@@ -71,7 +71,7 @@ impl EdgionOpCli {
         let loader_args = config.to_loader_args();
         let loader = Loader::from_args(
             &loader_args,
-            config_server as Arc<dyn crate::core::conf_sync::traits::EventDispatcher>,
+            config_server as Arc<dyn crate::core::conf_sync::traits::ConfigServerEventDispatcher>,
         )?;
 
         let addr = utils::parse_listen_addr(

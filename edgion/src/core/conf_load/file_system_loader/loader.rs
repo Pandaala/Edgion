@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 
 use crate::core::conf_sync::traits::ResourceChange;
-use crate::core::conf_sync::EventDispatcher;
+use crate::core::conf_sync::ConfigServerEventDispatcher;
 use crate::core::utils::{extract_resource_metadata, ResourceMetadata};
 use crate::types::ResourceKind;
 
@@ -18,7 +18,7 @@ use super::types::FileInfo;
 
 pub struct LocalPathLoader {
     root: PathBuf,
-    dispatcher: Arc<dyn EventDispatcher>,
+    dispatcher: Arc<dyn ConfigServerEventDispatcher>,
     // Track resource metadata to file paths mapping for duplicate detection
     // Key: ResourceMetadata (kind/namespace/name), Value: Vec<PathBuf> (file paths)
     resource_to_files: Arc<Mutex<HashMap<ResourceMetadata, Vec<PathBuf>>>>,
@@ -31,7 +31,7 @@ pub struct LocalPathLoader {
 impl LocalPathLoader {
     pub fn new<P: Into<PathBuf>>(
         root: P,
-        dispatcher: Arc<dyn EventDispatcher>,
+        dispatcher: Arc<dyn ConfigServerEventDispatcher>,
     ) -> Arc<Self> {
         let root_path = root.into();
         
@@ -88,7 +88,7 @@ impl LocalPathLoader {
         &self.root
     }
 
-    pub fn dispatcher(&self) -> &Arc<dyn EventDispatcher> {
+    pub fn dispatcher(&self) -> &Arc<dyn ConfigServerEventDispatcher> {
         &self.dispatcher
     }
 
@@ -270,10 +270,10 @@ impl LocalPathLoader {
         
         if is_base_conf {
             self.dispatcher
-                .apply_base_conf(ResourceChange::InitAdd, None, content, None);
+                .apply_base_conf(ResourceChange::InitAdd, None, content);
         } else {
             self.dispatcher
-                .apply_resource_change(ResourceChange::InitAdd, None, content, None);
+                .apply_resource_change(ResourceChange::InitAdd, None, content);
         }
         Ok(())
     }
@@ -343,10 +343,10 @@ impl LocalPathLoader {
                         
                         if is_base_conf {
                             self.dispatcher
-                                .apply_base_conf(ResourceChange::EventDelete, None, content, None);
+                                .apply_base_conf(ResourceChange::EventDelete, None, content);
                         } else {
                             self.dispatcher
-                                .apply_resource_change(ResourceChange::EventDelete, None, content, None);
+                                .apply_resource_change(ResourceChange::EventDelete, None, content);
                         }
                     } else {
                         let remaining_count = files.len();
@@ -423,10 +423,10 @@ impl LocalPathLoader {
         
         if is_base_conf {
             self.dispatcher
-                .apply_base_conf(change, None, content, None);
+                .apply_base_conf(change, None, content);
         } else {
             self.dispatcher
-                .apply_resource_change(change, None, content, None);
+                .apply_resource_change(change, None, content);
         }
         Ok(())
     }

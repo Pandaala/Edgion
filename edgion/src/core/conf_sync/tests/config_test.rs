@@ -10,7 +10,7 @@ use tokio::time::timeout;
 use crate::core::conf_sync::cache_server::ServerCache;
 use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::config_server::EventDataSimple;
-use crate::core::conf_sync::traits::{EventDispatcher, ResourceChange};
+use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ConfigServerEventDispatcher, ResourceChange};
 use crate::core::conf_sync::{ConfigServer, EventDispatch};
 use crate::types::{GatewayClass, GatewayClassSpec, ResourceKind};
 
@@ -106,7 +106,6 @@ async fn config_server_and_client_stay_in_sync_via_watch() {
         ResourceChange::EventAdd,
         Some(ResourceKind::GatewayClass),
         payload,
-        Some(1),
     );
 
     // Step 5: wait for the watcher task to finish applying the event
@@ -240,7 +239,6 @@ async fn config_client_stays_consistent_during_long_watch_window() {
             ResourceChange::EventAdd,
             Some(ResourceKind::GatewayClass),
             payload,
-            Some(current_version),
         );
 
         current_version += 1;
@@ -296,7 +294,6 @@ async fn config_client_stays_consistent_during_long_watch_window() {
                     ResourceChange::EventAdd,
                     Some(ResourceKind::GatewayClass),
                     payload,
-                    Some(current_version),
                 );
             }
             Mutation::Update { name, description } => {
@@ -308,7 +305,6 @@ async fn config_client_stays_consistent_during_long_watch_window() {
                     ResourceChange::EventUpdate,
                     Some(ResourceKind::GatewayClass),
                     payload,
-                    Some(current_version),
                 );
             }
             Mutation::Delete { name } => {
@@ -318,7 +314,6 @@ async fn config_client_stays_consistent_during_long_watch_window() {
                     ResourceChange::EventDelete,
                     Some(ResourceKind::GatewayClass),
                     payload,
-                    Some(current_version),
                 );
             }
         }
@@ -413,7 +408,6 @@ async fn multiple_clients_relist_after_stale_watch_error() {
                 ResourceChange::EventAdd,
                 Some(ResourceKind::GatewayClass),
                 payload,
-                Some(version),
             );
         }
         wait(Duration::from_millis(2), use_realtime).await;
@@ -494,7 +488,6 @@ async fn multiple_clients_relist_after_stale_watch_error() {
                 ResourceChange::EventAdd,
                 Some(ResourceKind::GatewayClass),
                 payload,
-                Some(latest_version),
             );
         }
         wait(Duration::from_millis(2), use_realtime).await;

@@ -1,6 +1,6 @@
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{
-    ConfigServer, EventDispatch, EventDispatcher, ServerCache, Versionable,
+    ConfigServer, EventDispatch, ConfigServerEventDispatcher, ServerCache, Versionable,
 };
 use crate::types::{EdgionGatewayConfig, EdgionTls, Gateway, GatewayClass, HTTPRoute, ResourceKind};
 use k8s_openapi::api::core::v1::{Secret, Service};
@@ -12,7 +12,6 @@ impl ConfigServer {
         change: ResourceChange,
         cache: &ServerCache<T>,
         resource: T,
-        _resource_version: Option<u64>,
     ) where
         T: Clone + Send + Sync + 'static + Versionable + Resource,
     {
@@ -24,7 +23,6 @@ impl ConfigServer {
         change: ResourceChange,
         resource_type: ResourceKind,
         data: String,
-        resource_version: Option<u64>,
     ) {
         match resource_type {
             // Base conf resources are handled by apply_base_conf, not here
@@ -93,7 +91,6 @@ impl ConfigServer {
                         change,
                         &self.routes,
                         resource,
-                        resource_version,
                     );
                 }
             }
@@ -108,7 +105,6 @@ impl ConfigServer {
                         change,
                         &self.services,
                         resource,
-                        resource_version,
                     );
                 }
             }
@@ -123,7 +119,6 @@ impl ConfigServer {
                         change,
                         &self.endpoint_slices,
                         resource,
-                        resource_version,
                     );
                 }
             }
@@ -186,7 +181,6 @@ impl ConfigServer {
                         change,
                         &self.edgion_tls,
                         resource,
-                        resource_version,
                     );
                 }
             }
@@ -201,7 +195,6 @@ impl ConfigServer {
                         change,
                         &self.secrets,
                         resource,
-                        resource_version,
                     );
                 }
             }
@@ -213,7 +206,6 @@ impl ConfigServer {
         change: ResourceChange,
         resource_type: ResourceKind,
         data: String,
-        _resource_version: Option<u64>,
     ) {
         // Only process base conf resources
         match resource_type {
@@ -402,21 +394,19 @@ impl ConfigServer {
 
 }
 
-impl EventDispatcher for ConfigServer {
+impl ConfigServerEventDispatcher for ConfigServer {
 
     fn apply_resource_change(
         &self,
         change: ResourceChange,
         resource_type: Option<ResourceKind>,
         data: String,
-        resource_version: Option<u64>,
     ) {
         if let Some(resource_kind) = resource_type.or_else(|| ResourceKind::from_content(&data)) {
             self.apply_resource_change_with_resource_type(
                 change,
                 resource_kind,
                 data,
-                resource_version,
             )
         } else {
             tracing::error!("Resource type {:?} does not exist", resource_type);
@@ -430,14 +420,12 @@ impl EventDispatcher for ConfigServer {
         change: ResourceChange,
         resource_type: Option<ResourceKind>,
         data: String,
-        resource_version: Option<u64>,
     ) {
         if let Some(resource_kind) = resource_type.or_else(|| ResourceKind::from_content(&data)) {
             self.apply_base_conf_with_resource_type(
                 change,
                 resource_kind,
                 data,
-                resource_version,
             )
         } else {
             tracing::error!("Resource type {:?} does not exist", resource_type);
