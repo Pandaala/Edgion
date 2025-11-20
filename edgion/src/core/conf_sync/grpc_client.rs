@@ -4,13 +4,14 @@ use crate::core::conf_sync::proto::{
     ListRequest, ListResponse, WatchRequest, WatchResponse,
 };
 use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ResourceChange};
-use crate::types::ResourceKind;
+use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass, ResourceKind};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tonic::transport::Channel;
 use tracing;
 use uuid::Uuid;
+use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
 
 /// gRPC client for ConfigSync service
 pub struct ConfigSyncClient {
@@ -125,57 +126,40 @@ impl ConfigSyncClient {
             "Init base_conf"
         );
 
-        // Parse JSON data from gRPC and convert to YAML for application layer
-        // gRPC uses JSON for performance, but application layer expects YAML
-        let gateway_class_yaml = if !base_conf_response.gateway_class.is_empty() {
-            let json_value: serde_json::Value =
-                serde_json::from_str(&base_conf_response.gateway_class).map_err(|e| {
-                    tonic::Status::internal(format!("Failed to parse gateway_class JSON: {}", e))
-                })?;
-            serde_yaml::to_string(&json_value).map_err(|e| {
-                tonic::Status::internal(format!("Failed to convert gateway_class to YAML: {}", e))
-            })?
-        } else {
-            String::new()
-        };
+        let mut base_conf = GatewayClassBaseConf::new();
 
-        let edgion_gateway_config_yaml = if !base_conf_response.edgion_gateway_config.is_empty() {
-            let json_value: serde_json::Value =
-                serde_json::from_str(&base_conf_response.edgion_gateway_config).map_err(|e| {
-                    tonic::Status::internal(format!(
-                        "Failed to parse edgion_gateway_config JSON: {}",
-                        e
-                    ))
-                })?;
-            serde_yaml::to_string(&json_value).map_err(|e| {
-                tonic::Status::internal(format!(
-                    "Failed to convert edgion_gateway_config to YAML: {}",
-                    e
-                ))
-            })?
-        } else {
-            String::new()
-        };
+        // Parse and set GatewayClass
+        if !base_conf_response.gateway_class.is_empty() {
+            if let Ok(items) = serde_json::from_str::<Vec<GatewayClass>>(&base_conf_response.gateway_class) {
+                if let Some(gc) = items.into_iter().next() {
+                    println!("[ConfigClient] Parsed GatewayClass");
+                    base_conf.set_gateway_class(gc);
+                }
+            }
+        }
 
-        let gateways_yaml = if !base_conf_response.gateways.is_empty() {
-            let json_value: serde_json::Value = serde_json::from_str(&base_conf_response.gateways)
-                .map_err(|e| {
-                    tonic::Status::internal(format!("Failed to parse gateways JSON: {}", e))
-                })?;
-            serde_yaml::to_string(&json_value).map_err(|e| {
-                tonic::Status::internal(format!("Failed to convert gateways to YAML: {}", e))
-            })?
-        } else {
-            String::new()
-        };
+        // Parse and set EdgionGatewayConfig
+        if !base_conf_response.edgion_gateway_config.is_empty() {
+            if let Ok(items) =
+                serde_json::from_str::<Vec<EdgionGatewayConfig>>(&base_conf_response.edgion_gateway_config)
+            {
+                if let Some(egc) = items.into_iter().next() {
+                    println!("[ConfigClient] Parsed EdgionGatewayConfig");
+                    base_conf.set_edgion_gateway_config(egc);
+                }
+            }
+        }
 
-        let base_conf = ConfigClient::parse_base_conf_from_json(
-            gateway_class_yaml,
-            edgion_gateway_config_yaml,
-            gateways_yaml,
-        );
+        // Parse and add Gateways
+        if !base_conf_response.gateways.is_empty() {
+            if let Ok(gateways) = serde_json::from_str::<Vec<Gateway>>(&base_conf_response.gateways) {
+                for gateway in gateways {
+                    println!("[ConfigClient] Parsed Gateway");
+                    base_conf.add_gateway(gateway);
+                }
+            }
+        }
 
-        // Initialize base_conf in ConfigClient
         self.config_client.init_base_conf(base_conf);
 
         tracing::info!("Base configuration initialized");
