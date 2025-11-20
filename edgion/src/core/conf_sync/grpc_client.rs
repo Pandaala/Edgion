@@ -2,24 +2,17 @@ use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
 use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, GetBaseConfRequest,
-    ListRequest, ListResponse, WatchRequest, WatchResponse,
 };
-use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ResourceChange};
 use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass, ResourceKind};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tonic::transport::Channel;
 use tracing;
 use uuid::Uuid;
 
 /// gRPC client for ConfigSync service
 pub struct ConfigSyncClient {
-    grpc_server_addr: String,
     config_client: Arc<ConfigClient>,
-    client_id: String,
-    client_name: String,
-    grpc_server_connect_timeout: Duration,
     conf_client_handle: ConfigSyncClientService<Channel>,
 }
 
@@ -45,48 +38,29 @@ impl ConfigSyncClient {
 
         let mut last_error = None;
         for attempt in 1..=MAX_RETRIES {
-            tracing::info!(
-                attempt = attempt,
-                max_retries = MAX_RETRIES,
-                server_addr = grpc_server_addr,
-                "Attempting to connect to gRPC server"
-            );
+            tracing::info!(attempt = attempt, max_retries = MAX_RETRIES, server_addr = grpc_server_addr, "Attempting to connect to gRPC server");
 
             match Self::create_client_internal(grpc_server_addr, timeout).await {
                 Ok(client) => {
-                    tracing::info!(
-                        server_addr = grpc_server_addr,
-                        "Successfully connected to gRPC server"
-                    );
+                    tracing::info!(server_addr = grpc_server_addr,"Successfully connected to gRPC server");
 
                     // Set gRPC client for each cache
                     config_client.routes().set_grpc_client(client.clone());
                     config_client.services().set_grpc_client(client.clone());
-                    config_client
-                        .endpoint_slices()
-                        .set_grpc_client(client.clone());
+                    config_client.endpoint_slices().set_grpc_client(client.clone());
                     config_client.edgion_tls().set_grpc_client(client.clone());
                     config_client.secrets().set_grpc_client(client.clone());
 
                     return Ok(Self {
-                        grpc_server_addr: grpc_server_addr.to_string(),
                         config_client,
-                        client_id,
-                        client_name,
-                        grpc_server_connect_timeout: timeout,
                         conf_client_handle: client,
                     });
                 }
                 Err(e) => {
                     last_error = Some(e);
                     if attempt < MAX_RETRIES {
-                        tracing::warn!(
-                            attempt = attempt,
-                            max_retries = MAX_RETRIES,
-                            error = %last_error.as_ref().unwrap(),
-                            retry_in_secs = RETRY_INTERVAL_SECS,
-                            "Failed to connect, will retry"
-                        );
+                        tracing::warn!(attempt = attempt,max_retries = MAX_RETRIES,error = %last_error.as_ref().unwrap(),
+                            retry_in_secs = RETRY_INTERVAL_SECS,"Failed to connect, will retry");
                         tokio::time::sleep(Duration::from_secs(RETRY_INTERVAL_SECS)).await;
                     }
                 }
@@ -94,12 +68,7 @@ impl ConfigSyncClient {
         }
 
         let err = last_error.unwrap();
-        tracing::error!(
-            server_addr = grpc_server_addr,
-            error = %err,
-            "Failed to connect to gRPC server after {} attempts",
-            MAX_RETRIES
-        );
+        tracing::error!(server_addr = grpc_server_addr,error = %err,"Failed to connect to gRPC server after {} attempts", MAX_RETRIES);
         Err(err)
     }
 
@@ -217,16 +186,10 @@ impl ConfigSyncClient {
     ) -> Result<(), tonic::Status> {
         match kind {
             ResourceKind::Unspecified => {
-                return Err(tonic::Status::invalid_argument(
-                    "Cannot sync unspecified resource kind",
-                ));
+                return Err(tonic::Status::invalid_argument("Cannot sync unspecified resource kind", ));
             }
-            ResourceKind::GatewayClass
-            | ResourceKind::EdgionGatewayConfig
-            | ResourceKind::Gateway => {
-                return Err(tonic::Status::invalid_argument(
-                    "Base conf resources should not be synced via list",
-                ));
+            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
+                return Err(tonic::Status::invalid_argument("Base conf resources should not be synced via list"));
             }
             ResourceKind::HTTPRoute => {
                 self.config_client.routes().sync().await?;
@@ -256,17 +219,11 @@ impl ConfigSyncClient {
     ) -> Result<(), tonic::Status> {
         match kind {
             ResourceKind::Unspecified => {
-                return Err(tonic::Status::invalid_argument(
-                    "Cannot watch unspecified resource kind",
-                ));
+                return Err(tonic::Status::invalid_argument("Cannot watch unspecified resource kind"));
             }
             // Base conf resources should not be watched
-            ResourceKind::GatewayClass
-            | ResourceKind::EdgionGatewayConfig
-            | ResourceKind::Gateway => {
-                return Err(tonic::Status::invalid_argument(
-                    "Base conf resources should not be watched",
-                ));
+            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
+                return Err(tonic::Status::invalid_argument("Base conf resources should not be watched"));
             }
             ResourceKind::HTTPRoute => {
                 self.config_client.routes().start_watch().await?;
@@ -309,247 +266,5 @@ impl ConfigSyncClient {
         }
 
         Ok(())
-    }
-
-    // The old implementation is now replaced by individual cache watch methods
-    #[allow(dead_code)]
-    async fn start_watch_sync_old(
-        &mut self,
-        key: String,
-        kind: ResourceKind,
-    ) -> Result<(), tonic::Status> {
-        let hub_clone = self.config_client.clone();
-        let kind_clone = kind;
-        let client_id = self.client_id.clone();
-        let client_name = self.client_name.clone();
-        let grpc_server_addr = self.grpc_server_addr.clone();
-        let grpc_server_connect_timeout = self.grpc_server_connect_timeout;
-
-        tokio::spawn(async move {
-            let mut from_version = {
-                let hub = &hub_clone;
-                match kind_clone {
-                    ResourceKind::Unspecified => {
-                        tracing::warn!(kind = ?kind_clone, "Unspecified resource kind cannot be watched");
-                        return;
-                    }
-                    // Base conf resources should not be watched
-                    ResourceKind::GatewayClass
-                    | ResourceKind::EdgionGatewayConfig
-                    | ResourceKind::Gateway => {
-                        tracing::warn!(kind = ?kind_clone, "Attempted to watch base_conf resource, which should not be watched");
-                        return;
-                    }
-                    ResourceKind::HTTPRoute => hub.list_routes().resource_version,
-                    ResourceKind::Service => hub.list_services().resource_version,
-                    ResourceKind::EndpointSlice => hub.list_endpoint_slices().resource_version,
-                    ResourceKind::EdgionTls => hub.list_edgion_tls().resource_version,
-                    ResourceKind::Secret => hub.list_secrets().resource_version,
-                }
-            };
-
-            loop {
-                // Connect and create watch stream
-                let mut client = match Self::create_client_internal(
-                    &grpc_server_addr,
-                    grpc_server_connect_timeout,
-                )
-                .await
-                {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::error!(
-                            kind = ?kind_clone,
-                            client_id = %client_id,
-                            error = %e,
-                            "Failed to create client for watch"
-                        );
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                        continue;
-                    }
-                };
-
-                let request = tonic::Request::new(WatchRequest {
-                    key: key.clone(),
-                    kind: kind_clone as i32,
-                    client_id: client_id.clone(),
-                    client_name: client_name.clone(),
-                    from_version,
-                });
-
-                let mut stream = match client.watch(request).await {
-                    Ok(response) => response.into_inner(),
-                    Err(e) => {
-                        tracing::error!(
-                            kind = ?kind_clone,
-                            client_id = %client_id,
-                            error = %e,
-                            "Failed to start watch"
-                        );
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                        continue;
-                    }
-                };
-
-                tracing::info!(
-                    kind = ?kind_clone,
-                    client_id = %client_id,
-                    from_version = from_version,
-                    "Watch started"
-                );
-
-                // Process stream messages
-                loop {
-                    match stream.message().await {
-                        Ok(Some(watch_response)) => {
-                            // Update from_version for next reconnect
-                            from_version = watch_response.resource_version;
-
-                            // Parse the events from the watch response (JSON format from gRPC)
-                            let events: Vec<serde_json::Value> = match serde_json::from_str(
-                                &watch_response.data,
-                            ) {
-                                Ok(events) => events,
-                                Err(e) => {
-                                    tracing::error!(error = %e, "Failed to parse watch response events");
-                                    continue;
-                                }
-                            };
-
-                            let hub = &hub_clone;
-                            for event in events {
-                                if let Some(event_type) = event.get("type").and_then(|v| v.as_str())
-                                {
-                                    // Convert JSON to YAML for application layer
-                                    let data_str = match serde_yaml::to_string(
-                                        &event.get("data").unwrap_or(&serde_json::Value::Null),
-                                    ) {
-                                        Ok(s) => s,
-                                        Err(e) => {
-                                            tracing::error!(error = %e, "Failed to convert event data JSON to YAML");
-                                            continue;
-                                        }
-                                    };
-                                    let resource_version = event
-                                        .get("resource_version")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(watch_response.resource_version);
-
-                                    match event_type {
-                                        "add" => hub.apply_resource_change(
-                                            ResourceChange::EventAdd,
-                                            Some(kind_clone),
-                                            data_str,
-                                            Some(resource_version),
-                                        ),
-                                        "update" => hub.apply_resource_change(
-                                            ResourceChange::EventUpdate,
-                                            Some(kind_clone),
-                                            data_str,
-                                            Some(resource_version),
-                                        ),
-                                        "delete" => hub.apply_resource_change(
-                                            ResourceChange::EventDelete,
-                                            Some(kind_clone),
-                                            data_str,
-                                            Some(resource_version),
-                                        ),
-                                        _ => {}
-                                    }
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            // Stream ended
-                            tracing::info!(
-                                kind = ?kind_clone,
-                                client_id = %client_id,
-                                "Watch stream ended, reconnecting"
-                            );
-                            break;
-                        }
-                        Err(e) => {
-                            // Stream error
-                            tracing::error!(
-                                kind = ?kind_clone,
-                                client_id = %client_id,
-                                error = %e,
-                                "Watch stream error, reconnecting"
-                            );
-                            break;
-                        }
-                    }
-                }
-
-                // Wait before reconnecting
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-        });
-
-        Ok(())
-    }
-
-    /// List resources of a specific kind
-    pub async fn list(
-        &mut self,
-        key: String,
-        kind: ResourceKind,
-    ) -> Result<ListResponse, tonic::Status> {
-        let request = tonic::Request::new(ListRequest {
-            key,
-            kind: kind as i32,
-        });
-
-        let response = self.conf_client_handle.list(request).await?;
-        Ok(response.into_inner())
-    }
-
-    /// Watch for changes to resources of a specific kind (internal use only)
-    #[allow(dead_code)]
-    async fn watch(
-        &mut self,
-        key: String,
-        kind: ResourceKind,
-        client_id: String,
-        client_name: String,
-        from_version: u64,
-    ) -> Result<mpsc::Receiver<WatchResponse>, tonic::Status> {
-        tracing::info!(
-            key = %key,
-            kind = ?kind,
-            client_id = %client_id,
-            client_name = %client_name,
-            "Start watch"
-        );
-        let request = tonic::Request::new(WatchRequest {
-            key,
-            kind: kind as i32,
-            client_id,
-            client_name,
-            from_version,
-        });
-
-        let mut stream = self.conf_client_handle.watch(request).await?.into_inner();
-
-        // Convert stream to mpsc::Receiver
-        let (tx, rx) = mpsc::channel(100);
-
-        tokio::spawn(async move {
-            while let Some(result) = stream.message().await.transpose() {
-                match result {
-                    Ok(response) => {
-                        if tx.send(response).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Error receiving watch response");
-                        break;
-                    }
-                }
-            }
-        });
-
-        Ok(rx)
     }
 }
