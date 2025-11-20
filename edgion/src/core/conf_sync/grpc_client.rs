@@ -3,7 +3,7 @@ use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, GetBaseConfRequest,
 };
-use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass, ResourceKind};
+use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass, ResourceKind, ResourceKind::*};
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;
@@ -159,13 +159,7 @@ impl ConfigSyncClient {
         self.fetch_and_init_base_conf(&key).await?;
 
         // Step 2: List and sync all other resources
-        let resource_kinds = vec![
-            ResourceKind::HTTPRoute,
-            ResourceKind::Service,
-            ResourceKind::EndpointSlice,
-            ResourceKind::EdgionTls,
-            ResourceKind::Secret,
-        ];
+        let resource_kinds = vec![HTTPRoute, Service, EndpointSlice, EdgionTls, Secret];
 
         for kind in resource_kinds {
             if let Err(e) = self.sync_resource(key.clone(), kind).await {
@@ -180,27 +174,27 @@ impl ConfigSyncClient {
     /// Sync all resources of a specific kind from server
     pub async fn sync_resource(&mut self, _key: String, kind: ResourceKind) -> Result<(), tonic::Status> {
         match kind {
-            ResourceKind::Unspecified => {
+            Unspecified => {
                 return Err(tonic::Status::invalid_argument("Cannot sync unspecified resource kind"));
             }
-            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
+            GatewayClass | EdgionGatewayConfig | Gateway => {
                 return Err(tonic::Status::invalid_argument(
                     "Base conf resources should not be synced via list",
                 ));
             }
-            ResourceKind::HTTPRoute => {
+            HTTPRoute => {
                 self.config_client.routes().sync().await?;
             }
-            ResourceKind::Service => {
+            Service => {
                 self.config_client.services().sync().await?;
             }
-            ResourceKind::EndpointSlice => {
+            EndpointSlice => {
                 self.config_client.endpoint_slices().sync().await?;
             }
-            ResourceKind::EdgionTls => {
+            EdgionTls => {
                 self.config_client.edgion_tls().sync().await?;
             }
-            ResourceKind::Secret => {
+            Secret => {
                 self.config_client.secrets().sync().await?;
             }
         }
@@ -211,30 +205,30 @@ impl ConfigSyncClient {
     /// Start watching a specific resource kind and automatically sync to ConfigHub
     pub async fn start_watch_sync(&mut self, _key: String, kind: ResourceKind) -> Result<(), tonic::Status> {
         match kind {
-            ResourceKind::Unspecified => {
+            Unspecified => {
                 return Err(tonic::Status::invalid_argument(
                     "Cannot watch unspecified resource kind",
                 ));
             }
             // Base conf resources should not be watched
-            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
+            GatewayClass | EdgionGatewayConfig | Gateway => {
                 return Err(tonic::Status::invalid_argument(
                     "Base conf resources should not be watched",
                 ));
             }
-            ResourceKind::HTTPRoute => {
+            HTTPRoute => {
                 self.config_client.routes().start_watch().await?;
             }
-            ResourceKind::Service => {
+            Service => {
                 self.config_client.services().start_watch().await?;
             }
-            ResourceKind::EndpointSlice => {
+            EndpointSlice => {
                 self.config_client.endpoint_slices().start_watch().await?;
             }
-            ResourceKind::EdgionTls => {
+            EdgionTls => {
                 self.config_client.edgion_tls().start_watch().await?;
             }
-            ResourceKind::Secret => {
+            Secret => {
                 self.config_client.secrets().start_watch().await?;
             }
         }
@@ -248,13 +242,7 @@ impl ConfigSyncClient {
         let key = hub.get_gateway_class_key().clone();
 
         // Only watch non-base_conf resources
-        let resource_kinds = vec![
-            ResourceKind::HTTPRoute,
-            ResourceKind::Service,
-            ResourceKind::EndpointSlice,
-            ResourceKind::EdgionTls,
-            ResourceKind::Secret,
-        ];
+        let resource_kinds = vec![HTTPRoute, Service, EndpointSlice, EdgionTls, Secret];
 
         for kind in resource_kinds {
             if let Err(e) = self.start_watch_sync(key.clone(), kind).await {
