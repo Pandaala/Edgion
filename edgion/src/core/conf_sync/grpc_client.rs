@@ -38,18 +38,28 @@ impl ConfigSyncClient {
 
         let mut last_error = None;
         for attempt in 1..=MAX_RETRIES {
-            tracing::info!(attempt = attempt, max_retries = MAX_RETRIES, server_addr = grpc_server_addr, "Attempting to connect to gRPC server");
+            tracing::info!(
+                attempt = attempt,
+                max_retries = MAX_RETRIES,
+                server_addr = grpc_server_addr,
+                "Attempting to connect to gRPC server"
+            );
 
             match Self::create_client_internal(grpc_server_addr, timeout).await {
                 Ok(client) => {
-                    tracing::info!(server_addr = grpc_server_addr,"Successfully connected to gRPC server");
+                    tracing::info!(
+                        server_addr = grpc_server_addr,
+                        "Successfully connected to gRPC server"
+                    );
 
                     // Set gRPC client for each cache
-                    config_client.routes().set_grpc_client(client.clone());
-                    config_client.services().set_grpc_client(client.clone());
-                    config_client.endpoint_slices().set_grpc_client(client.clone());
-                    config_client.edgion_tls().set_grpc_client(client.clone());
-                    config_client.secrets().set_grpc_client(client.clone());
+                    config_client.routes().set_grpc_client(client.clone()).await;
+                    config_client.services().set_grpc_client(client.clone()).await;
+                    config_client
+                        .endpoint_slices()
+                        .set_grpc_client(client.clone()).await;
+                    config_client.edgion_tls().set_grpc_client(client.clone()).await;
+                    config_client.secrets().set_grpc_client(client.clone()).await;
 
                     return Ok(Self {
                         config_client,
@@ -186,10 +196,16 @@ impl ConfigSyncClient {
     ) -> Result<(), tonic::Status> {
         match kind {
             ResourceKind::Unspecified => {
-                return Err(tonic::Status::invalid_argument("Cannot sync unspecified resource kind", ));
+                return Err(tonic::Status::invalid_argument(
+                    "Cannot sync unspecified resource kind",
+                ));
             }
-            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
-                return Err(tonic::Status::invalid_argument("Base conf resources should not be synced via list"));
+            ResourceKind::GatewayClass
+            | ResourceKind::EdgionGatewayConfig
+            | ResourceKind::Gateway => {
+                return Err(tonic::Status::invalid_argument(
+                    "Base conf resources should not be synced via list",
+                ));
             }
             ResourceKind::HTTPRoute => {
                 self.config_client.routes().sync().await?;
@@ -219,11 +235,17 @@ impl ConfigSyncClient {
     ) -> Result<(), tonic::Status> {
         match kind {
             ResourceKind::Unspecified => {
-                return Err(tonic::Status::invalid_argument("Cannot watch unspecified resource kind"));
+                return Err(tonic::Status::invalid_argument(
+                    "Cannot watch unspecified resource kind",
+                ));
             }
             // Base conf resources should not be watched
-            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
-                return Err(tonic::Status::invalid_argument("Base conf resources should not be watched"));
+            ResourceKind::GatewayClass
+            | ResourceKind::EdgionGatewayConfig
+            | ResourceKind::Gateway => {
+                return Err(tonic::Status::invalid_argument(
+                    "Base conf resources should not be watched",
+                ));
             }
             ResourceKind::HTTPRoute => {
                 self.config_client.routes().start_watch().await?;

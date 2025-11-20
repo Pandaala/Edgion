@@ -42,12 +42,9 @@ impl<T: Versionable + Resource> ClientCache<T> {
     }
 
     /// Set the gRPC client for this cache
-    pub fn set_grpc_client(&self, client: ConfigSyncClientService<Channel>) {
-        let grpc_client = self.grpc_client.clone();
-        tokio::spawn(async move {
-            let mut guard = grpc_client.write().await;
-            *guard = Some(client);
-        });
+    pub async fn set_grpc_client(&self, client: ConfigSyncClientService<Channel>) {
+        let mut guard = self.grpc_client.write().await;
+        *guard = Some(client);
     }
 
     /// Get current resource version
