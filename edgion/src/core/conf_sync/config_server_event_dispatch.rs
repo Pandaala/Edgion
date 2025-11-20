@@ -239,19 +239,6 @@ impl EventDispatcher for ConfigServer {
         }
     }
 
-    fn set_ready(&self) {
-        use crate::core::conf_sync::EventDispatch;
-
-        // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) don't have caches
-        // They are stored in base_conf and don't need set_ready
-
-        self.routes.set_ready();
-        self.services.set_ready();
-        self.endpoint_slices.set_ready();
-        self.edgion_tls.set_ready();
-        self.secrets.set_ready();
-    }
-
     fn apply_base_conf(
         &self,
         change: ResourceChange,
@@ -260,7 +247,7 @@ impl EventDispatcher for ConfigServer {
         _resource_version: Option<u64>,
     ) {
         let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-        
+
         if resource_type.is_none() {
             tracing::warn!(
                 component = "config_server",
@@ -270,7 +257,7 @@ impl EventDispatcher for ConfigServer {
             );
             return;
         }
-        
+
         let resource_type = resource_type.unwrap();
 
         // Only process base conf resources
@@ -304,7 +291,7 @@ impl EventDispatcher for ConfigServer {
                     match change {
                         ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
                             let mut base_conf = self.base_conf.write().unwrap();
-                            
+
                             // Check if existing EdgionGatewayConfig matches the new GatewayClass
                             // If GatewayClass has parametersRef, validate the match
                             // If GatewayClass has no parametersRef, clear any existing config
@@ -321,7 +308,7 @@ impl EventDispatcher for ConfigServer {
                                     // GatewayClass has no parametersRef, so no config should exist
                                     false
                                 };
-                                
+
                                 if !should_keep {
                                     tracing::info!(
                                         component = "config_server",
@@ -386,7 +373,7 @@ impl EventDispatcher for ConfigServer {
                         );
                         return;
                     }
-                    
+
                     tracing::info!(
                         component = "config_server",
                         kind = "EdgionGatewayConfig",
@@ -456,5 +443,18 @@ impl EventDispatcher for ConfigServer {
                 );
             }
         }
+    }
+
+    fn set_ready(&self) {
+        use crate::core::conf_sync::EventDispatch;
+
+        // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) don't have caches
+        // They are stored in base_conf and don't need set_ready
+
+        self.routes.set_ready();
+        self.services.set_ready();
+        self.endpoint_slices.set_ready();
+        self.edgion_tls.set_ready();
+        self.secrets.set_ready();
     }
 }
