@@ -5,7 +5,6 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::signal;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -37,7 +36,7 @@ impl EdgionGwCli {
     /// This can be easily removed in the future if not needed
     fn spawn_config_printer(config_client: Arc<ConfigClient>) {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
                 interval.tick().await;
                 config_client.print_config();
@@ -80,49 +79,10 @@ impl EdgionGwCli {
         // Start watching for changes
         sync_client.start_watch_all().await?;
 
-        let mut gateway = EdgionGw::new(sync_client);
-
-        // Get config_client for debug printing
-        let config_client = gateway.config_client();
-
-        tracing::info!(server_addr = server_addr, "Connected to operator");
-
-        // Print initial configuration
-        config_client.print_config();
-
-        // Spawn task to print config every 10 seconds
-        Self::spawn_config_printer(config_client);
-
-        gateway.serve().await?;
-        gateway.shutdown().await;
+        let config_client = sync_client.get_config_client();
+        Self::spawn_config_printer(config_client.clone());
 
         Ok(())
     }
 }
 
-pub struct EdgionGw {
-    sync_client: ConfigSyncClient,
-}
-
-impl EdgionGw {
-    pub fn new(sync_client: ConfigSyncClient) -> Self {
-        Self { sync_client }
-    }
-
-    pub async fn serve(&self) -> Result<()> {
-        tracing::info!("Gateway started, waiting for shutdown signal");
-
-        signal::ctrl_c().await.expect("failed to listen for ctrl_c signal");
-
-        tracing::info!("Shutdown signal received");
-        Ok(())
-    }
-
-    pub async fn shutdown(&mut self) {
-        // ConfigSyncClient will be automatically dropped when EdgionGw is dropped
-    }
-
-    pub fn config_client(&self) -> Arc<ConfigClient> {
-        self.sync_client.get_config_client()
-    }
-}
