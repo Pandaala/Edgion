@@ -219,8 +219,70 @@ where
 
         tokio::spawn(async move {
             let mut from_version = cache_data.read().unwrap().resource_version;
+            let mut is_first_watch = true;  // Flag to distinguish first watch from reconnection
 
             loop {
+                // On reconnection (not first watch), perform relist to sync with server
+                if !is_first_watch {
+                    tracing::info!(
+                        kind = T::kind_name(),
+                        client_id = %client_id,
+                        "Reconnecting - performing relist before watch"
+                    );
+
+                    let mut client_guard = grpc_client.write().await;
+                    if let Some(client) = client_guard.as_mut() {
+                        let list_request = tonic::Request::new(crate::core::conf_sync::proto::ListRequest {
+                            key: gateway_class_key.as_ref().clone(),
+                            kind: T::resource_kind() as i32,
+                        });
+
+                        match client.list(list_request).await {
+                            Ok(list_response) => {
+                                let list_data = list_response.into_inner();
+
+                                match serde_json::from_str::<Vec<T>>(&list_data.data) {
+                                    Ok(resources) => {
+                                        // Clear and rebuild cache with fresh data
+                                        let mut cache = cache_data.write().unwrap();
+                                        cache.data.clear();
+                                        for resource in resources {
+                                            let version = resource.get_version();
+                                            cache.data.insert(version.to_string(), resource);
+                                        }
+
+                                        // Update resource version
+                                        from_version = list_data.resource_version;
+                                        cache.resource_version = from_version;
+
+                                        tracing::info!(
+                                            kind = T::kind_name(),
+                                            count = cache.data.len(),
+                                            new_version = from_version,
+                                            "Reconnection relist completed successfully"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            kind = T::kind_name(),
+                                            error = %e,
+                                            "Failed to parse relist response on reconnection"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    kind = T::kind_name(),
+                                    error = %e,
+                                    "Failed to perform relist on reconnection"
+                                );
+                            }
+                        }
+                    }
+                    drop(client_guard);
+                }
+
                 let mut client_guard = grpc_client.write().await;
                 let client = match client_guard.as_mut() {
                     Some(c) => c,
@@ -321,12 +383,22 @@ where
 
                 drop(client_guard);
 
-                tracing::info!(
-                    kind = T::kind_name(),
-                    client_id = %client_id,
-                    from_version = from_version,
-                    "Watch started"
-                );
+                if is_first_watch {
+                    tracing::info!(
+                        kind = T::kind_name(),
+                        client_id = %client_id,
+                        from_version = from_version,
+                        "Watch started (first time)"
+                    );
+                    is_first_watch = false;  // Mark that first watch has been done
+                } else {
+                    tracing::info!(
+                        kind = T::kind_name(),
+                        client_id = %client_id,
+                        from_version = from_version,
+                        "Watch restarted after reconnection"
+                    );
+                }
 
                 // Process stream messages
                 loop {
