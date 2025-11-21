@@ -67,10 +67,7 @@ impl ConfigServer {
                                         .or_else(|| resource.metadata.namespace.as_ref()),
                                     first_ref.name
                                 );
-                                (
-                                    info,
-                                    "HTTPRoute references a Gateway that does not exist in base_conf, skipping",
-                                )
+                                (info, "HTTPRoute references a Gateway that does not exist in base_conf, skipping")
                             } else {
                                 (
                                     "no parent_refs".to_string(),
@@ -81,7 +78,7 @@ impl ConfigServer {
                             ("no parent_refs".to_string(), "HTTPRoute has no parent_refs, skipping")
                         };
 
-                        tracing::info!(
+                        tracing::warn!(
                             component = "config_server",
                             change = ?change,
                             kind = "HTTPRoute",
@@ -311,7 +308,7 @@ impl ConfigServer {
                     };
 
                     if !should_load {
-                        tracing::info!(
+                        tracing::warn!(
                             component = "config_server",
                             event = "skip_config_mismatch",
                             config_name = ?resource.metadata.name,

@@ -235,39 +235,48 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> EventDispatch<T
     {
         let mut version = resource.get_version();
         let store_guard = self.store.read().unwrap();
-        
-        // Only force version update if resource version is older than store version
-        // and it's not an InitAdd (which is used during initialization)
-        if resource.get_version() < store_guard.get_last_resource_version() && change != ResourceChange::InitAdd {
-            if *self.version_fix_mode.read().unwrap() {
-                version = utils::next_resource_version();
-                resource.meta_mut().resource_version = Some(version.to_string());
-                tracing::warn!(
-                    component = "cache_server",
-                    event = "apply_change",
-                    change = ?change,
-                    kind = std::any::type_name::<T>(),
-                    name = ?resource.name_any(),
-                    namespace = ?resource.namespace(),
-                    old_version = resource.get_version(),
-                    new_version = version,
-                    "old or same version detected, forcing new version"
-                );
-            } else {
-                tracing::warn!(
-                    component = "cache_server",
-                    event = "apply_change",
-                    change = ?change,
-                    kind = std::any::type_name::<T>(),
-                    name = ?resource.name_any(),
-                    namespace = ?resource.namespace(),
-                    old_version = resource.get_version(),
-                    new_version = version,
-                    "old or same version detected, but version fix mode is not enabled, skipping"
-                );
-                return;
-            }
+
+        if *self.version_fix_mode.read().unwrap() && resource.get_version() <= store_guard.get_last_resource_version() {
+            tracing::warn!(
+                component = "cache_server",
+                event = "apply_change",
+                change = ?change,
+                kind = std::any::type_name::<T>(),
+                name = ?resource.name_any(),
+                namespace = ?resource.namespace(),
+                old_version = resource.get_version(),
+                new_version = version,
+                "old or same version detected, forcing new version"
+            );
+            version = utils::next_resource_version();
+            resource.meta_mut().resource_version = Some(version.to_string());
         }
+
+        if change != ResourceChange::InitAdd && resource.get_version() <= store_guard.get_last_resource_version() {
+            tracing::error!(
+                component = "cache_server",
+                event = "apply_change",
+                change = ?change,
+                kind = std::any::type_name::<T>(),
+                name = ?resource.name_any(),
+                namespace = ?resource.namespace(),
+                old_version = resource.get_version(),
+                new_version = version,
+                "old or same version detected, should some error"
+            );
+            return;
+        }
+
+        tracing::info!(
+            component = "cache_server",
+            event = "apply_change",
+            change = ?change,
+            kind = std::any::type_name::<T>(),
+            name = ?resource.name_any(),
+            namespace = ?resource.namespace(),
+            version = resource.get_version(),
+            "apply change"
+        );
 
         match change {
             ResourceChange::InitAdd => {

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// EdgionGatewayConfig is the configuration for a GatewayClass
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
-    group = "example.com",
+    group = "edgion.com",
     version = "v1alpha1",
     kind = "EdgionGatewayConfig",
     plural = "Edgiongatewayclassconfigs",

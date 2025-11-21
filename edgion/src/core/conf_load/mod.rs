@@ -84,11 +84,11 @@ impl Loader {
         tracing::info!("====> loading Gateway...");
         self.inner.bootstrap_base_conf(Some(ResourceKind::Gateway)).await?;
 
+        self.inner.set_enable_resource_version_fix();
+
         tracing::info!("====> start bootstrap user conf...");
         // Bootstrap user configuration resources
         self.inner.bootstrap_user_conf().await?;
-
-        self.inner.set_enable_resource_version_fix();
 
         tracing::info!("====> Bootstrapped, set ready");
         // Set ready state
