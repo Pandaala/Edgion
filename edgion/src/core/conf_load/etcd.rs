@@ -134,58 +134,6 @@ impl ConfigLoader for EtcdConfigLoader {
         Ok(())
     }
 
-    /// Bootstrap and load base configuration resources (GatewayClass, EdgionGatewayConfig, Gateway)
-    /// If kind is specified, only load resources of that kind
-    async fn bootstrap_base_conf(&self, kind: Option<crate::types::ResourceKind>) -> Result<()> {
-        let mut client_guard = self.client.lock().await;
-        let client = client_guard.as_mut().ok_or_else(|| anyhow!("Client not connected"))?;
-
-        let options = GetOptions::new().with_prefix();
-        let resp = client
-            .get(self.prefix.clone(), Some(options))
-            .await
-            .with_context(|| format!("Failed to fetch initial keys for prefix {}", self.prefix))?;
-
-        let mut cache_guard = self.cache.lock().await;
-
-        for kv in resp.kvs() {
-            if let Ok(value) = String::from_utf8(kv.value().to_vec()) {
-                // Determine if this is a base conf resource
-                let is_base_conf = if let Some(content_kind) = ResourceKind::from_content(&value) {
-                    matches!(
-                        content_kind,
-                        ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
-                    )
-                } else {
-                    false
-                };
-
-                if is_base_conf {
-                    // Check kind filter if specified
-                    if let Some(target_kind) = kind {
-                        if let Some(content_kind) = ResourceKind::from_content(&value) {
-                            if content_kind != target_kind {
-                                continue;
-                            }
-                        } else {
-                            continue;
-                        }
-                    }
-
-                    let key = String::from_utf8_lossy(kv.key()).to_string();
-                    cache_guard.insert(key, value.clone());
-                    drop(cache_guard);
-                    // Use InitAdd for bootstrap phase
-                    self.dispatcher.apply_base_conf(ResourceChange::InitAdd, kind, value);
-                    cache_guard = self.cache.lock().await;
-                }
-            }
-        }
-
-        drop(cache_guard);
-        Ok(())
-    }
-
     /// Bootstrap and load user configuration resources (all other resources)
     async fn bootstrap_user_conf(&self) -> Result<()> {
         let mut client_guard = self.client.lock().await;
@@ -273,5 +221,90 @@ impl ConfigLoader for EtcdConfigLoader {
 
     fn set_enable_resource_version_fix(&self) {
         // not need
+    }
+
+    async fn load_base(&self) -> Result<crate::core::conf_sync::GatewayBaseConf> {
+        use crate::types::{GatewayClass, EdgionGatewayConfig, Gateway, ResourceKind};
+        use crate::core::conf_sync::GatewayBaseConf;
+        
+        tracing::info!("Starting to load base configuration from etcd");
+        
+        let mut gateway_class: Option<GatewayClass> = None;
+        let mut edgion_gateway_config: Option<EdgionGatewayConfig> = None;
+        let mut gateways: Vec<Gateway> = Vec::new();
+        
+        // Get all keys with prefix from etcd
+        let mut client_guard = self.client.lock().await;
+        let client = client_guard.as_mut().ok_or_else(|| anyhow!("Client not connected"))?;
+        
+        let options = GetOptions::new().with_prefix();
+        let resp = client
+            .get(self.prefix.clone(), Some(options))
+            .await
+            .context("Failed to get keys from etcd")?;
+        
+        drop(client_guard);
+        
+        for kv in resp.kvs() {
+            let key = String::from_utf8_lossy(kv.key()).to_string();
+            let value = match String::from_utf8(kv.value().to_vec()) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("Failed to parse value for key {}: {}", key, e);
+                    continue;
+                }
+            };
+            
+            // Determine resource kind
+            let kind = match ResourceKind::from_content(&value) {
+                Some(k) => k,
+                None => {
+                    tracing::warn!("Failed to determine resource kind for key {}", key);
+                    continue;
+                }
+            };
+            
+            // Parse based on kind
+            match kind {
+                ResourceKind::GatewayClass => {
+                    if gateway_class.is_none() {
+                        if let Ok(gc) = serde_yaml::from_str::<GatewayClass>(&value) {
+                            tracing::info!("Found GatewayClass: {:?}", gc.metadata.name);
+                            gateway_class = Some(gc);
+                        }
+                    }
+                }
+                ResourceKind::EdgionGatewayConfig => {
+                    if edgion_gateway_config.is_none() {
+                        if let Ok(egwc) = serde_yaml::from_str::<EdgionGatewayConfig>(&value) {
+                            tracing::info!("Found EdgionGatewayConfig: {:?}", egwc.metadata.name);
+                            edgion_gateway_config = Some(egwc);
+                        }
+                    }
+                }
+                ResourceKind::Gateway => {
+                    if let Ok(gw) = serde_yaml::from_str::<Gateway>(&value) {
+                        tracing::info!("Found Gateway: {:?}", gw.metadata.name);
+                        gateways.push(gw);
+                    }
+                }
+                _ => {
+                    // Skip other resource types
+                }
+            }
+        }
+        
+        // Validate required resources exist
+        let gc = gateway_class.ok_or_else(|| anyhow!("GatewayClass not found in etcd"))?;
+        let egwc = edgion_gateway_config.ok_or_else(|| anyhow!("EdgionGatewayConfig not found in etcd"))?;
+        
+        tracing::info!(
+            "Successfully loaded base configuration from etcd: GatewayClass={:?}, EdgionGatewayConfig={:?}, Gateways count={}",
+            gc.metadata.name,
+            egwc.metadata.name,
+            gateways.len()
+        );
+        
+        Ok(GatewayBaseConf::new(gc, egwc, gateways))
     }
 }

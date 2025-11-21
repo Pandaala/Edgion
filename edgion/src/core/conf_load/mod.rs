@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::core::conf_sync::traits::ConfigServerEventDispatcher;
-use crate::types::prelude_resources::*;
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use std::path::PathBuf;
@@ -67,22 +66,6 @@ impl Loader {
         tracing::info!("====> start connect...");
         // Connect to configuration source
         self.inner.connect().await?;
-
-        tracing::info!("====> start bootstrap base conf...");
-        // Bootstrap base configuration resources in order:
-        // 1. GatewayClass (must be loaded first)
-        tracing::info!("====> loading GatewayClass...");
-        self.inner.bootstrap_base_conf(Some(ResourceKind::GatewayClass)).await?;
-
-        // 2. EdgionGatewayConfig (referenced by GatewayClass)
-        tracing::info!("====> loading EdgionGatewayConfig...");
-        self.inner
-            .bootstrap_base_conf(Some(ResourceKind::EdgionGatewayConfig))
-            .await?;
-
-        // 3. Gateway (uses GatewayClass)
-        tracing::info!("====> loading Gateway...");
-        self.inner.bootstrap_base_conf(Some(ResourceKind::Gateway)).await?;
 
         self.inner.set_enable_resource_version_fix();
 

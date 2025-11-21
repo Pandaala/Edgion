@@ -1,4 +1,4 @@
-use crate::types::ResourceKind;
+use crate::core::conf_sync::GatewayBaseConf;
 use async_trait::async_trait;
 
 #[async_trait]
@@ -6,9 +6,10 @@ pub trait ConfigLoader: Send + Sync {
     /// Connect to the configuration source (e.g., etcd cluster, localpath)
     async fn connect(&self) -> anyhow::Result<()>;
 
-    /// Bootstrap and load base configuration resources (GatewayClass, EdgionGatewayConfig, Gateway)
-    /// If kind is specified, only load resources of that kind
-    async fn bootstrap_base_conf(&self, kind: Option<ResourceKind>) -> anyhow::Result<()>;
+    /// Load base configuration and return GatewayBaseConf
+    /// This method should find GatewayClass, EdgionGatewayConfig, and Gateways,
+    /// then assemble them into a GatewayBaseConf
+    async fn load_base(&self) -> anyhow::Result<GatewayBaseConf>;
 
     /// Bootstrap and load user configuration resources (all other resources)
     async fn bootstrap_user_conf(&self) -> anyhow::Result<()>;
