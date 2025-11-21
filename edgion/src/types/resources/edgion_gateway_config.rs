@@ -7,12 +7,6 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// API group for EdgionGatewayConfig
-pub const EDGION_GATEWAY_CONFIG_GROUP: &str = "example.com";
-
-/// Kind for EdgionGatewayConfig
-pub const EDGION_GATEWAY_CONFIG_KIND: &str = "EdgionGatewayConfig";
-
 /// EdgionGatewayConfig is the configuration for a GatewayClass
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
