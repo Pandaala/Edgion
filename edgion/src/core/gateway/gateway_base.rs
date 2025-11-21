@@ -32,6 +32,9 @@ impl GatewayBase {
         let mut conf = ServerConf::default();
         let server_config = self.edgion_gateway_config.spec.server.as_ref();
         
+        // Ensure daemon mode is disabled (we don't run as daemon)
+        conf.daemon = false;
+        
         // 1. Number of worker threads (default: number of CPU cores)
         conf.threads = server_config
             .and_then(|c| c.threads)

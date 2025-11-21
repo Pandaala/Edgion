@@ -49,8 +49,11 @@ impl EdgionGwCli {
         // Use RUST_LOG environment variable if set, otherwise default to "info"
         let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
 
+        // Use temp directory for logs to avoid permission issues
+        let log_dir = std::env::temp_dir().join("edgion-gw-logs");
+        
         let log_config = LogConfig {
-            log_dir: std::path::PathBuf::from("logs"),
+            log_dir,
             file_prefix: "edgion-gateway".to_string(),
             json_format: false,
             console: true,
@@ -82,6 +85,13 @@ impl EdgionGwCli {
         let config_client = sync_client.get_config_client();
         Self::spawn_config_printer(config_client.clone());
 
+        // Keep the program running indefinitely
+        tracing::info!("Gateway is running. Press Ctrl+C to exit.");
+        
+        // Wait indefinitely until the program is terminated
+        tokio::signal::ctrl_c().await?;
+        
+        tracing::info!("Received shutdown signal, exiting...");
         Ok(())
     }
 }
