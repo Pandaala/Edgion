@@ -258,6 +258,7 @@ impl LocalPathLoader {
 
         // 使用 InitAdd
         // Determine if this is a base conf resource
+        // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are loaded via load_base, not through file watching
         let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
             matches!(
                 kind,
@@ -267,9 +268,8 @@ impl LocalPathLoader {
             false
         };
 
-        if is_base_conf {
-            self.dispatcher.apply_base_conf(ResourceChange::InitAdd, None, content);
-        } else {
+        // Skip base conf resources as they are handled by load_base
+        if !is_base_conf {
             self.dispatcher
                 .apply_resource_change(ResourceChange::InitAdd, None, content);
         }
@@ -329,6 +329,7 @@ impl LocalPathLoader {
 
                         // 触发 delete 事件
                         // Determine if this is a base conf resource
+                        // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are loaded via load_base, not through file watching
                         let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
                             matches!(
                                 kind,
@@ -338,10 +339,8 @@ impl LocalPathLoader {
                             false
                         };
 
-                        if is_base_conf {
-                            self.dispatcher
-                                .apply_base_conf(ResourceChange::EventDelete, None, content);
-                        } else {
+                        // Skip base conf resources as they are handled by load_base
+                        if !is_base_conf {
                             self.dispatcher
                                 .apply_resource_change(ResourceChange::EventDelete, None, content);
                         }
@@ -409,6 +408,7 @@ impl LocalPathLoader {
         }
 
         // Determine if this is a base conf resource
+        // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are loaded via load_base, not through file watching
         let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
             matches!(
                 kind,
@@ -418,9 +418,8 @@ impl LocalPathLoader {
             false
         };
 
-        if is_base_conf {
-            self.dispatcher.apply_base_conf(change, None, content);
-        } else {
+        // Skip base conf resources as they are handled by load_base
+        if !is_base_conf {
             self.dispatcher.apply_resource_change(change, None, content);
         }
         Ok(())

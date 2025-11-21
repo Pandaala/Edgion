@@ -409,16 +409,4 @@ impl ConfigClientEventDispatcher for ConfigClient {
             },
         }
     }
-
-    fn apply_base_conf(
-        &self,
-        change: ResourceChange,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        resource_version: Option<u64>,
-    ) {
-        // ConfigClient also handles base_conf through apply_resource_change
-        // This method is kept for trait compatibility but delegates to apply_resource_change
-        self.apply_resource_change(change, resource_type, data, resource_version);
-    }
 }

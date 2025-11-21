@@ -49,6 +49,7 @@ impl EtcdConfigLoader {
 
     async fn handle_put(&self, key: String, value: String) {
         // Determine if this is a base conf resource
+        // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are loaded via load_base, not through watch
         let is_base_conf = if let Some(kind) = ResourceKind::from_content(&value) {
             matches!(
                 kind,
@@ -58,44 +59,30 @@ impl EtcdConfigLoader {
             false
         };
 
+        // Skip base conf resources as they are handled by load_base
+        if is_base_conf {
+            return;
+        }
+
         let mut cache = self.cache.lock().await;
         if let Some(old) = cache.remove(&key) {
-            // Determine if old value was base conf resource
-            let old_is_base_conf = if let Some(kind) = ResourceKind::from_content(&old) {
-                matches!(
-                    kind,
-                    ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
-                )
-            } else {
-                false
-            };
-
             drop(cache);
-            if old_is_base_conf {
-                self.dispatcher
-                    .apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old);
-            } else {
-                self.dispatcher
-                    .apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old);
-            }
+            self.dispatcher
+                .apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old);
             cache = self.cache.lock().await;
         }
         cache.insert(key, value.clone());
         drop(cache);
 
-        if is_base_conf {
-            self.dispatcher
-                .apply_base_conf(ResourceChange::EventAdd, self.resource_kind, value);
-        } else {
-            self.dispatcher
-                .apply_resource_change(ResourceChange::EventAdd, self.resource_kind, value);
-        }
+        self.dispatcher
+            .apply_resource_change(ResourceChange::EventAdd, self.resource_kind, value);
     }
 
     async fn handle_delete(&self, key: String) {
         let mut cache = self.cache.lock().await;
         if let Some(old) = cache.remove(&key) {
             // Determine if this is a base conf resource
+            // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are loaded via load_base, not through watch
             let is_base_conf = if let Some(kind) = ResourceKind::from_content(&old) {
                 matches!(
                     kind,
@@ -106,10 +93,9 @@ impl EtcdConfigLoader {
             };
 
             drop(cache);
-            if is_base_conf {
-                self.dispatcher
-                    .apply_base_conf(ResourceChange::EventDelete, self.resource_kind, old);
-            } else {
+            
+            // Skip base conf resources as they are handled by load_base
+            if !is_base_conf {
                 self.dispatcher
                     .apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old);
             }
