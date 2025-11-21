@@ -36,6 +36,14 @@ impl GatewayBaseConf {
         }
     }
     
+    fn make_gateway_key_from_parts(namespace: Option<&String>, name: Option<&String>) -> String {
+        if let Some(ns) = namespace {
+            format!("{}/{}", ns, name.unwrap_or(&"".to_string()))
+        } else {
+            name.unwrap_or(&"".to_string()).clone()
+        }
+    }
+    
     pub fn gateway_class(&self) -> &GatewayClass {
         &self.gateway_class
     }
@@ -46,5 +54,49 @@ impl GatewayBaseConf {
     
     pub fn gateways(&self) -> &Vec<Gateway> {
         &self.gateways
+    }
+    
+    /// Add a new gateway or update an existing one
+    pub fn add_gateway(&mut self, gateway: Gateway) {
+        let key = Self::make_gateway_key(&gateway);
+        
+        // Check if gateway already exists
+        if !self.gateway_map.contains_key(&key) {
+            self.gateway_map.insert(key.clone(), ());
+            self.gateways.push(gateway);
+        } else {
+            // Update existing gateway
+            if let Some(existing) = self.gateways.iter_mut().find(|g| {
+                Self::make_gateway_key(g) == key
+            }) {
+                *existing = gateway;
+            }
+        }
+    }
+    
+    /// Remove a gateway by namespace and name
+    pub fn remove_gateway(&mut self, namespace: Option<&String>, name: Option<&String>) {
+        let key = Self::make_gateway_key_from_parts(namespace, name);
+        
+        self.gateway_map.remove(&key);
+        self.gateways.retain(|g| {
+            Self::make_gateway_key(g) != key
+        });
+    }
+    
+    /// Check if a gateway exists
+    pub fn has_gateway(&self, namespace: Option<&String>, name: Option<&String>) -> bool {
+        let key = Self::make_gateway_key_from_parts(namespace, name);
+        self.gateway_map.contains_key(&key)
+    }
+    
+    /// Set gateway class
+    pub fn set_gateway_class(&mut self, gateway_class: GatewayClass) {
+        self.gateway_class = gateway_class;
+    }
+    
+    /// Set edgion gateway config
+    pub fn set_edgion_gateway_config(&mut self, edgion_gateway_config: EdgionGatewayConfig) {
+        self.edgion_gateway_config = edgion_gateway_config;
     }
 }
