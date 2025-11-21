@@ -45,8 +45,12 @@ impl ConfigServer {
                                 .or_else(|| resource.metadata.namespace.as_ref());
                             let gateway_name = Some(&first_ref.name);
 
-                            let base_conf = self.base_conf.read().unwrap();
-                            base_conf.has_gateway(gateway_namespace, gateway_name)
+                            let base_conf_guard = self.base_conf.read().unwrap();
+                            if let Some(ref base_conf) = *base_conf_guard {
+                                base_conf.has_gateway(gateway_namespace, gateway_name)
+                            } else {
+                                false
+                            }
                         } else {
                             // 没有 parent_refs，无法判断
                             false
@@ -132,8 +136,12 @@ impl ConfigServer {
                                 .or_else(|| resource.metadata.namespace.as_ref());
                             let gateway_name = Some(&first_ref.name);
 
-                            let base_conf = self.base_conf.read().unwrap();
-                            base_conf.has_gateway(gateway_namespace, gateway_name)
+                            let base_conf_guard = self.base_conf.read().unwrap();
+                            if let Some(ref base_conf) = *base_conf_guard {
+                                base_conf.has_gateway(gateway_namespace, gateway_name)
+                            } else {
+                                false
+                            }
                         } else {
                             // 没有 parent_refs，无法判断
                             false
@@ -233,43 +241,27 @@ impl ConfigServer {
                     );
                     match change {
                         ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                            let mut base_conf = self.base_conf.write().unwrap();
-
-                            // Check if existing EdgionGatewayConfig matches the new GatewayClass
-                            // If GatewayClass has parametersRef, validate the match
-                            // If GatewayClass has no parametersRef, clear any existing config
-                            if let Some(existing_config) = base_conf.edgion_gateway_config() {
-                                let config_name = existing_config.metadata.name.as_deref().unwrap_or("");
-                                let should_keep = if let Some(ref params) = resource.spec.parameters_ref {
-                                    // Check group, kind, and name
-                                    params.group == EdgionGatewayConfig::group(&()) &&
-                                        params.kind == EdgionGatewayConfig::kind(&()) &&
-                                        params.name == config_name &&
-                                        // EdgionGatewayConfig is cluster-scoped, so namespace should be None
-                                        params.namespace.is_none()
-                                } else {
-                                    // GatewayClass has no parametersRef, so no config should exist
-                                    false
-                                };
-
-                                if !should_keep {
-                                    tracing::info!(
-                                        component = "config_server",
-                                        event = "clear_mismatched_config",
-                                        config_name = %config_name,
-                                        "Clearing EdgionGatewayConfig that does not match new GatewayClass parametersRef"
-                                    );
-                                    base_conf.clear_edgion_gateway_config();
-                                }
+                            let mut base_conf_guard = self.base_conf.write().unwrap();
+                            if let Some(ref mut base_conf) = *base_conf_guard {
+                                base_conf.set_gateway_class(resource);
+                            } else {
+                                // base_conf not initialized yet, cannot set gateway_class alone
+                                tracing::warn!(
+                                    component = "config_server",
+                                    event = "base_conf_not_initialized",
+                                    "Cannot set GatewayClass when base_conf is not initialized"
+                                );
                             }
-
-                            base_conf.set_gateway_class(resource);
                         }
                         ResourceChange::EventDelete => {
-                            let mut base_conf = self.base_conf.write().unwrap();
-                            base_conf.clear_gateway_class();
-                            // Also clear config as it's no longer referenced
-                            base_conf.clear_edgion_gateway_config();
+                            // Deleting GatewayClass invalidates the entire base_conf
+                            let mut base_conf_guard = self.base_conf.write().unwrap();
+                            *base_conf_guard = None;
+                            tracing::warn!(
+                                component = "config_server",
+                                event = "gateway_class_deleted",
+                                "GatewayClass deleted, base_conf invalidated"
+                            );
                         }
                     }
                 }
@@ -278,8 +270,9 @@ impl ConfigServer {
                 if let Ok(resource) = serde_yaml::from_str::<EdgionGatewayConfig>(&data) {
                     // Check against existing GatewayClass
                     let should_load = {
-                        let base_conf = self.base_conf.read().unwrap();
-                        if let Some(gc) = base_conf.gateway_class() {
+                        let base_conf_guard = self.base_conf.read().unwrap();
+                        if let Some(ref base_conf) = *base_conf_guard {
+                            let gc = base_conf.gateway_class();
                             if let Some(ref params) = gc.spec.parameters_ref {
                                 // Check group, kind, name, and namespace
                                     params.group == EdgionGatewayConfig::group(&()) &&
@@ -290,9 +283,9 @@ impl ConfigServer {
                             } else {
                                 // GatewayClass has no parametersRef, so no config should be loaded
                                 false
-                            }
+                                }
                         } else {
-                            // GatewayClass not loaded yet
+                            // base_conf not initialized yet (GatewayClass not loaded)
                             // If gateway_class is configured, we should wait for the matching GatewayClass
                             // If gateway_class is not configured, allow loading for now (will be validated later)
                             if self.gateway_class.is_some() {
@@ -327,12 +320,27 @@ impl ConfigServer {
                     );
                     match change {
                         ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                            let mut base_conf = self.base_conf.write().unwrap();
-                            base_conf.set_edgion_gateway_config(resource);
+                            let mut base_conf_guard = self.base_conf.write().unwrap();
+                            if let Some(ref mut base_conf) = *base_conf_guard {
+                                base_conf.set_edgion_gateway_config(resource);
+                            } else {
+                                // base_conf not initialized yet, cannot set edgion_gateway_config alone
+                                tracing::warn!(
+                                    component = "config_server",
+                                    event = "base_conf_not_initialized",
+                                    "Cannot set EdgionGatewayConfig when base_conf is not initialized"
+                                );
+                            }
                         }
                         ResourceChange::EventDelete => {
-                            let mut base_conf = self.base_conf.write().unwrap();
-                            base_conf.clear_edgion_gateway_config();
+                            // Deleting EdgionGatewayConfig invalidates the entire base_conf
+                            let mut base_conf_guard = self.base_conf.write().unwrap();
+                            *base_conf_guard = None;
+                            tracing::warn!(
+                                component = "config_server",
+                                event = "edgion_gateway_config_deleted",
+                                "EdgionGatewayConfig deleted, base_conf invalidated"
+                            );
                         }
                     }
                 }
@@ -364,13 +372,23 @@ impl ConfigServer {
                     );
                     match change {
                         ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                            let mut base_conf = self.base_conf.write().unwrap();
-                            base_conf.add_gateway(resource);
+                            let mut base_conf_guard = self.base_conf.write().unwrap();
+                            if let Some(ref mut base_conf) = *base_conf_guard {
+                                base_conf.add_gateway(resource);
+                            } else {
+                                // base_conf not initialized yet, cannot add gateway alone
+                                tracing::warn!(
+                                    component = "config_server",
+                                    event = "base_conf_not_initialized",
+                                    "Cannot add Gateway when base_conf is not initialized"
+                                );
+                            }
                         }
                         ResourceChange::EventDelete => {
-                            let mut base_conf = self.base_conf.write().unwrap();
-                            base_conf
-                                .remove_gateway(resource.metadata.namespace.as_ref(), resource.metadata.name.as_ref());
+                            let mut base_conf_guard = self.base_conf.write().unwrap();
+                            if let Some(ref mut base_conf) = *base_conf_guard {
+                                base_conf.remove_gateway(resource.metadata.namespace.as_ref(), resource.metadata.name.as_ref());
+                            }
                         }
                     }
                 }

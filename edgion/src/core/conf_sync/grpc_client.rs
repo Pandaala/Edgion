@@ -1,14 +1,10 @@
-use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
+use crate::core::conf_sync::GatewayBaseConf;
 use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, GetBaseConfRequest,
 };
 use crate::types::prelude_resources::*;
 use crate::types::ResourceKind::*;
-// Re-import types to shadow the enum variants with the same name
-use crate::types::resources::{
-    EdgionGatewayConfig, Gateway, GatewayClass,
-};
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;
@@ -109,49 +105,30 @@ impl ConfigSyncClient {
         let base_conf_response = response.into_inner();
 
         tracing::info!(
-            gateway_class_bytes = base_conf_response.gateway_class.len(),
-            edgion_gateway_config_bytes = base_conf_response.edgion_gateway_config.len(),
-            gateways_bytes = base_conf_response.gateways.len(),
+            base_conf_bytes = base_conf_response.base_conf.len(),
             "Init base_conf"
         );
 
-        let mut base_conf = GatewayClassBaseConf::new();
-
-        // Parse and set GatewayClass
-        if !base_conf_response.gateway_class.is_empty() {
-            if let Ok(items) = serde_json::from_str::<Vec<GatewayClass>>(&base_conf_response.gateway_class) {
-                if let Some(gc) = items.into_iter().next() {
-                    println!("[ConfigClient] Parsed GatewayClass");
-                    base_conf.set_gateway_class(gc);
+        // Parse GatewayBaseConf
+        if !base_conf_response.base_conf.is_empty() {
+            match serde_json::from_str::<GatewayBaseConf>(&base_conf_response.base_conf) {
+                Ok(mut base_conf) => {
+                    // Rebuild gateway_map after deserialization
+                    base_conf.rebuild_gateway_map();
+                    
+                    println!("[ConfigClient] Parsed GatewayBaseConf");
+                    self.config_client.init_base_conf(base_conf);
+                    tracing::info!("Base configuration initialized");
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to parse base conf");
+                    return Err(tonic::Status::internal(format!("Failed to parse base conf: {}", e)));
                 }
             }
+        } else {
+            tracing::warn!("Received empty base configuration");
         }
 
-        // Parse and set EdgionGatewayConfig
-        if !base_conf_response.edgion_gateway_config.is_empty() {
-            if let Ok(items) =
-                serde_json::from_str::<Vec<EdgionGatewayConfig>>(&base_conf_response.edgion_gateway_config)
-            {
-                if let Some(egc) = items.into_iter().next() {
-                    println!("[ConfigClient] Parsed EdgionGatewayConfig");
-                    base_conf.set_edgion_gateway_config(egc);
-                }
-            }
-        }
-
-        // Parse and add Gateways
-        if !base_conf_response.gateways.is_empty() {
-            if let Ok(gateways) = serde_json::from_str::<Vec<Gateway>>(&base_conf_response.gateways) {
-                for gateway in gateways {
-                    println!("[ConfigClient] Parsed Gateway");
-                    base_conf.add_gateway(gateway);
-                }
-            }
-        }
-
-        self.config_client.init_base_conf(base_conf);
-
-        tracing::info!("Base configuration initialized");
         Ok(())
     }
 

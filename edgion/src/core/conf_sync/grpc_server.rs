@@ -151,9 +151,7 @@ impl ConfigSync for ConfigSyncServer {
             .map_err(|e| Status::internal(format!("Failed to get base conf: {}", e)))?;
 
         Ok(Response::new(GetBaseConfResponse {
-            gateway_class: base_conf_data.gateway_class,
-            edgion_gateway_config: base_conf_data.edgion_gateway_config,
-            gateways: base_conf_data.gateways,
+            base_conf: base_conf_data.base_conf,
         }))
     }
 }

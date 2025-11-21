@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass};
+use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayBaseConf {
     gateway_class: GatewayClass,
     edgion_gateway_config: EdgionGatewayConfig,
     gateways: Vec<Gateway>,
+    #[serde(skip)]
     gateway_map: HashMap<String, ()>,
 }
 
@@ -25,6 +28,15 @@ impl GatewayBaseConf {
             edgion_gateway_config,
             gateways,
             gateway_map,
+        }
+    }
+    
+    /// Rebuild gateway_map from gateways (used after deserialization)
+    pub fn rebuild_gateway_map(&mut self) {
+        self.gateway_map.clear();
+        for gateway in &self.gateways {
+            let key = Self::make_gateway_key(gateway);
+            self.gateway_map.insert(key, ());
         }
     }
     

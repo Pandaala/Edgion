@@ -1,4 +1,4 @@
-use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
+use crate::core::conf_sync::GatewayBaseConf;
 use crate::core::conf_sync::cache_client::ClientCache;
 use crate::core::conf_sync::cache_server::{EventDispatch, ListData, ResourceMeta};
 use crate::core::conf_sync::config_server::GatewayClassKey;
@@ -13,7 +13,7 @@ use std::sync::RwLock;
 
 pub struct ConfigClient {
     gateway_class_key: GatewayClassKey,
-    base_conf: RwLock<GatewayClassBaseConf>,
+    pub base_conf: RwLock<Option<GatewayBaseConf>>,
     routes: ClientCache<HTTPRoute>,
     services: ClientCache<Service>,
     endpoint_slices: ClientCache<EndpointSlice>,
@@ -25,7 +25,7 @@ impl ConfigClient {
     pub fn new(gateway_class_key: GatewayClassKey, client_id: String, client_name: String) -> Self {
         Self {
             gateway_class_key: gateway_class_key.clone(),
-            base_conf: RwLock::new(GatewayClassBaseConf::new()),
+            base_conf: RwLock::new(None),
             routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             services: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             endpoint_slices: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
@@ -64,9 +64,9 @@ impl ConfigClient {
     }
 
     /// Initialize base configuration with parsed objects
-    pub fn init_base_conf(&self, new_base_conf: GatewayClassBaseConf) {
+    pub fn init_base_conf(&self, new_base_conf: GatewayBaseConf) {
         let mut base_conf = self.base_conf.write().unwrap();
-        *base_conf = new_base_conf;
+        *base_conf = Some(new_base_conf);
     }
 
     fn apply_change_to_cache<T>(cache: &ClientCache<T>, change: ResourceChange, resource: T)
@@ -89,27 +89,36 @@ impl ConfigClient {
                 return Err("Resource kind unspecified".to_string());
             }
             ResourceKind::GatewayClass => {
-                let base_conf = self.base_conf.read().unwrap();
-                let data: Vec<GatewayClass> = base_conf.gateway_class().map(|gc| vec![gc.clone()]).unwrap_or_default();
+                let base_conf_guard = self.base_conf.read().unwrap();
+                let data: Vec<GatewayClass> = if let Some(ref base_conf) = *base_conf_guard {
+                    vec![base_conf.gateway_class().clone()]
+                } else {
+                    vec![]
+                };
                 let json = serde_json::to_string(&data)
                     .map_err(|e| format!("Failed to serialize GatewayClass data: {}", e))?;
                 // Base conf resources don't have version tracking, use 0
                 (json, 0)
             }
             ResourceKind::EdgionGatewayConfig => {
-                let base_conf = self.base_conf.read().unwrap();
-                let data: Vec<EdgionGatewayConfig> = base_conf
-                    .edgion_gateway_config()
-                    .map(|egwc| vec![egwc.clone()])
-                    .unwrap_or_default();
+                let base_conf_guard = self.base_conf.read().unwrap();
+                let data: Vec<EdgionGatewayConfig> = if let Some(ref base_conf) = *base_conf_guard {
+                    vec![base_conf.edgion_gateway_config().clone()]
+                } else {
+                    vec![]
+                };
                 let json = serde_json::to_string(&data)
                     .map_err(|e| format!("Failed to serialize EdgionGatewayConfig data: {}", e))?;
                 // Base conf resources don't have version tracking, use 0
                 (json, 0)
             }
             ResourceKind::Gateway => {
-                let base_conf = self.base_conf.read().unwrap();
-                let data = base_conf.gateways().clone();
+                let base_conf_guard = self.base_conf.read().unwrap();
+                let data = if let Some(ref base_conf) = *base_conf_guard {
+                    base_conf.gateways().clone()
+                } else {
+                    vec![]
+                };
                 let json =
                     serde_json::to_string(&data).map_err(|e| format!("Failed to serialize Gateway data: {}", e))?;
                 // Base conf resources don't have version tracking, use 0
@@ -185,31 +194,27 @@ impl ConfigClient {
         println!("=== ConfigHub Config for GatewayClassKey: {} ===", key);
 
         // Base conf resources are stored in base_conf
-        let base_conf = self.base_conf.read().unwrap();
-        if let Some(gc) = base_conf.gateway_class() {
+        let base_conf_guard = self.base_conf.read().unwrap();
+        if let Some(ref base_conf) = *base_conf_guard {
             println!("GatewayClass:");
-            println!("  [0] {}", format_resource_info(gc));
-        } else {
-            println!("GatewayClass: not found");
-        }
+            println!("  [0] {}", format_resource_info(base_conf.gateway_class()));
 
-        if let Some(egwc) = base_conf.edgion_gateway_config() {
             println!("EdgionGatewayConfig:");
-            println!("  [0] {}", format_resource_info(egwc));
-        } else {
-            println!("EdgionGatewayConfig: not found");
-        }
+            println!("  [0] {}", format_resource_info(base_conf.edgion_gateway_config()));
 
-        let gateways = base_conf.gateways();
-        if !gateways.is_empty() {
-            println!("Gateways (count: {}):", gateways.len());
-            for (idx, gw) in gateways.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(gw));
+            let gateways = base_conf.gateways();
+            if !gateways.is_empty() {
+                println!("Gateways (count: {}):", gateways.len());
+                for (idx, gw) in gateways.iter().enumerate() {
+                    println!("  [{}] {}", idx, format_resource_info(gw));
+                }
+            } else {
+                println!("Gateways: not found");
             }
         } else {
-            println!("Gateways: not found");
+            println!("Base configuration not initialized");
         }
-        drop(base_conf);
+        drop(base_conf_guard);
 
         // HTTP Routes
         let list_data = self.list_routes();
@@ -313,13 +318,18 @@ impl ConfigClientEventDispatcher for ConfigClient {
             }
             ResourceKind::GatewayClass => match serde_yaml::from_str::<GatewayClass>(&data) {
                 Ok(resource) => {
-                    let mut base_conf = self.base_conf.write().unwrap();
+                    let mut base_conf_guard = self.base_conf.write().unwrap();
                     match change {
                         ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                            base_conf.set_gateway_class(resource);
+                            if let Some(ref mut base_conf) = *base_conf_guard {
+                                base_conf.set_gateway_class(resource);
+                            } else {
+                                eprintln!("[HUB] Cannot set GatewayClass: base_conf not initialized");
+                            }
                         }
                         ResourceChange::EventDelete => {
-                            base_conf.clear_gateway_class();
+                            *base_conf_guard = None;
+                            eprintln!("[HUB] GatewayClass deleted, base_conf invalidated");
                         }
                     }
                 }
@@ -327,13 +337,18 @@ impl ConfigClientEventDispatcher for ConfigClient {
             },
             ResourceKind::EdgionGatewayConfig => match serde_yaml::from_str::<EdgionGatewayConfig>(&data) {
                 Ok(resource) => {
-                    let mut base_conf = self.base_conf.write().unwrap();
+                    let mut base_conf_guard = self.base_conf.write().unwrap();
                     match change {
                         ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                            base_conf.set_edgion_gateway_config(resource);
+                            if let Some(ref mut base_conf) = *base_conf_guard {
+                                base_conf.set_edgion_gateway_config(resource);
+                            } else {
+                                eprintln!("[HUB] Cannot set EdgionGatewayConfig: base_conf not initialized");
+                            }
                         }
                         ResourceChange::EventDelete => {
-                            base_conf.clear_edgion_gateway_config();
+                            *base_conf_guard = None;
+                            eprintln!("[HUB] EdgionGatewayConfig deleted, base_conf invalidated");
                         }
                     }
                 }
@@ -341,16 +356,22 @@ impl ConfigClientEventDispatcher for ConfigClient {
             },
             ResourceKind::Gateway => match serde_yaml::from_str::<Gateway>(&data) {
                 Ok(resource) => {
-                    let mut base_conf = self.base_conf.write().unwrap();
+                    let mut base_conf_guard = self.base_conf.write().unwrap();
                     match change {
                         ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                            base_conf.add_gateway(resource);
+                            if let Some(ref mut base_conf) = *base_conf_guard {
+                                base_conf.add_gateway(resource);
+                            } else {
+                                eprintln!("[HUB] Cannot add Gateway: base_conf not initialized");
+                            }
                         }
                         ResourceChange::EventDelete => {
-                            // For delete, we need to extract namespace and name before moving resource
-                            let namespace = resource.metadata.namespace.clone();
-                            let name = resource.metadata.name.clone();
-                            base_conf.remove_gateway(namespace.as_ref(), name.as_ref());
+                            if let Some(ref mut base_conf) = *base_conf_guard {
+                                // For delete, we need to extract namespace and name before moving resource
+                                let namespace = resource.metadata.namespace.clone();
+                                let name = resource.metadata.name.clone();
+                                base_conf.remove_gateway(namespace.as_ref(), name.as_ref());
+                            }
                         }
                     }
                 }

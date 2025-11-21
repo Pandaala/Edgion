@@ -3,7 +3,7 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::sync::RwLock;
 use tokio::sync::mpsc;
 
-use crate::core::conf_sync::base_onf::GatewayClassBaseConf;
+use crate::core::conf_sync::GatewayBaseConf;
 use crate::core::conf_sync::cache_server::{ListData, ServerCache, WatchResponse};
 use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
@@ -30,7 +30,7 @@ pub enum ResourceItem {
 // 3、只会处理对应route信息里的有些parentRefs是对应的，不然就不会处理
 pub struct ConfigServer {
     pub(crate) gateway_class: Option<String>,
-    pub base_conf: RwLock<GatewayClassBaseConf>,
+    pub base_conf: RwLock<Option<GatewayBaseConf>>,
     pub routes: ServerCache<HTTPRoute>,
     pub services: ServerCache<Service>,
     pub endpoint_slices: ServerCache<EndpointSlice>,
@@ -50,16 +50,14 @@ pub struct EventDataSimple {
 }
 
 pub struct BaseConfData {
-    pub gateway_class: String,
-    pub edgion_gateway_config: String,
-    pub gateways: String,
+    pub base_conf: String,
 }
 
 impl ConfigServer {
     pub fn new(gateway_class: Option<String>) -> Self {
         Self {
             gateway_class,
-            base_conf: RwLock::new(GatewayClassBaseConf::new()),
+            base_conf: RwLock::new(None),
             routes: ServerCache::new(200),
             services: ServerCache::new(200),
             endpoint_slices: ServerCache::new(200),
@@ -74,7 +72,7 @@ impl ConfigServer {
     }
 
     /// Get base configuration for a specific gateway class
-    /// Returns the base conf data as JSON strings
+    /// Returns the base conf data as JSON string
     pub fn get_base_conf(&self, gateway_class: &str) -> Result<BaseConfData, String> {
         // Verify gateway class matches if configured
         if let Some(ref configured_gc) = self.gateway_class {
@@ -86,25 +84,17 @@ impl ConfigServer {
             }
         }
 
-        let base_conf = self.base_conf.read().unwrap();
-
-        let gateway_class_json = base_conf
-            .gateway_class()
-            .and_then(|gc| serde_json::to_string(gc).ok())
-            .unwrap_or_default();
-
-        let edgion_gateway_config_json = base_conf
-            .edgion_gateway_config()
-            .and_then(|egwc| serde_json::to_string(egwc).ok())
-            .unwrap_or_default();
-
-        let gateways_json =
-            serde_json::to_string(base_conf.gateways()).map_err(|e| format!("Failed to serialize gateways: {}", e))?;
+        let base_conf_guard = self.base_conf.read().unwrap();
+        
+        let base_conf_json = if let Some(ref base_conf) = *base_conf_guard {
+            serde_json::to_string(base_conf)
+                .map_err(|e| format!("Failed to serialize base conf: {}", e))?
+        } else {
+            String::new()
+        };
 
         Ok(BaseConfData {
-            gateway_class: gateway_class_json,
-            edgion_gateway_config: edgion_gateway_config_json,
-            gateways: gateways_json,
+            base_conf: base_conf_json,
         })
     }
 
@@ -401,25 +391,25 @@ impl ConfigServer {
         println!("\n==========================");
 
         // Base conf resources are stored in base_conf
-        let base_conf = self.base_conf.read().unwrap();
-        if let Some(gc) = base_conf.gateway_class() {
+        let base_conf_guard = self.base_conf.read().unwrap();
+        if let Some(ref base_conf) = *base_conf_guard {
             println!("GatewayClass:");
-            println!("  [0] {}", format_resource_info(gc));
-        }
+            println!("  [0] {}", format_resource_info(base_conf.gateway_class()));
 
-        if let Some(egwc) = base_conf.edgion_gateway_config() {
             println!("EdgionGatewayConfig:");
-            println!("  [0] {}", format_resource_info(egwc));
-        }
+            println!("  [0] {}", format_resource_info(base_conf.edgion_gateway_config()));
 
-        let gateways = base_conf.gateways();
-        if !gateways.is_empty() {
-            println!("Gateways (count: {}):", gateways.len());
-            for (idx, gw) in gateways.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(gw));
+            let gateways = base_conf.gateways();
+            if !gateways.is_empty() {
+                println!("Gateways (count: {}):", gateways.len());
+                for (idx, gw) in gateways.iter().enumerate() {
+                    println!("  [{}] {}", idx, format_resource_info(gw));
+                }
             }
+        } else {
+            println!("Base configuration not initialized");
         }
-        drop(base_conf);
+        drop(base_conf_guard);
 
         println!(""); // Empty line before user conf resources
         

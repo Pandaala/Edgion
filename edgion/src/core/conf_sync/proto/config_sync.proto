@@ -63,8 +63,6 @@ message GetBaseConfRequest {
 
 // Get base conf response
 message GetBaseConfResponse {
-    string gateway_class = 1;  // JSON serialized GatewayClass, empty if not set
-    string edgion_gateway_config = 2;  // JSON serialized EdgionGatewayConfig, empty if not set
-    string gateways = 3;  // JSON serialized array of Gateway
+    string base_conf = 1;  // JSON serialized GatewayBaseConf
 }
 
