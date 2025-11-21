@@ -65,6 +65,24 @@ impl EdgionOpCli {
         let loader_args = config.to_loader_args();
         let loader = Loader::from_args(&loader_args, config_server as Arc<dyn ConfigServerEventDispatcher>)?;
 
+        // Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
+        tracing::info!("Loading base configuration...");
+        let base_conf = loader.load_base().await?;
+        
+        // Print base configuration as pretty JSON
+        if let Ok(json) = serde_json::to_string_pretty(&base_conf) {
+            tracing::info!(
+                "Base configuration loaded successfully:\n{}",
+                json
+            );
+        }
+        
+        // Set base configuration to config_server
+        {
+            let mut base_conf_guard = debug_config_server.base_conf.write().unwrap();
+            *base_conf_guard = Some(base_conf);
+        }
+
         let addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
 
         tracing::info!(

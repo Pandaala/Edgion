@@ -62,6 +62,11 @@ impl Loader {
         }
     }
 
+    /// Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
+    pub async fn load_base(&self) -> Result<crate::core::conf_sync::GatewayBaseConf> {
+        self.inner.load_base().await
+    }
+
     pub async fn run(self) -> Result<()> {
         tracing::info!("====> start connect...");
         // Connect to configuration source
