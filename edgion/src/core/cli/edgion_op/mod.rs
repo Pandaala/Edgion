@@ -25,20 +25,14 @@ impl EdgionOpCli {
         Self::parse()
     }
 
-    /// Spawn a background task to periodically print all gateway class configs in debug mode
+    /// Spawn a background task to periodically print all gateway class configs every 10 seconds
     /// This can be easily removed in the future if not needed
-    fn spawn_debug_config_printer(config_server: Arc<ConfigServer>, log_level: String, enabled: bool) {
-        if !enabled {
-            return;
-        }
-
+    fn spawn_config_printer(config_server: Arc<ConfigServer>) {
         tokio::spawn(async move {
-            if log_level == "debug" || log_level == "trace" {
-                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
-                loop {
-                    interval.tick().await;
-                    config_server.print_config().await;
-                }
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                config_server.print_config().await;
             }
         });
     }
@@ -80,8 +74,8 @@ impl EdgionOpCli {
             "Starting gRPC server and configuration loader"
         );
 
-        // Spawn debug task to print config every 30 seconds in debug mode
-        Self::spawn_debug_config_printer(debug_config_server, config.log_level(), config.debug.enabled);
+        // Spawn task to print config every 10 seconds
+        Self::spawn_config_printer(debug_config_server);
 
         // Run both services concurrently using tokio::join!
         let (sync_result, loader_result) = tokio::join!(sync_server.serve(addr), loader.run());
