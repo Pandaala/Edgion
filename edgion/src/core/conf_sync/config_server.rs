@@ -421,70 +421,66 @@ impl ConfigServer {
         }
         drop(base_conf);
 
+        println!(""); // Empty line before user conf resources
+        
         // HTTP Routes
+        tracing::debug!(component = "config_server", event = "listing_routes", "About to call list_routes");
         let list_data = self.list_routes();
-        if !list_data.data.is_empty() {
-            println!(
-                "HTTPRoutes (count: {}, version: {}):",
-                list_data.data.len(),
-                list_data.resource_version
-            );
-            for (idx, route) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(route));
-            }
+        tracing::debug!(component = "config_server", event = "listed_routes", count = list_data.data.len(), "list_routes returned");
+        println!(
+            "HTTPRoutes (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, route) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(route));
         }
 
         // Services
         let list_data = self.list_services();
-        if !list_data.data.is_empty() {
-            println!(
-                "Services (count: {}, version: {}):",
-                list_data.data.len(),
-                list_data.resource_version
-            );
-            for (idx, svc) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(svc));
-            }
+        println!(
+            "Services (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, svc) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(svc));
         }
 
         // Endpoint Slices
         let list_data = self.list_endpoint_slices();
-        if !list_data.data.is_empty() {
-            println!(
-                "EndpointSlices (count: {}, version: {}):",
-                list_data.data.len(),
-                list_data.resource_version
-            );
-            for (idx, es) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(es));
-            }
+        println!(
+            "EndpointSlices (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, es) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(es));
         }
 
         // Edgion TLS
         let list_data = self.list_edgion_tls();
-        if !list_data.data.is_empty() {
-            println!(
-                "EdgionTls (count: {}, version: {}):",
-                list_data.data.len(),
-                list_data.resource_version
-            );
-            for (idx, tls) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(tls));
-            }
+        println!(
+            "EdgionTls (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, tls) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(tls));
         }
 
         // Secrets
         let list_data = self.list_secrets();
-        if !list_data.data.is_empty() {
-            println!(
-                "Secrets (count: {}, version: {}):",
-                list_data.data.len(),
-                list_data.resource_version
-            );
-            for (idx, secret) in list_data.data.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(secret));
-            }
+        println!(
+            "Secrets (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, secret) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(secret));
         }
+        
+        println!("==========================\n");
     }
 }
 

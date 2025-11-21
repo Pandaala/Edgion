@@ -234,9 +234,13 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> EventDispatch<T
         T: Resource + Send + 'static,
     {
         let mut version = resource.get_version();
-        let store_guard = self.store.read().unwrap();
+        
+        let last_version = {
+            let store_guard = self.store.read().unwrap();
+            store_guard.get_last_resource_version()
+        };
 
-        if *self.version_fix_mode.read().unwrap() && resource.get_version() <= store_guard.get_last_resource_version() {
+        if *self.version_fix_mode.read().unwrap() && resource.get_version() <= last_version {
             tracing::warn!(
                 component = "cache_server",
                 event = "apply_change",
@@ -252,7 +256,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> EventDispatch<T
             resource.meta_mut().resource_version = Some(version.to_string());
         }
 
-        if change != ResourceChange::InitAdd && resource.get_version() <= store_guard.get_last_resource_version() {
+        if change != ResourceChange::InitAdd && resource.get_version() <= last_version {
             tracing::error!(
                 component = "cache_server",
                 event = "apply_change",
