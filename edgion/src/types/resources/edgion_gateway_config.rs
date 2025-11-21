@@ -43,6 +43,10 @@ pub struct EdgionGatewayConfigSpec {
     /// Observability configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observability: Option<Observability>,
+
+    /// Server configuration for Pingora
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<ServerConfig>,
 }
 
 // ============================================
@@ -466,6 +470,42 @@ fn default_logging_level() -> LogLevel {
 
 fn default_logging_format() -> LoggingFormat {
     LoggingFormat::Json
+}
+
+// ============================================
+// Server Configuration
+// ============================================
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerConfig {
+    /// Number of worker threads (default: number of CPU cores)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threads: Option<u32>,
+    
+    /// Enable work stealing (default: true)
+    #[serde(default = "default_work_stealing")]
+    pub work_stealing: bool,
+    
+    /// Grace period for shutdown in seconds (default: 30)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grace_period_seconds: Option<u64>,
+    
+    /// Graceful shutdown timeout in seconds (default: 10)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graceful_shutdown_timeout_s: Option<u64>,
+    
+    /// Upstream keepalive pool size (default: 128)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_keepalive_pool_size: Option<u32>,
+    
+    /// Error log file path
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_log: Option<String>,
+}
+
+fn default_work_stealing() -> bool {
+    true
 }
 
 // ============================================
