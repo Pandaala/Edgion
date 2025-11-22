@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass};
 use serde::{Deserialize, Serialize};
+use anyhow::{Result, anyhow};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayBaseConf {
@@ -110,5 +111,25 @@ impl GatewayBaseConf {
     /// Set edgion gateway config
     pub fn set_edgion_gateway_config(&mut self, edgion_gateway_config: EdgionGatewayConfig) {
         self.edgion_gateway_config = edgion_gateway_config;
+    }
+    
+    /// Validate base configuration schema
+    /// Returns an error if the configuration doesn't meet basic requirements
+    pub fn validate_schema(&self) -> Result<()> {
+        // Check that at least one gateway exists
+        if self.gateways.is_empty() {
+            return Err(anyhow!(
+                "Base configuration validation failed: at least one Gateway must be defined"
+            ));
+        }
+        
+        tracing::info!(
+            component = "gateway_base_conf",
+            event = "schema_validation_passed",
+            gateway_count = self.gateways.len(),
+            "Base configuration schema validation passed"
+        );
+        
+        Ok(())
     }
 }

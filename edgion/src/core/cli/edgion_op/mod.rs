@@ -71,17 +71,24 @@ impl EdgionOpCli {
             );
         }
 
-        let config_server = Arc::new(ConfigServer::new(config.gateway_class()));
+        // Validate base configuration schema
+        if let Err(e) = base_conf.validate_schema() {
+            tracing::error!(
+                component = COMPONENT_EDGION_OPERATOR,
+                event = "schema_validation_failed",
+                error = %e,
+                "Base configuration schema validation failed: {}. Process will exit in 5 seconds.",
+                e
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            std::process::exit(1);
+        }
+
+        let config_server = Arc::new(ConfigServer::new(config.gateway_class(), base_conf));
         let sync_server = ConfigSyncServer::new(config_server.clone());
 
         // Register dispatcher before using the loader
         loader.register_dispatcher(config_server.clone() as Arc<dyn ConfigServerEventDispatcher>).await;
-
-        // Set base configuration to config_server
-        {
-            let mut base_conf_guard = config_server.base_conf.write().unwrap();
-            *base_conf_guard = Some(base_conf);
-        }
 
         let addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
 
@@ -96,7 +103,10 @@ impl EdgionOpCli {
         Self::spawn_config_printer(config_server.clone());
 
         // Run both services concurrently using tokio::join!
-        let (sync_result, loader_result) = tokio::join!(sync_server.serve(addr), loader.run());
+        let (sync_result, loader_result) = tokio::join!(
+            sync_server.serve(addr),
+            loader.run()
+        );
 
         // Check results - if either service fails, return error
         if let Err(e) = &sync_result {

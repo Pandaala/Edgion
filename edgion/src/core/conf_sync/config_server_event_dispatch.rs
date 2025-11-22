@@ -46,11 +46,7 @@ impl ConfigServer {
                             let gateway_name = Some(&first_ref.name);
 
                             let base_conf_guard = self.base_conf.read().unwrap();
-                            if let Some(ref base_conf) = *base_conf_guard {
-                                base_conf.has_gateway(gateway_namespace, gateway_name)
-                            } else {
-                                false
-                            }
+                            base_conf_guard.has_gateway(gateway_namespace, gateway_name)
                         } else {
                             // 没有 parent_refs，无法判断
                             false
@@ -137,11 +133,7 @@ impl ConfigServer {
                             let gateway_name = Some(&first_ref.name);
 
                             let base_conf_guard = self.base_conf.read().unwrap();
-                            if let Some(ref base_conf) = *base_conf_guard {
-                                base_conf.has_gateway(gateway_namespace, gateway_name)
-                            } else {
-                                false
-                            }
+                            base_conf_guard.has_gateway(gateway_namespace, gateway_name)
                         } else {
                             // 没有 parent_refs，无法判断
                             false
