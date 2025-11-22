@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
-use crate::core::routes::HttpRouteRuleUnit;
+use crate::core::routes::{HttpRouteRuleUnit, r#match::RouteRuntime};
 use crate::types::{HTTPRoute, ResourceMeta};
 
 type DomainStr = String;
@@ -14,7 +14,6 @@ pub struct RouteRules {
 #[derive(Clone)]
 pub struct DomainRouteRules {
     domain_routes_map: HashMap<DomainStr, Arc<RouteRules>>,
-    need_rebuild: bool,
 }
 
 pub struct RouteManager {
@@ -34,11 +33,16 @@ impl RouteManager {
             let changed_domain_routes = self.add_http_route_single(route);
             // Traverse changed domain routes and output need_rebuild
             for domain_routes in changed_domain_routes {
-                if domain_routes.need_rebuild {
-                    tracing::info!(
-                        "DomainRoutesMap needs rebuild: need_rebuild={}",
-                        domain_routes.need_rebuild
-                    );
+                for (_, route_rules) in &domain_routes.domain_routes_map {
+                    for rule_unit in &route_rules.route_rules_list {
+                        if rule_unit.need_rebuild {
+                            tracing::info!(
+                                "HttpRouteRuleUnit needs rebuild: need_rebuild={}, identifier={}",
+                                rule_unit.need_rebuild,
+                                rule_unit.identifier()
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -48,11 +52,16 @@ impl RouteManager {
         let changed_domain_routes = self.add_http_route_single(route);
         // Traverse changed domain routes and output need_rebuild
         for domain_routes in changed_domain_routes {
-            if domain_routes.need_rebuild {
-                tracing::info!(
-                    "DomainRoutesMap needs rebuild: need_rebuild={}",
-                    domain_routes.need_rebuild
-                );
+            for (_, route_rules) in &domain_routes.domain_routes_map {
+                for rule_unit in &route_rules.route_rules_list {
+                    if rule_unit.need_rebuild {
+                        tracing::info!(
+                            "HttpRouteRuleUnit needs rebuild: need_rebuild={}, identifier={}",
+                            rule_unit.need_rebuild,
+                            rule_unit.identifier()
+                        );
+                    }
+                }
             }
         }
     }
@@ -105,14 +114,10 @@ impl RouteManager {
                         .entry(map_key.clone())
                         .or_insert_with(|| Arc::new(DomainRouteRules {
                             domain_routes_map: HashMap::new(),
-                            need_rebuild: true,
                         }));
 
                     // Clone Arc to get mutable access (Arc::make_mut ensures we have unique ownership)
                     let domain_routes_map = Arc::make_mut(domain_routes_map_arc);
-                    
-                    // Mark as needing rebuild since we're adding routes
-                    domain_routes_map.need_rebuild = true;
 
                     // Add route rules to domain routes map
                     if let Some(rules) = &route.spec.rules {
@@ -137,7 +142,6 @@ impl RouteManager {
                                         route_namespace.clone(),
                                         route_name.clone(),
                                         rule.clone(),
-                                        hostname_vec.clone(),
                                     );
                                     route_rules.route_rules_list.push(rule_unit);
                                 }
@@ -157,7 +161,6 @@ impl RouteManager {
                                     route_namespace.clone(),
                                     route_name.clone(),
                                     rule.clone(),
-                                    Vec::new(), // No hostnames specified
                                 );
                                 route_rules.route_rules_list.push(rule_unit);
                             }

@@ -8,14 +8,16 @@ pub struct HttpRouteRuleUnit {
     pub namespace: String,
     pub name: String,
     pub rule: HTTPRouteRule,
+    pub need_rebuild: bool,
 }
 
 impl HttpRouteRuleUnit {
-    pub fn new(namespace: String, name: String, rule: HTTPRouteRule, hostname: Vec<String>) -> HttpRouteRuleUnit {
+    pub fn new(namespace: String, name: String, rule: HTTPRouteRule) -> HttpRouteRuleUnit {
         Self {
             namespace,
             name,
             rule,
+            need_rebuild: true,
         }
     }
 }
