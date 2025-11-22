@@ -10,13 +10,14 @@ pub struct RouteRules {
     route_rules_list: Vec<HTTPRouteRule>,
 }
 
-pub struct DomainRoutesMap {
+#[derive(Clone)]
+pub struct DomainRouteRules {
     domain_routes_map: HashMap<DomainStr, Arc<RouteRules>>,
     need_rebuild: bool,
 }
 
 pub struct RouteManager {
-    gateway_listener_routes_map: HashMap<String, DomainRoutesMap>,
+    gateway_listener_routes_map: HashMap<String, Arc<DomainRouteRules>>,
     // gateway_route_matcher: HashMap<DomainStr, >,
 }
 
@@ -29,15 +30,34 @@ impl RouteManager {
 
     pub fn add_http_routes(&mut self, http_routes: Vec<HTTPRoute>) {
         for route in http_routes {
-            self.add_http_route_single(route);
+            let changed_domain_routes = self.add_http_route_single(route);
+            // Traverse changed domain routes and output need_rebuild
+            for domain_routes in changed_domain_routes {
+                if domain_routes.need_rebuild {
+                    tracing::info!(
+                        "DomainRoutesMap needs rebuild: need_rebuild={}",
+                        domain_routes.need_rebuild
+                    );
+                }
+            }
         }
     }
 
     pub fn add_http_route(&mut self, route: HTTPRoute) {
-        self.add_http_route_single(route);
+        let changed_domain_routes = self.add_http_route_single(route);
+        // Traverse changed domain routes and output need_rebuild
+        for domain_routes in changed_domain_routes {
+            if domain_routes.need_rebuild {
+                tracing::info!(
+                    "DomainRoutesMap needs rebuild: need_rebuild={}",
+                    domain_routes.need_rebuild
+                );
+            }
+        }
+    }
 
-
-    fn add_http_route_single(&mut self, route: HTTPRoute) {
+    fn add_http_route_single(&mut self, route: HTTPRoute) -> Vec<Arc<DomainRouteRules>> {
+        let mut changed_domain_routes = Vec::new();
         let parent_refs = match &route.spec.parent_refs {
             Some(refs) => refs,
             None => {
@@ -45,7 +65,7 @@ impl RouteManager {
                     "HTTPRoute '{}' has no parent_refs, skipping",
                     route.key_name()
                 );
-                return;
+                return changed_domain_routes;
             }
         };
 
@@ -79,13 +99,19 @@ impl RouteManager {
                     let map_key = format!("{}/{}", gateway_key, listener_name);
                     
                     // Get or create DomainRoutesMap for this gateway/listener combination
-                    let domain_routes_map = self
+                    let domain_routes_map_arc = self
                         .gateway_listener_routes_map
-                        .entry(map_key)
-                        .or_insert_with(|| DomainRoutesMap {
+                        .entry(map_key.clone())
+                        .or_insert_with(|| Arc::new(DomainRouteRules {
                             domain_routes_map: HashMap::new(),
                             need_rebuild: true,
-                        });
+                        }));
+
+                    // Clone Arc to get mutable access (Arc::make_mut ensures we have unique ownership)
+                    let domain_routes_map = Arc::make_mut(domain_routes_map_arc);
+                    
+                    // Mark as needing rebuild since we're adding routes
+                    domain_routes_map.need_rebuild = true;
 
                     // Add route rules to domain routes map
                     if let Some(rules) = &route.spec.rules {
@@ -119,6 +145,11 @@ impl RouteManager {
                         }
                     }
 
+                    // Add to changed_domain_routes list (get the updated Arc from the map)
+                    if let Some(domain_routes) = self.gateway_listener_routes_map.get(&map_key) {
+                        changed_domain_routes.push(domain_routes.clone());
+                    }
+
                     tracing::info!(
                         "Added HTTPRoute '{}' to gateway '{}' listener '{}'",
                         route.key_name(),
@@ -136,5 +167,7 @@ impl RouteManager {
                 }
             }
         }
+        
+        changed_domain_routes
     }
 }
