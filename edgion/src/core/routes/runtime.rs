@@ -3,25 +3,24 @@ use crate::types::err::EdError;
 use crate::types::HTTPRouteRule;
 use pingora_proxy::Session;
 
-pub struct HttpRouteRuntime {
+#[derive(Clone)]
+pub struct HttpRouteRuleUnit {
     pub namespace: String,
     pub name: String,
-    pub hostname: Vec<String>,
     pub rule: HTTPRouteRule,
 }
 
-impl HttpRouteRuntime {
-    pub fn new(namespace: String, name: String, rule: HTTPRouteRule, hostname: Vec<String>) -> HttpRouteRuntime {
+impl HttpRouteRuleUnit {
+    pub fn new(namespace: String, name: String, rule: HTTPRouteRule, hostname: Vec<String>) -> HttpRouteRuleUnit {
         Self {
             namespace,
             name,
-            hostname,
             rule,
         }
     }
 }
 
-impl RouteRuntime for HttpRouteRuntime {
+impl RouteRuntime for HttpRouteRuleUnit {
     fn extract_paths(&self) -> Vec<(String, bool)> {
         let mut paths = Vec::new();
 

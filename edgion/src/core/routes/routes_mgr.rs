@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
-use crate::types::{HTTPRoute, HTTPRouteRule, ResourceMeta};
+use crate::core::routes::HttpRouteRuleUnit;
+use crate::types::{HTTPRoute, ResourceMeta};
 
 type DomainStr = String;
 
 #[derive(Clone)]
 pub struct RouteRules {
-    route_rules_list: Vec<HTTPRouteRule>,
+    route_rules_list: Vec<HttpRouteRuleUnit>,
 }
 
 #[derive(Clone)]
@@ -115,8 +116,12 @@ impl RouteManager {
 
                     // Add route rules to domain routes map
                     if let Some(rules) = &route.spec.rules {
+                        let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
+                        let route_name = route.metadata.name.as_deref().unwrap_or("").to_string();
+                        
                         for rule in rules {
                             if let Some(hostnames) = &route.spec.hostnames {
+                                let hostname_vec = hostnames.clone();
                                 for hostname in hostnames {
                                     let route_rules = domain_routes_map
                                         .domain_routes_map
@@ -127,7 +132,14 @@ impl RouteManager {
                                     
                                     // Clone Arc to get mutable access
                                     let route_rules = Arc::make_mut(route_rules);
-                                    route_rules.route_rules_list.push(rule.clone());
+                                    // Create HttpRouteRuleUnit from HTTPRouteRule
+                                    let rule_unit = HttpRouteRuleUnit::new(
+                                        route_namespace.clone(),
+                                        route_name.clone(),
+                                        rule.clone(),
+                                        hostname_vec.clone(),
+                                    );
+                                    route_rules.route_rules_list.push(rule_unit);
                                 }
                             } else {
                                 // If no hostnames specified, use "*" as default
@@ -140,7 +152,14 @@ impl RouteManager {
                                 
                                 // Clone Arc to get mutable access
                                 let route_rules = Arc::make_mut(route_rules);
-                                route_rules.route_rules_list.push(rule.clone());
+                                // Create HttpRouteRuleUnit from HTTPRouteRule
+                                let rule_unit = HttpRouteRuleUnit::new(
+                                    route_namespace.clone(),
+                                    route_name.clone(),
+                                    rule.clone(),
+                                    Vec::new(), // No hostnames specified
+                                );
+                                route_rules.route_rules_list.push(rule_unit);
                             }
                         }
                     }
