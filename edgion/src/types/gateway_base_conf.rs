@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass};
+use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass, ResourceMeta};
 use serde::{Deserialize, Serialize};
 use anyhow::{Result, anyhow};
 
@@ -20,7 +20,7 @@ impl GatewayBaseConf {
     ) -> Self {
         let mut gateway_map = HashMap::new();
         for gateway in &gateways {
-            let key = Self::make_gateway_key(gateway);
+            let key = gateway.key_name();
             gateway_map.insert(key, ());
         }
         
@@ -36,17 +36,15 @@ impl GatewayBaseConf {
     pub fn rebuild_gateway_map(&mut self) {
         self.gateway_map.clear();
         for gateway in &self.gateways {
-            let key = Self::make_gateway_key(gateway);
+            let key = gateway.key_name();
             self.gateway_map.insert(key, ());
         }
     }
     
-    fn make_gateway_key(gateway: &Gateway) -> String {
-        if let Some(namespace) = &gateway.metadata.namespace {
-            format!("{}/{}", namespace, gateway.metadata.name.as_deref().unwrap_or(""))
-        } else {
-            gateway.metadata.name.as_deref().unwrap_or("").to_string()
-        }
+    /// Make a gateway key from a Gateway resource (namespace/name format)
+    /// This is a convenience method that delegates to ResourceMeta::key_name()
+    pub fn make_gateway_key(gateway: &Gateway) -> String {
+        gateway.key_name()
     }
     
     fn make_gateway_key_from_parts(namespace: Option<&String>, name: Option<&String>) -> String {
@@ -76,7 +74,7 @@ impl GatewayBaseConf {
     
     /// Add a new gateway or update an existing one
     pub fn add_gateway(&mut self, gateway: Gateway) {
-        let key = Self::make_gateway_key(&gateway);
+        let key = gateway.key_name();
         
         // Check if gateway already exists
         if !self.gateway_map.contains_key(&key) {
@@ -85,7 +83,7 @@ impl GatewayBaseConf {
         } else {
             // Update existing gateway
             if let Some(existing) = self.gateways.iter_mut().find(|g| {
-                Self::make_gateway_key(g) == key
+                g.key_name() == key
             }) {
                 *existing = gateway;
             }
@@ -98,7 +96,7 @@ impl GatewayBaseConf {
         
         self.gateway_map.remove(&key);
         self.gateways.retain(|g| {
-            Self::make_gateway_key(g) != key
+            g.key_name() != key
         });
     }
     

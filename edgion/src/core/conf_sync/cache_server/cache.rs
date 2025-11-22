@@ -342,6 +342,10 @@ mod tests {
         fn kind_name() -> &'static str {
             "TestResource"
         }
+
+        fn key_name(&self) -> String {
+            "test".to_string()
+        }
     }
 
 

@@ -207,6 +207,10 @@ mod tests {
         fn kind_name() -> &'static str {
             "TestResource"
         }
+
+        fn key_name(&self) -> String {
+            "TestResource".to_string()
+        }
     }
 
     impl kube::Resource for TestResource {

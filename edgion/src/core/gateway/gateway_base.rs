@@ -5,7 +5,8 @@ use pingora_core::server::Server;
 use pingora_core::server::configuration::ServerConf;
 use pingora_proxy::http_proxy_service;
 use crate::core::gateway::edgion_http::EdgionHttp;
-use crate::types::GatewayBaseConf;
+use crate::core::gateway::gateway_store::get_global_gateway_store;
+use crate::types::{GatewayBaseConf, ResourceMeta};
 use anyhow::Result;
 use crate::core::tls::tls_pingora::TlsCallback;
 
@@ -76,6 +77,23 @@ impl GatewayBase {
         pingora_server.bootstrap();
 
         for gateway in self.base_conf.gateways().iter() {
+
+            // Add gateway to global store
+            let gateway_store = get_global_gateway_store();
+            if let Err(e) = gateway_store.write().unwrap().add_gateway(gateway.clone()) {
+                tracing::error!(
+                    "Failed to add gateway '{}' to global store: {}",
+                    gateway.key_name(),
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "Successfully added gateway '{}' to global store",
+                    gateway.key_name()
+                );
+            }
+
+            // process listener
             if let Some(listeners) = &gateway.spec.listeners {
                 for listener in listeners {
                     let listener = listener.clone();

@@ -17,6 +17,7 @@ use super::resources::*;
 /// - Resource version tracking (for optimistic concurrency control)
 /// - Resource kind identification (for routing and dispatching)
 /// - Human-readable type names (for logging and debugging)
+/// - Unique identifier generation (namespace/name format)
 pub trait ResourceMeta: DeserializeOwned + Send + Sync + 'static {
     /// Get the resource version as u64
     fn get_version(&self) -> u64;
@@ -26,6 +27,10 @@ pub trait ResourceMeta: DeserializeOwned + Send + Sync + 'static {
     
     /// Get a human-readable name for this resource type
     fn kind_name() -> &'static str;
+    
+    /// Get a unique key identifier for this resource (namespace/name format)
+    /// Returns "namespace/name" for namespaced resources, or "name" for cluster-scoped resources
+    fn key_name(&self) -> String;
 }
 
 
@@ -51,6 +56,11 @@ impl ResourceMeta for GatewayClass {
     fn kind_name() -> &'static str {
         "GatewayClass"
     }
+    
+    fn key_name(&self) -> String {
+        // GatewayClass is cluster-scoped, so no namespace
+        self.metadata.name.as_deref().unwrap_or("").to_string()
+    }
 }
 
 impl ResourceMeta for EdgionGatewayConfig {
@@ -64,6 +74,11 @@ impl ResourceMeta for EdgionGatewayConfig {
     
     fn kind_name() -> &'static str {
         "EdgionGatewayConfig"
+    }
+    
+    fn key_name(&self) -> String {
+        // EdgionGatewayConfig is cluster-scoped, so no namespace
+        self.metadata.name.as_deref().unwrap_or("").to_string()
     }
 }
 
@@ -79,6 +94,14 @@ impl ResourceMeta for Gateway {
     fn kind_name() -> &'static str {
         "Gateway"
     }
+    
+    fn key_name(&self) -> String {
+        if let Some(namespace) = &self.metadata.namespace {
+            format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
+        } else {
+            self.metadata.name.as_deref().unwrap_or("").to_string()
+        }
+    }
 }
 
 impl ResourceMeta for HTTPRoute {
@@ -92,6 +115,14 @@ impl ResourceMeta for HTTPRoute {
     
     fn kind_name() -> &'static str {
         "HTTPRoute"
+    }
+    
+    fn key_name(&self) -> String {
+        if let Some(namespace) = &self.metadata.namespace {
+            format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
+        } else {
+            self.metadata.name.as_deref().unwrap_or("").to_string()
+        }
     }
 }
 
@@ -107,6 +138,14 @@ impl ResourceMeta for Service {
     fn kind_name() -> &'static str {
         "Service"
     }
+    
+    fn key_name(&self) -> String {
+        if let Some(namespace) = &self.metadata.namespace {
+            format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
+        } else {
+            self.metadata.name.as_deref().unwrap_or("").to_string()
+        }
+    }
 }
 
 impl ResourceMeta for EndpointSlice {
@@ -120,6 +159,14 @@ impl ResourceMeta for EndpointSlice {
     
     fn kind_name() -> &'static str {
         "EndpointSlice"
+    }
+    
+    fn key_name(&self) -> String {
+        if let Some(namespace) = &self.metadata.namespace {
+            format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
+        } else {
+            self.metadata.name.as_deref().unwrap_or("").to_string()
+        }
     }
 }
 
@@ -135,6 +182,14 @@ impl ResourceMeta for Secret {
     fn kind_name() -> &'static str {
         "Secret"
     }
+    
+    fn key_name(&self) -> String {
+        if let Some(namespace) = &self.metadata.namespace {
+            format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
+        } else {
+            self.metadata.name.as_deref().unwrap_or("").to_string()
+        }
+    }
 }
 
 impl ResourceMeta for EdgionTls {
@@ -148,6 +203,14 @@ impl ResourceMeta for EdgionTls {
     
     fn kind_name() -> &'static str {
         "EdgionTls"
+    }
+    
+    fn key_name(&self) -> String {
+        if let Some(namespace) = &self.metadata.namespace {
+            format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
+        } else {
+            self.metadata.name.as_deref().unwrap_or("").to_string()
+        }
     }
 }
 
