@@ -8,7 +8,6 @@ pub struct HttpRouteRuleUnit {
     pub namespace: String,
     pub name: String,
     pub rule: HTTPRouteRule,
-    pub need_rebuild: bool,
 }
 
 impl HttpRouteRuleUnit {
@@ -17,7 +16,6 @@ impl HttpRouteRuleUnit {
             namespace,
             name,
             rule,
-            need_rebuild: true,
         }
     }
 }
