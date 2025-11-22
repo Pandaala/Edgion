@@ -61,6 +61,11 @@ impl GatewayBaseConf {
         &self.gateway_class
     }
     
+    /// Get the gateway class name
+    pub fn gateway_class_name(&self) -> Option<&String> {
+        self.gateway_class.metadata.name.as_ref()
+    }
+    
     pub fn edgion_gateway_config(&self) -> &EdgionGatewayConfig {
         &self.edgion_gateway_config
     }

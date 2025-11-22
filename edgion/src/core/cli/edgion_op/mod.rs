@@ -84,7 +84,7 @@ impl EdgionOpCli {
             std::process::exit(1);
         }
 
-        let config_server = Arc::new(ConfigServer::new(config.gateway_class(), base_conf));
+        let config_server = Arc::new(ConfigServer::new(base_conf));
         let sync_server = ConfigSyncServer::new(config_server.clone());
 
         // Register dispatcher before using the loader

@@ -29,7 +29,6 @@ pub enum ResourceItem {
 // 2、内部不做细分的全新配置，实际的权限配置全部由RBAC来控制他能取到哪些，取到哪些，就把哪些全部同步到对应的网关。（此处如果给予全部service/secret可见，那么对应的网关就可见）
 // 3、只会处理对应route信息里的有些parentRefs是对应的，不然就不会处理
 pub struct ConfigServer {
-    pub(crate) gateway_class: Option<String>,
     pub base_conf: RwLock<GatewayBaseConf>,
     pub routes: ServerCache<HTTPRoute>,
     pub services: ServerCache<Service>,
@@ -54,9 +53,8 @@ pub struct BaseConfData {
 }
 
 impl ConfigServer {
-    pub fn new(gateway_class: Option<String>, base_conf: GatewayBaseConf) -> Self {
+    pub fn new(base_conf: GatewayBaseConf) -> Self {
         Self {
-            gateway_class,
             base_conf: RwLock::new(base_conf),
             routes: ServerCache::new(200),
             services: ServerCache::new(200),
@@ -66,16 +64,19 @@ impl ConfigServer {
         }
     }
 
-    /// Get the configured gateway class name
-    pub fn gateway_class(&self) -> Option<&String> {
-        self.gateway_class.as_ref()
+    /// Get the configured gateway class name from base_conf
+    pub fn gateway_class(&self) -> Option<String> {
+        let base_conf_guard = self.base_conf.read().unwrap();
+        base_conf_guard.gateway_class_name().map(|s| s.clone())
     }
 
     /// Get base configuration for a specific gateway class
     /// Returns the base conf data as JSON string
     pub fn get_base_conf(&self, gateway_class: &str) -> Result<BaseConfData, String> {
+        let base_conf_guard = self.base_conf.read().unwrap();
+        
         // Verify gateway class matches if configured
-        if let Some(ref configured_gc) = self.gateway_class {
+        if let Some(configured_gc) = base_conf_guard.gateway_class_name() {
             if configured_gc != gateway_class {
                 return Err(format!(
                     "Gateway class mismatch: expected {}, got {}",
@@ -83,8 +84,7 @@ impl ConfigServer {
                 ));
             }
         }
-
-        let base_conf_guard = self.base_conf.read().unwrap();
+        
         let base_conf_json = serde_json::to_string(&*base_conf_guard)
             .map_err(|e| format!("Failed to serialize base conf: {}", e))?;
 
