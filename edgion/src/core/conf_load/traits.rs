@@ -1,4 +1,4 @@
-use crate::core::conf_sync::GatewayBaseConf;
+use crate::types::GatewayBaseConf;
 use crate::core::conf_sync::traits::ConfigServerEventDispatcher;
 use async_trait::async_trait;
 use std::sync::Arc;

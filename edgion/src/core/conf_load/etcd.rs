@@ -218,9 +218,8 @@ impl ConfigLoader for EtcdConfigLoader {
         // not need for etcd loader
     }
 
-    async fn load_base(&self, gateway_class_name: &str) -> Result<crate::core::conf_sync::GatewayBaseConf> {
-        use crate::types::{GatewayClass, EdgionGatewayConfig, Gateway, ResourceKind};
-        use crate::core::conf_sync::GatewayBaseConf;
+    async fn load_base(&self, gateway_class_name: &str) -> Result<crate::types::GatewayBaseConf> {
+        use crate::types::{GatewayClass, EdgionGatewayConfig, Gateway, ResourceKind, GatewayBaseConf};
         
         tracing::info!(
             "Starting to load base configuration from etcd for gateway_class_name: {}",

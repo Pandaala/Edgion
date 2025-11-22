@@ -68,7 +68,7 @@ impl Loader {
     }
 
     /// Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
-    pub async fn load_base(&self, gateway_class_name: &str) -> Result<crate::core::conf_sync::GatewayBaseConf> {
+    pub async fn load_base(&self, gateway_class_name: &str) -> Result<crate::types::GatewayBaseConf> {
         self.inner.load_base(gateway_class_name).await
     }
 

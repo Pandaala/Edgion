@@ -1,4 +1,4 @@
-use crate::core::conf_sync::GatewayBaseConf;
+use crate::types::GatewayBaseConf;
 use crate::core::conf_sync::config_client::ConfigClient;
 use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, GetBaseConfRequest,

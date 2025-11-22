@@ -3,7 +3,7 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::sync::RwLock;
 use tokio::sync::mpsc;
 
-use crate::core::conf_sync::GatewayBaseConf;
+use crate::types::GatewayBaseConf;
 use crate::core::conf_sync::cache_server::{ListData, ServerCache, WatchResponse};
 use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;

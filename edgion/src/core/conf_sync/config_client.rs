@@ -1,4 +1,4 @@
-use crate::core::conf_sync::GatewayBaseConf;
+use crate::types::GatewayBaseConf;
 use crate::core::conf_sync::cache_client::ClientCache;
 use crate::core::conf_sync::cache_server::{EventDispatch, ListData, ResourceMeta};
 use crate::core::conf_sync::config_server::GatewayClassKey;

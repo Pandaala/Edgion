@@ -15,8 +15,7 @@ pub use config_server::ConfigServer;
 pub use grpc_client::ConfigSyncClient;
 pub use grpc_server::ConfigSyncServer;
 pub use traits::ConfigServerEventDispatcher;
-pub use gateway_base_conf::GatewayBaseConf;
+pub use crate::types::GatewayBaseConf;
 
 #[cfg(test)]
 mod tests;
-mod gateway_base_conf;

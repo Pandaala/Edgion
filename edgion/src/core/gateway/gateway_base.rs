@@ -5,22 +5,18 @@ use pingora_core::server::Server;
 use pingora_core::server::configuration::ServerConf;
 use pingora_proxy::http_proxy_service;
 use crate::core::gateway::edgion_http::EdgionHttp;
-use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass};
+use crate::types::GatewayBaseConf;
 use anyhow::Result;
 use crate::core::tls::tls_pingora::TlsCallback;
 
 pub struct GatewayBase {
-    gateway_class: GatewayClass,
-    edgion_gateway_config: EdgionGatewayConfig,
-    gateways: Vec<Gateway>,
+    base_conf: GatewayBaseConf,
 }
 
 impl GatewayBase {
-    pub fn new(gateway_class: GatewayClass, edgion_gateway_config: EdgionGatewayConfig, gateways: Vec<Gateway>) -> Self {
+    pub fn new(base_conf: GatewayBaseConf) -> Self {
         Self {
-            gateway_class,
-            edgion_gateway_config,
-            gateways,
+            base_conf,
         }
     }
 
@@ -30,7 +26,7 @@ impl GatewayBase {
 
     fn create_server_conf(&self) -> ServerConf {
         let mut conf = ServerConf::default();
-        let server_config = self.edgion_gateway_config.spec.server.as_ref();
+        let server_config = self.base_conf.edgion_gateway_config().spec.server.as_ref();
         
         // Ensure daemon mode is disabled (we don't run as daemon)
         conf.daemon = false;
@@ -79,7 +75,7 @@ impl GatewayBase {
         let mut pingora_server = Server::new_with_opt_and_conf(None, server_conf);
         pingora_server.bootstrap();
 
-        for gateway in self.gateways.iter() {
+        for gateway in self.base_conf.gateways().iter() {
             if let Some(listeners) = &gateway.spec.listeners {
                 for listener in listeners {
 
@@ -100,7 +96,7 @@ impl GatewayBase {
                     };
 
                     let edgion_http = EdgionHttp{
-                        gateway_class_name: self.gateway_class.metadata.name.clone(),
+                        gateway_class_name: self.base_conf.gateway_class().metadata.name.clone(),
                         gateway_namespace: gateway.metadata.namespace.clone(),
                         gateway_name: gateway.name_any(),
                         server_start_time: SystemTime::now(),
