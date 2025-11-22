@@ -44,7 +44,7 @@ pub struct Loader {
 }
 
 impl Loader {
-    pub fn from_args(args: &LoaderArgs, dispatcher: Arc<dyn ConfigServerEventDispatcher>) -> Result<Self> {
+    pub fn from_args(args: &LoaderArgs) -> Result<Self> {
         match args.loader {
             LoaderKind::LocalPath => {
                 const DEFAULT_LOCAL_PATH_DIR: &str = "edgion/config/examples";
@@ -54,12 +54,17 @@ impl Loader {
                     return Err(anyhow::anyhow!("configuration directory {:?} does not exist", path));
                 }
 
-                let loader = LocalPathLoader::new(path, dispatcher);
+                let loader = LocalPathLoader::new(path);
                 Ok(Self { inner: loader })
             }
             LoaderKind::Etcd => Err(anyhow::anyhow!("etcd loader is not currently supported")),
             LoaderKind::NotSupport => Err(anyhow::anyhow!("not support loader")),
         }
+    }
+
+    /// Register a dispatcher for handling configuration events
+    pub async fn register_dispatcher(&self, dispatcher: Arc<dyn ConfigServerEventDispatcher>) {
+        self.inner.register_dispatcher(dispatcher).await;
     }
 
     /// Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
@@ -72,7 +77,7 @@ impl Loader {
         // Connect to configuration source
         self.inner.connect().await?;
 
-        self.inner.set_enable_resource_version_fix();
+        self.inner.set_enable_resource_version_fix().await;
 
         tracing::info!("====> start bootstrap user conf...");
         // Bootstrap user configuration resources

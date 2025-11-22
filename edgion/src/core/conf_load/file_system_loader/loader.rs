@@ -18,7 +18,7 @@ use super::types::FileInfo;
 
 pub struct LocalPathLoader {
     root: PathBuf,
-    dispatcher: Arc<dyn ConfigServerEventDispatcher>,
+    registered_dispatcher: RwLock<Option<Arc<dyn ConfigServerEventDispatcher>>>,
     // Track resource metadata to file paths mapping for duplicate detection
     // Key: ResourceMetadata (kind/namespace/name), Value: Vec<PathBuf> (file paths)
     resource_to_files: Arc<Mutex<HashMap<ResourceMetadata, Vec<PathBuf>>>>,
@@ -31,7 +31,7 @@ pub struct LocalPathLoader {
 // updates inside the root directory are handled; directory-level operations are
 // ignored with an error log.
 impl LocalPathLoader {
-    pub fn new<P: Into<PathBuf>>(root: P, dispatcher: Arc<dyn ConfigServerEventDispatcher>) -> Arc<Self> {
+    pub fn new<P: Into<PathBuf>>(root: P) -> Arc<Self> {
         let root_path = root.into();
 
         // 将 root 转换为绝对路径
@@ -53,7 +53,7 @@ impl LocalPathLoader {
 
         let loader = Arc::new(Self {
             root: root_abs,
-            dispatcher,
+            registered_dispatcher: RwLock::new(None),
             resource_to_files: Arc::new(Mutex::new(HashMap::new())),
             files_to_resource: Arc::new(RwLock::new(HashMap::new())),
             enable_resource_version_fix: true,
@@ -88,8 +88,22 @@ impl LocalPathLoader {
         &self.root
     }
 
-    pub fn dispatcher(&self) -> &Arc<dyn ConfigServerEventDispatcher> {
-        &self.dispatcher
+    /// Register a dispatcher for handling configuration events
+    pub async fn register_dispatcher(&self, dispatcher: Arc<dyn ConfigServerEventDispatcher>) {
+        let mut registered = self.registered_dispatcher.write().await;
+        *registered = Some(dispatcher);
+        tracing::info!(
+            component = "file_system_loader",
+            event = "dispatcher_registered",
+            root = ?self.root,
+            "Dispatcher registered successfully"
+        );
+    }
+
+    /// Get the registered dispatcher if available
+    pub async fn dispatcher(&self) -> Option<Arc<dyn ConfigServerEventDispatcher>> {
+        let registered = self.registered_dispatcher.read().await;
+        registered.clone()
     }
 
     pub async fn read_file(path: &Path) -> Result<String> {
@@ -270,8 +284,16 @@ impl LocalPathLoader {
 
         // Skip base conf resources as they are handled by load_base
         if !is_base_conf {
-            self.dispatcher
-                .apply_resource_change(ResourceChange::InitAdd, None, content);
+            if let Some(dispatcher) = self.dispatcher().await {
+                dispatcher.apply_resource_change(ResourceChange::InitAdd, None, content);
+            } else {
+                tracing::warn!(
+                    component = "file_system_loader",
+                    event = "dispatcher_not_registered",
+                    path = ?path,
+                    "Dispatcher not registered, skipping resource change notification"
+                );
+            }
         }
         Ok(())
     }
@@ -341,8 +363,16 @@ impl LocalPathLoader {
 
                         // Skip base conf resources as they are handled by load_base
                         if !is_base_conf {
-                            self.dispatcher
-                                .apply_resource_change(ResourceChange::EventDelete, None, content);
+                            if let Some(dispatcher) = self.dispatcher().await {
+                                dispatcher.apply_resource_change(ResourceChange::EventDelete, None, content);
+                            } else {
+                                tracing::warn!(
+                                    component = "file_system_loader",
+                                    event = "dispatcher_not_registered",
+                                    path = ?path,
+                                    "Dispatcher not registered, skipping resource deletion notification"
+                                );
+                            }
                         }
                     } else {
                         let remaining_count = files.len();
@@ -420,7 +450,17 @@ impl LocalPathLoader {
 
         // Skip base conf resources as they are handled by load_base
         if !is_base_conf {
-            self.dispatcher.apply_resource_change(change, None, content);
+            if let Some(dispatcher) = self.dispatcher().await {
+                dispatcher.apply_resource_change(change, None, content);
+            } else {
+                tracing::warn!(
+                    component = "file_system_loader",
+                    event = "dispatcher_not_registered",
+                    path = ?path,
+                    change = ?change,
+                    "Dispatcher not registered, skipping resource change notification"
+                );
+            }
         }
         Ok(())
     }

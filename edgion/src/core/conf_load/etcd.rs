@@ -105,6 +105,15 @@ impl EtcdConfigLoader {
 
 #[async_trait::async_trait]
 impl ConfigLoader for EtcdConfigLoader {
+    /// Register a dispatcher for handling configuration events
+    /// Note: EtcdConfigLoader currently requires dispatcher at construction time
+    async fn register_dispatcher(&self, _dispatcher: Arc<dyn ConfigServerEventDispatcher>) {
+        tracing::warn!(
+            component = "etcd_loader",
+            "EtcdConfigLoader does not support late dispatcher registration. Dispatcher must be provided at construction."
+        );
+    }
+
     /// Connect to etcd cluster
     async fn connect(&self) -> Result<()> {
         if self.endpoints.is_empty() {
@@ -205,8 +214,8 @@ impl ConfigLoader for EtcdConfigLoader {
         Ok(())
     }
 
-    fn set_enable_resource_version_fix(&self) {
-        // not need
+    async fn set_enable_resource_version_fix(&self) {
+        // not need for etcd loader
     }
 
     async fn load_base(&self) -> Result<crate::core::conf_sync::GatewayBaseConf> {

@@ -56,19 +56,13 @@ impl EdgionOpCli {
             "Edgion Operator starting"
         );
 
-        let config_server = Arc::new(ConfigServer::new(config.gateway_class()));
-        let sync_server = ConfigSyncServer::new(config_server.clone());
-
-        // Clone config_server before moving into loader
-        let debug_config_server = config_server.clone();
-
         let loader_args = config.to_loader_args();
-        let loader = Loader::from_args(&loader_args, config_server as Arc<dyn ConfigServerEventDispatcher>)?;
+        let loader = Loader::from_args(&loader_args)?;
 
         // Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
         tracing::info!("Loading base configuration...");
         let base_conf = loader.load_base().await?;
-        
+
         // Print base configuration as pretty JSON
         if let Ok(json) = serde_json::to_string_pretty(&base_conf) {
             tracing::info!(
@@ -76,10 +70,16 @@ impl EdgionOpCli {
                 json
             );
         }
-        
+
+        let config_server = Arc::new(ConfigServer::new(config.gateway_class()));
+        let sync_server = ConfigSyncServer::new(config_server.clone());
+
+        // Register dispatcher before using the loader
+        loader.register_dispatcher(config_server.clone() as Arc<dyn ConfigServerEventDispatcher>).await;
+
         // Set base configuration to config_server
         {
-            let mut base_conf_guard = debug_config_server.base_conf.write().unwrap();
+            let mut base_conf_guard = config_server.base_conf.write().unwrap();
             *base_conf_guard = Some(base_conf);
         }
 
@@ -93,7 +93,7 @@ impl EdgionOpCli {
         );
 
         // Spawn task to print config every 10 seconds
-        Self::spawn_config_printer(debug_config_server);
+        Self::spawn_config_printer(config_server.clone());
 
         // Run both services concurrently using tokio::join!
         let (sync_result, loader_result) = tokio::join!(sync_server.serve(addr), loader.run());

@@ -1,13 +1,20 @@
 use anyhow::{anyhow, Context, Result};
 use tokio::fs;
+use std::sync::Arc;
 
 use crate::core::conf_load::ConfigLoader;
+use crate::core::conf_sync::traits::ConfigServerEventDispatcher;
 use crate::types::ResourceKind;
 
 use super::loader::LocalPathLoader;
 
 #[async_trait::async_trait]
 impl ConfigLoader for LocalPathLoader {
+    /// Register a dispatcher for handling configuration events
+    async fn register_dispatcher(&self, dispatcher: Arc<dyn ConfigServerEventDispatcher>) {
+        self.register_dispatcher(dispatcher).await;
+    }
+
     /// Connect to localpath (no-op for localpath loader)
     async fn connect(&self) -> Result<()> {
         // LOCAL_PATH doesn't need connection setup
@@ -159,7 +166,15 @@ impl ConfigLoader for LocalPathLoader {
 
     /// Set ready state after initialization
     async fn set_ready(&self) {
-        self.dispatcher().set_ready();
+        if let Some(dispatcher) = self.dispatcher().await {
+            dispatcher.set_ready();
+        } else {
+            tracing::warn!(
+                component = "file_system_loader",
+                event = "dispatcher_not_registered",
+                "Dispatcher not registered, cannot set ready state"
+            );
+        }
     }
 
     /// Main run loop for watching configuration changes
@@ -168,9 +183,17 @@ impl ConfigLoader for LocalPathLoader {
         self.run_watcher().await
     }
 
-    fn set_enable_resource_version_fix(&self) {
+    async fn set_enable_resource_version_fix(&self) {
         if self.enable_resource_version_fix {
-            self.dispatcher().enable_version_fix_mode()
+            if let Some(dispatcher) = self.dispatcher().await {
+                dispatcher.enable_version_fix_mode();
+            } else {
+                tracing::warn!(
+                    component = "file_system_loader",
+                    event = "dispatcher_not_registered",
+                    "Dispatcher not registered, cannot enable version fix mode"
+                );
+            }
         }
     }
 }
