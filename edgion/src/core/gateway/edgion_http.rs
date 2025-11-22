@@ -2,11 +2,14 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::SystemTime;
 use crate::core::gateway::server_header::ServerHeaderOpts;
+use crate::types::Listener;
 
 pub struct EdgionHttp {
     pub gateway_class_name: Option<String>,
     pub gateway_namespace: Option<String>,
     pub gateway_name: String,
+
+    pub listener: Listener,
 
     pub server_start_time: SystemTime,
 

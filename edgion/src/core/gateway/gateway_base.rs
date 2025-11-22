@@ -78,10 +78,9 @@ impl GatewayBase {
         for gateway in self.base_conf.gateways().iter() {
             if let Some(listeners) = &gateway.spec.listeners {
                 for listener in listeners {
-
+                    let listener = listener.clone();
                     let host = listener.hostname.as_deref().unwrap_or("0.0.0.0");
-                    let port = listener.port;
-                    let addr = format!("{}:{}", host, port);
+                    let addr = format!("{}:{}", host, listener.port);
 
                     let enable_tls = {
                         if listener.tls.is_some() {
@@ -95,10 +94,11 @@ impl GatewayBase {
                         }
                     };
 
-                    let edgion_http = EdgionHttp{
+                    let edgion_http = EdgionHttp {
                         gateway_class_name: self.base_conf.gateway_class().metadata.name.clone(),
                         gateway_namespace: gateway.metadata.namespace.clone(),
                         gateway_name: gateway.name_any(),
+                        listener,
                         server_start_time: SystemTime::now(),
                         server_header_opts: Default::default(),
                         ctx_cnt: Arc::new(Default::default()),
