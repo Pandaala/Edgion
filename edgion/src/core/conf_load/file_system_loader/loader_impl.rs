@@ -33,15 +33,15 @@ impl ConfigLoader for LocalPathLoader {
             gateway_class_name
         );
 
-        let mut gateway_class: Option<GatewayClass> = None;
-        let mut edgion_gateway_config_name: Option<String> = None;
-        let mut edgion_gateway_config: Option<EdgionGatewayConfig> = None;
+        // Step 1: Collect all base resources in one pass
+        let mut gateway_classes: Vec<GatewayClass> = Vec::new();
+        let mut edgion_gateway_configs: Vec<EdgionGatewayConfig> = Vec::new();
         let mut gateways: Vec<Gateway> = Vec::new();
 
         let root = self.root();
         let mut stack = vec![root.clone()];
 
-        // First pass: find the matching GatewayClass and extract EdgionGatewayConfig name
+        // Traverse all files and collect resources
         while let Some(dir) = stack.pop() {
             let mut entries = fs::read_dir(&dir)
                 .await
@@ -74,126 +74,180 @@ impl ConfigLoader for LocalPathLoader {
                     }
                 };
 
-                // Try to parse as GatewayClass and check if name matches
-                if gateway_class.is_none() {
-                    if let Ok(gc) = serde_yaml::from_str::<GatewayClass>(&content) {
-                        if let Some(ref name) = gc.metadata.name {
-                            if name == gateway_class_name {
-                                tracing::info!("Found matching GatewayClass: {:?}", name);
-                                // Extract EdgionGatewayConfig name from parameters_ref
-                                if let Some(ref params_ref) = gc.spec.parameters_ref {
-                                    if params_ref.kind == "EdgionGatewayConfig" {
-                                        edgion_gateway_config_name = Some(params_ref.name.clone());
-                                        tracing::info!(
-                                            "GatewayClass references EdgionGatewayConfig: {}",
-                                            params_ref.name
-                                        );
-                                    }
-                                }
-                                gateway_class = Some(gc);
-                                continue;
+                // First, determine the resource kind from content
+                use crate::types::ResourceKind;
+                let resource_kind = ResourceKind::from_content(&content);
+
+                // Parse based on resource kind to avoid false matches
+                match resource_kind {
+                    Some(ResourceKind::GatewayClass) => {
+                        match serde_yaml::from_str::<GatewayClass>(&content) {
+                            Ok(gc) => {
+                                tracing::debug!("Found GatewayClass: {:?} in file {:?}", gc.metadata.name, path);
+                                gateway_classes.push(gc);
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to parse GatewayClass from file {:?}: {}", path, e);
                             }
                         }
+                    }
+                    Some(ResourceKind::EdgionGatewayConfig) => {
+                        match serde_yaml::from_str::<EdgionGatewayConfig>(&content) {
+                            Ok(egwc) => {
+                                tracing::debug!("Found EdgionGatewayConfig: {:?} in file {:?}", egwc.metadata.name, path);
+                                edgion_gateway_configs.push(egwc);
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to parse EdgionGatewayConfig from file {:?}: {}", path, e);
+                            }
+                        }
+                    }
+                    Some(ResourceKind::Gateway) => {
+                        match serde_yaml::from_str::<Gateway>(&content) {
+                            Ok(gw) => {
+                                tracing::debug!(
+                                    "Found Gateway: {:?} with gateway_class_name: {} in file {:?}",
+                                    gw.metadata.name,
+                                    gw.spec.gateway_class_name,
+                                    path
+                                );
+                                gateways.push(gw);
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to parse Gateway from file {:?}: {}", path, e);
+                            }
+                        }
+                    }
+                    Some(_) => {
+                        // Other resource types (HTTPRoute, Service, etc.) - skip for base conf
+                        tracing::trace!("Skipping non-base-conf resource in file {:?}", path);
+                    }
+                    None => {
+                        // Could not determine resource kind - try fallback parsing
+                        // This handles edge cases where kind might not be easily extractable
+                        tracing::trace!("Could not determine resource kind from file {:?}, attempting fallback parsing", path);
                     }
                 }
             }
         }
-
-        // Validate GatewayClass was found
-        let gc = gateway_class.ok_or_else(|| {
-            anyhow!(
-                "GatewayClass '{}' not found in configuration directory",
-                gateway_class_name
-            )
-        })?;
-
-        // Validate EdgionGatewayConfig name was found
-        let egwc_name = edgion_gateway_config_name.ok_or_else(|| {
-            anyhow!(
-                "GatewayClass '{}' does not reference an EdgionGatewayConfig via parameters_ref",
-                gateway_class_name
-            )
-        })?;
-
-        // Second pass: find EdgionGatewayConfig and matching Gateways
-        let root = self.root();
-        let mut stack = vec![root.clone()];
-
-        while let Some(dir) = stack.pop() {
-            let mut entries = fs::read_dir(&dir)
-                .await
-                .with_context(|| format!("Failed to read directory {:?}", dir))?;
-
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-
-                // Only process yaml/yml/json files
-                if let Some(ext) = path.extension() {
-                    let ext_str = ext.to_string_lossy();
-                    if !matches!(ext_str.as_ref(), "yaml" | "yml" | "json") {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-
-                // Read and parse file
-                let content = match LocalPathLoader::read_file(&path).await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!("Failed to read file {:?}: {}", path, e);
-                        continue;
-                    }
-                };
-
-                // Try to parse as EdgionGatewayConfig and check if name matches
-                if edgion_gateway_config.is_none() {
-                    if let Ok(egwc) = serde_yaml::from_str::<EdgionGatewayConfig>(&content) {
-                        if let Some(ref name) = egwc.metadata.name {
-                            if name == &egwc_name {
-                                tracing::info!("Found matching EdgionGatewayConfig: {:?}", name);
-                                edgion_gateway_config = Some(egwc);
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                // Try to parse as Gateway and check if gateway_class_name matches
-                if let Ok(gw) = serde_yaml::from_str::<Gateway>(&content) {
-                    if gw.spec.gateway_class_name == gateway_class_name {
-                        tracing::info!(
-                            "Found matching Gateway: {:?} (gateway_class_name: {})",
-                            gw.metadata.name,
-                            gateway_class_name
-                        );
-                        gateways.push(gw);
-                    }
-                }
-            }
-        }
-
-        // Validate required resources exist
-        let egwc = edgion_gateway_config.ok_or_else(|| {
-            anyhow!(
-                "EdgionGatewayConfig '{}' not found in configuration directory",
-                egwc_name
-            )
-        })?;
 
         tracing::info!(
-            "Successfully loaded base configuration: GatewayClass={:?}, EdgionGatewayConfig={:?}, Gateways count={}",
-            gc.metadata.name,
-            egwc.metadata.name,
+            "Collected resources: {} GatewayClasses, {} EdgionGatewayConfigs, {} Gateways",
+            gateway_classes.len(),
+            edgion_gateway_configs.len(),
             gateways.len()
         );
 
-        Ok(GatewayBaseConf::new(gc, egwc, gateways))
+        // Log all collected Gateway names and their gateway_class_name for debugging
+        if !gateways.is_empty() {
+            tracing::info!("All collected Gateways:");
+            for gw in &gateways {
+                tracing::info!(
+                    "  - Gateway: {:?} (namespace: {:?}), gateway_class_name: {}",
+                    gw.metadata.name,
+                    gw.metadata.namespace,
+                    gw.spec.gateway_class_name
+                );
+            }
+        } else {
+            tracing::warn!("No Gateways were collected from filesystem!");
+        }
+
+        // Step 2: Find the matching GatewayClass by name
+        let gateway_class = gateway_classes
+            .into_iter()
+            .find(|gc| gc.metadata.name.as_ref().map(|n| n == gateway_class_name).unwrap_or(false))
+            .ok_or_else(|| {
+                anyhow!(
+                    "GatewayClass '{}' not found in configuration directory",
+                    gateway_class_name
+                )
+            })?;
+
+        tracing::info!("Found matching GatewayClass: {:?}", gateway_class.metadata.name);
+
+        // Step 3: Extract EdgionGatewayConfig name from GatewayClass parameters_ref
+        let egwc_name = gateway_class
+            .spec
+            .parameters_ref
+            .as_ref()
+            .and_then(|params_ref| {
+                if params_ref.kind == "EdgionGatewayConfig" {
+                    Some(params_ref.name.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "GatewayClass '{}' does not reference an EdgionGatewayConfig via parameters_ref",
+                    gateway_class_name
+                )
+            })?;
+
+        tracing::info!(
+            "GatewayClass references EdgionGatewayConfig: {}",
+            egwc_name
+        );
+
+        // Step 4: Find the matching EdgionGatewayConfig by name
+        let edgion_gateway_config = edgion_gateway_configs
+            .into_iter()
+            .find(|egwc| egwc.metadata.name.as_ref().map(|n| n == &egwc_name).unwrap_or(false))
+            .ok_or_else(|| {
+                anyhow!(
+                    "EdgionGatewayConfig '{}' not found in configuration directory",
+                    egwc_name
+                )
+            })?;
+
+        tracing::info!("Found matching EdgionGatewayConfig: {:?}", edgion_gateway_config.metadata.name);
+
+        // Step 5: Filter Gateways by gateway_class_name
+        let matching_gateways: Vec<Gateway> = gateways
+            .into_iter()
+            .filter(|gw| {
+                let matches = gw.spec.gateway_class_name == gateway_class_name;
+                if !matches {
+                    tracing::debug!(
+                        "Gateway {:?} (gateway_class_name: {}) does not match target: {}",
+                        gw.metadata.name,
+                        gw.spec.gateway_class_name,
+                        gateway_class_name
+                    );
+                }
+                matches
+            })
+            .collect();
+
+        if matching_gateways.is_empty() {
+            tracing::error!(
+                "No matching Gateways found for gateway_class_name: {}. Please check that Gateway resources have spec.gatewayClassName set correctly.",
+                gateway_class_name
+            );
+        } else {
+            tracing::info!(
+                "Found {} matching Gateways for gateway_class_name: {}",
+                matching_gateways.len(),
+                gateway_class_name
+            );
+            for gw in &matching_gateways {
+                tracing::info!(
+                    "  - Matching Gateway: {:?} (namespace: {:?})",
+                    gw.metadata.name,
+                    gw.metadata.namespace
+                );
+            }
+        }
+
+        tracing::info!(
+            "Successfully loaded base configuration: GatewayClass={:?}, EdgionGatewayConfig={:?}, Gateways count={}",
+            gateway_class.metadata.name,
+            edgion_gateway_config.metadata.name,
+            matching_gateways.len()
+        );
+
+        Ok(GatewayBaseConf::new(gateway_class, edgion_gateway_config, matching_gateways))
     }
 
     /// Bootstrap and load user configuration resources (all other resources)
