@@ -68,27 +68,28 @@ impl Loader {
     }
 
     /// Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
-    pub async fn load_base(&self) -> Result<crate::core::conf_sync::GatewayBaseConf> {
-        self.inner.load_base().await
+    pub async fn load_base(&self, gateway_class_name: &str) -> Result<crate::core::conf_sync::GatewayBaseConf> {
+        self.inner.load_base(gateway_class_name).await
     }
 
     pub async fn run(self) -> Result<()> {
-        tracing::info!("====> start connect...");
+        
         // Connect to configuration source
+        tracing::info!("====> start connect...");
         self.inner.connect().await?;
 
         self.inner.set_enable_resource_version_fix().await;
 
-        tracing::info!("====> start bootstrap user conf...");
         // Bootstrap user configuration resources
+        tracing::info!("====> start bootstrap user conf...");
         self.inner.bootstrap_user_conf().await?;
 
-        tracing::info!("====> Bootstrapped, set ready");
         // Set ready state
+        tracing::info!("====> Bootstrapped, set ready");
         self.inner.set_ready().await;
 
-        tracing::info!("====> Loader running...");
         // Start watching for changes
+        tracing::info!("====> Loader running...");
         self.inner.run().await
     }
 }

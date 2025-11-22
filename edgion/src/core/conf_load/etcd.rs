@@ -218,17 +218,92 @@ impl ConfigLoader for EtcdConfigLoader {
         // not need for etcd loader
     }
 
-    async fn load_base(&self) -> Result<crate::core::conf_sync::GatewayBaseConf> {
+    async fn load_base(&self, gateway_class_name: &str) -> Result<crate::core::conf_sync::GatewayBaseConf> {
         use crate::types::{GatewayClass, EdgionGatewayConfig, Gateway, ResourceKind};
         use crate::core::conf_sync::GatewayBaseConf;
         
-        tracing::info!("Starting to load base configuration from etcd");
+        tracing::info!(
+            "Starting to load base configuration from etcd for gateway_class_name: {}",
+            gateway_class_name
+        );
         
         let mut gateway_class: Option<GatewayClass> = None;
+        let mut edgion_gateway_config_name: Option<String> = None;
         let mut edgion_gateway_config: Option<EdgionGatewayConfig> = None;
         let mut gateways: Vec<Gateway> = Vec::new();
         
         // Get all keys with prefix from etcd
+        let mut client_guard = self.client.lock().await;
+        let client = client_guard.as_mut().ok_or_else(|| anyhow!("Client not connected"))?;
+        
+        let options = GetOptions::new().with_prefix();
+        let resp = client
+            .get(self.prefix.clone(), Some(options))
+            .await
+            .context("Failed to get keys from etcd")?;
+        
+        drop(client_guard);
+        
+        // First pass: find matching GatewayClass and extract EdgionGatewayConfig name
+        for kv in resp.kvs() {
+            let key = String::from_utf8_lossy(kv.key()).to_string();
+            let value = match String::from_utf8(kv.value().to_vec()) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("Failed to parse value for key {}: {}", key, e);
+                    continue;
+                }
+            };
+            
+            // Determine resource kind
+            let kind = match ResourceKind::from_content(&value) {
+                Some(k) => k,
+                None => {
+                    tracing::warn!("Failed to determine resource kind for key {}", key);
+                    continue;
+                }
+            };
+            
+            // Parse GatewayClass and check if name matches
+            if kind == ResourceKind::GatewayClass && gateway_class.is_none() {
+                if let Ok(gc) = serde_yaml::from_str::<GatewayClass>(&value) {
+                    if let Some(ref name) = gc.metadata.name {
+                        if name == gateway_class_name {
+                            tracing::info!("Found matching GatewayClass: {:?}", name);
+                            // Extract EdgionGatewayConfig name from parameters_ref
+                            if let Some(ref params_ref) = gc.spec.parameters_ref {
+                                if params_ref.kind == "EdgionGatewayConfig" {
+                                    edgion_gateway_config_name = Some(params_ref.name.clone());
+                                    tracing::info!(
+                                        "GatewayClass references EdgionGatewayConfig: {}",
+                                        params_ref.name
+                                    );
+                                }
+                            }
+                            gateway_class = Some(gc);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Validate GatewayClass was found
+        let gc = gateway_class.ok_or_else(|| {
+            anyhow!(
+                "GatewayClass '{}' not found in etcd",
+                gateway_class_name
+            )
+        })?;
+        
+        // Validate EdgionGatewayConfig name was found
+        let egwc_name = edgion_gateway_config_name.ok_or_else(|| {
+            anyhow!(
+                "GatewayClass '{}' does not reference an EdgionGatewayConfig via parameters_ref",
+                gateway_class_name
+            )
+        })?;
+        
+        // Second pass: find EdgionGatewayConfig and matching Gateways
         let mut client_guard = self.client.lock().await;
         let client = client_guard.as_mut().ok_or_else(|| anyhow!("Client not connected"))?;
         
@@ -261,26 +336,28 @@ impl ConfigLoader for EtcdConfigLoader {
             
             // Parse based on kind
             match kind {
-                ResourceKind::GatewayClass => {
-                    if gateway_class.is_none() {
-                        if let Ok(gc) = serde_yaml::from_str::<GatewayClass>(&value) {
-                            tracing::info!("Found GatewayClass: {:?}", gc.metadata.name);
-                            gateway_class = Some(gc);
-                        }
-                    }
-                }
                 ResourceKind::EdgionGatewayConfig => {
                     if edgion_gateway_config.is_none() {
                         if let Ok(egwc) = serde_yaml::from_str::<EdgionGatewayConfig>(&value) {
-                            tracing::info!("Found EdgionGatewayConfig: {:?}", egwc.metadata.name);
-                            edgion_gateway_config = Some(egwc);
+                            if let Some(ref name) = egwc.metadata.name {
+                                if name == &egwc_name {
+                                    tracing::info!("Found matching EdgionGatewayConfig: {:?}", name);
+                                    edgion_gateway_config = Some(egwc);
+                                }
+                            }
                         }
                     }
                 }
                 ResourceKind::Gateway => {
                     if let Ok(gw) = serde_yaml::from_str::<Gateway>(&value) {
-                        tracing::info!("Found Gateway: {:?}", gw.metadata.name);
-                        gateways.push(gw);
+                        if gw.spec.gateway_class_name == gateway_class_name {
+                            tracing::info!(
+                                "Found matching Gateway: {:?} (gateway_class_name: {})",
+                                gw.metadata.name,
+                                gateway_class_name
+                            );
+                            gateways.push(gw);
+                        }
                     }
                 }
                 _ => {
@@ -290,8 +367,12 @@ impl ConfigLoader for EtcdConfigLoader {
         }
         
         // Validate required resources exist
-        let gc = gateway_class.ok_or_else(|| anyhow!("GatewayClass not found in etcd"))?;
-        let egwc = edgion_gateway_config.ok_or_else(|| anyhow!("EdgionGatewayConfig not found in etcd"))?;
+        let egwc = edgion_gateway_config.ok_or_else(|| {
+            anyhow!(
+                "EdgionGatewayConfig '{}' not found in etcd",
+                egwc_name
+            )
+        })?;
         
         tracing::info!(
             "Successfully loaded base configuration from etcd: GatewayClass={:?}, EdgionGatewayConfig={:?}, Gateways count={}",

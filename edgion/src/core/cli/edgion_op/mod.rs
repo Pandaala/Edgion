@@ -59,9 +59,16 @@ impl EdgionOpCli {
         let loader_args = config.to_loader_args();
         let loader = Loader::from_args(&loader_args)?;
 
+        // Get gateway_class_name from config
+        let gateway_class_name = config.gateway_class()
+            .ok_or_else(|| anyhow!("gateway_class must be specified in configuration"))?;
+
         // Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
-        tracing::info!("Loading base configuration...");
-        let base_conf = loader.load_base().await?;
+        tracing::info!(
+            "Loading base configuration for gateway_class: {}",
+            gateway_class_name
+        );
+        let base_conf = loader.load_base(&gateway_class_name).await?;
 
         // Print base configuration as pretty JSON
         if let Ok(json) = serde_json::to_string_pretty(&base_conf) {

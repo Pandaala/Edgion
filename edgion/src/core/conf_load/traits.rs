@@ -12,9 +12,9 @@ pub trait ConfigLoader: Send + Sync {
     async fn connect(&self) -> anyhow::Result<()>;
 
     /// Load base configuration and return GatewayBaseConf
-    /// This method should find GatewayClass, EdgionGatewayConfig, and Gateways,
-    /// then assemble them into a GatewayBaseConf
-    async fn load_base(&self) -> anyhow::Result<GatewayBaseConf>;
+    /// This method should find GatewayClass (by name), EdgionGatewayConfig (linked via parameters_ref),
+    /// and Gateways (that reference the GatewayClass), then assemble them into a GatewayBaseConf
+    async fn load_base(&self, gateway_class_name: &str) -> anyhow::Result<GatewayBaseConf>;
 
     /// Bootstrap and load user configuration resources (all other resources)
     async fn bootstrap_user_conf(&self) -> anyhow::Result<()>;
