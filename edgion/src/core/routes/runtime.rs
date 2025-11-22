@@ -1,4 +1,4 @@
-use super::r#match::RouteRuntime;
+use super::r#match::RouteEntry;
 use crate::types::err::EdError;
 use crate::types::HTTPRouteRule;
 use pingora_proxy::Session;
@@ -22,7 +22,7 @@ impl HttpRouteRuleUnit {
     }
 }
 
-impl RouteRuntime for HttpRouteRuleUnit {
+impl RouteEntry for HttpRouteRuleUnit {
     fn extract_paths(&self) -> Vec<(String, bool)> {
         let mut paths = Vec::new();
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
-use crate::core::routes::{HttpRouteRuleUnit, r#match::RouteRuntime};
+use crate::core::routes::{HttpRouteRuleUnit, r#match::RouteEntry};
 use crate::types::{HTTPRoute, ResourceMeta};
 
 type DomainStr = String;

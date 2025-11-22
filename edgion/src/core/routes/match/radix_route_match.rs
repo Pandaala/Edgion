@@ -1,5 +1,5 @@
 use super::radix_path::RadixPath;
-use super::route_runtime::RouteRuntime;
+use super::route_runtime::RouteEntry;
 use crate::types::err::EdError;
 use crate::types::err::EdError::RouteNotFound;
 use pingora_proxy::Session;
@@ -22,7 +22,7 @@ use std::sync::Arc;
 pub struct RadixRouteMatchEngine {
     tree: RadixTree,
     /// Routes implementing RouteRuntime trait
-    routes: Vec<Arc<dyn RouteRuntime>>,
+    routes: Vec<Arc<dyn RouteEntry>>,
     /// All RadixPath instances (flattened from all routes)
     radix_paths: Vec<RadixPath>,
     /// Mapping from tree_idx to list of path indices that share the same radix_key
@@ -56,7 +56,7 @@ impl RadixRouteMatchEngine {
         &self,
         route_idx: usize,
         session: &Session,
-    ) -> Result<Option<Arc<dyn RouteRuntime>>, EdError> {
+    ) -> Result<Option<Arc<dyn RouteEntry>>, EdError> {
         if let Some(route) = self.routes.get(route_idx) {
             match route.deep_match(session) {
                 Ok(true) => {
@@ -76,7 +76,7 @@ impl RadixRouteMatchEngine {
         Ok(None)
     }
 
-    pub fn match_route(&self, session: &mut Session) -> Result<Arc<dyn RouteRuntime>, EdError> {
+    pub fn match_route(&self, session: &mut Session) -> Result<Arc<dyn RouteEntry>, EdError> {
         let path = session.req_header().uri.path();
 
         println!("\n========== Radix Route Matching ==========");
@@ -182,7 +182,7 @@ impl RadixRouteMatchEngine {
         Err(RouteNotFound())
     }
 
-    pub fn initialize(&mut self, route_runtimes: Vec<Arc<dyn RouteRuntime>>) -> Result<(), EdError> {
+    pub fn initialize(&mut self, route_runtimes: Vec<Arc<dyn RouteEntry>>) -> Result<(), EdError> {
         println!("\n========== RadixRouteMatchEngine Initialize ==========");
         println!("Total route runtimes to compile: {}", route_runtimes.len());
 
@@ -316,7 +316,7 @@ mod tests {
         }
     }
 
-    impl RouteRuntime for MockRoute {
+    impl RouteEntry for MockRoute {
         fn extract_paths(&self) -> Vec<(String, bool)> {
             self.paths.clone()
         }
@@ -343,7 +343,7 @@ mod tests {
         let mut engine = RadixRouteMatchEngine::new();
 
         let route = MockRoute::new("test-route", vec![("/api", false)]);
-        let routes: Vec<Arc<dyn RouteRuntime>> = vec![Arc::new(route)];
+        let routes: Vec<Arc<dyn RouteEntry>> = vec![Arc::new(route)];
 
         let result = engine.initialize(routes);
         assert!(result.is_ok());
@@ -357,7 +357,7 @@ mod tests {
     fn test_engine_initialization_multiple_routes() {
         let mut engine = RadixRouteMatchEngine::new();
 
-        let routes: Vec<Arc<dyn RouteRuntime>> = vec![
+        let routes: Vec<Arc<dyn RouteEntry>> = vec![
             Arc::new(MockRoute::new("route1", vec![("/api", false)])),
             Arc::new(MockRoute::new("route2", vec![("/users", true)])),
             Arc::new(MockRoute::new("route3", vec![("/posts/{id}", false)])),
@@ -376,7 +376,7 @@ mod tests {
 
         let route = MockRoute::new("multi-path-route", vec![("/api/v1", false), ("/api/v2", false)]);
 
-        let routes: Vec<Arc<dyn RouteRuntime>> = vec![Arc::new(route)];
+        let routes: Vec<Arc<dyn RouteEntry>> = vec![Arc::new(route)];
         let result = engine.initialize(routes);
         assert!(result.is_ok());
 
@@ -389,7 +389,7 @@ mod tests {
         let mut engine = RadixRouteMatchEngine::new();
 
         // Two routes with same prefix but different suffixes
-        let routes: Vec<Arc<dyn RouteRuntime>> = vec![
+        let routes: Vec<Arc<dyn RouteEntry>> = vec![
             Arc::new(MockRoute::new("route1", vec![("/api/users", false)])),
             Arc::new(MockRoute::new("route2", vec![("/api/posts", false)])),
         ];
@@ -407,7 +407,7 @@ mod tests {
     fn test_engine_priority_ordering() {
         let mut engine = RadixRouteMatchEngine::new();
 
-        let routes: Vec<Arc<dyn RouteRuntime>> = vec![
+        let routes: Vec<Arc<dyn RouteEntry>> = vec![
             Arc::new(MockRoute::new("prefix", vec![("/api", true)])),
             Arc::new(MockRoute::new("exact", vec![("/api", false)])),
         ];
@@ -426,7 +426,7 @@ mod tests {
     fn test_engine_empty_initialization() {
         let mut engine = RadixRouteMatchEngine::new();
 
-        let routes: Vec<Arc<dyn RouteRuntime>> = vec![];
+        let routes: Vec<Arc<dyn RouteEntry>> = vec![];
         let result = engine.initialize(routes);
         assert!(result.is_ok());
 
@@ -439,7 +439,7 @@ mod tests {
         let mut engine = RadixRouteMatchEngine::new();
 
         let route = MockRoute::new("test", vec![("/api", false)]);
-        let routes: Vec<Arc<dyn RouteRuntime>> = vec![Arc::new(route)];
+        let routes: Vec<Arc<dyn RouteEntry>> = vec![Arc::new(route)];
         engine.initialize(routes).unwrap();
 
         // Can access the underlying tree
@@ -452,7 +452,7 @@ mod tests {
         let mut engine = RadixRouteMatchEngine::new();
 
         // Multiple paths with same radix_key should reuse tree_idx
-        let routes: Vec<Arc<dyn RouteRuntime>> = vec![
+        let routes: Vec<Arc<dyn RouteEntry>> = vec![
             Arc::new(MockRoute::new("r1", vec![("/api/{v1}", false)])),
             Arc::new(MockRoute::new("r2", vec![("/api/{v2}", false)])),
         ];
