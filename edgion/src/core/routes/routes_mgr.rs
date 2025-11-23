@@ -1,6 +1,5 @@
-use std::collections::HashMap;
 use std::sync::Arc;
-use arc_swap::ArcSwap;
+use dashmap::DashMap;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::core::routes::HttpRouteRuleUnit;
 use crate::core::routes::r#match::radix_route_match::RadixRouteMatchEngine;
@@ -15,25 +14,22 @@ pub struct RouteRules {
     need_rebuild: bool,
 }
 
-#[derive(Clone)]
 pub struct DomainRouteRules {
-    domain_routes_map: HashMap<DomainStr, Arc<RouteRules>>,
+    domain_routes_map: DashMap<DomainStr, Arc<RouteRules>>,
 }
 
 pub struct RouteManager {
-    gateway_routes_map: HashMap<String, Arc<DomainRouteRules>>,
-    gateway_routes_matcher: ArcSwap<HashMap<String, HashMap<String, ArcSwap<RadixRouteMatchEngine>>>>,
+    gateway_routes_map: DashMap<String, Arc<DomainRouteRules>>,
 }
 
 impl RouteManager {
     pub fn new() -> Self {
         Self {
-            gateway_routes_map: HashMap::new(),
-            gateway_routes_matcher: ArcSwap::new(Arc::new(HashMap::new())),
+            gateway_routes_map: DashMap::new(),
         }
     }
 
-    pub fn add_http_routes(&mut self, http_routes: Vec<HTTPRoute>) {
+    pub fn add_http_routes(&self, http_routes: Vec<HTTPRoute>) {
         for route in http_routes {
             let changed_route_rules = self.add_http_route_single(route);
             // Traverse changed route rules and output need_rebuild
@@ -49,7 +45,7 @@ impl RouteManager {
         }
     }
 
-    pub fn add_http_route(&mut self, route: HTTPRoute) {
+    pub fn add_http_route(&self, route: HTTPRoute) {
         let changed_route_rules = self.add_http_route_single(route);
         // Traverse changed route rules and output need_rebuild
         for route_rules in changed_route_rules {
@@ -63,7 +59,7 @@ impl RouteManager {
         }
     }
 
-    fn add_http_route_single(&mut self, route: HTTPRoute) -> Vec<Arc<RouteRules>> {
+    fn add_http_route_single(&self, route: HTTPRoute) -> Vec<Arc<RouteRules>> {
         let mut changed_route_rules = Vec::new();
         let parent_refs = match &route.spec.parent_refs {
             Some(refs) => refs,
@@ -83,7 +79,7 @@ impl RouteManager {
             match gateway_store_guard.get_gateway(&gateway_key) {
                 Ok(_gateway) => {
                     let domain_routes_map = self.get_or_create_domain_routes_map(&gateway_key);
-                    let route_changes = Self::add_rules_to_domain_map(domain_routes_map, &route);
+                    let route_changes = Self::add_rules_to_domain_map(&domain_routes_map, &route);
                     changed_route_rules.extend(route_changes);
                     
                     tracing::info!(
@@ -121,20 +117,18 @@ impl RouteManager {
     }
 
     /// Get or create DomainRouteRules for the given gateway key
-    fn get_or_create_domain_routes_map(&mut self, gateway_key: &str) -> &mut DomainRouteRules {
-        let domain_routes_map_arc = self
-            .gateway_routes_map
+    fn get_or_create_domain_routes_map(&self, gateway_key: &str) -> Arc<DomainRouteRules> {
+        self.gateway_routes_map
             .entry(gateway_key.to_string())
             .or_insert_with(|| Arc::new(DomainRouteRules {
-                domain_routes_map: HashMap::new(),
-            }));
-
-        // Clone Arc to get mutable access (Arc::make_mut ensures we have unique ownership)
-        Arc::make_mut(domain_routes_map_arc)
+                domain_routes_map: DashMap::new(),
+            }))
+            .value()
+            .clone()
     }
 
     /// Add all rules from HTTPRoute to the domain routes map
-    fn add_rules_to_domain_map(domain_routes_map: &mut DomainRouteRules, route: &HTTPRoute) -> Vec<Arc<RouteRules>> {
+    fn add_rules_to_domain_map(domain_routes_map: &DomainRouteRules, route: &HTTPRoute) -> Vec<Arc<RouteRules>> {
         let mut changed_route_rules = Vec::new();
         
         if let Some(rules) = &route.spec.rules {
@@ -172,14 +166,14 @@ impl RouteManager {
 
     /// Add a single rule to RouteRules for the given hostname
     fn add_rule_to_route_rules(
-        domain_routes_map: &mut DomainRouteRules,
+        domain_routes_map: &DomainRouteRules,
         hostname: &str,
         route_namespace: &str,
         route_name: &str,
         rule: &crate::types::HTTPRouteRule,
     ) -> Arc<RouteRules> {
         let hostname_key = hostname.to_string();
-        let route_rules = domain_routes_map
+        let mut route_rules_entry = domain_routes_map
             .domain_routes_map
             .entry(hostname_key.clone())
             .or_insert_with(|| Arc::new(RouteRules {
@@ -189,7 +183,8 @@ impl RouteManager {
             }));
         
         // Clone Arc to get mutable access
-        let route_rules_mut = Arc::make_mut(route_rules);
+        let mut route_rules_arc = route_rules_entry.value_mut();
+        let route_rules_mut = Arc::make_mut(&mut route_rules_arc);
         // Mark as needing rebuild since we're adding routes
         route_rules_mut.need_rebuild = true;
         // Create HttpRouteRuleUnit from HTTPRouteRule
@@ -205,6 +200,7 @@ impl RouteManager {
             .domain_routes_map
             .get(&hostname_key)
             .unwrap()
+            .value()
             .clone()
     }
 }
