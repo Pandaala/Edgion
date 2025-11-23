@@ -52,7 +52,7 @@ impl RadixRouteMatchEngine {
     /// Get direct access to the underlying radix tree for advanced usage
     pub fn tree(&self) -> &RadixTree {
         &self.tree
-    }
+}
 
     fn try_route_deep_match(
         &self,

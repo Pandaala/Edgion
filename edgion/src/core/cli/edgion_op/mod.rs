@@ -69,7 +69,7 @@ impl EdgionOpCli {
             gateway_class_name
         );
         let base_conf = loader.load_base(&gateway_class_name).await?;
-
+        
         // Print base configuration as pretty JSON
         if let Ok(json) = serde_json::to_string_pretty(&base_conf) {
             tracing::info!(
@@ -77,7 +77,7 @@ impl EdgionOpCli {
                 json
             );
         }
-
+        
         // Validate base configuration schema
         if let Err(e) = base_conf.validate_schema() {
             tracing::error!(

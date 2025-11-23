@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::SystemTime;
 use crate::core::gateway::server_header::ServerHeaderOpts;
+use crate::core::routes::DomainRouteRules;
 use crate::types::Listener;
 
 pub struct EdgionHttp {
@@ -17,5 +18,8 @@ pub struct EdgionHttp {
 
     // counter
     pub ctx_cnt: Arc<AtomicUsize>,
+    
+    // domain routes for this gateway
+    pub domain_routes: Option<Arc<DomainRouteRules>>,
 }
 

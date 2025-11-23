@@ -2,6 +2,7 @@ use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use dashmap::DashMap;
 use arc_swap::ArcSwap;
+use once_cell::sync::Lazy;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::core::routes::HttpRouteRuleUnit;
 use crate::core::routes::r#match::radix_route_match::RadixRouteMatchEngine;
@@ -31,11 +32,33 @@ pub struct RouteManager {
     gateway_routes_map: DashMap<String, Arc<DomainRouteRules>>,
 }
 
+// Global RouteManager instance
+static GLOBAL_ROUTE_MANAGER: Lazy<Arc<RouteManager>> = 
+    Lazy::new(|| Arc::new(RouteManager::new()));
+
+/// Get the global RouteManager instance
+pub fn get_global_route_manager() -> Arc<RouteManager> {
+    GLOBAL_ROUTE_MANAGER.clone()
+}
+
 impl RouteManager {
     pub fn new() -> Self {
         Self {
             gateway_routes_map: DashMap::new(),
         }
+    }
+
+    /// Get or create DomainRouteRules for a specific gateway by namespace and name
+    /// This ensures the gateway has a route map even if no HTTPRoutes exist yet
+    pub fn get_or_create_domain_routes(&self, namespace: &str, name: &str) -> Arc<DomainRouteRules> {
+        let gateway_key = format!("{}/{}", namespace, name);
+        self.gateway_routes_map
+            .entry(gateway_key)
+            .or_insert_with(|| Arc::new(DomainRouteRules {
+                domain_routes_map: ArcSwap::from_pointee(Arc::new(HashMap::new())),
+            }))
+            .value()
+            .clone()
     }
 
     pub fn add_http_routes(&self, http_routes: Vec<HTTPRoute>) {

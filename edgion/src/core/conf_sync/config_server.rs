@@ -84,7 +84,7 @@ impl ConfigServer {
                 ));
             }
         }
-        
+
         let base_conf_json = serde_json::to_string(&*base_conf_guard)
             .map_err(|e| format!("Failed to serialize base conf: {}", e))?;
 
@@ -387,18 +387,18 @@ impl ConfigServer {
 
         // Base conf resources are stored in base_conf
         let base_conf_guard = self.base_conf.read().unwrap();
-        println!("GatewayClass:");
+            println!("GatewayClass:");
         println!("  [0] {}", format_resource_info(base_conf_guard.gateway_class()));
 
-        println!("EdgionGatewayConfig:");
+            println!("EdgionGatewayConfig:");
         println!("  [0] {}", format_resource_info(base_conf_guard.edgion_gateway_config()));
 
         let gateways = base_conf_guard.gateways();
-        if !gateways.is_empty() {
-            println!("Gateways (count: {}):", gateways.len());
-            for (idx, gw) in gateways.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(gw));
-            }
+            if !gateways.is_empty() {
+                println!("Gateways (count: {}):", gateways.len());
+                for (idx, gw) in gateways.iter().enumerate() {
+                    println!("  [{}] {}", idx, format_resource_info(gw));
+                }
         }
         drop(base_conf_guard);
 

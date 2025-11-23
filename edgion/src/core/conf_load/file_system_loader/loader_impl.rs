@@ -110,8 +110,8 @@ impl ConfigLoader for LocalPathLoader {
                                     gw.spec.gateway_class_name,
                                     path
                                 );
-                                gateways.push(gw);
-                            }
+                    gateways.push(gw);
+                }
                             Err(e) => {
                                 tracing::warn!("Failed to parse Gateway from file {:?}: {}", path, e);
                             }

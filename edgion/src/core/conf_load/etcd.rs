@@ -266,12 +266,12 @@ impl ConfigLoader for EtcdConfigLoader {
             // Parse based on kind
             match kind {
                 ResourceKind::GatewayClass => {
-                    if let Ok(gc) = serde_yaml::from_str::<GatewayClass>(&value) {
+                        if let Ok(gc) = serde_yaml::from_str::<GatewayClass>(&value) {
                         gateway_classes.push(gc);
                     }
                 }
                 ResourceKind::EdgionGatewayConfig => {
-                    if let Ok(egwc) = serde_yaml::from_str::<EdgionGatewayConfig>(&value) {
+                        if let Ok(egwc) = serde_yaml::from_str::<EdgionGatewayConfig>(&value) {
                         edgion_gateway_configs.push(egwc);
                     }
                 }

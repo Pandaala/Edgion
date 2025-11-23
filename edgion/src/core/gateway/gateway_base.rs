@@ -6,6 +6,7 @@ use pingora_core::server::configuration::ServerConf;
 use pingora_proxy::http_proxy_service;
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
+use crate::core::routes::get_global_route_manager;
 use crate::types::{GatewayBaseConf, ResourceMeta};
 use anyhow::Result;
 use crate::core::tls::tls_pingora::TlsCallback;
@@ -112,6 +113,24 @@ impl GatewayBase {
                         }
                     };
 
+                    // Get or create domain routes from global RouteManager
+                    // This ensures the gateway has a route map even if no HTTPRoutes exist yet
+                    let route_manager = get_global_route_manager();
+                    let domain_routes = if let Some(namespace) = &gateway.metadata.namespace {
+                        let routes = route_manager.get_or_create_domain_routes(namespace, &gateway.name_any());
+                        tracing::info!(
+                            "Retrieved domain routes hook for gateway '{}'",
+                            gateway.key_name()
+                        );
+                        Some(routes)
+                    } else {
+                        tracing::warn!(
+                            "Gateway '{}' has no namespace, cannot create domain routes",
+                            gateway.key_name()
+                        );
+                        None
+                    };
+
                     let edgion_http = EdgionHttp {
                         gateway_class_name: self.base_conf.gateway_class().metadata.name.clone(),
                         gateway_namespace: gateway.metadata.namespace.clone(),
@@ -120,6 +139,7 @@ impl GatewayBase {
                         server_start_time: SystemTime::now(),
                         server_header_opts: Default::default(),
                         ctx_cnt: Arc::new(Default::default()),
+                        domain_routes,
                     };
 
                     let mut http_service = http_proxy_service(&pingora_server.configuration, edgion_http);
