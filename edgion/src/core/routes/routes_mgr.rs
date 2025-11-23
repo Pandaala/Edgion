@@ -1,5 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
 use dashmap::DashMap;
+use arc_swap::ArcSwap;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::core::routes::HttpRouteRuleUnit;
 use crate::core::routes::r#match::radix_route_match::RadixRouteMatchEngine;
@@ -7,15 +9,22 @@ use crate::types::{HTTPRoute, ResourceMeta};
 
 type DomainStr = String;
 
-#[derive(Clone)]
 pub struct RouteRules {
-    route_rules_list: Vec<HttpRouteRuleUnit>,
+    route_rules_list: RwLock<Vec<HttpRouteRuleUnit>>,
     match_engine: Arc<RadixRouteMatchEngine>,
-    need_rebuild: bool,
+}
+
+impl Clone for RouteRules {
+    fn clone(&self) -> Self {
+        Self {
+            route_rules_list: RwLock::new(self.route_rules_list.read().unwrap().clone()),
+            match_engine: self.match_engine.clone(),
+        }
+    }
 }
 
 pub struct DomainRouteRules {
-    domain_routes_map: DashMap<DomainStr, Arc<RouteRules>>,
+    domain_routes_map: ArcSwap<Arc<HashMap<DomainStr, Arc<RouteRules>>>>,
 }
 
 pub struct RouteManager {
@@ -31,41 +40,20 @@ impl RouteManager {
 
     pub fn add_http_routes(&self, http_routes: Vec<HTTPRoute>) {
         for route in http_routes {
-            let changed_route_rules = self.add_http_route_single(route);
-            // Traverse changed route rules and output need_rebuild
-            for route_rules in changed_route_rules {
-                if route_rules.need_rebuild {
-                    tracing::info!(
-                        "RouteRules needs rebuild: need_rebuild={}, route_count={}",
-                        route_rules.need_rebuild,
-                        route_rules.route_rules_list.len()
-                    );
-                }
-            }
+            self.add_http_route_single(route);
         }
     }
 
     pub fn add_http_route(&self, route: HTTPRoute) {
-        let changed_route_rules = self.add_http_route_single(route);
-        // Traverse changed route rules and output need_rebuild
-        for route_rules in changed_route_rules {
-            if route_rules.need_rebuild {
-                tracing::info!(
-                    "RouteRules needs rebuild: need_rebuild={}, route_count={}",
-                    route_rules.need_rebuild,
-                    route_rules.route_rules_list.len()
-                );
-            }
-        }
+        self.add_http_route_single(route);
     }
 
-    fn add_http_route_single(&self, route: HTTPRoute) -> Vec<Arc<RouteRules>> {
-        let mut changed_route_rules = Vec::new();
+    fn add_http_route_single(&self, route: HTTPRoute) {
         let parent_refs = match &route.spec.parent_refs {
             Some(refs) => refs,
             None => {
                 tracing::warn!("HTTPRoute '{}' has no parent_refs, skipping", route.key_name());
-                return changed_route_rules;
+                return;
             }
         };
 
@@ -79,8 +67,7 @@ impl RouteManager {
             match gateway_store_guard.get_gateway(&gateway_key) {
                 Ok(_gateway) => {
                     let domain_routes_map = self.get_or_create_domain_routes_map(&gateway_key);
-                    let route_changes = Self::add_rules_to_domain_map(&domain_routes_map, &route);
-                    changed_route_rules.extend(route_changes);
+                    Self::add_rules_to_domain_map(&domain_routes_map, &route);
                     
                     tracing::info!(
                         "Added HTTPRoute '{}' to gateway '{}'",
@@ -98,8 +85,6 @@ impl RouteManager {
                 }
             }
         }
-        
-        changed_route_rules
     }
 
     /// Build gateway key from parent reference
@@ -121,16 +106,14 @@ impl RouteManager {
         self.gateway_routes_map
             .entry(gateway_key.to_string())
             .or_insert_with(|| Arc::new(DomainRouteRules {
-                domain_routes_map: DashMap::new(),
+                domain_routes_map: ArcSwap::from_pointee(Arc::new(HashMap::new())),
             }))
             .value()
             .clone()
     }
 
     /// Add all rules from HTTPRoute to the domain routes map
-    fn add_rules_to_domain_map(domain_routes_map: &DomainRouteRules, route: &HTTPRoute) -> Vec<Arc<RouteRules>> {
-        let mut changed_route_rules = Vec::new();
-        
+    fn add_rules_to_domain_map(domain_routes_map: &DomainRouteRules, route: &HTTPRoute) {
         if let Some(rules) = &route.spec.rules {
             let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
             let route_name = route.metadata.name.as_deref().unwrap_or("").to_string();
@@ -138,30 +121,26 @@ impl RouteManager {
             for rule in rules {
                 if let Some(hostnames) = &route.spec.hostnames {
                     for hostname in hostnames {
-                        let route_rules_arc = Self::add_rule_to_route_rules(
+                        Self::add_rule_to_route_rules(
                             domain_routes_map,
                             &hostname,
                             &route_namespace,
                             &route_name,
                             rule,
                         );
-                        changed_route_rules.push(route_rules_arc);
                     }
                 } else {
                     // If no hostnames specified, use "*" as default
-                    let route_rules_arc = Self::add_rule_to_route_rules(
+                    Self::add_rule_to_route_rules(
                         domain_routes_map,
                         "*",
                         &route_namespace,
                         &route_name,
                         rule,
                     );
-                    changed_route_rules.push(route_rules_arc);
                 }
             }
         }
-        
-        changed_route_rules
     }
 
     /// Add a single rule to RouteRules for the given hostname
@@ -171,36 +150,65 @@ impl RouteManager {
         route_namespace: &str,
         route_name: &str,
         rule: &crate::types::HTTPRouteRule,
-    ) -> Arc<RouteRules> {
+    ) {
         let hostname_key = hostname.to_string();
-        let mut route_rules_entry = domain_routes_map
-            .domain_routes_map
-            .entry(hostname_key.clone())
-            .or_insert_with(|| Arc::new(RouteRules {
-                route_rules_list: Vec::new(),
-                match_engine: Arc::new(RadixRouteMatchEngine::default()),
-                need_rebuild: true,
-            }));
         
-        // Clone Arc to get mutable access
-        let mut route_rules_arc = route_rules_entry.value_mut();
-        let route_rules_mut = Arc::make_mut(&mut route_rules_arc);
-        // Mark as needing rebuild since we're adding routes
-        route_rules_mut.need_rebuild = true;
-        // Create HttpRouteRuleUnit from HTTPRouteRule
-        let rule_unit = HttpRouteRuleUnit::new(
-            route_namespace.to_string(),
-            route_name.to_string(),
-            rule.clone(),
-        );
-        route_rules_mut.route_rules_list.push(rule_unit);
-        
-        // Return the updated Arc from the map
-        domain_routes_map
-            .domain_routes_map
-            .get(&hostname_key)
-            .unwrap()
-            .value()
-            .clone()
+        // Use ArcSwap::rcu for lock-free update
+        domain_routes_map.domain_routes_map.rcu(|current_map| {
+            let current_hashmap: &HashMap<DomainStr, Arc<RouteRules>> = current_map.as_ref();
+            let mut new_hashmap = current_hashmap.clone();
+            
+            // Get or create RouteRules for this hostname
+            let route_rules_arc = new_hashmap
+                .entry(hostname_key.clone())
+                .or_insert_with(|| Arc::new(RouteRules {
+                    route_rules_list: RwLock::new(Vec::new()),
+                    match_engine: Arc::new(RadixRouteMatchEngine::default()),
+                }));
+            
+            // Get mutable access to RouteRules
+            let route_rules_mut = Arc::make_mut(route_rules_arc);
+            
+            // Create HttpRouteRuleUnit from HTTPRouteRule
+            let rule_unit = HttpRouteRuleUnit::new(
+                route_namespace.to_string(),
+                route_name.to_string(),
+                rule.clone(),
+            );
+            
+            // Add the rule to the list
+            route_rules_mut.route_rules_list.write().unwrap().push(rule_unit);
+            
+            // Rebuild match_engine with updated route rules
+            // Collect route entries while holding the read lock
+            let route_entries: Vec<Arc<dyn crate::core::routes::r#match::RouteEntry>> = {
+                let route_rules_list = route_rules_mut.route_rules_list.read().unwrap();
+                route_rules_list
+                    .iter()
+                    .map(|unit| Arc::new(unit.clone()) as Arc<dyn crate::core::routes::r#match::RouteEntry>)
+                    .collect()
+            };
+            
+            // Build new match engine and directly replace it (no lock needed)
+            match RadixRouteMatchEngine::build(route_entries.clone()) {
+                Ok(new_engine) => {
+                    route_rules_mut.match_engine = Arc::new(new_engine);
+                    tracing::info!(
+                        "Rebuilt RadixRouteMatchEngine for hostname '{}' with {} routes",
+                        hostname,
+                        route_entries.len()
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to rebuild RadixRouteMatchEngine for hostname '{}': {}",
+                        hostname,
+                        e
+                    );
+                }
+            }
+            
+            Arc::new(new_hashmap)
+        });
     }
 }
