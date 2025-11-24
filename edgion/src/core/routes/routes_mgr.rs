@@ -24,8 +24,41 @@ impl Clone for RouteRules {
     }
 }
 
+impl RouteRules {
+    /// Match a route using the match engine
+    pub fn match_route(
+        &self,
+        session: &mut pingora_proxy::Session,
+    ) -> Result<Arc<dyn crate::core::routes::r#match::RouteEntry>, crate::types::err::EdError> {
+        self.match_engine.match_route(session)
+    }
+}
+
 pub struct DomainRouteRules {
     domain_routes_map: ArcSwap<Arc<HashMap<DomainStr, Arc<RouteRules>>>>,
+}
+
+impl DomainRouteRules {
+    /// Match a route for the given hostname and session
+    /// Returns the matched RouteEntry if found, or an error if no route matches
+    pub fn match_route(
+        &self,
+        hostname: &str,
+        session: &mut pingora_proxy::Session,
+    ) -> Result<Arc<dyn crate::core::routes::r#match::RouteEntry>, crate::types::err::EdError> {
+        let domain_routes_map = self.domain_routes_map.load();
+        
+        // Try to find RouteRules for the hostname (exact match only)
+        let route_rules = domain_routes_map
+            .get(hostname)
+            .cloned();
+
+        if let Some(route_rules) = route_rules {
+            route_rules.match_route(session)
+        } else {
+            Err(crate::types::err::EdError::RouteNotFound())
+        }
+    }
 }
 
 type GatewayKey = String;
@@ -145,6 +178,14 @@ impl RouteManager {
             
             for rule in rules {
                 if let Some(hostnames) = &route.spec.hostnames {
+                    if hostnames.is_empty() {
+                        tracing::warn!(
+                            "HTTPRoute '{}/{}' has empty hostnames list, skipping rule",
+                            route_namespace,
+                            route_name
+                        );
+                        continue;
+                    }
                     for hostname in hostnames {
                         Self::add_rule_to_route_rules(
                             domain_routes_map,
@@ -155,13 +196,11 @@ impl RouteManager {
                         );
                     }
                 } else {
-                    // If no hostnames specified, use "*" as default
-                    Self::add_rule_to_route_rules(
-                        domain_routes_map,
-                        "*",
-                        &route_namespace,
-                        &route_name,
-                        rule,
+                    // Hostnames are required, skip routes without hostnames
+                    tracing::warn!(
+                        "HTTPRoute '{}/{}' has no hostnames specified, skipping rule",
+                        route_namespace,
+                        route_name
                     );
                 }
             }
