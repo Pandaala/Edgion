@@ -1,4 +1,5 @@
 pub mod err;
+pub mod err_code;
 pub mod global_def;
 pub mod resource_kind;
 pub mod resources;
@@ -7,6 +8,7 @@ pub mod resource_meta_traits;
 pub mod gateway_base_conf;
 
 pub use self::err::{EdError, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
+pub use self::err_code::EdgionErrCode;
 pub use self::global_def::*;
 pub use self::resource_kind::ResourceKind;
 pub use self::resources::*;

@@ -7,6 +7,7 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::core::gateway::edgion_http_context::EdgionHttpContext;
+use crate::types::EdgionErrCode;
 
 #[async_trait]
 impl ProxyHttp for EdgionHttp {
@@ -44,7 +45,7 @@ impl ProxyHttp for EdgionHttp {
         Ok(())
     }
 
-    async fn request_filter(&self, session: &mut Session, _ctx: &mut Self::CTX) -> pingora_core::Result<bool>
+    async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<bool>
     where
         Self::CTX: Send + Sync,
     {
@@ -57,12 +58,16 @@ impl ProxyHttp for EdgionHttp {
         {
             Some(host) => host.to_string(),
             None => {
-                // No hostname provided, return 404
+                // No hostname provided, add error code and return 400
+                let err_code = EdgionErrCode::HostMissing;
+                ctx.add_error(err_code);
                 tracing::warn!(
-                    "Request missing Host header, path: {}",
-                    session.req_header().uri.path()
+                    "Request missing Host header, path: {}, error_code: 0x{:X}, message: {}",
+                    session.req_header().uri.path(),
+                    err_code.code(),
+                    err_code.message()
                 );
-                let resp = Box::new(ResponseHeader::build(400, None).unwrap());
+                let resp = Box::new(ResponseHeader::build(err_code.http_status(), None).unwrap());
                 session.write_response_header(resp, false).await?;
                 return Ok(false);
             }
@@ -82,14 +87,18 @@ impl ProxyHttp for EdgionHttp {
                 Ok(true)
             }
             Err(e) => {
+                // Route not found, add error code and return 404
+                let err_code = EdgionErrCode::RouteNotFound;
+                ctx.add_error(err_code);
                 tracing::debug!(
-                    "No route matched for hostname: {}, path: {}, error: {:?}",
+                    "No route matched for hostname: {}, path: {}, error: {:?}, error_code: 0x{:X}, message: {}",
                     hostname,
                     session.req_header().uri.path(),
-                    e
+                    e,
+                    err_code.code(),
+                    err_code.message()
                 );
-                // Return 404 for no route matched
-                let resp = Box::new(ResponseHeader::build(404, None).unwrap());
+                let resp = Box::new(ResponseHeader::build(err_code.http_status(), None).unwrap());
                 session.write_response_header(resp, false).await?;
                 Ok(false)
             }
