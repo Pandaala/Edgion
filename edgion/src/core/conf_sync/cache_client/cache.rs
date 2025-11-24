@@ -1,3 +1,4 @@
+use crate::core::conf_sync::cache_client::ConfProcessor;
 use crate::core::conf_sync::cache_server::{EventDispatch, ListData};
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::conf_sync::traits::ResourceChange;
@@ -8,10 +9,51 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::RwLock as AsyncRwLock;
 use tonic::transport::Channel;
 
+/// Compressed event storage: key is resource key (namespace/name), value is list of events
+pub struct CompressEvent {
+    events: HashMap<String, Vec<ResourceChange>>,
+}
+
+impl CompressEvent {
+    pub fn new() -> Self {
+        Self {
+            events: HashMap::new(),
+        }
+    }
+
+    /// Add an event for a resource key
+    pub fn add_event(&mut self, key: String, change: ResourceChange) {
+        self.events.entry(key).or_insert_with(Vec::new).push(change);
+    }
+
+    /// Get events for a resource key
+    pub fn get_events(&self, key: &str) -> Option<&Vec<ResourceChange>> {
+        self.events.get(key)
+    }
+
+    /// Clear all events
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+}
+
 /// Internal cache data structure combining data and version under single lock
 struct CacheData<T> {
     data: HashMap<String, T>,
     resource_version: u64,
+}
+
+impl<T: ResourceMeta> CacheData<T> {
+    /// Reset cache with a complete set of resources
+    /// Uses resource.key_name() (namespace/name) as the key for each resource
+    fn reset(&mut self, resources: Vec<T>, resource_version: u64) {
+        self.data.clear();
+        for resource in resources {
+            let key = resource.key_name();
+            self.data.insert(key, resource);
+        }
+        self.resource_version = resource_version;
+    }
 }
 
 pub struct ClientCache<T>
@@ -30,6 +72,12 @@ where
     // client identification
     client_id: Arc<String>,
     client_name: Arc<String>,
+
+    // configuration processor (optional)
+    conf_processor: Arc<RwLock<Option<Box<dyn ConfProcessor<T> + Send + Sync>>>>,
+
+    // compressed events storage
+    compress_events: Arc<RwLock<CompressEvent>>,
 }
 
 impl<T: ResourceMeta + Resource> ClientCache<T> {
@@ -43,6 +91,8 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
             gateway_class_key: Arc::new(gateway_class_key),
             client_id: Arc::new(client_id),
             client_name: Arc::new(client_name),
+            conf_processor: Arc::new(RwLock::new(None)),
+            compress_events: Arc::new(RwLock::new(CompressEvent::new())),
         }
     }
 
@@ -50,6 +100,12 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
     pub async fn set_grpc_client(&self, client: ConfigSyncClientService<Channel>) {
         let mut guard = self.grpc_client.write().await;
         *guard = Some(client);
+    }
+
+    /// Set the configuration processor for this cache
+    pub fn set_conf_processor(&self, processor: Box<dyn ConfProcessor<T> + Send + Sync>) {
+        let mut guard = self.conf_processor.write().unwrap();
+        *guard = Some(processor);
     }
 
     /// Get current resource version
@@ -60,6 +116,17 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
     /// Set current resource version
     pub fn set_resource_version(&self, version: u64) {
         self.cache_data.write().unwrap().resource_version = version;
+    }
+
+    /// Reset cache with a complete set of resources
+    /// This clears existing cache and rebuilds it with the provided resources
+    /// Uses resource.key_name() (namespace/name) as the key for each resource
+    pub fn reset(&self, resources: Vec<T>, resource_version: u64)
+    where
+        T: ResourceMeta,
+    {
+        let mut cache = self.cache_data.write().unwrap();
+        cache.reset(resources, resource_version);
     }
 
     /// List all data - returns all resources in the cache with resource version
@@ -114,41 +181,31 @@ impl<T: ResourceMeta + Resource + Clone + Send + 'static> EventDispatch<T> for C
     where
         T: Send + 'static,
     {
+        // Extract resource key and add event to compress_events
+        let key = resource.key_name();
+        {
+            let mut compress_events = self.compress_events.write().unwrap();
+            compress_events.add_event(key, change);
+        }
+
         let version = resource.get_version();
         if resource.get_version() == 0 {
-            tracing::warn!(
-                component = "cache_client",
-                event = "apply_change",
-                change = ?change,
-                kind = std::any::type_name::<T>(),
-                name = ?resource.name_any(),
-                namespace = ?resource.namespace(),
-                version = 0,
-                "Applying change to cache with version 0"
-            );
+            tracing::warn!(component = "cache_client", event = "apply_change", change = ?change, kind = std::any::type_name::<T>(), name = ?resource.name_any(), namespace = ?resource.namespace(), version = 0, "Applying change to cache with version 0");
         } else {
-            tracing::info!(
-                component = "cache_client",
-                event = "apply_change",
-                change = ?change,
-                kind = std::any::type_name::<T>(),
-                name = ?resource.name_any(),
-                namespace = ?resource.namespace(),
-                version = resource.get_version(),
-                "Applying change to cache"
-            );
+            tracing::info!(component = "cache_client", event = "apply_change", change = ?change, kind = std::any::type_name::<T>(), name = ?resource.name_any(), namespace = ?resource.namespace(), version = resource.get_version(), "Applying change to cache");
         }
 
         let mut cache = self.cache_data.write().unwrap();
+        let resource_key = resource.key_name(); // Use namespace/name as key
         match change {
             ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                cache.data.insert(version.to_string(), resource);
+                cache.data.insert(resource_key, resource);
                 if version > cache.resource_version {
                     cache.resource_version = version;
                 }
             }
             ResourceChange::EventDelete => {
-                cache.data.remove(&version.to_string());
+                cache.data.remove(&resource_key);
                 if version > cache.resource_version {
                     cache.resource_version = version;
                 }
@@ -166,6 +223,41 @@ impl<T> ClientCache<T>
 where
     T: ResourceMeta + Resource + Clone + Send + 'static,
 {
+    /// Internal helper function to perform list and reset cache
+    /// Returns the resource version on success
+    async fn list_and_reset(
+        client: &mut ConfigSyncClientService<Channel>,
+        gateway_class_key: &str,
+        cache_data: &Arc<RwLock<CacheData<T>>>,
+        log_context: &str,
+    ) -> Result<u64, tonic::Status> {
+        let list_request = tonic::Request::new(crate::core::conf_sync::proto::ListRequest {
+            key: gateway_class_key.to_string(),
+            kind: T::resource_kind() as i32,
+        });
+
+        let response = client.list(list_request).await?;
+        let list_data = response.into_inner();
+
+        tracing::info!(kind = T::kind_name(), bytes = list_data.data.len(), version = list_data.resource_version, context = log_context, "Listing resources");
+
+        // Parse JSON array directly to concrete type
+        let resources: Vec<T> = serde_json::from_str(&list_data.data).map_err(|e| {
+            tracing::error!(kind = T::kind_name(), error = %e, context = log_context, "Failed to parse list response");
+            tonic::Status::internal(format!("Failed to parse list response: {}", e))
+        })?;
+
+        tracing::info!(kind = T::kind_name(), count = resources.len(), context = log_context, "Parsed resources");
+
+        // Use reset method to rebuild cache with fresh data
+        {
+            let mut cache = cache_data.write().unwrap();
+            cache.reset(resources, list_data.resource_version);
+        }
+
+        Ok(list_data.resource_version)
+    }
+
     /// Sync resources from gRPC server
     pub async fn sync(&self) -> Result<(), tonic::Status> {
         let mut client_guard = self.grpc_client.write().await;
@@ -173,37 +265,13 @@ where
             .as_mut()
             .ok_or_else(|| tonic::Status::internal("gRPC client not initialized"))?;
 
-        let request = tonic::Request::new(crate::core::conf_sync::proto::ListRequest {
-            key: self.gateway_class_key.as_ref().clone(),
-            kind: T::resource_kind() as i32,
-        });
-
-        let response = client.list(request).await?;
-        let list_response = response.into_inner();
-
-        tracing::info!(
-            kind = T::kind_name(),
-            bytes = list_response.data.len(),
-            version = list_response.resource_version,
-            "Syncing resource"
-        );
-
-        // Parse JSON array directly to concrete type
-        let resources: Vec<T> = serde_json::from_str(&list_response.data).map_err(|e| {
-            tracing::error!(
-                kind = T::kind_name(),
-                error = %e,
-                "Failed to parse list response"
-            );
-            tonic::Status::internal(format!("Failed to parse list response: {}", e))
-        })?;
-
-        tracing::info!(kind = T::kind_name(), count = resources.len(), "Parsed resources");
-
-        // Apply to cache
-        for resource in resources {
-            self.apply_change(ResourceChange::InitAdd, resource);
-        }
+        Self::list_and_reset(
+            client,
+            self.gateway_class_key.as_ref(),
+            &self.cache_data,
+            "sync",
+        )
+        .await?;
 
         tracing::info!(kind = T::kind_name(), "Finished syncing");
         Ok(())
@@ -224,59 +292,29 @@ where
             loop {
                 // On reconnection (not first watch), perform relist to sync with server
                 if !is_first_watch {
-                    tracing::info!(
-                        kind = T::kind_name(),
-                        client_id = %client_id,
-                        "Reconnecting - performing relist before watch"
-                    );
+                    tracing::info!(kind = T::kind_name(), client_id = %client_id, "Reconnecting - performing relist before watch");
 
                     let mut client_guard = grpc_client.write().await;
                     if let Some(client) = client_guard.as_mut() {
-                        let list_request = tonic::Request::new(crate::core::conf_sync::proto::ListRequest {
-                            key: gateway_class_key.as_ref().clone(),
-                            kind: T::resource_kind() as i32,
-                        });
-
-                        match client.list(list_request).await {
-                            Ok(list_response) => {
-                                let list_data = list_response.into_inner();
-
-                                match serde_json::from_str::<Vec<T>>(&list_data.data) {
-                                    Ok(resources) => {
-                                        // Clear and rebuild cache with fresh data
-                                        let mut cache = cache_data.write().unwrap();
-                                        cache.data.clear();
-                                        for resource in resources {
-                                            let version = resource.get_version();
-                                            cache.data.insert(version.to_string(), resource);
-                                        }
-
-                                        // Update resource version
-                                        from_version = list_data.resource_version;
-                                        cache.resource_version = from_version;
-
-                                        tracing::info!(
-                                            kind = T::kind_name(),
-                                            count = cache.data.len(),
-                                            new_version = from_version,
-                                            "Reconnection relist completed successfully"
-                                        );
-                                    }
-                                    Err(e) => {
-                                        tracing::error!(
-                                            kind = T::kind_name(),
-                                            error = %e,
-                                            "Failed to parse relist response on reconnection"
-                                        );
-                                    }
-                                }
+                        match Self::list_and_reset(
+                            client,
+                            gateway_class_key.as_ref(),
+                            &cache_data,
+                            "reconnection relist",
+                        )
+                        .await
+                        {
+                            Ok(resource_version) => {
+                                // Update resource version
+                                from_version = resource_version;
+                                let count = {
+                                    let cache = cache_data.read().unwrap();
+                                    cache.data.len()
+                                };
+                                tracing::info!(kind = T::kind_name(), count = count, new_version = from_version, "Reconnection relist completed successfully");
                             }
                             Err(e) => {
-                                tracing::error!(
-                                    kind = T::kind_name(),
-                                    error = %e,
-                                    "Failed to perform relist on reconnection"
-                                );
+                                tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform relist on reconnection");
                             }
                         }
                     }
@@ -310,69 +348,32 @@ where
                         if error_message.contains(WATCH_ERR_VERSION_UNEXPECTED)
                             || error_message.contains(WATCH_ERR_TOO_OLD_VERSION)
                         {
-                            tracing::warn!(
-                                kind = T::kind_name(),
-                                client_id = %client_id,
-                                error = %e,
-                                from_version = from_version,
-                                "Watch version error, performing re-list"
-                            );
+                            tracing::warn!(kind = T::kind_name(), client_id = %client_id, error = %e, from_version = from_version, "Watch version error, performing re-list");
 
                             // Perform list to get latest data
-                            let list_request = tonic::Request::new(crate::core::conf_sync::proto::ListRequest {
-                                key: gateway_class_key.as_ref().clone(),
-                                kind: T::resource_kind() as i32,
-                            });
-
-                            match client.list(list_request).await {
-                                Ok(list_response) => {
-                                    let list_data = list_response.into_inner();
-
-                                    match serde_json::from_str::<Vec<T>>(&list_data.data) {
-                                        Ok(resources) => {
-                                            // Clear and update cache with fresh data under single lock
-                                            let mut cache = cache_data.write().unwrap();
-                                            cache.data.clear();
-                                            for resource in resources {
-                                                let version = resource.get_version();
-                                                cache.data.insert(version.to_string(), resource);
-                                            }
-
-                                            // Update resource version
-                                            from_version = list_data.resource_version;
-                                            cache.resource_version = from_version;
-
-                                            tracing::info!(
-                                                kind = T::kind_name(),
-                                                count = cache.data.len(),
-                                                new_version = from_version,
-                                                "Re-list completed successfully"
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(
-                                                kind = T::kind_name(),
-                                                error = %e,
-                                                "Failed to parse list response after version error"
-                                            );
-                                        }
-                                    }
+                            match Self::list_and_reset(
+                                client,
+                                gateway_class_key.as_ref(),
+                                &cache_data,
+                                "version error relist",
+                            )
+                            .await
+                            {
+                                Ok(resource_version) => {
+                                    // Update resource version
+                                    from_version = resource_version;
+                                    let count = {
+                                        let cache = cache_data.read().unwrap();
+                                        cache.data.len()
+                                    };
+                                    tracing::info!(kind = T::kind_name(), count = count, new_version = from_version, "Re-list completed successfully");
                                 }
                                 Err(e) => {
-                                    tracing::error!(
-                                        kind = T::kind_name(),
-                                        error = %e,
-                                        "Failed to perform re-list after version error"
-                                    );
+                                    tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform re-list after version error");
                                 }
                             }
                         } else {
-                            tracing::error!(
-                                kind = T::kind_name(),
-                                client_id = %client_id,
-                                error = %e,
-                                "Failed to start watch"
-                            );
+                            tracing::error!(kind = T::kind_name(), client_id = %client_id, error = %e, "Failed to start watch");
                         }
 
                         drop(client_guard);
@@ -384,20 +385,10 @@ where
                 drop(client_guard);
 
                 if is_first_watch {
-                    tracing::info!(
-                        kind = T::kind_name(),
-                        client_id = %client_id,
-                        from_version = from_version,
-                        "Watch started (first time)"
-                    );
+                    tracing::info!(kind = T::kind_name(), client_id = %client_id, from_version = from_version, "Watch started (first time)");
                     is_first_watch = false;  // Mark that first watch has been done
                 } else {
-                    tracing::info!(
-                        kind = T::kind_name(),
-                        client_id = %client_id,
-                        from_version = from_version,
-                        "Watch restarted after reconnection"
-                    );
+                    tracing::info!(kind = T::kind_name(), client_id = %client_id, from_version = from_version, "Watch restarted after reconnection");
                 }
 
                 // Process stream messages
@@ -428,18 +419,19 @@ where
 
                                                 // Apply change using single lock
                                                 let version = resource.get_version();
+                                                let resource_key = resource.key_name(); // Use namespace/name as key
                                                 let mut cache = cache_data.write().unwrap();
                                                 match change {
                                                     ResourceChange::InitAdd
                                                     | ResourceChange::EventAdd
                                                     | ResourceChange::EventUpdate => {
-                                                        cache.data.insert(version.to_string(), resource);
+                                                        cache.data.insert(resource_key, resource);
                                                         if version > cache.resource_version {
                                                             cache.resource_version = version;
                                                         }
                                                     }
                                                     ResourceChange::EventDelete => {
-                                                        cache.data.remove(&version.to_string());
+                                                        cache.data.remove(&resource_key);
                                                         if version > cache.resource_version {
                                                             cache.resource_version = version;
                                                         }
@@ -447,11 +439,7 @@ where
                                                 }
                                             }
                                             Err(e) => {
-                                                tracing::error!(
-                                                    error = %e,
-                                                    kind = T::kind_name(),
-                                                    "Failed to parse resource from watch event"
-                                                );
+                                                tracing::error!(error = %e, kind = T::kind_name(), "Failed to parse resource from watch event");
                                             }
                                         }
                                     }
@@ -459,11 +447,7 @@ where
                             }
                         }
                         Ok(None) => {
-                            tracing::info!(
-                                kind = T::kind_name(),
-                                client_id = %client_id,
-                                "Watch stream ended, reconnecting"
-                            );
+                            tracing::info!(kind = T::kind_name(), client_id = %client_id, "Watch stream ended, reconnecting");
                             break;
                         }
                         Err(e) => {
@@ -473,19 +457,9 @@ where
                             if error_message.contains(WATCH_ERR_VERSION_UNEXPECTED)
                                 || error_message.contains(WATCH_ERR_TOO_OLD_VERSION)
                             {
-                                tracing::warn!(
-                                    kind = T::kind_name(),
-                                    client_id = %client_id,
-                                    error = %e,
-                                    "Watch stream version error, will re-list on next iteration"
-                                );
+                                tracing::warn!(kind = T::kind_name(), client_id = %client_id, error = %e, "Watch stream version error, will re-list on next iteration");
                             } else {
-                                tracing::error!(
-                                    kind = T::kind_name(),
-                                    client_id = %client_id,
-                                    error = %e,
-                                    "Watch stream error, reconnecting"
-                                );
+                                tracing::error!(kind = T::kind_name(), client_id = %client_id, error = %e, "Watch stream error, reconnecting");
                             }
                             break;
                         }
