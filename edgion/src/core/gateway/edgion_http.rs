@@ -19,7 +19,7 @@ pub struct EdgionHttp {
     // counter
     pub ctx_cnt: Arc<AtomicUsize>,
     
-    // domain routes for this gateway
-    pub domain_routes: Option<Arc<DomainRouteRules>>,
+    // domain routes for this gateway (always exists, uses namespace/name or /name as key)
+    pub domain_routes: Arc<DomainRouteRules>,
 }
 

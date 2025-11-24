@@ -28,8 +28,10 @@ pub struct DomainRouteRules {
     domain_routes_map: ArcSwap<Arc<HashMap<DomainStr, Arc<RouteRules>>>>,
 }
 
+type GatewayKey = String;
+
 pub struct RouteManager {
-    gateway_routes_map: DashMap<String, Arc<DomainRouteRules>>,
+    gateway_routes_map: DashMap<GatewayKey, Arc<DomainRouteRules>>,
 }
 
 // Global RouteManager instance

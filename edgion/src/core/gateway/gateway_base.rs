@@ -5,7 +5,6 @@ use pingora_core::server::Server;
 use pingora_core::server::configuration::ServerConf;
 use pingora_proxy::http_proxy_service;
 use crate::core::gateway::edgion_http::EdgionHttp;
-use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::core::routes::get_global_route_manager;
 use crate::types::{GatewayBaseConf, ResourceMeta};
 use anyhow::Result;
@@ -78,68 +77,36 @@ impl GatewayBase {
         pingora_server.bootstrap();
 
         for gateway in self.base_conf.gateways().iter() {
+            // Prepare gateway metadata and routes before processing listeners
+            let gateway_class_name = self.base_conf.gateway_class().metadata.name.clone();
+            let gateway_namespace = gateway.metadata.namespace.clone();
+            let gateway_name = gateway.name_any();
+            
+            // Get or create domain routes from global RouteManager
+            // Use empty string for namespace if not present (key will be "/name")
+            let route_manager = get_global_route_manager();
+            let namespace_str = gateway.metadata.namespace.as_deref().unwrap_or("");
+            let domain_routes = route_manager.get_or_create_domain_routes(namespace_str, &gateway_name);
+            tracing::info!("Retrieved domain routes hook for gateway '{}'", gateway.key_name());
 
-            // Add gateway to global store
-            let gateway_store = get_global_gateway_store();
-            if let Err(e) = gateway_store.write().unwrap().add_gateway(gateway.clone()) {
-                tracing::error!(
-                    "Failed to add gateway '{}' to global store: {}",
-                    gateway.key_name(),
-                    e
-                );
-            } else {
-                tracing::info!(
-                    "Successfully added gateway '{}' to global store",
-                    gateway.key_name()
-                );
-            }
-
-            // process listener
+            // Process listeners
             if let Some(listeners) = &gateway.spec.listeners {
                 for listener in listeners {
                     let listener = listener.clone();
                     let host = listener.hostname.as_deref().unwrap_or("0.0.0.0");
                     let addr = format!("{}:{}", host, listener.port);
 
-                    let enable_tls = {
-                        if listener.tls.is_some() {
-                            true
-                        } else {
-                            if listener.port == 443 || listener.port == 8443 {
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                    };
-
-                    // Get or create domain routes from global RouteManager
-                    // This ensures the gateway has a route map even if no HTTPRoutes exist yet
-                    let route_manager = get_global_route_manager();
-                    let domain_routes = if let Some(namespace) = &gateway.metadata.namespace {
-                        let routes = route_manager.get_or_create_domain_routes(namespace, &gateway.name_any());
-                        tracing::info!(
-                            "Retrieved domain routes hook for gateway '{}'",
-                            gateway.key_name()
-                        );
-                        Some(routes)
-                    } else {
-                        tracing::warn!(
-                            "Gateway '{}' has no namespace, cannot create domain routes",
-                            gateway.key_name()
-                        );
-                        None
-                    };
+                    let enable_tls = listener.tls.is_some() || listener.port == 443 || listener.port == 8443;
 
                     let edgion_http = EdgionHttp {
-                        gateway_class_name: self.base_conf.gateway_class().metadata.name.clone(),
-                        gateway_namespace: gateway.metadata.namespace.clone(),
-                        gateway_name: gateway.name_any(),
+                        gateway_class_name: gateway_class_name.clone(),
+                        gateway_namespace: gateway_namespace.clone(),
+                        gateway_name: gateway_name.clone(),
                         listener,
                         server_start_time: SystemTime::now(),
                         server_header_opts: Default::default(),
                         ctx_cnt: Arc::new(Default::default()),
-                        domain_routes,
+                        domain_routes: domain_routes.clone(),
                     };
 
                     let mut http_service = http_proxy_service(&pingora_server.configuration, edgion_http);
