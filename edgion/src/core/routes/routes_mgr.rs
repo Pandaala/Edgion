@@ -11,8 +11,8 @@ use crate::types::{HTTPRoute, ResourceMeta};
 type DomainStr = String;
 
 pub struct RouteRules {
-    route_rules_list: RwLock<Vec<HttpRouteRuleUnit>>,
-    match_engine: Arc<RadixRouteMatchEngine>,
+    pub(crate) route_rules_list: RwLock<Vec<HttpRouteRuleUnit>>,
+    pub(crate) match_engine: Arc<RadixRouteMatchEngine>,
 }
 
 impl Clone for RouteRules {
@@ -35,7 +35,7 @@ impl RouteRules {
 }
 
 pub struct DomainRouteRules {
-    domain_routes_map: ArcSwap<Arc<HashMap<DomainStr, Arc<RouteRules>>>>,
+    pub(crate) domain_routes_map: ArcSwap<Arc<HashMap<DomainStr, Arc<RouteRules>>>>,
 }
 
 impl DomainRouteRules {
@@ -64,7 +64,7 @@ impl DomainRouteRules {
 type GatewayKey = String;
 
 pub struct RouteManager {
-    gateway_routes_map: DashMap<GatewayKey, Arc<DomainRouteRules>>,
+    pub(crate) gateway_routes_map: DashMap<GatewayKey, Arc<DomainRouteRules>>,
 }
 
 // Global RouteManager instance

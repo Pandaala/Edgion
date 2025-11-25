@@ -1,10 +1,85 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use crate::core::conf_sync::traits::ConfHandler;
 use crate::core::routes::{RouteManager, HttpRouteRuleUnit};
+use crate::core::routes::routes_mgr::RouteRules;
+use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
+use crate::core::routes::match_engine::RouteEntry;
+use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::types::{HTTPRoute, ResourceMeta};
 
 type GatewayKey = String;
 type DomainStr = String;
+
+/// Parse all HTTPRoutes and collect rules into gateway->domain->rules structure
+/// Returns HashMap<GatewayKey, HashMap<DomainStr, Vec<HttpRouteRuleUnit>>>
+fn parse_http_routes_to_gateway_domain_rules(
+    data: &HashMap<String, HTTPRoute>
+) -> HashMap<GatewayKey, HashMap<DomainStr, Vec<HttpRouteRuleUnit>>> {
+    let mut gateway_domain_rules: HashMap<GatewayKey, HashMap<DomainStr, Vec<HttpRouteRuleUnit>>> = HashMap::new();
+    
+    let mut processed_routes = 0;
+    let mut skipped_routes = 0;
+
+    // Iterate through all HTTPRoutes and collect rules
+    for (_key, route) in data.iter() {
+        // Validate HTTPRoute and extract required fields
+        let (parent_refs, rules, hostnames, route_namespace, route_name) = match validate_http_route(route) {
+            Some(validated) => validated,
+            None => {
+                skipped_routes += 1;
+                continue;
+            }
+        };
+
+        // Process each parent gateway reference
+        for parent_ref in parent_refs {
+            // Build gateway key
+            let gateway_key = if let Some(namespace) = parent_ref.namespace.as_ref() {
+                format!("{}/{}", namespace, parent_ref.name)
+            } else {
+                format!("{}/{}", route_namespace, parent_ref.name)
+            };
+
+            // Get or create the domain map for this gateway
+            let domain_map = gateway_domain_rules
+                .entry(gateway_key.clone())
+                .or_insert_with(HashMap::new);
+
+            // Process each hostname and rule combination
+            for hostname in hostnames {
+                for rule in rules {
+                    // Create HttpRouteRuleUnit
+                    let rule_unit = HttpRouteRuleUnit::new(
+                        route_namespace.clone(),
+                        route_name.clone(),
+                        route.key_name(),
+                        rule.clone(),
+                    );
+
+                    // Add to the domain's rule list
+                    domain_map
+                        .entry(hostname.clone())
+                        .or_insert_with(Vec::new)
+                        .push(rule_unit);
+                }
+            }
+
+            processed_routes += 1;
+        }
+    }
+
+    tracing::debug!(
+        component = "route_manager",
+        processed_routes = processed_routes,
+        skipped_routes = skipped_routes,
+        gateways = gateway_domain_rules.len(),
+        "Parsed HTTPRoutes into gateway-domain structure"
+    );
+
+    gateway_domain_rules
+}
 
 /// Validate HTTPRoute and extract required fields
 /// Returns Some((parent_refs, rules, hostnames, namespace, name)) if valid, None otherwise
@@ -82,79 +157,101 @@ impl ConfHandler<HTTPRoute> for RouteManager {
     /// Full rebuild with a complete set of HTTPRoutes
     /// This is typically called during initial sync
     fn full_build(&mut self, data: &HashMap<String, HTTPRoute>) {
+        let start_time = Instant::now();
+        
         tracing::info!(
             component = "route_manager",
             count = data.len(),
             "Full build with HTTPRoutes - starting from scratch"
         );
 
-        // Step 1: Define temporary storage for parsed data
-        // Structure: HashMap<GatewayKey, HashMap<DomainStr, Vec<HttpRouteRuleUnit>>>
-        let mut gateway_domain_rules: HashMap<GatewayKey, HashMap<DomainStr, Vec<HttpRouteRuleUnit>>> = HashMap::new();
+        // Step 1: Parse all HTTPRoutes into temporary gateway->domain->rules structure
+        let gateway_domain_rules_new = parse_http_routes_to_gateway_domain_rules(data);
 
-        let mut processed_routes = 0;
-        let mut skipped_routes = 0;
+        // Step 2: Build RouteRules with RadixRouteMatchEngine and update gateway_routes_map
+        let gateway_store = get_global_gateway_store();
+        let gateway_store_guard = gateway_store.read().unwrap();
 
-        // Step 2: Iterate through all HTTPRoutes and collect rules
-        for (_key, route) in data.iter() {
-            // Validate HTTPRoute and extract required fields
-            let (parent_refs, rules, hostnames, route_namespace, route_name) = match validate_http_route(route) {
-                Some(validated) => validated,
-                None => {
-                    skipped_routes += 1;
-                    continue;
-                }
-            };
+        let mut processed_gateways = 0;
+        let mut skipped_gateways = 0;
 
-            // Process each parent gateway reference
-            for parent_ref in parent_refs {
-                // Build gateway key
-                let gateway_key = if let Some(namespace) = parent_ref.namespace.as_ref() {
-                    format!("{}/{}", namespace, parent_ref.name)
-                } else {
-                    format!("{}/{}", route_namespace, parent_ref.name)
+        for (gateway_key, domain_rules_map) in gateway_domain_rules_new.into_iter() {
+            // Check if gateway exists in store
+            if gateway_store_guard.get_gateway(&gateway_key).is_err() {
+                tracing::warn!(
+                    component = "route_manager",
+                    gateway_key = %gateway_key,
+                    "Gateway not found in store, skipping routes"
+                );
+                skipped_gateways += 1;
+                continue;
+            }
+
+            // Build HashMap<DomainStr, Arc<RouteRules>> for this gateway
+            let mut new_domain_routes: HashMap<DomainStr, Arc<RouteRules>> = HashMap::new();
+
+            for (domain, rules_vec) in domain_rules_map.into_iter() {
+                // Convert Vec<HttpRouteRuleUnit> to Vec<Arc<dyn RouteEntry>>
+                let route_entries: Vec<Arc<dyn RouteEntry>> = rules_vec
+                    .iter()
+                    .map(|unit| Arc::new(unit.clone()) as Arc<dyn RouteEntry>)
+                    .collect();
+
+                // Build RadixRouteMatchEngine
+                let match_engine = match RadixRouteMatchEngine::build(route_entries) {
+                    Ok(engine) => Arc::new(engine),
+                    Err(e) => {
+                        tracing::error!(
+                            component = "route_manager",
+                            gateway_key = %gateway_key,
+                            domain = %domain,
+                            error = ?e,
+                            "Failed to build RadixRouteMatchEngine"
+                        );
+                        continue;
+                    }
                 };
 
-                // Get or create the domain map for this gateway
-                let domain_map = gateway_domain_rules
-                    .entry(gateway_key.clone())
-                    .or_insert_with(HashMap::new);
+                // Create RouteRules
+                let route_rules = Arc::new(RouteRules {
+                    route_rules_list: RwLock::new(rules_vec),
+                    match_engine,
+                });
 
-                // Process each hostname and rule combination
-                for hostname in hostnames {
-                    for rule in rules {
-                        // Create HttpRouteRuleUnit
-                        let rule_unit = HttpRouteRuleUnit::new(
-                            route_namespace.clone(),
-                            route_name.clone(),
-                            route.key_name(),
-                            rule.clone(),
-                        );
-
-                        // Add to the domain's rule list
-                        domain_map
-                            .entry(hostname.clone())
-                            .or_insert_with(Vec::new)
-                            .push(rule_unit);
-                    }
-                }
-
-                processed_routes += 1;
-                tracing::debug!(route_key = %route.key_name(), gateway_key = %gateway_key, "Collected HTTPRoute rules");
+                new_domain_routes.insert(domain, route_rules);
             }
+
+            // Get existing DomainRouteRules for this gateway (don't create new)
+            let domain_route_rules = if let Some(entry) = self.gateway_routes_map.get(&gateway_key) {
+                entry.value().clone()
+            } else {
+                tracing::debug!(
+                    component = "route_manager",
+                    gateway_key = %gateway_key,
+                    "Gateway not found in routes map, skipping"
+                );
+                skipped_gateways += 1;
+                continue;
+            };
+
+            // Replace the domain_routes_map with the new one
+            // Note: ArcSwap<Arc<T>> requires Arc<Arc<T>> for store() method
+            // This double-Arc is needed for lock-free atomic pointer swapping
+            domain_route_rules.domain_routes_map.store(Arc::new(Arc::new(new_domain_routes)));
+
+            processed_gateways += 1;
         }
 
+        let elapsed = start_time.elapsed();
         tracing::info!(
             component = "route_manager",
-            total_routes = data.len(),
-            processed = processed_routes,
-            skipped = skipped_routes,
-            gateways = gateway_domain_rules.len(),
-            "Step 1 completed: collected all route rules"
+            total_gateways = processed_gateways + skipped_gateways,
+            processed = processed_gateways,
+            skipped = skipped_gateways,
+            elapsed_ms = elapsed.as_millis(),
+            "Full build completed in {:?}",
+            elapsed
         );
-
-        // TODO: Step 3 - Build RadixRouteMatchEngine and update gateway_routes_map
-        // This will be implemented in the next step
     }
 
     /// Handle incremental configuration changes
