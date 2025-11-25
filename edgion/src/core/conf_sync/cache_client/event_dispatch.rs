@@ -1,4 +1,5 @@
 use crate::core::conf_sync::cache_server::EventDispatch;
+use crate::core::conf_sync::cache_client::cache_data::CacheData;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::types::{ResourceMeta, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
@@ -6,7 +7,7 @@ use kube::{Resource, ResourceExt};
 use std::sync::{Arc, RwLock};
 use tonic::transport::Channel;
 
-use super::cache::{CacheData, ClientCache};
+use super::cache::ClientCache;
 
 impl<T: ResourceMeta + Resource + Clone + Send + 'static> EventDispatch<T> for ClientCache<T> {
     fn apply_change(&self, change: ResourceChange, resource: T)
@@ -16,34 +17,27 @@ impl<T: ResourceMeta + Resource + Clone + Send + 'static> EventDispatch<T> for C
         // Extract resource key and add event to compress_events
         let key = resource.key_name();
         {
-            let mut compress_events = self.compress_events.write().unwrap();
-            compress_events.add_event(key, change);
+            let mut cache = self.cache_data.write().unwrap();
+            cache.add_compress_event(key, change);
         }
 
-        let version = resource.get_version();
         tracing::info!(component = "cache_client", event = "apply_change", change = ?change, kind = std::any::type_name::<T>(), name = ?resource.name_any(), namespace = ?resource.namespace(), version = resource.get_version(), "Applying change to cache");
 
         let mut cache = self.cache_data.write().unwrap();
         let resource_key = resource.key_name(); // Use namespace/name as key
         match change {
             ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                cache.data.insert(resource_key, resource);
-                if version > cache.resource_version {
-                    cache.resource_version = version;
-                }
+                cache.insert(resource_key, resource);
             }
             ResourceChange::EventDelete => {
-                cache.data.remove(&resource_key);
-                if version > cache.resource_version {
-                    cache.resource_version = version;
-                }
+                cache.remove(&resource_key);
             }
         }
     }
 
     fn set_ready(&self) {
         let mut cache = self.cache_data.write().unwrap();
-        cache.ready = true;
+        cache.set_ready();
     }
 }
 
@@ -87,25 +81,6 @@ where
         Ok(list_data.resource_version)
     }
 
-    // /// Sync resources from gRPC server
-    // pub async fn sync(&self) -> Result<(), tonic::Status> {
-    //     let mut client_guard = self.grpc_client.write().await;
-    //     let client = client_guard
-    //         .as_mut()
-    //         .ok_or_else(|| tonic::Status::internal("gRPC client not initialized"))?;
-    //
-    //     Self::list_and_reset(
-    //         client,
-    //         self.gateway_class_key.as_ref(),
-    //         &self.cache_data,
-    //         "sync",
-    //     )
-    //     .await?;
-    //
-    //     tracing::info!(kind = T::kind_name(), "Finished syncing");
-    //     Ok(())
-    // }
-
     /// Start watching resources from gRPC server
     pub async fn start_watch(&self) -> Result<(), tonic::Status> {
         let grpc_client = self.grpc_client.clone();
@@ -135,14 +110,14 @@ where
                     Ok(resource_version) => {
                         let count = {
                             let cache = cache_data.read().unwrap();
-                            cache.data.len()
+                            cache.len()
                         };
                         tracing::info!(kind = T::kind_name(), count = count, version = resource_version, "List completed, starting watch");
                         
                         // Set ready after first successful list
                         if !is_ready {
                             let mut cache = cache_data.write().unwrap();
-                            cache.ready = true;
+                            cache.set_ready();
                             is_ready = true;
                             tracing::info!(kind = T::kind_name(), "Cache is ready");
                         }
@@ -220,23 +195,16 @@ where
                                                     };
 
                                                     // Apply change using single lock
-                                                    let version = resource.get_version();
                                                     let resource_key = resource.key_name(); // Use namespace/name as key
                                                     let mut cache = cache_data.write().unwrap();
                                                     match change {
                                                         ResourceChange::InitAdd
                                                         | ResourceChange::EventAdd
                                                         | ResourceChange::EventUpdate => {
-                                                            cache.data.insert(resource_key, resource);
-                                                            if version > cache.resource_version {
-                                                                cache.resource_version = version;
-                                                            }
+                                                            cache.insert(resource_key, resource);
                                                         }
                                                         ResourceChange::EventDelete => {
-                                                            cache.data.remove(&resource_key);
-                                                            if version > cache.resource_version {
-                                                                cache.resource_version = version;
-                                                            }
+                                                            cache.remove(&resource_key);
                                                         }
                                                     }
                                                 }
