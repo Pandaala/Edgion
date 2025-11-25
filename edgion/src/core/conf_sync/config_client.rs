@@ -63,6 +63,34 @@ impl ConfigClient {
         &self.gateway_class_key
     }
 
+    /// Check if all caches are ready
+    /// Returns Ok(()) if all caches are ready, Err with waiting message otherwise
+    pub fn is_ready(&self) -> Result<(), String> {
+        let mut not_ready = Vec::new();
+        
+        if !self.routes.is_ready() {
+            not_ready.push("routes");
+        }
+        if !self.services.is_ready() {
+            not_ready.push("services");
+        }
+        if !self.endpoint_slices.is_ready() {
+            not_ready.push("endpoint_slices");
+        }
+        if !self.edgion_tls.is_ready() {
+            not_ready.push("edgion_tls");
+        }
+        if !self.secrets.is_ready() {
+            not_ready.push("secrets");
+        }
+        
+        if not_ready.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("wait [{}] ready", not_ready.join(", ")))
+        }
+    }
+
     /// Initialize base configuration with parsed objects
     pub fn init_base_conf(&self, new_base_conf: GatewayBaseConf) {
         let mut base_conf = self.base_conf.write().unwrap();

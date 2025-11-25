@@ -132,61 +132,10 @@ impl ConfigSyncClient {
         Ok(())
     }
 
-    /// Initialize base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
-    /// and sync all other resources (HTTPRoute, Service, etc.)
     pub async fn init(&mut self) -> Result<(), tonic::Status> {
         let key = self.config_client.get_gateway_class_key().clone();
-
-        // Step 1: Get base configuration
         self.fetch_and_init_base_conf(&key).await?;
-
-        // Step 2: List and sync all other resources
-        let resource_kinds = vec![
-            HTTPRoute,
-            Service,
-            EndpointSlice,
-            EdgionTls,
-            Secret,
-        ];
-
-        for kind in resource_kinds {
-            if let Err(e) = self.sync_resource(key.clone(), kind).await {
-                tracing::error!(kind = ?kind, error = %e, "Failed to init sync");
-            }
-        }
-
-        tracing::info!("All resources initialized");
-        Ok(())
-    }
-
-    /// Sync all resources of a specific kind from server
-    pub async fn sync_resource(&mut self, _key: String, kind: ResourceKind) -> Result<(), tonic::Status> {
-        match kind {
-            Unspecified => {
-                return Err(tonic::Status::invalid_argument("Cannot sync unspecified resource kind"));
-            }
-            GatewayClass | EdgionGatewayConfig | Gateway => {
-                return Err(tonic::Status::invalid_argument(
-                    "Base conf resources should not be synced via list",
-                ));
-            }
-            HTTPRoute => {
-                self.config_client.routes().sync().await?;
-            }
-            Service => {
-                self.config_client.services().sync().await?;
-            }
-            EndpointSlice => {
-                self.config_client.endpoint_slices().sync().await?;
-            }
-            EdgionTls => {
-                self.config_client.edgion_tls().sync().await?;
-            }
-            Secret => {
-                self.config_client.secrets().sync().await?;
-            }
-        }
-
+        tracing::info!("Base Conf Initialized.");
         Ok(())
     }
 

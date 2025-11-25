@@ -85,6 +85,20 @@ impl EdgionGwCli {
         let config_client = sync_client.get_config_client();
         Self::spawn_config_printer(config_client.clone());
 
+        // Wait for all caches to be ready
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            match config_client.is_ready() {
+                Ok(()) => {
+                    tracing::info!("All caches are ready");
+                    break;
+                }
+                Err(msg) => {
+                    tracing::info!("{}", msg);
+                }
+            }
+        }
+
         // Keep the program running indefinitely
         tracing::info!("Gateway is running. Press Ctrl+C to exit.");
         
