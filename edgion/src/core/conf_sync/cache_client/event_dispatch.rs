@@ -42,7 +42,8 @@ impl<T: ResourceMeta + Resource + Clone + Send + 'static> EventDispatch<T> for C
     }
 
     fn set_ready(&self) {
-        *self.ready.write().unwrap() = true;
+        let mut cache = self.cache_data.write().unwrap();
+        cache.ready = true;
     }
 }
 
@@ -112,7 +113,6 @@ where
         let gck = self.gateway_class_key.clone();
         let client_id = self.client_id.clone();
         let client_name = self.client_name.clone();
-        let self_arc = Arc::new(self.clone());
 
         tokio::spawn(async move {
             let mut is_ready = false;
@@ -141,7 +141,8 @@ where
                         
                         // Set ready after first successful list
                         if !is_ready {
-                            EventDispatch::set_ready(&*self_arc);
+                            let mut cache = cache_data.write().unwrap();
+                            cache.ready = true;
                             is_ready = true;
                             tracing::info!(kind = T::kind_name(), client_id = %client_id, "Cache is ready");
                         }

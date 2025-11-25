@@ -41,6 +41,7 @@ impl CompressEvent {
 pub(crate) struct CacheData<T> {
     pub(crate) data: HashMap<String, T>,
     pub(crate) resource_version: u64,
+    pub(crate) ready: bool,
 }
 
 impl<T: ResourceMeta> CacheData<T> {
@@ -60,9 +61,6 @@ pub struct ClientCache<T>
 where
     T: kube::Resource,
 {
-    // wait for init complete
-    pub(crate) ready: RwLock<bool>,
-
     // data and version protected by single lock
     pub(crate) cache_data: Arc<RwLock<CacheData<T>>>,
 
@@ -89,7 +87,6 @@ where
 impl<T: kube::Resource> Clone for ClientCache<T> {
     fn clone(&self) -> Self {
         Self {
-            ready: RwLock::new(*self.ready.read().unwrap()),
             cache_data: self.cache_data.clone(),
             grpc_client: self.grpc_client.clone(),
             gateway_class_key: self.gateway_class_key.clone(),
@@ -104,10 +101,10 @@ impl<T: kube::Resource> Clone for ClientCache<T> {
 impl<T: ResourceMeta + Resource> ClientCache<T> {
     pub fn new(gateway_class_key: String, client_id: String, client_name: String) -> Self {
         Self {
-            ready: RwLock::new(false),
             cache_data: Arc::new(RwLock::new(CacheData {
                 data: HashMap::new(),
                 resource_version: 0,
+                ready: false,
             })),
             grpc_client: Arc::new(AsyncRwLock::new(None)),
             gateway_class_key: Arc::new(gateway_class_key),
@@ -120,7 +117,8 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
 
     /// Check if cache is ready
     pub fn is_ready(&self) -> bool {
-        *self.ready.read().unwrap()
+        let cache = self.cache_data.read().unwrap();
+        cache.ready
     }
 
     /// Set the gRPC client for this cache
