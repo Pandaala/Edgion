@@ -234,9 +234,11 @@ impl RouteManager {
             let route_rules_mut = Arc::make_mut(route_rules_arc);
             
             // Create HttpRouteRuleUnit from HTTPRouteRule
+            let resource_key = format!("{}/{}", route_namespace, route_name);
             let rule_unit = HttpRouteRuleUnit::new(
                 route_namespace.to_string(),
                 route_name.to_string(),
+                resource_key,
                 rule.clone(),
             );
             

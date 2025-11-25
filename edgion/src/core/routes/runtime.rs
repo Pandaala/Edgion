@@ -7,14 +7,16 @@ use pingora_proxy::Session;
 pub struct HttpRouteRuleUnit {
     pub namespace: String,
     pub name: String,
+    pub resource_key: String,
     pub rule: HTTPRouteRule,
 }
 
 impl HttpRouteRuleUnit {
-    pub fn new(namespace: String, name: String, rule: HTTPRouteRule) -> HttpRouteRuleUnit {
+    pub fn new(namespace: String, name: String, resource_key: String, rule: HTTPRouteRule) -> HttpRouteRuleUnit {
         Self {
             namespace,
             name,
+            resource_key,
             rule,
         }
     }
