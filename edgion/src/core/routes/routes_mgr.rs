@@ -5,7 +5,7 @@ use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::core::routes::HttpRouteRuleUnit;
-use crate::core::routes::r#match::radix_route_match::RadixRouteMatchEngine;
+use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::types::{HTTPRoute, ResourceMeta};
 
 type DomainStr = String;
@@ -25,11 +25,11 @@ impl Clone for RouteRules {
 }
 
 impl RouteRules {
-    /// Match a route using the match engine
+    /// Match a route using the match_engine engine
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-    ) -> Result<Arc<dyn crate::core::routes::r#match::RouteEntry>, crate::types::err::EdError> {
+    ) -> Result<Arc<dyn crate::core::routes::match_engine::RouteEntry>, crate::types::err::EdError> {
         self.match_engine.match_route(session)
     }
 }
@@ -45,10 +45,10 @@ impl DomainRouteRules {
         &self,
         hostname: &str,
         session: &mut pingora_proxy::Session,
-    ) -> Result<Arc<dyn crate::core::routes::r#match::RouteEntry>, crate::types::err::EdError> {
+    ) -> Result<Arc<dyn crate::core::routes::match_engine::RouteEntry>, crate::types::err::EdError> {
         let domain_routes_map = self.domain_routes_map.load();
         
-        // Try to find RouteRules for the hostname (exact match only)
+        // Try to find RouteRules for the hostname (exact match_engine only)
         let route_rules = domain_routes_map
             .get(hostname)
             .cloned();
@@ -245,15 +245,15 @@ impl RouteManager {
             
             // Rebuild match_engine with updated route rules
             // Collect route entries while holding the read lock
-            let route_entries: Vec<Arc<dyn crate::core::routes::r#match::RouteEntry>> = {
+            let route_entries: Vec<Arc<dyn crate::core::routes::match_engine::RouteEntry>> = {
                 let route_rules_list = route_rules_mut.route_rules_list.read().unwrap();
                 route_rules_list
                     .iter()
-                    .map(|unit| Arc::new(unit.clone()) as Arc<dyn crate::core::routes::r#match::RouteEntry>)
+                    .map(|unit| Arc::new(unit.clone()) as Arc<dyn crate::core::routes::match_engine::RouteEntry>)
                     .collect()
             };
             
-            // Build new match engine and directly replace it (no lock needed)
+            // Build new match_engine engine and directly replace it (no lock needed)
             match RadixRouteMatchEngine::build(route_entries.clone()) {
                 Ok(new_engine) => {
                     route_rules_mut.match_engine = Arc::new(new_engine);

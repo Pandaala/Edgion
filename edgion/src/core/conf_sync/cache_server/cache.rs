@@ -4,9 +4,9 @@ use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
 use super::store::EventStore;
-use super::traits::{CacheEventDispatch, ResourceMeta};
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
-use crate::core::conf_sync::traits::ResourceChange;
+use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
+use crate::types::ResourceMeta;
 use crate::core::utils;
 
 pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {

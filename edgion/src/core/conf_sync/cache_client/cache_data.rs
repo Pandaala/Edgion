@@ -1,5 +1,4 @@
-use crate::core::conf_sync::cache_client::ConfHandler;
-use crate::core::conf_sync::traits::ResourceChange;
+use crate::core::conf_sync::traits::{ConfHandler, ResourceChange};
 use crate::types::ResourceMeta;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};

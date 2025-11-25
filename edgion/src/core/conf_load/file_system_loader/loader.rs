@@ -213,7 +213,7 @@ impl LocalPathLoader {
                 kind = ?metadata.kind,
                 namespace = ?metadata.namespace,
                 name = ?metadata.name,
-                "File name does not match required format. Your file should be named: {}",
+                "File name does not match_engine required format. Your file should be named: {}",
                 expected_filename
             );
             return Ok(None);

@@ -31,7 +31,7 @@ impl ConfigServer {
             // Base conf resources are handled by apply_base_conf, not here
             ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
                 // This should never be reached due to the early return above,
-                // but included for match exhaustiveness
+                // but included for match_engine exhaustiveness
                 unreachable!("Base conf resources should have been handled earlier")
             }
             ResourceKind::HTTPRoute => {

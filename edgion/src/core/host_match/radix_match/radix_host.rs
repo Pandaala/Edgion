@@ -121,7 +121,7 @@ impl<T> RadixHost<T> {
             // and has the correct number of additional segments
             self.wildcard_matches(&reversed_request)
         } else {
-            // Exact match
+            // Exact match_engine
             reversed_request == self.radix_key
         }
     }
@@ -133,7 +133,7 @@ impl<T> RadixHost<T> {
             return false;
         }
 
-        // If radix_key is the entire request, we need wildcards to match something
+        // If radix_key is the entire request, we need wildcards to match_engine something
         if reversed_request.len() == self.radix_key.len() {
             return false; // No room for wildcard segments
         }
@@ -153,7 +153,7 @@ impl<T> RadixHost<T> {
         // Count segments (number of parts separated by dots)
         let segment_count = remaining_without_dot.split('.').count();
 
-        // Must match exactly the wildcard count
+        // Must match_engine exactly the wildcard count
         segment_count == self.wildcard_count
     }
 }

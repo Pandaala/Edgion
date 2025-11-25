@@ -209,7 +209,7 @@ impl ConfigLoader for LocalPathLoader {
                 let matches = gw.spec.gateway_class_name == gateway_class_name;
                 if !matches {
                     tracing::debug!(
-                        "Gateway {:?} (gateway_class_name: {}) does not match target: {}",
+                        "Gateway {:?} (gateway_class_name: {}) does not match_engine target: {}",
                         gw.metadata.name,
                         gw.spec.gateway_class_name,
                         gateway_class_name

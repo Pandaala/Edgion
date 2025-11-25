@@ -56,12 +56,12 @@ impl EdgionTls {
         for host in &self.spec.hosts {
             let host_lower = host.to_lowercase();
 
-            // Exact match
+            // Exact match_engine
             if host_lower == hostname_lower {
                 return true;
             }
 
-            // Wildcard match: only allow * at the beginning in "*.*.*.domain" format
+            // Wildcard match_engine: only allow * at the beginning in "*.*.*.domain" format
             if host_lower.starts_with('*') {
                 if Self::wildcard_match(&host_lower, &hostname_lower) {
                     return true;
@@ -85,7 +85,7 @@ impl EdgionTls {
 
         let mut p_idx = 0; // Pattern pointer
         let mut h_idx = 0; // Hostname pointer
-        let mut has_exact_match = false; // Track if we've seen any exact match segment
+        let mut has_exact_match = false; // Track if we've seen any exact match_engine segment
 
         // Process pattern segment by segment
         while p_idx < pattern_len {
@@ -102,14 +102,14 @@ impl EdgionTls {
             if segment_len == 1 && pattern_bytes[segment_start] == b'*' {
                 // This is a wildcard segment
 
-                // Rule: wildcard cannot appear after exact match
+                // Rule: wildcard cannot appear after exact match_engine
                 if has_exact_match {
                     return false;
                 }
 
                 // Find the next dot in hostname (or end)
                 if h_idx >= hostname_len {
-                    return false; // No more hostname to match
+                    return false; // No more hostname to match_engine
                 }
 
                 let h_segment_start = h_idx;
@@ -118,7 +118,7 @@ impl EdgionTls {
                     h_segment_end += 1;
                 }
 
-                // Wildcard must match at least one character
+                // Wildcard must match_engine at least one character
                 if h_segment_end == h_segment_start {
                     return false;
                 }
@@ -126,7 +126,7 @@ impl EdgionTls {
                 // Move hostname pointer past this segment
                 h_idx = h_segment_end;
             } else {
-                // This is an exact match segment
+                // This is an exact match_engine segment
                 has_exact_match = true;
 
                 // Check if hostname has enough bytes left
@@ -197,19 +197,19 @@ mod tests {
     fn test_single_wildcard_one_level() {
         let tls = create_tls(vec!["*.aaa.com"]);
 
-        // Should match one level
+        // Should match_engine one level
         assert!(tls.matches_hostname("test.aaa.com"));
         assert!(tls.matches_hostname("foo.aaa.com"));
         assert!(tls.matches_hostname("bar.aaa.com"));
 
-        // Should NOT match multiple levels
+        // Should NOT match_engine multiple levels
         assert!(!tls.matches_hostname("my.test.aaa.com"));
         assert!(!tls.matches_hostname("a.b.aaa.com"));
 
-        // Should NOT match base domain
+        // Should NOT match_engine base domain
         assert!(!tls.matches_hostname("aaa.com"));
 
-        // Should NOT match different domain
+        // Should NOT match_engine different domain
         assert!(!tls.matches_hostname("test.bbb.com"));
     }
 
@@ -217,14 +217,14 @@ mod tests {
     fn test_double_wildcard() {
         let tls = create_tls(vec!["*.*.aaa.com"]);
 
-        // Should match two levels
+        // Should match_engine two levels
         assert!(tls.matches_hostname("my.test.aaa.com"));
         assert!(tls.matches_hostname("a.b.aaa.com"));
 
-        // Should NOT match one level
+        // Should NOT match_engine one level
         assert!(!tls.matches_hostname("test.aaa.com"));
 
-        // Should NOT match three levels
+        // Should NOT match_engine three levels
         assert!(!tls.matches_hostname("x.y.z.aaa.com"));
     }
 
@@ -289,14 +289,14 @@ mod tests {
     fn test_triple_wildcard() {
         let tls = create_tls(vec!["*.*.*.example.com"]);
 
-        // Should match three levels
+        // Should match_engine three levels
         assert!(tls.matches_hostname("a.b.c.example.com"));
         assert!(tls.matches_hostname("foo.bar.baz.example.com"));
 
-        // Should NOT match two levels
+        // Should NOT match_engine two levels
         assert!(!tls.matches_hostname("a.b.example.com"));
 
-        // Should NOT match four levels
+        // Should NOT match_engine four levels
         assert!(!tls.matches_hostname("a.b.c.d.example.com"));
     }
 
@@ -327,7 +327,7 @@ mod tests {
         // Hostname has extra domain level at the beginning
         assert!(!tls.matches_hostname("sub.aaa.example.com"));
 
-        // Valid match - exactly one level before example.com
+        // Valid match_engine - exactly one level before example.com
         assert!(tls.matches_hostname("aaa.example.com"));
     }
 
@@ -344,7 +344,7 @@ mod tests {
         // Hostname has extra domain level at the beginning
         assert!(!tls.matches_hostname("c.a.b.example.com"));
 
-        // Valid match - exactly two levels before example.com
+        // Valid match_engine - exactly two levels before example.com
         assert!(tls.matches_hostname("a.b.example.com"));
     }
 }

@@ -86,8 +86,8 @@ impl RadixRouteMatchEngine {
         println!("Available routes: {}", self.routes.len());
         println!("Available paths: {}", self.radix_paths.len());
 
-        // Step 1: Try exact match first (highest priority)
-        println!("\n[Step 1] Trying exact match for '{}'...", path);
+        // Step 1: Try exact match_engine first (highest priority)
+        println!("\n[Step 1] Trying exact match_engine for '{}'...", path);
         if let Some(tree_idx) = self.tree.find_exact(path) {
             println!("  OK found exact tree_idx: {}", tree_idx);
             if let Some(path_indices) = self.tree_idx_to_path_idx.get(&tree_idx) {
@@ -99,10 +99,10 @@ impl RadixRouteMatchEngine {
                             radix_path.original, radix_path.radix_key, radix_path.is_prefix_match, radix_path.route_idx
                         );
                         if !radix_path.matches(&path) {
-                            println!("    FAIL pattern match failed");
+                            println!("    FAIL pattern match_engine failed");
                             continue;
                         }
-                        println!("    OK pattern matched, trying deep match...");
+                        println!("    OK pattern matched, trying deep match_engine...");
                         if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session)? {
                             println!("OK route matched\n");
                             return Ok(runtime);
@@ -111,10 +111,10 @@ impl RadixRouteMatchEngine {
                 }
             }
         } else {
-            println!("  FAIL no exact match found");
+            println!("  FAIL no exact match_engine found");
         }
 
-        // Step 2: Try prefix matching (if exact match failed or didn't exist)
+        // Step 2: Try prefix matching (if exact match_engine failed or didn't exist)
         println!("\n[Step 2] Trying prefix matching...");
         let iter = self
             .tree
@@ -142,7 +142,7 @@ impl RadixRouteMatchEngine {
                             println!("      OK pattern matched");
                             matched_paths.push(path_idx);
                         } else {
-                            println!("      FAIL pattern did not match");
+                            println!("      FAIL pattern did not match_engine");
                         }
                     }
                 }
@@ -192,7 +192,7 @@ impl RadixRouteMatchEngine {
         let mut next_tree_idx = 1i32; // Start from 1, as 0 might be reserved
 
         for (route_idx, runtime) in route_runtimes.iter().enumerate() {
-            // Extract all paths and their match types from the RouteRuntime
+            // Extract all paths and their match_engine types from the RouteRuntime
             let paths = runtime.extract_paths();
 
             println!(
@@ -407,7 +407,7 @@ mod tests {
 
         let engine = RadixRouteMatchEngine::build(routes).unwrap();
 
-        // Exact match should have higher priority
+        // Exact match_engine should have higher priority
         let exact_path = &engine.radix_paths[1];
         let prefix_path = &engine.radix_paths[0];
 

@@ -86,11 +86,11 @@ pub struct HTTPRouteMatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<HTTPPathMatch>,
 
-    /// Headers specifies HTTP request header match
+    /// Headers specifies HTTP request header match_engine
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<Vec<HTTPHeaderMatch>>,
 
-    /// QueryParams specifies HTTP query parameter match
+    /// QueryParams specifies HTTP query parameter match_engine
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_params: Option<Vec<HTTPQueryParamMatch>>,
 
@@ -102,11 +102,11 @@ pub struct HTTPRouteMatch {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPPathMatch {
-    /// Type specifies how to match against the path Value
+    /// Type specifies how to match_engine against the path Value
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub match_type: Option<String>,
 
-    /// Value of the HTTP path to match against
+    /// Value of the HTTP path to match_engine against
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
 }
@@ -114,7 +114,7 @@ pub struct HTTPPathMatch {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPHeaderMatch {
-    /// Type specifies how to match the header
+    /// Type specifies how to match_engine the header
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub match_type: Option<String>,
 
@@ -128,7 +128,7 @@ pub struct HTTPHeaderMatch {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPQueryParamMatch {
-    /// Type specifies how to match the query parameter
+    /// Type specifies how to match_engine the query parameter
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub match_type: Option<String>,
 

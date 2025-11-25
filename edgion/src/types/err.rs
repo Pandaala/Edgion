@@ -24,6 +24,6 @@ pub enum EdError {
     #[error("Upstream error {0}")]
     UpstreamError(String),
 
-    #[error("Sni not match: {0}")]
+    #[error("Sni not match_engine: {0}")]
     SniNotMatch(String),
 }

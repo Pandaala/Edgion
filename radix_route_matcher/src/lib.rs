@@ -7,7 +7,7 @@
 //! # Features
 //!
 //! - **High Performance**: Based on Redis's `rax` implementation in C
-//! - **Multiple Match Modes**: Exact match, longest prefix match, and iterator-based matching
+//! - **Multiple Match Modes**: Exact match_engine, longest prefix match_engine, and iterator-based matching
 //! - **Safe Rust API**: High-level safe wrapper around C implementation
 //! - **C ABI Compatible**: Can be used from C/C++ or other FFI-capable languages
 //! - **Unicode Support**: Full UTF-8 support including Chinese characters
@@ -29,10 +29,10 @@
 //! // Create an iterator for prefix matching operations
 //! let iter = tree.create_iter().unwrap();
 //!
-//! // Exact match
+//! // Exact match_engine
 //! assert_eq!(tree.find_exact("/api/users"), Some(2));
 //!
-//! // Longest prefix match
+//! // Longest prefix match_engine
 //! assert_eq!(tree.longest_prefix(&iter, "/api/users/123"), Some(2));
 //!
 //! // Get all matching prefixes

@@ -60,7 +60,7 @@ pub extern "C" fn radix_tree_insert(t: *mut c_void, buf: *const c_uchar, len: c_
     unsafe { tree_insert_raw(t, buf as *const u8, len as usize, idx) }
 }
 
-/// Finds an exact match for a key.
+/// Finds an exact match_engine for a key.
 ///
 /// # Arguments
 ///
@@ -219,7 +219,7 @@ pub extern "C" fn radix_tree_next(it: *mut c_void, buf: *const c_uchar, len: c_u
     unsafe { (*iter_ptr).data as isize as c_int }
 }
 
-/// Moves iterator up to find the next shorter prefix match.
+/// Moves iterator up to find the next shorter prefix match_engine.
 ///
 /// # Arguments
 ///

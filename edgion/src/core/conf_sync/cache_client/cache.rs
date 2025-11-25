@@ -62,7 +62,7 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
     }
 
     /// Set the configuration processor for this cache
-    pub fn set_conf_processor(&self, processor: Box<dyn crate::core::conf_sync::cache_client::ConfHandler<T> + Send + Sync>)
+    pub fn set_conf_processor(&self, processor: Box<dyn crate::core::conf_sync::traits::ConfHandler<T> + Send + Sync>)
     where
         T: Clone + ResourceMeta,
     {

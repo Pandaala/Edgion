@@ -221,7 +221,7 @@ mod tests {
         assert!(path.matches("/api"));
         assert!(path.matches("/api/users"));
         assert!(path.matches("/api/users/123"));
-        // Note: prefix match is string-based, so "/apix" matches "/api" prefix
+        // Note: prefix match_engine is string-based, so "/apix" matches "/api" prefix
         assert!(path.matches("/apix"));
         assert!(!path.matches("/"));
         assert!(!path.matches("/ap"));
@@ -319,7 +319,7 @@ mod tests {
         let exact = RadixPath::new("/api/users", 0, false);
         let prefix = RadixPath::new("/api/users", 0, true);
 
-        // Exact match should have higher priority (odd number)
+        // Exact match_engine should have higher priority (odd number)
         assert!(exact.priority_weight > prefix.priority_weight);
         assert_eq!(exact.priority_weight % 2, 1); // Odd for exact
         assert_eq!(prefix.priority_weight % 2, 0); // Even for prefix
@@ -383,7 +383,7 @@ mod tests {
     fn test_param_cannot_be_empty() {
         let path = RadixPath::new("/users/{id}/profile", 0, false);
 
-        // Param must match at least one character
+        // Param must match_engine at least one character
         assert!(!path.matches("/users//profile"));
     }
 

@@ -46,10 +46,10 @@ impl<T> RadixHostMatchEngine<T> {
     /// Match a hostname and return the matched runtime
     ///
     /// # Arguments
-    /// * `hostname` - The hostname to match (e.g., "api.example.com")
+    /// * `hostname` - The hostname to match_engine (e.g., "api.example.com")
     ///
     /// # Returns
-    /// `Some(Arc<T>)` if a match is found, `None` otherwise
+    /// `Some(Arc<T>)` if a match_engine is found, `None` otherwise
     pub fn match_host(&self, hostname: &str) -> Option<Arc<T>> {
         let hostname_lower = hostname.to_lowercase();
         let reversed = RadixHost::<T>::reverse_hostname(&hostname_lower);
@@ -71,13 +71,13 @@ impl<T> RadixHostMatchEngine<T> {
         // Use search to initialize iterator, then iterate from longest to shortest using next_prefix
         println!("\n[Step 1] Searching in radix tree...");
         if !self.tree.search(&iter, &reversed) {
-            println!("FAIL no match found in radix tree\n");
+            println!("FAIL no match_engine found in radix tree\n");
             return None;
         }
 
         println!("  OK found matches, iterating from longest to shortest...");
 
-        // Get the first match (longest)
+        // Get the first match_engine (longest)
         let mut match_count = 0;
         loop {
             let tree_idx = if match_count == 0 {
@@ -109,7 +109,7 @@ impl<T> RadixHostMatchEngine<T> {
                             println!("      OK matched!");
                             return Some(radix_host.runtime.clone());
                         } else {
-                            println!("      FAIL pattern did not match");
+                            println!("      FAIL pattern did not match_engine");
                         }
                     }
                 }
@@ -119,7 +119,7 @@ impl<T> RadixHostMatchEngine<T> {
         if match_count == 0 {
             println!("FAIL no matches found\n");
         } else {
-            println!("FAIL checked {} match(es), none matched\n", match_count);
+            println!("FAIL checked {} match_engine(es), none matched\n", match_count);
         }
         None
     }
@@ -367,12 +367,12 @@ mod tests {
         assert_eq!(engine.host_count(), 4);
         assert_eq!(engine.tree_idx_to_host_idx.len(), 3); // example.com and *.example.com share same radix_key
 
-        // Test exact match for example.com (should match runtime1, not wildcard runtime4)
+        // Test exact match_engine for example.com (should match_engine runtime1, not wildcard runtime4)
         let r1 = engine.match_host("example.com");
         assert!(r1.is_some());
         assert_eq!(r1.unwrap().identifier(), "runtime1");
 
-        // Test wildcard match for *.example.com (should match runtime4)
+        // Test wildcard match_engine for *.example.com (should match_engine runtime4)
         let r4 = engine.match_host("api.example.com");
         assert!(r4.is_some());
         assert_eq!(r4.unwrap().identifier(), "runtime4");
@@ -387,12 +387,12 @@ mod tests {
         assert!(r2.is_some());
         assert_eq!(r2.unwrap().identifier(), "runtime2");
 
-        // Test exact match for test.com
+        // Test exact match_engine for test.com
         let r3 = engine.match_host("test.com");
         assert!(r3.is_some());
         assert_eq!(r3.unwrap().identifier(), "runtime3");
 
-        // Test that *.example.com doesn't match too many levels
+        // Test that *.example.com doesn't match_engine too many levels
         let r_none = engine.match_host("sub.api.example.com");
         assert!(r_none.is_none());
     }

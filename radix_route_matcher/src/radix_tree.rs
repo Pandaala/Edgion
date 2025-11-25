@@ -122,7 +122,7 @@ impl RadixTree {
         }
     }
 
-    /// Finds the exact match for a path.
+    /// Finds the exact match_engine for a path.
     ///
     /// # Arguments
     ///
@@ -183,7 +183,7 @@ impl RadixTree {
         }
     }
 
-    /// Finds the longest prefix match for a path.
+    /// Finds the longest prefix match_engine for a path.
     ///
     /// This is useful for route matching where you want to find the most specific
     /// route that matches the beginning of the given path.
@@ -191,11 +191,11 @@ impl RadixTree {
     /// # Arguments
     ///
     /// * `iter` - A RadixIterator for this tree
-    /// * `path` - The path to match
+    /// * `path` - The path to match_engine
     ///
     /// # Returns
     ///
-    /// Returns `Some(idx)` of the longest matching prefix, `None` if no match.
+    /// Returns `Some(idx)` of the longest matching prefix, `None` if no match_engine.
     ///
     /// # Examples
     ///
@@ -262,7 +262,7 @@ impl RadixTree {
         !search_ptr.is_null()
     }
 
-    /// Gets the next prefix match (from longest to shortest).
+    /// Gets the next prefix match_engine (from longest to shortest).
     ///
     /// Must call `search()` first to initialize the iterator.
     ///
@@ -273,7 +273,7 @@ impl RadixTree {
     ///
     /// # Returns
     ///
-    /// Returns `Some(idx)` for the next match, `None` when no more matches.
+    /// Returns `Some(idx)` for the next match_engine, `None` when no more matches.
     ///
     /// # Examples
     ///
