@@ -1,8 +1,8 @@
 use crate::types::{GatewayBaseConf, ResourceMeta};
 use crate::core::conf_sync::cache_client::ClientCache;
-use crate::core::conf_sync::cache_server::{CacheEventDispatch, ListData};
+use crate::core::conf_sync::types::ListData;
 use crate::core::conf_sync::config_server::GatewayClassKey;
-use crate::core::conf_sync::traits::{ConfigClientEventDispatcher, ResourceChange};
+use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
 use anyhow::Result;

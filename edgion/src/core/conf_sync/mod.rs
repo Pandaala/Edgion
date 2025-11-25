@@ -8,13 +8,14 @@ pub mod grpc_server;
 mod cache_client;
 mod proto;
 pub mod traits;
+pub mod types;
 
 pub use cache_client::ClientCache;
-pub use cache_server::{CacheEventDispatch, ServerCache, ResourceMeta};
+pub use cache_server::{ServerCache, ResourceMeta};
 pub use config_server::ConfigServer;
 pub use grpc_client::ConfigSyncClient;
 pub use grpc_server::ConfigSyncServer;
-pub use traits::ConfigServerEventDispatcher;
+pub use traits::{CacheEventDispatch, ConfigServerEventDispatcher};
 pub use crate::types::GatewayBaseConf;
 
 #[cfg(test)]

@@ -1,7 +1,6 @@
-use crate::core::conf_sync::cache_server::CacheEventDispatch;
 use crate::core::conf_sync::cache_client::cache_data::CacheData;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
-use crate::core::conf_sync::traits::ResourceChange;
+use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::{ResourceMeta, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 use kube::{Resource, ResourceExt};
 use std::sync::{Arc, RwLock};
