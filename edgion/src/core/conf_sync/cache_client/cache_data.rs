@@ -107,65 +107,76 @@ impl<T: ResourceMeta> CacheData<T> {
             loop {
                 interval.tick().await;
 
-                // Collect events and resources
-                let (events_to_process, mut add_or_update, mut remove) = {
-                    let cache = cache_data_clone.read().unwrap();
-                    // Processor is guaranteed to exist at spawn time, but check handler in case it was removed
-                    let handler = match cache.handler.as_ref() {
-                        Some(h) => h,
-                        None => {
-                            tracing::error!(component = "cache_client", "Handler was removed, stopping compressed events processing task");
-                            break; // Handler removed, stop the task
-                        }
-                    };
-
-                    // Collect events to process
-                    let events: HashMap<String, Vec<ResourceChange>> = handler
-                        .compressed_events
-                        .events
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
-
-                    // Prepare maps for add_or_update and remove
-                    let mut add_or_update_map = HashMap::new();
-                    let mut remove_set = HashSet::new();
-
-                    // Classify events based on current state in cache.data
-                    // If resource exists in cache.data, it's add_or_update
-                    // If resource doesn't exist in cache.data, it's remove
-                    for (key, _event_changes) in &events {
-                        if let Some(resource) = cache.data.get(key).cloned() {
-                            // Resource exists in cache, it's add_or_update
-                            add_or_update_map.insert(key.clone(), resource);
-                            tracing::info!(key = %key, "Processed compressed event: add_or_update");
-                        } else {
-                            // Resource doesn't exist in cache, it's remove
-                            // For remove, we only need the key
-                            remove_set.insert(key.clone());
-                            tracing::info!(key = %key, "Processed compressed event: remove");
-                        }
-                    }
-
-                    (events, add_or_update_map, remove_set)
-                };
-
-                // Process events if there are any
-                if !events_to_process.is_empty() && (!add_or_update.is_empty() || !remove.is_empty()) {
-                    // Clear processed events and call conf_change
-                    let mut cache = cache_data_clone.write().unwrap();
-                    if let Some(ref mut handler) = cache.handler {
-                        handler.compressed_events.clear();
-                        handler.processor.conf_change(add_or_update, remove);
-                        handler.processor.update_rebuild();
-                    } else {
-                        // Handler was removed, stop the task
-                        tracing::error!(component = "cache_client", "Handler was removed during event processing, stopping compressed events processing task");
-                        break;
-                    }
+                // Process compressed events, return false if should stop
+                if !Self::process_compressed_events(&cache_data_clone) {
+                    break;
                 }
             }
         });
+    }
+
+    /// Process compressed events in a single write lock
+    /// Returns true if should continue, false if should stop
+    fn process_compressed_events(cache_data: &Arc<RwLock<CacheData<T>>>) -> bool
+    where
+        T: Clone + ResourceMeta,
+    {
+        let mut cache = cache_data.write().unwrap();
+        
+        // Get handler reference at the beginning
+        let handler = match cache.handler.as_mut() {
+            Some(h) => h,
+            None => {
+                tracing::error!(component = "cache_client", "Handler was removed, stopping compressed events processing task");
+                return false; // Handler removed, stop the task
+            }
+        };
+
+        // If no events, skip this iteration
+        if handler.compressed_events.events.is_empty() {
+            return true; // Continue
+        }
+
+        // Collect event keys first (to avoid borrowing conflicts)
+        let event_keys: Vec<String> = handler.compressed_events.events.keys().cloned().collect();
+
+        // Classify events based on current state in cache.data
+        // Note: We can access cache.data here because handler borrow is released after collecting keys
+        let mut add_or_update = HashMap::new();
+        let mut remove = HashSet::new();
+        for key in &event_keys {
+            if let Some(resource) = cache.data.get(key).cloned() {
+                add_or_update.insert(key.clone(), resource);
+                tracing::info!(key = %key, "Processed compressed event: add_or_update");
+            } else {
+                remove.insert(key.clone());
+                tracing::info!(key = %key, "Processed compressed event: remove");
+            }
+        }
+
+        // Process events if there are any
+        if !add_or_update.is_empty() || !remove.is_empty() {
+            let add_keys: Vec<&String> = add_or_update.keys().collect();
+            let remove_keys: Vec<&String> = remove.iter().collect();
+            tracing::info!(
+                component = "cache_client",
+                add_or_update_keys = ?add_keys,
+                remove_keys = ?remove_keys,
+                "Processing compressed events"
+            );
+            
+            // Re-borrow handler to process events
+            if let Some(handler) = cache.handler.as_mut() {
+                handler.compressed_events.clear();
+                handler.processor.conf_change(add_or_update, remove);
+                handler.processor.update_rebuild();
+            } else {
+                tracing::error!(component = "cache_client", "Handler was removed before processing events");
+                return false;
+            }
+        }
+
+        true // Continue
     }
 
     // Compress events methods

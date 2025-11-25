@@ -72,6 +72,15 @@ where
 
         tracing::info!(kind = T::kind_name(), count = resources.len(), "Parsed resources");
 
+        // Debug: print all resource keys and resource_version
+        let resource_keys: Vec<String> = resources.iter().map(|r| r.key_name()).collect();
+        tracing::debug!(
+            kind = T::kind_name(),
+            resource_version = list_data.resource_version,
+            resources = ?resource_keys,
+            "Resetting cache with resources"
+        );
+
         // Use reset method to rebuild cache with fresh data
         {
             let mut cache = cache_data.write().unwrap();
