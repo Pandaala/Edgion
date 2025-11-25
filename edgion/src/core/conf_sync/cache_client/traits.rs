@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Configuration ConfHandler trait for handling resource lifecycle operations
 /// 
@@ -9,13 +9,8 @@ pub trait ConfHandler<T>: Send + Sync {
     fn full_build(&mut self, data: &HashMap<String, T>);
 
     /// Add a new resource
-    fn add(&mut self, item: T);
-
-    /// Update an existing resource
-    fn update(&mut self, item: T);
-
-    /// Delete a resource
-    fn del(&mut self, item: T);
+    /// For remove, only the key is needed since the resource is already deleted
+    fn conf_change(&mut self, add_or_update: HashMap<String, T>, remove: HashSet<String>);
 
     /// Trigger a rebuild/refresh of the configuration
     /// This is called when the processor needs to update its internal state

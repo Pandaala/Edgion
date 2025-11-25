@@ -1,7 +1,25 @@
 use crate::core::conf_sync::cache_client::ConfHandler;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::types::ResourceMeta;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
+use tokio::time::{interval, Duration};
+
+/// Configuration handler data structure
+/// Contains handler state, processor, and compressed events
+pub struct ConfHandlerData<T> {
+    processor: Option<Box<dyn ConfHandler<T> + Send + Sync>>,
+    compressed_events: CompressEvent,
+}
+
+impl<T> ConfHandlerData<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            processor: None,
+            compressed_events: CompressEvent::new(),
+        }
+    }
+}
 
 /// Internal cache data structure combining data and version under single lock
 pub struct CacheData<T> {
@@ -10,9 +28,7 @@ pub struct CacheData<T> {
     resource_version: u64,
 
     // 注册到Cachedata内部，用于处理具体配置的handler
-    handler_running: bool,
-    handler_processor: Option<Box<dyn ConfHandler<T> + Send + Sync>>,
-    handler_compressed_events: CompressEvent,
+    handler: Option<ConfHandlerData<T>>,
 }
 
 impl<T: ResourceMeta> CacheData<T> {
@@ -21,9 +37,7 @@ impl<T: ResourceMeta> CacheData<T> {
             ready: false,
             data: HashMap::new(),
             resource_version: 0,
-            handler_running: false,
-            handler_processor: None,
-            handler_compressed_events: CompressEvent::new(),
+            handler: None,
         }
     }
 
@@ -36,11 +50,12 @@ impl<T: ResourceMeta> CacheData<T> {
             self.data.insert(key, resource);
         }
         self.resource_version = resource_version;
-        if let Some(mut processor) = self.handler_processor.take() {
-            // Pass reference to full_build, no need to clone or move data
-            processor.full_build(&self.data);
-            // Put processor back
-            self.handler_processor = Some(processor);
+        if let Some(ref mut handler) = self.handler {
+            if let Some(ref mut processor) = handler.processor {
+                // Pass reference to full_build, no need to clone or move data
+                processor.full_build(&self.data);
+                handler.compressed_events.clear();
+            }
         }
     }
 
@@ -91,28 +106,110 @@ impl<T: ResourceMeta> CacheData<T> {
         self.resource_version = version;
     }
 
-    pub(crate) fn update_resource_version_if_newer(&mut self, version: u64) {
-        if version > self.resource_version {
-            self.resource_version = version;
+    // Configuration handler methods
+    pub(crate) fn set_conf_processor(
+        &mut self,
+        processor: Box<dyn ConfHandler<T> + Send + Sync>,
+        cache_data: Arc<RwLock<CacheData<T>>>,
+    ) where
+        T: Clone + ResourceMeta,
+    {
+        if self.handler.is_none() {
+            self.handler = Some(ConfHandlerData::new());
         }
-    }
+        if let Some(ref mut handler) = self.handler {
+            handler.processor = Some(processor);
+        }
 
-    // Configuration processor methods
-    pub(crate) fn set_conf_processor(&mut self, processor: Box<dyn ConfHandler<T> + Send + Sync>) {
-        self.handler_processor = Some(processor);
-    }
+        // Start a background task to process compressed events every 100ms
+        let cache_data_clone = cache_data.clone();
+        tokio::spawn(async move {
+            let mut interval = interval(Duration::from_millis(100));
+            loop {
+                interval.tick().await;
 
-    pub(crate) fn conf_processor(&self) -> Option<&(dyn ConfHandler<T> + Send + Sync)> {
-        self.handler_processor.as_deref()
+                // Collect events and resources
+                let (events_to_process, mut add_or_update, mut remove) = {
+                    let cache = cache_data_clone.read().unwrap();
+                    if let Some(ref handler) = cache.handler {
+                        // Check if processor exists, if not, stop the task
+                        if handler.processor.is_none() {
+                            break;
+                        }
+
+                        // Collect events to process
+                        let events: HashMap<String, Vec<ResourceChange>> = handler
+                            .compressed_events
+                            .events
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+
+                        // Prepare maps for add_or_update and remove
+                        let mut add_or_update_map = HashMap::new();
+                        let mut remove_set = HashSet::new();
+
+                        // Classify events based on current state in cache.data
+                        // If resource exists in cache.data, it's add_or_update
+                        // If resource doesn't exist in cache.data, it's remove
+                        for (key, _event_changes) in &events {
+                            if let Some(resource) = cache.data.get(key).cloned() {
+                                // Resource exists in cache, it's add_or_update
+                                add_or_update_map.insert(key.clone(), resource);
+                                tracing::info!(key = %key, "Processed compressed event: add_or_update");
+                            } else {
+                                // Resource doesn't exist in cache, it's remove
+                                // For remove, we only need the key
+                                remove_set.insert(key.clone());
+                                tracing::info!(key = %key, "Processed compressed event: remove");
+                            }
+                        }
+
+                        (events, add_or_update_map, remove_set)
+                    } else {
+                        break; // No handler, stop the task
+                    }
+                };
+
+                // Process events if there are any
+                if !events_to_process.is_empty() && (!add_or_update.is_empty() || !remove.is_empty()) {
+                    // Clear processed events
+                    {
+                        let mut cache = cache_data_clone.write().unwrap();
+                        if let Some(ref mut handler) = cache.handler {
+                            handler.compressed_events.clear();
+                        }
+                    }
+
+                    // Call conf_change
+                    {
+                        let mut cache = cache_data_clone.write().unwrap();
+                        if let Some(ref mut handler) = cache.handler {
+                            if let Some(ref mut proc) = handler.processor {
+                                proc.conf_change(add_or_update, remove);
+                                proc.update_rebuild();
+                            }
+                        }
+                    }
+                }
+            }
+        });
     }
 
     // Compress events methods
     pub(crate) fn add_compress_event(&mut self, key: String, change: ResourceChange) {
-        self.handler_compressed_events.add_event(key, change);
+        if self.handler.is_none() {
+            self.handler = Some(ConfHandlerData::new());
+        }
+        if let Some(ref mut handler) = self.handler {
+            handler.compressed_events.add_event(key, change);
+        }
     }
 
     pub(crate) fn clear_compress_events(&mut self) {
-        self.handler_compressed_events.clear();
+        if let Some(ref mut handler) = self.handler {
+            handler.compressed_events.clear();
+        }
     }
 }
 
