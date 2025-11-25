@@ -9,8 +9,6 @@ use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
 use anyhow::Result;
 
-pub type GatewayClassKey = String;
-
 // internal key
 pub type NsNameKey = String;
 
@@ -93,7 +91,7 @@ impl ConfigServer {
         })
     }
 
-    pub fn list(&self, _key: &GatewayClassKey, kind: &ResourceKind) -> Result<ListDataSimple, String> {
+    pub fn list(&self, kind: &ResourceKind) -> Result<ListDataSimple, String> {
         let (data_json, resource_version) = match kind {
             ResourceKind::Unspecified => {
                 return Err("Resource kind unspecified".to_string());
@@ -141,7 +139,6 @@ impl ConfigServer {
 
     pub fn watch(
         &self,
-        _key: &GatewayClassKey,
         kind: &ResourceKind,
         client_id: String,
         client_name: String,

@@ -64,7 +64,7 @@ impl ConfigSync for ConfigSyncServer {
         // Get WatcherMgr and call list
         let list_data = self
             .config_server
-            .list(&req.key, &resource_kind)
+            .list(&resource_kind)
             .map_err(|e| Status::internal(format!("Failed to list resources: {}", e)))?;
 
         Ok(Response::new(ListResponse {
@@ -92,7 +92,6 @@ impl ConfigSync for ConfigSyncServer {
 
         // Get WatcherMgr and call watch
         let watch_result = self.config_server.watch(
-            &req.key,
             &resource_kind,
             req.client_id,
             req.client_name,

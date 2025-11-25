@@ -1,7 +1,6 @@
 use crate::types::{GatewayBaseConf, ResourceMeta};
 use crate::core::conf_sync::cache_client::ClientCache;
 use crate::core::conf_sync::types::ListData;
-use crate::core::conf_sync::config_server::GatewayClassKey;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
@@ -12,7 +11,7 @@ use kube::Resource;
 use std::sync::RwLock;
 
 pub struct ConfigClient {
-    gateway_class_key: GatewayClassKey,
+    gateway_class_key: String,
     pub base_conf: RwLock<Option<GatewayBaseConf>>,
     routes: ClientCache<HTTPRoute>,
     services: ClientCache<Service>,
@@ -22,7 +21,7 @@ pub struct ConfigClient {
 }
 
 impl ConfigClient {
-    pub fn new(gateway_class_key: GatewayClassKey, client_id: String, client_name: String) -> Self {
+    pub fn new(gateway_class_key: String, client_id: String, client_name: String) -> Self {
         Self {
             gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(None),
@@ -59,7 +58,7 @@ impl ConfigClient {
         &self.secrets
     }
 
-    pub fn get_gateway_class_key(&self) -> &GatewayClassKey {
+    pub fn get_gateway_class_key(&self) -> &String {
         &self.gateway_class_key
     }
 
@@ -104,7 +103,7 @@ impl ConfigClient {
         cache.apply_change(change, resource);
     }
 
-    pub fn list(&self, key: &GatewayClassKey, kind: &ResourceKind) -> Result<ListDataSimple, String> {
+    pub fn list(&self, key: &String, kind: &ResourceKind) -> Result<ListDataSimple, String> {
         if key != &self.gateway_class_key {
             return Err(format!(
                 "Key mismatch: expected {}, got {}",
