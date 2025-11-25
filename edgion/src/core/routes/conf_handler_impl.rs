@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 use crate::core::conf_sync::traits::ConfHandler;
 use crate::core::routes::{RouteManager, HttpRouteRuleUnit};
 use crate::core::routes::routes_mgr::RouteRules;
@@ -12,13 +11,34 @@ use crate::types::{HTTPRoute, ResourceMeta};
 type GatewayKey = String;
 type DomainStr = String;
 
+/// Implement ConfHandler for Arc<RouteManager> to allow using the global instance
+impl ConfHandler<HTTPRoute> for Arc<RouteManager> {
+    fn full_build(&self, data: &HashMap<String, HTTPRoute>) {
+        (**self).full_build(data)
+    }
+
+    fn conf_change(&self, add_or_update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
+        (**self).conf_change(add_or_update, remove)
+    }
+
+    fn update_rebuild(&self) {
+        (**self).update_rebuild()
+    }
+}
+
+/// Create a RouteManager handler for registration with ConfigClient
+/// Returns the global RouteManager instance
+pub fn create_route_manager_handler() -> Box<dyn crate::core::conf_sync::traits::ConfHandler<HTTPRoute> + Send + Sync> {
+    Box::new(crate::core::routes::get_global_route_manager())
+}
+
 /// Parse all HTTPRoutes and collect rules into gateway->domain->rules structure
 /// Returns HashMap<GatewayKey, HashMap<DomainStr, Vec<HttpRouteRuleUnit>>>
 fn parse_http_routes_to_gateway_domain_rules(
     data: &HashMap<String, HTTPRoute>
 ) -> HashMap<GatewayKey, HashMap<DomainStr, Vec<HttpRouteRuleUnit>>> {
     let mut gateway_domain_rules: HashMap<GatewayKey, HashMap<DomainStr, Vec<HttpRouteRuleUnit>>> = HashMap::new();
-    
+
     let mut processed_routes = 0;
     let mut skipped_routes = 0;
 
@@ -156,9 +176,7 @@ fn validate_http_route(route: &HTTPRoute) -> Option<(
 impl ConfHandler<HTTPRoute> for RouteManager {
     /// Full rebuild with a complete set of HTTPRoutes
     /// This is typically called during initial sync
-    fn full_build(&mut self, data: &HashMap<String, HTTPRoute>) {
-        let start_time = Instant::now();
-        
+    fn full_build(&self, data: &HashMap<String, HTTPRoute>) {
         tracing::info!(
             component = "route_manager",
             count = data.len(),
@@ -242,21 +260,18 @@ impl ConfHandler<HTTPRoute> for RouteManager {
             processed_gateways += 1;
         }
 
-        let elapsed = start_time.elapsed();
         tracing::info!(
             component = "route_manager",
             total_gateways = processed_gateways + skipped_gateways,
             processed = processed_gateways,
             skipped = skipped_gateways,
-            elapsed_ms = elapsed.as_millis(),
-            "Full build completed in {:?}",
-            elapsed
+            "Full build completed"
         );
     }
 
     /// Handle incremental configuration changes
     /// Processes additions, updates, and removals of HTTPRoutes
-    fn conf_change(&mut self, add_or_update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
+    fn conf_change(&self, add_or_update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
         tracing::info!(
             component = "route_manager",
             add_or_update_count = add_or_update.len(),
@@ -293,7 +308,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
 
     /// Trigger a rebuild/refresh of the route configuration
     /// This could be used to optimize internal data structures or refresh caches
-    fn update_rebuild(&mut self) {
+    fn update_rebuild(&self) {
         tracing::debug!(
             component = "route_manager",
             "Update rebuild triggered (no-op for now)"

@@ -33,9 +33,11 @@ impl<T: ResourceMeta> CacheData<T> {
             self.data.insert(key, resource);
         }
         self.resource_version = resource_version;
-        if let Some(ref mut handler) = self.handler {
+        if let Some(ref handler) = self.handler {
             // Pass reference to full_build, no need to clone or move data
             handler.processor.full_build(&self.data);
+        }
+        if let Some(ref mut handler) = self.handler {
             handler.compressed_events.clear();
         }
     }
@@ -164,14 +166,18 @@ impl<T: ResourceMeta> CacheData<T> {
                 "Processing compressed events"
             );
             
-            // Re-borrow handler to process events
-            if let Some(handler) = cache.handler.as_mut() {
-                handler.compressed_events.clear();
+            // Process events with immutable borrow
+            if let Some(handler) = cache.handler.as_ref() {
                 handler.processor.conf_change(add_or_update, remove);
                 handler.processor.update_rebuild();
             } else {
                 tracing::error!(component = "cache_client", "Handler was removed before processing events");
                 return false;
+            }
+            
+            // Clear events with mutable borrow
+            if let Some(handler) = cache.handler.as_mut() {
+                handler.compressed_events.clear();
             }
         }
 

@@ -3,6 +3,7 @@ use crate::core::conf_sync::cache_client::ClientCache;
 use crate::core::conf_sync::types::ListData;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::utils::format_resource_info;
+use crate::core::routes::create_route_manager_handler;
 use crate::types::prelude_resources::*;
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Secret, Service};
@@ -22,10 +23,16 @@ pub struct ConfigClient {
 
 impl ConfigClient {
     pub fn new(gateway_class_key: String, client_id: String, client_name: String) -> Self {
+        let routes_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        
+        // Register RouteManager as the handler for HTTPRoute resources
+        let route_handler = create_route_manager_handler();
+        routes_cache.set_conf_processor(route_handler);
+        
         Self {
             gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(None),
-            routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            routes: routes_cache,
             services: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             endpoint_slices: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
