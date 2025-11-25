@@ -4,7 +4,7 @@ use crate::core::conf_sync::traits::ResourceChange;
 pub use crate::types::ResourceMeta;
 
 /// Trait for handling resource events
-pub trait EventDispatch<T> {
+pub trait CacheEventDispatch<T> {
     /// Apply a change to the resource cache
     fn apply_change(&self, change: ResourceChange, resource: T)
     where

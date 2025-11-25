@@ -4,7 +4,7 @@ use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
 use super::store::EventStore;
-use super::traits::{EventDispatch, ResourceMeta};
+use super::traits::{CacheEventDispatch, ResourceMeta};
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::utils;
@@ -228,7 +228,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     }
 }
 
-impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> EventDispatch<T> for ServerCache<T> {
+impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispatch<T> for ServerCache<T> {
     fn apply_change(&self, change: ResourceChange, mut resource: T)
     where
         T: Resource + Send + 'static,
@@ -308,7 +308,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> EventDispatch<T
 mod tests {
     use super::*;
     use crate::core::conf_sync::traits::ResourceChange;
-    use crate::core::conf_sync::EventDispatch;
+    use crate::core::conf_sync::CacheEventDispatch;
     use crate::types::{ResourceKind, ResourceMeta};
     use kube::api::ObjectMeta;
     use serde::{Deserialize, Serialize};

@@ -1,4 +1,4 @@
-use crate::core::conf_sync::cache_server::EventDispatch;
+use crate::core::conf_sync::cache_server::CacheEventDispatch;
 use crate::core::conf_sync::cache_client::cache_data::CacheData;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::conf_sync::traits::ResourceChange;
@@ -9,7 +9,7 @@ use tonic::transport::Channel;
 
 use super::cache::ClientCache;
 
-impl<T: ResourceMeta + Resource + Clone + Send + 'static> EventDispatch<T> for ClientCache<T> {
+impl<T: ResourceMeta + Resource + Clone + Send + 'static> CacheEventDispatch<T> for ClientCache<T> {
     fn apply_change(&self, change: ResourceChange, resource: T)
     where
         T: Resource + Send + 'static,
