@@ -4,4 +4,4 @@ mod event_dispatch;
 pub mod traits;
 
 pub use cache::ClientCache;
-pub use traits::ConfProcessor;
+pub use traits::ConfHandler;

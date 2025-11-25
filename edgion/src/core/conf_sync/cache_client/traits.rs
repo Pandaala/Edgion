@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-/// Configuration processor trait for handling resource lifecycle operations
+/// Configuration ConfHandler trait for handling resource lifecycle operations
 /// 
 /// This trait must be Send + Sync to allow safe sharing across threads
-pub trait ConfProcessor<T>: Send + Sync {
+pub trait ConfHandler<T>: Send + Sync {
     /// Full rebuild with a complete set of resources
     /// This is typically called during initial sync or when a complete refresh is needed
     fn full_build(&mut self, data: &HashMap<String, T>);

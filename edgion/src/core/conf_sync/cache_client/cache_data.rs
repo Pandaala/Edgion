@@ -1,19 +1,18 @@
-use crate::core::conf_sync::cache_client::ConfProcessor;
+use crate::core::conf_sync::cache_client::ConfHandler;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::types::ResourceMeta;
 use std::collections::HashMap;
-
-use crate::core::conf_sync::cache_client::cache::CompressEvent;
 
 /// Internal cache data structure combining data and version under single lock
 pub struct CacheData<T> {
     ready: bool,
     data: HashMap<String, T>,
     resource_version: u64,
-    // configuration processor (optional)
-    conf_processor: Option<Box<dyn ConfProcessor<T> + Send + Sync>>,
-    // compressed events storage
-    compress_events: CompressEvent,
+
+    // 注册到Cachedata内部，用于处理具体配置的handler
+    handler_running: bool,
+    handler_processor: Option<Box<dyn ConfHandler<T> + Send + Sync>>,
+    handler_compressed_events: CompressEvent,
 }
 
 impl<T: ResourceMeta> CacheData<T> {
@@ -22,8 +21,9 @@ impl<T: ResourceMeta> CacheData<T> {
             ready: false,
             data: HashMap::new(),
             resource_version: 0,
-            conf_processor: None,
-            compress_events: CompressEvent::new(),
+            handler_running: false,
+            handler_processor: None,
+            handler_compressed_events: CompressEvent::new(),
         }
     }
 
@@ -36,11 +36,11 @@ impl<T: ResourceMeta> CacheData<T> {
             self.data.insert(key, resource);
         }
         self.resource_version = resource_version;
-        if let Some(mut processor) = self.conf_processor.take() {
+        if let Some(mut processor) = self.handler_processor.take() {
             // Pass reference to full_build, no need to clone or move data
             processor.full_build(&self.data);
             // Put processor back
-            self.conf_processor = Some(processor);
+            self.handler_processor = Some(processor);
         }
     }
 
@@ -98,25 +98,49 @@ impl<T: ResourceMeta> CacheData<T> {
     }
 
     // Configuration processor methods
-    pub(crate) fn set_conf_processor(&mut self, processor: Box<dyn ConfProcessor<T> + Send + Sync>) {
-        self.conf_processor = Some(processor);
+    pub(crate) fn set_conf_processor(&mut self, processor: Box<dyn ConfHandler<T> + Send + Sync>) {
+        self.handler_processor = Some(processor);
     }
 
-    pub(crate) fn conf_processor(&self) -> Option<&(dyn ConfProcessor<T> + Send + Sync)> {
-        self.conf_processor.as_deref()
+    pub(crate) fn conf_processor(&self) -> Option<&(dyn ConfHandler<T> + Send + Sync)> {
+        self.handler_processor.as_deref()
     }
 
     // Compress events methods
     pub(crate) fn add_compress_event(&mut self, key: String, change: ResourceChange) {
-        self.compress_events.add_event(key, change);
-    }
-
-    pub(crate) fn get_compress_events(&self, key: &str) -> Option<&Vec<ResourceChange>> {
-        self.compress_events.get_events(key)
+        self.handler_compressed_events.add_event(key, change);
     }
 
     pub(crate) fn clear_compress_events(&mut self) {
-        self.compress_events.clear();
+        self.handler_compressed_events.clear();
+    }
+}
+
+
+pub struct CompressEvent {
+    events: HashMap<String, Vec<ResourceChange>>,
+}
+
+impl CompressEvent {
+    pub fn new() -> Self {
+        Self {
+            events: HashMap::new(),
+        }
+    }
+
+    /// Add an event for a resource key
+    pub fn add_event(&mut self, key: String, change: crate::core::conf_sync::traits::ResourceChange) {
+        self.events.entry(key).or_insert_with(Vec::new).push(change);
+    }
+
+    /// Get events for a resource key
+    pub fn get_events(&self, key: &str) -> Option<&Vec<ResourceChange>> {
+        self.events.get(key)
+    }
+
+    /// Clear all events
+    pub fn clear(&mut self) {
+        self.events.clear();
     }
 }
 

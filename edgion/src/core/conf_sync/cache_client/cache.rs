@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::core::conf_sync::cache_server::ListData;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::types::ResourceMeta;
@@ -5,36 +6,8 @@ use kube::Resource;
 use std::sync::{Arc, RwLock};
 use tokio::sync::RwLock as AsyncRwLock;
 use tonic::transport::Channel;
+use super::cache_data::CacheData;
 
-use crate::core::conf_sync::cache_client::cache_data::CacheData;
-
-/// Compressed event storage: key is resource key (namespace/name), value is list of events
-pub struct CompressEvent {
-    events: std::collections::HashMap<String, Vec<crate::core::conf_sync::traits::ResourceChange>>,
-}
-
-impl CompressEvent {
-    pub fn new() -> Self {
-        Self {
-            events: std::collections::HashMap::new(),
-        }
-    }
-
-    /// Add an event for a resource key
-    pub fn add_event(&mut self, key: String, change: crate::core::conf_sync::traits::ResourceChange) {
-        self.events.entry(key).or_insert_with(Vec::new).push(change);
-    }
-
-    /// Get events for a resource key
-    pub fn get_events(&self, key: &str) -> Option<&Vec<crate::core::conf_sync::traits::ResourceChange>> {
-        self.events.get(key)
-    }
-
-    /// Clear all events
-    pub fn clear(&mut self) {
-        self.events.clear();
-    }
-}
 
 pub struct ClientCache<T>
 where
@@ -90,7 +63,7 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
     }
 
     /// Set the configuration processor for this cache
-    pub fn set_conf_processor(&self, processor: Box<dyn crate::core::conf_sync::cache_client::ConfProcessor<T> + Send + Sync>) {
+    pub fn set_conf_processor(&self, processor: Box<dyn crate::core::conf_sync::cache_client::ConfHandler<T> + Send + Sync>) {
         let mut cache = self.cache_data.write().unwrap();
         cache.set_conf_processor(processor);
     }
