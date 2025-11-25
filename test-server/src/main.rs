@@ -74,7 +74,7 @@ async fn run_server(addr: SocketAddr, app: Router) {
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     println!("Listening on {}", addr);
 
-    // Add ConnectInfo layer to enable client address extraction
+    // Add ConnectInfo layer to enable conf_client address extraction
     let app_with_connect_info = app.into_make_service_with_connect_info::<SocketAddr>();
 
     axum::serve(listener, app_with_connect_info).await.unwrap();

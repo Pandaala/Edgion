@@ -36,7 +36,7 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 toml.workspace = true
 
-# Kubernetes client and types
+# Kubernetes conf_client and types
 kube.workspace = true
 k8s-openapi.workspace = true
 schemars.workspace = true
@@ -50,7 +50,7 @@ prost.workspace = true
 notify.workspace = true
 futures.workspace = true
 
-# HTTP server
+# HTTP conf_server
 axum.workspace = true
 
 # Route matching

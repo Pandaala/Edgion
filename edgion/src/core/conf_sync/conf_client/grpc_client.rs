@@ -1,5 +1,5 @@
 use crate::types::GatewayBaseConf;
-use crate::core::conf_sync::config_client::ConfigClient;
+use crate::core::conf_sync::conf_client::ConfigClient;
 use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, GetBaseConfRequest,
 };
@@ -11,14 +11,14 @@ use tonic::transport::Channel;
 use tracing;
 use uuid::Uuid;
 
-/// gRPC client for ConfigSync service
+/// gRPC conf_client for ConfigSync service
 pub struct ConfigSyncClient {
     config_client: Arc<ConfigClient>,
     conf_client_handle: ConfigSyncClientService<Channel>,
 }
 
 impl ConfigSyncClient {
-    /// Create a new ConfigSync client and connect to server with retry
+    /// Create a new ConfigSync conf_client and connect to conf_server with retry
     /// Retries connection up to 3 times with 2 second intervals
     pub async fn new(
         grpc_server_addr: &str,
@@ -43,14 +43,14 @@ impl ConfigSyncClient {
                 attempt = attempt,
                 max_retries = MAX_RETRIES,
                 server_addr = grpc_server_addr,
-                "Attempting to connect to gRPC server"
+                "Attempting to connect to gRPC conf_server"
             );
 
             match Self::create_client_internal(grpc_server_addr, timeout).await {
                 Ok(client) => {
-                    tracing::info!(server_addr = grpc_server_addr, "Successfully connected to gRPC server");
+                    tracing::info!(server_addr = grpc_server_addr, "Successfully connected to gRPC conf_server");
 
-                    // Set gRPC client for each cache
+                    // Set gRPC conf_client for each cache
                     config_client.routes().set_grpc_client(client.clone()).await;
                     config_client.services().set_grpc_client(client.clone()).await;
                     config_client.endpoint_slices().set_grpc_client(client.clone()).await;
@@ -74,11 +74,11 @@ impl ConfigSyncClient {
         }
 
         let err = last_error.unwrap();
-        tracing::error!(server_addr = grpc_server_addr,error = %err,"Failed to connect to gRPC server after {} attempts", MAX_RETRIES);
+        tracing::error!(server_addr = grpc_server_addr,error = %err,"Failed to connect to gRPC conf_server after {} attempts", MAX_RETRIES);
         Err(err)
     }
 
-    /// Internal helper to create a client
+    /// Internal helper to create a conf_client
     async fn create_client_internal(
         addr: &str,
         timeout: Duration,
@@ -95,7 +95,7 @@ impl ConfigSyncClient {
         self.config_client.clone()
     }
 
-    /// Fetch and initialize base configuration from server
+    /// Fetch and initialize base configuration from conf_server
     async fn fetch_and_init_base_conf(&mut self, gateway_class_key: &str) -> Result<(), tonic::Status> {
         let request = tonic::Request::new(GetBaseConfRequest {
             gateway_class: gateway_class_key.to_string(),

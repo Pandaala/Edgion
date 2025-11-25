@@ -26,7 +26,7 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 toml = "0.8"
 
-# Kubernetes client and types
+# Kubernetes conf_client and types
 kube = { version = "2.0.1", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.26.0", features = ["latest", "schemars"] }
 schemars = { version = "1" }
@@ -64,7 +64,7 @@ tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 
-# Test server
+# Test conf_server
 axum = { version = "0.8.4", features = ["macros"] }
 futures = { version = "0.3.31" }
 

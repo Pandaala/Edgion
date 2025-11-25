@@ -242,7 +242,7 @@ spec:
                           default: "/metrics"
                         port:
                           type: integer
-                          description: "Metrics server port"
+                          description: "Metrics conf_server port"
                           default: 9090
                         format:
                           type: string

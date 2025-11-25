@@ -15,13 +15,13 @@ where
     // data and version protected by single lock
     pub(crate) cache_data: Arc<RwLock<CacheData<T>>>,
 
-    // gRPC client (optional, for sync/watch)
+    // gRPC conf_client (optional, for sync/watch)
     pub(crate) grpc_client: Arc<AsyncRwLock<Option<ConfigSyncClientService<Channel>>>>,
 
     // gateway class key
     pub(crate) gateway_class_key: Arc<String>,
 
-    // client identification
+    // conf_client identification
     pub(crate) client_id: Arc<String>,
     pub(crate) client_name: Arc<String>,
 }
@@ -55,7 +55,7 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         cache.is_ready()
     }
 
-    /// Set the gRPC client for this cache
+    /// Set the gRPC conf_client for this cache
     pub async fn set_grpc_client(&self, client: ConfigSyncClientService<Channel>) {
         let mut guard = self.grpc_client.write().await;
         *guard = Some(client);

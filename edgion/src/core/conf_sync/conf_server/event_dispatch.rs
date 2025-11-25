@@ -1,5 +1,6 @@
 use crate::core::conf_sync::traits::ResourceChange;
-use crate::core::conf_sync::{ConfigServer, ConfigServerEventDispatcher, CacheEventDispatch, ServerCache, ResourceMeta};
+use crate::core::conf_sync::conf_server::ConfigServer;
+use crate::core::conf_sync::{ConfigServerEventDispatcher, CacheEventDispatch, ServerCache, ResourceMeta};
 use crate::types::prelude_resources::*;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;

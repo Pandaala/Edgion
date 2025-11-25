@@ -101,7 +101,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
                             let response = WatchResponse::new(events, current_version);
 
                             if sender.send(response).await.is_err() {
-                                println!("CenterCache receiver dropped, client disconnected");
+                                println!("CenterCache receiver dropped, conf_client disconnected");
                                 break;
                             }
 
@@ -140,7 +140,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     /// Returns a receiver that continuously receives WatchResponse updates
     ///
     /// This method will automatically start a watcher task that:
-    /// 1. First checks if client is behind and sends initial data
+    /// 1. First checks if conf_client is behind and sends initial data
     /// 2. Then loops waiting for notifications and sends updates
     pub fn watch(&self, client_id: String, client_name: String, from_version: u64) -> mpsc::Receiver<WatchResponse<T>>
     where

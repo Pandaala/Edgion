@@ -1,5 +1,4 @@
-use crate::core::conf_sync::config_client::ConfigClient;
-use crate::core::conf_sync::grpc_client::ConfigSyncClient;
+use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
 use crate::core::logging::{init_logging, LogConfig};
 use anyhow::{anyhow, Result};
 use clap::Parser;
@@ -66,7 +65,7 @@ impl EdgionGwCli {
         let server_addr = self
             .server_addr
             .as_deref()
-            .ok_or_else(|| anyhow!("server_addr is required, please provide --server-addr"))?;
+            .ok_or_else(|| anyhow!("server_addr is required, please provide --conf_server-addr"))?;
 
         let mut sync_client = ConfigSyncClient::new(
             server_addr,

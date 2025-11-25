@@ -375,7 +375,7 @@ pub struct Metrics {
     #[serde(default = "default_metrics_endpoint")]
     pub endpoint: String,
 
-    /// Metrics server port
+    /// Metrics conf_server port
     #[serde(default = "default_metrics_port")]
     pub port: u16,
 

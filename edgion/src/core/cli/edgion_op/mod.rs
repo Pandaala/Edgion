@@ -103,7 +103,7 @@ impl EdgionOpCli {
             component = COMPONENT_EDGION_OPERATOR,
             event = "services_starting",
             grpc_addr = %addr,
-            "Starting gRPC server and configuration loader"
+            "Starting gRPC conf_server and configuration loader"
         );
 
         // Spawn task to print config every 10 seconds
@@ -121,7 +121,7 @@ impl EdgionOpCli {
                 component = COMPONENT_EDGION_OPERATOR,
                 event = "grpc_server_error",
                 error = %e,
-                "gRPC server failed"
+                "gRPC conf_server failed"
             );
         }
 
@@ -134,7 +134,7 @@ impl EdgionOpCli {
             );
         }
 
-        sync_result.map_err(|e| anyhow!("gRPC server error: {}", e))?;
+        sync_result.map_err(|e| anyhow!("gRPC conf_server error: {}", e))?;
         loader_result?;
 
         tracing::info!(

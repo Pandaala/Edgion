@@ -89,7 +89,7 @@ where
         Ok(list_data.resource_version)
     }
 
-    /// Start watching resources from gRPC server
+    /// Start watching resources from gRPC conf_server
     pub async fn start_watch(&self) -> Result<(), tonic::Status> {
         let grpc_client = self.grpc_client.clone();
         let cache_data = self.cache_data.clone();
@@ -101,12 +101,12 @@ where
             let mut is_ready = false;
             // Outer loop: perform list operation
             loop {
-                // Get gRPC client
+                // Get gRPC conf_client
                 let mut client_guard = grpc_client.write().await;
                 let client = match client_guard.as_mut() {
                     Some(c) => c,
                     None => {
-                        tracing::error!(kind = T::kind_name(), "gRPC client not initialized");
+                        tracing::error!(kind = T::kind_name(), "gRPC conf_client not initialized");
                         drop(client_guard);
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         continue;
@@ -148,7 +148,7 @@ where
                     let client = match client_guard.as_mut() {
                         Some(c) => c,
                         None => {
-                            tracing::error!(kind = T::kind_name(), "gRPC client not initialized for watch");
+                            tracing::error!(kind = T::kind_name(), "gRPC conf_client not initialized for watch");
                             drop(client_guard);
                             break 'watch_loop; // Return to outer loop
                         }
