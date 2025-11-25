@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use crate::core::conf_sync::traits::ConfHandler;
 use crate::core::routes::{RouteManager, HttpRouteRuleUnit};
 use crate::core::routes::routes_mgr::RouteRules;
@@ -177,6 +178,8 @@ impl ConfHandler<HTTPRoute> for RouteManager {
     /// Full rebuild with a complete set of HTTPRoutes
     /// This is typically called during initial sync
     fn full_build(&self, data: &HashMap<String, HTTPRoute>) {
+        let start_time = Instant::now();
+        
         tracing::info!(
             component = "route_manager",
             count = data.len(),
@@ -260,12 +263,15 @@ impl ConfHandler<HTTPRoute> for RouteManager {
             processed_gateways += 1;
         }
 
+        let elapsed = start_time.elapsed();
         tracing::info!(
             component = "route_manager",
             total_gateways = processed_gateways + skipped_gateways,
             processed = processed_gateways,
             skipped = skipped_gateways,
-            "Full build completed"
+            elapsed_ms = elapsed.as_millis(),
+            "Full build completed in {:?}",
+            elapsed
         );
     }
 
