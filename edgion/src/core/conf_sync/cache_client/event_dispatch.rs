@@ -137,20 +137,20 @@ where
                             let cache = cache_data.read().unwrap();
                             cache.data.len()
                         };
-                        tracing::info!(kind = T::kind_name(), client_id = %client_id, count = count, version = resource_version, "List completed, starting watch");
+                        tracing::info!(kind = T::kind_name(), count = count, version = resource_version, "List completed, starting watch");
                         
                         // Set ready after first successful list
                         if !is_ready {
                             let mut cache = cache_data.write().unwrap();
                             cache.ready = true;
                             is_ready = true;
-                            tracing::info!(kind = T::kind_name(), client_id = %client_id, "Cache is ready");
+                            tracing::info!(kind = T::kind_name(), "Cache is ready");
                         }
                         
                         resource_version
                     }
                     Err(e) => {
-                        tracing::error!(kind = T::kind_name(), client_id = %client_id, error = %e, "Failed to perform list, retrying");
+                        tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
                         drop(client_guard);
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         continue;
@@ -181,11 +181,11 @@ where
 
                     let mut stream = match client.watch(request).await {
                         Ok(response) => {
-                            tracing::info!(kind = T::kind_name(), client_id = %client_id, from_version = from_version, "Watch started");
+                            tracing::info!(kind = T::kind_name(), from_version = from_version, "Watch started");
                             response.into_inner()
                         }
                         Err(e) => {
-                            tracing::error!(kind = T::kind_name(), client_id = %client_id, error = %e, from_version = from_version, "Failed to start watch");
+                            tracing::error!(kind = T::kind_name(), error = %e, from_version = from_version, "Failed to start watch");
                             drop(client_guard);
                             break 'watch_loop; // Return to outer loop to re-list
                         }
@@ -249,7 +249,7 @@ where
                                 }
                             }
                             Ok(None) => {
-                                tracing::info!(kind = T::kind_name(), client_id = %client_id, "Watch stream ended");
+                                tracing::info!(kind = T::kind_name(), "Watch stream ended");
                                 break 'watch_loop; // Return to outer loop to re-list
                             }
                             Err(e) => {
@@ -257,9 +257,9 @@ where
                                 if error_message.contains(WATCH_ERR_VERSION_UNEXPECTED)
                                     || error_message.contains(WATCH_ERR_TOO_OLD_VERSION)
                                 {
-                                    tracing::warn!(kind = T::kind_name(), client_id = %client_id, error = %e, "Watch stream version error");
+                                    tracing::warn!(kind = T::kind_name(), error = %e, "Watch stream version error");
                                 } else {
-                                    tracing::error!(kind = T::kind_name(), client_id = %client_id, error = %e, "Watch stream error");
+                                    tracing::error!(kind = T::kind_name(), error = %e, "Watch stream error");
                                 }
                                 break 'watch_loop; // Return to outer loop to re-list
                             }
