@@ -140,11 +140,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 }
 
                 processed_routes += 1;
-                tracing::debug!(
-                    route_key = %route.key_name(),
-                    gateway_key = %gateway_key,
-                    "Collected HTTPRoute rules"
-                );
+                tracing::debug!(route_key = %route.key_name(), gateway_key = %gateway_key, "Collected HTTPRoute rules");
             }
         }
 
