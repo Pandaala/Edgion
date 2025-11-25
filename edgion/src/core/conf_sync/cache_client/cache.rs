@@ -1,4 +1,4 @@
-use crate::core::conf_sync::cache_server::ListData;
+use crate::core::conf_sync::types::ListData;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::types::ResourceMeta;
 use kube::Resource;

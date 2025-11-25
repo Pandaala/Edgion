@@ -4,7 +4,8 @@ use std::sync::RwLock;
 use tokio::sync::mpsc;
 
 use crate::types::GatewayBaseConf;
-use crate::core::conf_sync::cache_server::{ListData, ServerCache, WatchResponse};
+use crate::core::conf_sync::cache_server::ServerCache;
+use crate::core::conf_sync::types::{ListData, WatchResponse};
 use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
 use anyhow::Result;
