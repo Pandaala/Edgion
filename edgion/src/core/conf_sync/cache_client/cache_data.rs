@@ -36,6 +36,12 @@ impl<T: ResourceMeta> CacheData<T> {
             self.data.insert(key, resource);
         }
         self.resource_version = resource_version;
+        if let Some(mut processor) = self.conf_processor.take() {
+            // Pass reference to full_build, no need to clone or move data
+            processor.full_build(&self.data);
+            // Put processor back
+            self.conf_processor = Some(processor);
+        }
     }
 
     // Ready state methods
@@ -52,28 +58,12 @@ impl<T: ResourceMeta> CacheData<T> {
         self.data.get(key)
     }
 
-    /// Insert a resource and automatically update resource version if newer
-    pub(crate) fn insert(&mut self, key: String, value: T)
-    where
-        T: ResourceMeta,
-    {
-        let version = value.get_version();
+    pub(crate) fn insert(&mut self, key: String, value: T) {
         self.data.insert(key, value);
-        self.update_resource_version_if_newer(version);
     }
 
-    /// Remove a resource and automatically update resource version if newer
-    pub(crate) fn remove(&mut self, key: &str) -> Option<T>
-    where
-        T: ResourceMeta,
-    {
-        if let Some(removed) = self.data.remove(key) {
-            let version = removed.get_version();
-            self.update_resource_version_if_newer(version);
-            Some(removed)
-        } else {
-            None
-        }
+    pub(crate) fn remove(&mut self, key: &str) -> Option<T> {
+        self.data.remove(key)
     }
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &T> {

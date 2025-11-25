@@ -187,6 +187,7 @@ where
                                         if let Some(event_data) = event.get("data") {
                                             match serde_json::from_value::<T>(event_data.clone()) {
                                                 Ok(resource) => {
+                                                    tracing::info!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), version = resource.get_version(), "Received resource from watch event");
                                                     let change = match event_type {
                                                         "add" => ResourceChange::EventAdd,
                                                         "update" => ResourceChange::EventUpdate,

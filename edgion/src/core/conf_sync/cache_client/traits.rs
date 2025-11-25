@@ -6,7 +6,7 @@ use std::collections::HashMap;
 pub trait ConfProcessor<T>: Send + Sync {
     /// Full rebuild with a complete set of resources
     /// This is typically called during initial sync or when a complete refresh is needed
-    fn full_build(&mut self, data: HashMap<String, T>);
+    fn full_build(&mut self, data: &HashMap<String, T>);
 
     /// Add a new resource
     fn add(&mut self, item: T);
