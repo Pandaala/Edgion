@@ -1,4 +1,5 @@
 use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
+use crate::core::gateway::gateway_base::GatewayBase;
 use crate::core::logging::{init_logging, LogConfig};
 use anyhow::{anyhow, Result};
 use clap::Parser;
@@ -76,12 +77,22 @@ impl EdgionGwCli {
         .await?;
 
         // Initialize base configuration and sync all resources
-        sync_client.init().await?;
+        sync_client.init_base_conf().await?;
+
+        let config_client = sync_client.get_config_client();
+
+        // Initialize GatewayBase and bootstrap (before start_watch_all)
+        let base_conf = config_client.get_base_conf()
+            .ok_or_else(|| anyhow!("Base configuration not available"))?;
+
+        // bootstrap Gateway
+        let gateway = GatewayBase::new(base_conf);
+        gateway.bootstrap()?;
+        tracing::info!("Gateway bootstrap completed successfully");
 
         // Start watching for changes
         sync_client.start_watch_all().await?;
 
-        let config_client = sync_client.get_config_client();
         Self::spawn_config_printer(config_client.clone());
 
         // Wait for all caches to be ready
@@ -101,10 +112,9 @@ impl EdgionGwCli {
         // Keep the program running indefinitely
         tracing::info!("Gateway is running. Press Ctrl+C to exit.");
         
-        // Wait indefinitely until the program is terminated
-        tokio::signal::ctrl_c().await?;
+        // Run the Pingora server forever (this will block)
+        gateway.run_forever();
         
-        tracing::info!("Received shutdown signal, exiting...");
         Ok(())
     }
 }

@@ -132,7 +132,7 @@ impl ConfigSyncClient {
         Ok(())
     }
 
-    pub async fn init(&mut self) -> Result<(), tonic::Status> {
+    pub async fn init_base_conf(&mut self) -> Result<(), tonic::Status> {
         let key = self.config_client.get_gateway_class_key().clone();
         self.fetch_and_init_base_conf(&key).await?;
         tracing::info!("Base Conf Initialized.");

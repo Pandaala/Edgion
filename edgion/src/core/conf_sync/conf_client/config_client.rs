@@ -103,6 +103,12 @@ impl ConfigClient {
         *base_conf = Some(new_base_conf);
     }
 
+    /// Get a copy of the current base configuration
+    pub fn get_base_conf(&self) -> Option<GatewayBaseConf> {
+        let base_conf = self.base_conf.read().unwrap();
+        base_conf.clone()
+    }
+
     fn apply_change_to_cache<T>(cache: &ClientCache<T>, change: ResourceChange, resource: T)
     where
         T: Clone + ResourceMeta + Resource + Send + 'static,
@@ -350,67 +356,6 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     &data[..data.len().min(200)]
                 );
             }
-            ResourceKind::GatewayClass => match serde_yaml::from_str::<GatewayClass>(&data) {
-                Ok(resource) => {
-                    let mut base_conf_guard = self.base_conf.write().unwrap();
-                    match change {
-                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                            if let Some(ref mut base_conf) = *base_conf_guard {
-                                base_conf.set_gateway_class(resource);
-                            } else {
-                                eprintln!("[HUB] Cannot set GatewayClass: base_conf not initialized");
-                            }
-                        }
-                        ResourceChange::EventDelete => {
-                            *base_conf_guard = None;
-                            eprintln!("[HUB] GatewayClass deleted, base_conf invalidated");
-                        }
-                    }
-                }
-                Err(e) => log_error("GatewayClass", &e),
-            },
-            ResourceKind::EdgionGatewayConfig => match serde_yaml::from_str::<EdgionGatewayConfig>(&data) {
-                Ok(resource) => {
-                    let mut base_conf_guard = self.base_conf.write().unwrap();
-                    match change {
-                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                            if let Some(ref mut base_conf) = *base_conf_guard {
-                                base_conf.set_edgion_gateway_config(resource);
-                            } else {
-                                eprintln!("[HUB] Cannot set EdgionGatewayConfig: base_conf not initialized");
-                            }
-                        }
-                        ResourceChange::EventDelete => {
-                            *base_conf_guard = None;
-                            eprintln!("[HUB] EdgionGatewayConfig deleted, base_conf invalidated");
-                        }
-                    }
-                }
-                Err(e) => log_error("EdgionGatewayConfig", &e),
-            },
-            ResourceKind::Gateway => match serde_yaml::from_str::<Gateway>(&data) {
-                Ok(resource) => {
-                    let mut base_conf_guard = self.base_conf.write().unwrap();
-                    match change {
-                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                            if let Some(ref mut base_conf) = *base_conf_guard {
-                                base_conf.add_gateway(resource);
-                            } else {
-                                eprintln!("[HUB] Cannot add Gateway: base_conf not initialized");
-                            }
-                        }
-                        ResourceChange::EventDelete => {
-                            if let Some(ref mut base_conf) = *base_conf_guard {
-                                // For delete, we need to extract namespace and name before moving resource
-                                let namespace = resource.metadata.namespace.clone();
-                                let name = resource.metadata.name.clone();
-                                base_conf.remove_gateway(namespace.as_ref(), name.as_ref());
-                            }
-                        }
-                    }
-                }
-                Err(e) => log_error("Gateway", &e),
-            },
             ResourceKind::HTTPRoute => match serde_yaml::from_str::<HTTPRoute>(&data) {
                 Ok(resource) => {
                     Self::apply_change_to_cache(&self.routes, change, resource);
@@ -441,6 +386,9 @@ impl ConfigClientEventDispatcher for ConfigClient {
                 }
                 Err(e) => log_error("Secret", &e),
             },
+            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
+                tracing::warn!("skip resource change {:?}", change);
+            }
         }
     }
 }
