@@ -145,6 +145,69 @@ impl HttpRouteRuleUnit {
             }
         }
     }
+    
+    /// Common deep match logic for checking method, headers, and query parameters
+    /// This function is shared between HttpRouteRuleUnit and HttpRouteRuleRegexUnit
+    pub(crate) fn deep_match_common(
+        match_item: &HTTPRouteMatch,
+        req_header: &pingora_http::RequestHeader,
+        identifier: &str,
+    ) -> Result<bool, EdError> {
+        let method = req_header.method.as_str();
+        
+        // Parse query parameters from URI (if present)
+        let query_params = req_header.uri.query()
+            .map(|q| Self::parse_query_string(q))
+            .unwrap_or_default();
+        
+        // 1. Check HTTP Method (if specified)
+        if let Some(match_method) = &match_item.method {
+            if method != match_method.as_str() {
+                tracing::trace!(
+                    method = %method,
+                    expected = %match_method,
+                    route = %identifier,
+                    "HTTP method mismatch"
+                );
+                return Ok(false);
+            }
+        }
+        
+        // 2. Check Headers (if specified) - ALL must match (AND logic)
+        if let Some(header_matches) = &match_item.headers {
+            for header_match in header_matches {
+                if !Self::match_header(req_header, header_match)? {
+                    tracing::trace!(
+                        header = %header_match.name,
+                        route = %identifier,
+                        "Header match failed"
+                    );
+                    return Ok(false);
+                }
+            }
+        }
+        
+        // 3. Check Query Parameters (if specified) - ALL must match (AND logic)
+        if let Some(query_param_matches) = &match_item.query_params {
+            for query_param_match in query_param_matches {
+                if !Self::match_query_param(&query_params, query_param_match)? {
+                    tracing::trace!(
+                        param = %query_param_match.name,
+                        route = %identifier,
+                        "Query parameter match failed"
+                    );
+                    return Ok(false);
+                }
+            }
+        }
+        
+        // All conditions matched
+        tracing::debug!(
+            route = %identifier,
+            "Deep match succeeded"
+        );
+        Ok(true)
+    }
 }
 
 impl RouteEntry for HttpRouteRuleUnit {
@@ -168,64 +231,8 @@ impl RouteEntry for HttpRouteRuleUnit {
 
     // Host , Path , Header , QueryParam , Method
     fn deep_match(&self, session: &Session) -> Result<bool, EdError> {
-        // Get request info from session
         let req_header = session.req_header();
-        let method = req_header.method.as_str();
-        
-        // Parse query parameters from URI (if present)
-        let query_params = req_header.uri.query()
-            .map(|q| Self::parse_query_string(q))
-            .unwrap_or_default();
-        
-        // Check the single match_item (all conditions must match - AND logic)
-        
-        // 1. Check HTTP Method (if specified)
-        if let Some(match_method) = &self.match_item.method {
-            if method != match_method.as_str() {
-                tracing::trace!(
-                    method = %method,
-                    expected = %match_method,
-                    route = %self.identifier(),
-                    "HTTP method mismatch"
-                );
-                return Ok(false);
-            }
-        }
-        
-        // 2. Check Headers (if specified) - ALL must match (AND logic)
-        if let Some(header_matches) = &self.match_item.headers {
-            for header_match in header_matches {
-                if !Self::match_header(req_header, header_match)? {
-                    tracing::trace!(
-                        header = %header_match.name,
-                        route = %self.identifier(),
-                        "Header match failed"
-                    );
-                    return Ok(false);
-                }
-            }
-        }
-        
-        // 3. Check Query Parameters (if specified) - ALL must match (AND logic)
-        if let Some(query_param_matches) = &self.match_item.query_params {
-            for query_param_match in query_param_matches {
-                if !Self::match_query_param(&query_params, query_param_match)? {
-                    tracing::trace!(
-                        param = %query_param_match.name,
-                        route = %self.identifier(),
-                        "Query parameter match failed"
-                    );
-                    return Ok(false);
-                }
-            }
-        }
-        
-        // All conditions matched
-        tracing::debug!(
-            route = %self.identifier(),
-            "Deep match succeeded"
-        );
-        Ok(true)
+        Self::deep_match_common(&self.match_item, req_header, &self.identifier())
     }
 }
 

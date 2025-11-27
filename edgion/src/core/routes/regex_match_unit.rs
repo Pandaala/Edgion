@@ -44,45 +44,10 @@ impl HttpRouteRuleRegexUnit {
     }
     
     /// Perform deep match (headers, query params, method)
-    /// Similar to HttpRouteRuleUnit::deep_match but without path matching (already done by regex)
+    /// Uses common deep match logic shared with HttpRouteRuleUnit
     pub fn deep_match(&self, session: &Session) -> Result<bool, EdError> {
         let req_header = session.req_header();
-        let method = req_header.method.as_str();
-        
-        let query_params = req_header.uri.query()
-            .map(|q| HttpRouteRuleUnit::parse_query_string(q))
-            .unwrap_or_default();
-        
-        // Check HTTP Method
-        if let Some(match_method) = &self.match_item.method {
-            if method != match_method.as_str() {
-                tracing::trace!(method=%method,expected=%match_method,"method mismatch");
-                return Ok(false);
-            }
-        }
-        
-        // Check Headers
-        if let Some(header_matches) = &self.match_item.headers {
-            for header_match in header_matches {
-                if !HttpRouteRuleUnit::match_header(req_header, header_match)? {
-                    tracing::trace!(header=%header_match.name,"header mismatch");
-                    return Ok(false);
-                }
-            }
-        }
-        
-        // Check Query Parameters
-        if let Some(query_param_matches) = &self.match_item.query_params {
-            for query_param_match in query_param_matches {
-                if !HttpRouteRuleUnit::match_query_param(&query_params, query_param_match)? {
-                    tracing::trace!(param=%query_param_match.name,"query param mismatch");
-                    return Ok(false);
-                }
-            }
-        }
-        
-        tracing::debug!(route=?self.identifier(),"regex deep match ok");
-        Ok(true)
+        HttpRouteRuleUnit::deep_match_common(&self.match_item, req_header, &self.identifier())
     }
     
     pub fn identifier(&self) -> String {
