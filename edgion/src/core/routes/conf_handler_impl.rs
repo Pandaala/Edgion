@@ -186,7 +186,8 @@ impl RouteManager {
             }
         }
         
-        // Step 2: Add/update resource keys from add_or_update
+        // Step 2: Add/update/remove resource keys from add_or_update
+        // For updates, if a route no longer applies to this hostname, remove it
         for (resource_key, route) in add_or_update.iter() {
             // Check if this route applies to this hostname
             let applies = route.spec.hostnames
@@ -196,82 +197,96 @@ impl RouteManager {
             
             if applies {
                 resource_keys.insert(resource_key.clone());
-                tracing::debug!(component="route_manager",hostname=%hostname,key=%resource_key,"add key");
+                tracing::debug!(component="route_manager",hostname=%hostname,key=%resource_key,"add/update key");
+            } else {
+                // Route no longer applies to this hostname (e.g., hostname was removed from route)
+                // Remove it from resource_keys if it exists
+                if resource_keys.remove(resource_key) {
+                    tracing::debug!(component="route_manager",hostname=%hostname,key=%resource_key,"rm key (no longer applies)");
+                }
             }
         }
         
         // Step 3: Rebuild route_rules_list and match_engine from resource_keys
-        if resource_keys.is_empty() {
-            // No more routes for this hostname, remove it
-            domain_hashmap.remove(hostname);
-            tracing::info!(component="route_manager",hostname=%hostname,"rm hostname");
-        } else {
-            // Rebuild from http_routes storage
-            let mut route_rules_list = Vec::new();
-            let mut regex_routes_list = Vec::new();
-            
-            let http_routes = self.http_routes.lock().unwrap();
-            for resource_key in resource_keys.iter() {
-                if let Some(route) = http_routes.get(resource_key) {
-                    let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-                    let route_name = route.metadata.name.as_deref().unwrap_or("");
-                    
-                    if let Some(rules) = &route.spec.rules {
-                        for rule in rules {
-                            let rule_arc = Arc::new(rule.clone());
-                            
-                            // Each rule may have multiple matches
-                            if let Some(matches) = &rule.matches {
-                                for match_item in matches {
-                                    // Check if this is a regex path
-                                    if Self::is_regex_path(&match_item) {
-                                        // Create regex route
-                                        if let Ok(regex_unit) = Self::create_regex_route_unit(
-                                            route_namespace,
-                                            route_name,
-                                            resource_key,
-                                            match_item,
-                                            rule_arc.clone(),
-                                        ) {
-                                            regex_routes_list.push(regex_unit);
-                                        }
-                                    } else {
-                                        // Create normal route (exact/prefix)
-                                        let rule_unit = HttpRouteRuleUnit::new(
-                                            route_namespace.to_string(),
-                                            route_name.to_string(),
-                                            resource_key.clone(),
-                                            match_item.clone(),
-                                            rule_arc.clone(),
-                                        );
-                                        route_rules_list.push(rule_unit);
+        // Rebuild from http_routes storage
+        let mut route_rules_list = Vec::new();
+        let mut regex_routes_list = Vec::new();
+        
+        let http_routes = self.http_routes.lock().unwrap();
+        for resource_key in resource_keys.iter() {
+            if let Some(route) = http_routes.get(resource_key) {
+                let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+                let route_name = route.metadata.name.as_deref().unwrap_or("");
+                
+                if let Some(rules) = &route.spec.rules {
+                    for rule in rules {
+                        let rule_arc = Arc::new(rule.clone());
+                        
+                        // Each rule may have multiple matches
+                        if let Some(matches) = &rule.matches {
+                            for match_item in matches {
+                                // Check if this is a regex path
+                                if Self::is_regex_path(&match_item) {
+                                    // Create regex route
+                                    if let Ok(regex_unit) = Self::create_regex_route_unit(
+                                        route_namespace,
+                                        route_name,
+                                        resource_key,
+                                        match_item,
+                                        rule_arc.clone(),
+                                    ) {
+                                        regex_routes_list.push(regex_unit);
                                     }
+                                } else {
+                                    // Create normal route (exact/prefix)
+                                    let rule_unit = HttpRouteRuleUnit::new(
+                                        route_namespace.to_string(),
+                                        route_name.to_string(),
+                                        resource_key.clone(),
+                                        match_item.clone(),
+                                        rule_arc.clone(),
+                                    );
+                                    route_rules_list.push(rule_unit);
                                 }
-                            } else {
-                                // If no matches, create a default match (match all)
-                                let default_match = crate::types::HTTPRouteMatch {
-                                    path: None,
-                                    headers: None,
-                                    query_params: None,
-                                    method: None,
-                                };
-                                let rule_unit = HttpRouteRuleUnit::new(
-                                    route_namespace.to_string(),
-                                    route_name.to_string(),
-                                    resource_key.clone(),
-                                    default_match,
-                                    rule_arc,
-                                );
-                                route_rules_list.push(rule_unit);
                             }
+                        } else {
+                            // If no matches, create a default match (match all)
+                            let default_match = crate::types::HTTPRouteMatch {
+                                path: None,
+                                headers: None,
+                                query_params: None,
+                                method: None,
+                            };
+                            let rule_unit = HttpRouteRuleUnit::new(
+                                route_namespace.to_string(),
+                                route_name.to_string(),
+                                resource_key.clone(),
+                                default_match,
+                                rule_arc,
+                            );
+                            route_rules_list.push(rule_unit);
                         }
                     }
-                } else {
-                    tracing::warn!(component="route_manager",key=%resource_key,"key not found in storage");
                 }
+            } else {
+                tracing::warn!(component="route_manager",key=%resource_key,"key not found in storage");
             }
-            
-            // Build match engine for exact/prefix routes
+        }
+        drop(http_routes);
+        
+        // Only remove hostname if both normal routes and regex routes are empty
+        if route_rules_list.is_empty() && regex_routes_list.is_empty() {
+            // No more routes for this hostname, remove it
+            domain_hashmap.remove(hostname);
+            tracing::info!(component="route_manager",hostname=%hostname,"rm hostname (no routes)");
+            return;
+        }
+        
+        // Build match engine for exact/prefix routes (only if there are normal routes)
+        let match_engine = if route_rules_list.is_empty() {
+            // Only regex routes, no need for match_engine
+            None
+        } else {
             let route_entries: Vec<Arc<dyn RouteEntry>> = route_rules_list
                 .iter()
                 .map(|unit| Arc::new(unit.clone()) as Arc<dyn RouteEntry>)
@@ -279,21 +294,33 @@ impl RouteManager {
             
             match RadixRouteMatchEngine::build(route_entries.clone()) {
                 Ok(new_engine) => {
-                    let new_route_rules = Arc::new(RouteRules {
-                        resource_keys: RwLock::new(resource_keys),
-                        route_rules_list: RwLock::new(route_rules_list),
-                        match_engine: Arc::new(new_engine),
-                        regex_routes: RwLock::new(regex_routes_list),
-                    });
-                    
-                    domain_hashmap.insert(hostname.to_string(), new_route_rules);
-                    tracing::debug!(component="route_manager",hostname=%hostname,cnt=route_entries.len(),"updated");
+                    Some(Arc::new(new_engine))
                 }
                 Err(e) => {
-                    tracing::error!(component="route_manager",hostname=%hostname,err=%e,"rebuild failed");
+                    tracing::error!(component="route_manager",hostname=%hostname,err=%e,"rebuild match_engine failed");
+                    return;
                 }
             }
-        }
+        };
+        
+        let normal_routes_count = route_rules_list.len();
+        let regex_routes_count = regex_routes_list.len();
+        
+        let new_route_rules = Arc::new(RouteRules {
+            resource_keys: RwLock::new(resource_keys),
+            route_rules_list: RwLock::new(route_rules_list),
+            match_engine,
+            regex_routes: RwLock::new(regex_routes_list),
+        });
+        
+        domain_hashmap.insert(hostname.to_string(), new_route_rules);
+        tracing::debug!(
+            component="route_manager",
+            hostname=%hostname,
+            normal_routes=normal_routes_count,
+            regex_routes=regex_routes_count,
+            "updated"
+        );
     }
 }
 
@@ -497,18 +524,30 @@ impl ConfHandler<HTTPRoute> for RouteManager {
             let mut new_domain_routes: HashMap<DomainStr, Arc<RouteRules>> = HashMap::new();
 
             for (domain, split) in domain_rules_map.into_iter() {
-                // Convert Vec<HttpRouteRuleUnit> to Vec<Arc<dyn RouteEntry>>
-                let route_entries: Vec<Arc<dyn RouteEntry>> = split.0
-                    .iter()
-                    .map(|unit| Arc::new(unit.clone()) as Arc<dyn RouteEntry>)
-                    .collect();
+                // Skip if both normal routes and regex routes are empty
+                if split.0.is_empty() && split.1.is_empty() {
+                    tracing::debug!(component="route_manager",gw=%gateway_key,domain=%domain,"skipping domain (no routes)");
+                    continue;
+                }
+                
+                // Build RadixRouteMatchEngine for normal routes (only if there are normal routes)
+                let match_engine = if split.0.is_empty() {
+                    // Only regex routes, no need for match_engine
+                    None
+                } else {
+                    // Convert Vec<HttpRouteRuleUnit> to Vec<Arc<dyn RouteEntry>>
+                    let route_entries: Vec<Arc<dyn RouteEntry>> = split.0
+                        .iter()
+                        .map(|unit| Arc::new(unit.clone()) as Arc<dyn RouteEntry>)
+                        .collect();
 
-                // Build RadixRouteMatchEngine for normal routes
-                let match_engine = match RadixRouteMatchEngine::build(route_entries) {
-                    Ok(engine) => Arc::new(engine),
-                    Err(e) => {
-                        tracing::error!(component="route_manager",gw=%gateway_key,domain=%domain,err=?e,"build failed");
-                        continue;
+                    // Build RadixRouteMatchEngine for normal routes
+                    match RadixRouteMatchEngine::build(route_entries) {
+                        Ok(engine) => Some(Arc::new(engine)),
+                        Err(e) => {
+                            tracing::error!(component="route_manager",gw=%gateway_key,domain=%domain,err=?e,"build failed");
+                            continue;
+                        }
                     }
                 };
 

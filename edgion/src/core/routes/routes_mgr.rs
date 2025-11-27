@@ -18,7 +18,8 @@ pub struct RouteRules {
     
     /// Exact and prefix match routes (handled by radix tree)
     pub(crate) route_rules_list: RwLock<Vec<HttpRouteRuleUnit>>,
-    pub(crate) match_engine: Arc<RadixRouteMatchEngine>,
+    /// Match engine for exact/prefix routes. None if there are no normal routes (only regex routes)
+    pub(crate) match_engine: Option<Arc<RadixRouteMatchEngine>>,
     
     /// Regex match routes (handled separately)
     pub(crate) regex_routes: RwLock<Vec<HttpRouteRuleRegexUnit>>,
@@ -44,14 +45,16 @@ impl RouteRules {
     ) -> Result<Arc<HTTPRouteRule>, crate::types::err::EdError> {
         let path = session.req_header().uri.path().to_string();
         
-        // Step 1: Try exact match first (highest priority)
-        if let Some(route_entry) = self.match_engine.exact_match(session)? {
-            tracing::debug!(path=%path,"exact match ok");
-            // Convert RouteEntry back to HttpRouteRuleUnit
-            let route_entry_id = route_entry.identifier();
-            let route_rules = self.route_rules_list.read().unwrap();
-            if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.namespace, u.name) == route_entry_id) {
-                return Ok(unit.rule.clone());
+        // Step 1: Try exact match first (highest priority) - only if match_engine exists
+        if let Some(ref match_engine) = self.match_engine {
+            if let Some(route_entry) = match_engine.exact_match(session)? {
+                tracing::debug!(path=%path,"exact match ok");
+                // Convert RouteEntry back to HttpRouteRuleUnit
+                let route_entry_id = route_entry.identifier();
+                let route_rules = self.route_rules_list.read().unwrap();
+                if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.namespace, u.name) == route_entry_id) {
+                    return Ok(unit.rule.clone());
+                }
             }
         }
         
@@ -67,18 +70,20 @@ impl RouteRules {
         }
         drop(regex_routes);
         
-        // Step 3: Fall back to prefix match
-        let route_entry = self.match_engine.prefix_match(session)?;
-        tracing::debug!(path=%path,"prefix match ok");
-        
-        // Convert RouteEntry back to HttpRouteRuleUnit
-        let route_entry_id = route_entry.identifier();
-        let route_rules = self.route_rules_list.read().unwrap();
-        if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.namespace, u.name) == route_entry_id) {
-            return Ok(unit.rule.clone());
+        // Step 3: Fall back to prefix match - only if match_engine exists
+        if let Some(ref match_engine) = self.match_engine {
+            let route_entry = match_engine.prefix_match(session)?;
+            tracing::debug!(path=%path,"prefix match ok");
+            
+            // Convert RouteEntry back to HttpRouteRuleUnit
+            let route_entry_id = route_entry.identifier();
+            let route_rules = self.route_rules_list.read().unwrap();
+            if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.namespace, u.name) == route_entry_id) {
+                return Ok(unit.rule.clone());
+            }
         }
         
-        // Should not happen
+        // No route matched
         Err(crate::types::err::EdError::RouteNotFound())
     }
 }
