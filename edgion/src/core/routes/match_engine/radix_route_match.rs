@@ -62,15 +62,15 @@ impl RadixRouteMatchEngine {
         if let Some(route) = self.routes.get(route_idx) {
             match route.deep_match(session) {
                 Ok(true) => {
-                    println!("OK route matched after deep_match: route_idx={}", route_idx);
+                    tracing::trace!("Route matched after deep_match: route_idx={}", route_idx);
                     return Ok(Some(route.clone()));
                 }
                 Ok(false) => {
-                    println!("FAIL route {} failed deep_match", route_idx);
+                    tracing::trace!("Route {} failed deep_match", route_idx);
                     return Ok(None);
                 }
                 Err(e) => {
-                    eprintln!("ERROR: deep_match failed for route_idx={}: {:?}", route_idx, e);
+                    tracing::error!("deep_match failed for route_idx={}: {:?}", route_idx, e);
                     return Ok(None);
                 }
             }
@@ -81,68 +81,67 @@ impl RadixRouteMatchEngine {
     pub fn match_route(&self, session: &mut Session) -> Result<Arc<dyn RouteEntry>, EdError> {
         let path = session.req_header().uri.path();
 
-        println!("\n========== Radix Route Matching ==========");
-        println!("Request Path: '{}'", path);
-        println!("Available routes: {}", self.routes.len());
-        println!("Available paths: {}", self.radix_paths.len());
+        tracing::trace!("========== Radix Route Matching ==========");
+        tracing::trace!("Request Path: '{}', Available routes: {}, Available paths: {}", 
+            path, self.routes.len(), self.radix_paths.len());
 
         // Step 1: Try exact match_engine first (highest priority)
-        println!("\n[Step 1] Trying exact match_engine for '{}'...", path);
+        tracing::trace!("[Step 1] Trying exact match for '{}'...", path);
         if let Some(tree_idx) = self.tree.find_exact(path) {
-            println!("  OK found exact tree_idx: {}", tree_idx);
+            tracing::trace!("Found exact tree_idx: {}", tree_idx);
             if let Some(path_indices) = self.tree_idx_to_path_idx.get(&tree_idx) {
-                println!("  -> Checking {} path(s) at this tree node", path_indices.len());
+                tracing::trace!("Checking {} path(s) at this tree node", path_indices.len());
                 for &path_idx in path_indices {
                     if let Some(radix_path) = self.radix_paths.get(path_idx) {
-                        println!(
-                            "    Checking: original='{}', radix_key='{}', is_prefix={}, route_idx={}",
+                        tracing::trace!(
+                            "Checking: original='{}', radix_key='{}', is_prefix={}, route_idx={}",
                             radix_path.original, radix_path.radix_key, radix_path.is_prefix_match, radix_path.route_idx
                         );
                         if !radix_path.matches(&path) {
-                            println!("    FAIL pattern match_engine failed");
+                            tracing::trace!("Pattern match failed");
                             continue;
                         }
-                        println!("    OK pattern matched, trying deep match_engine...");
+                        tracing::trace!("Pattern matched, trying deep match...");
                         if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session)? {
-                            println!("OK route matched\n");
+                            tracing::debug!("Route matched");
                             return Ok(runtime);
                         }
                     }
                 }
             }
         } else {
-            println!("  FAIL no exact match_engine found");
+            tracing::trace!("No exact match found");
         }
 
         // Step 2: Try prefix matching (if exact match_engine failed or didn't exist)
-        println!("\n[Step 2] Trying prefix matching...");
+        tracing::trace!("[Step 2] Trying prefix matching...");
         let iter = self
             .tree
             .create_iter()
             .map_err(|e| EdError::InternalError(format!("Failed to create iterator: {}", e)))?;
         let all_prefixes = self.tree.find_all_prefixes(&iter, &path);
-        println!("  Found {} prefix(es) in radix tree", all_prefixes.len());
+        tracing::trace!("Found {} prefix(es) in radix tree", all_prefixes.len());
         if all_prefixes.is_empty() {
-            println!("FAIL no route matched (no prefixes found)\n");
+            tracing::debug!("No route matched (no prefixes found)");
             return Err(RouteNotFound());
         }
 
         let mut matched_paths: Vec<usize> = Vec::new();
         for tree_idx in all_prefixes {
-            println!("  Checking tree_idx: {}", tree_idx);
+            tracing::trace!("Checking tree_idx: {}", tree_idx);
             if let Some(path_indices) = self.tree_idx_to_path_idx.get(&tree_idx) {
-                println!("    -> {} path(s) at this tree node", path_indices.len());
+                tracing::trace!("{} path(s) at this tree node", path_indices.len());
                 for &path_idx in path_indices {
                     if let Some(radix_path) = self.radix_paths.get(path_idx) {
-                        println!(
-                            "      Testing: original='{}', radix_key='{}', is_prefix={}, route_idx={}",
+                        tracing::trace!(
+                            "Testing: original='{}', radix_key='{}', is_prefix={}, route_idx={}",
                             radix_path.original, radix_path.radix_key, radix_path.is_prefix_match, radix_path.route_idx
                         );
                         if radix_path.matches(&path) {
-                            println!("      OK pattern matched");
+                            tracing::trace!("Pattern matched");
                             matched_paths.push(path_idx);
                         } else {
-                            println!("      FAIL pattern did not match_engine");
+                            tracing::trace!("Pattern did not match");
                         }
                     }
                 }
@@ -150,14 +149,11 @@ impl RadixRouteMatchEngine {
         }
 
         if matched_paths.is_empty() {
-            println!("FAIL no route matched (no patterns matched)\n");
+            tracing::debug!("No route matched (no patterns matched)");
             return Err(RouteNotFound());
         }
 
-        println!(
-            "\n[Step 3] Sorting {} matched path(s) by priority...",
-            matched_paths.len()
-        );
+        tracing::trace!("[Step 3] Sorting {} matched path(s) by priority...", matched_paths.len());
         matched_paths.sort_by(|a, b| {
             let weight_a = self.radix_paths[*a].priority_weight;
             let weight_b = self.radix_paths[*b].priority_weight;
@@ -166,27 +162,27 @@ impl RadixRouteMatchEngine {
 
         for (i, path_idx) in matched_paths.iter().enumerate() {
             let radix_path = &self.radix_paths[*path_idx];
-            println!(
-                "  [{}] Trying: original='{}', priority={}, route_idx={}",
+            tracing::trace!(
+                "[{}] Trying: original='{}', priority={}, route_idx={}",
                 i + 1,
                 radix_path.original,
                 radix_path.priority_weight,
                 radix_path.route_idx
             );
             if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session)? {
-                println!("OK route matched\n");
+                tracing::debug!("Route matched");
                 return Ok(runtime);
             }
         }
 
         // No route matched after trying all candidates
-        println!("FAIL no route matched (all deep matches failed)\n");
+        tracing::debug!("No route matched (all deep matches failed)");
         Err(RouteNotFound())
     }
 
     fn initialize_internal(&mut self, route_runtimes: Vec<Arc<dyn RouteEntry>>) -> Result<(), EdError> {
-        println!("\n========== RadixRouteMatchEngine Initialize ==========");
-        println!("Total route runtimes to compile: {}", route_runtimes.len());
+        tracing::debug!("========== RadixRouteMatchEngine Initialize ==========");
+        tracing::debug!("Total route runtimes to compile: {}", route_runtimes.len());
 
         let mut total_paths = 0usize;
         let mut next_tree_idx = 1i32; // Start from 1, as 0 might be reserved
@@ -195,8 +191,8 @@ impl RadixRouteMatchEngine {
             // Extract all paths and their match_engine types from the RouteRuntime
             let paths = runtime.extract_paths();
 
-            println!(
-                "\n  [Route #{}] {} (paths: {})",
+            tracing::debug!(
+                "  [Route #{}] {} (paths: {})",
                 route_idx,
                 runtime.identifier(),
                 paths.len()
@@ -208,7 +204,7 @@ impl RadixRouteMatchEngine {
                 }
 
                 // Log path compilation details
-                println!(
+                tracing::debug!(
                     "    [COMPILING PATH] path='{}', route_idx={}, is_prefix={}, route_name={}",
                     path,
                     route_idx,
@@ -218,7 +214,7 @@ impl RadixRouteMatchEngine {
 
                 // Compile the path pattern with route_idx and is_prefix flag
                 let radix_path = RadixPath::new(&path, route_idx, is_prefix);
-                println!(
+                tracing::debug!(
                     "    [COMPILED] {} -> {} (radix_key='{}', priority={})",
                     path,
                     radix_path.match_type_str(),
@@ -230,7 +226,7 @@ impl RadixRouteMatchEngine {
 
                 // Check if this radix_key already exists in the tree using find_exact
                 let tree_idx = if let Some(existing_tree_idx) = self.tree.find_exact(&radix_key) {
-                    println!(
+                    tracing::debug!(
                         "    Reusing tree_idx: {} for radix_key: '{}'",
                         existing_tree_idx, radix_key
                     );
@@ -245,7 +241,7 @@ impl RadixRouteMatchEngine {
                         ))
                     })?;
 
-                    println!("    Inserted radix_key: '{}' -> tree_idx: {}", radix_key, new_tree_idx);
+                    tracing::debug!("    Inserted radix_key: '{}' -> tree_idx: {}", radix_key, new_tree_idx);
                     next_tree_idx += 1;
                     new_tree_idx
                 };
@@ -267,13 +263,15 @@ impl RadixRouteMatchEngine {
             self.routes.push(runtime.clone());
         }
 
-        println!("\n========== Initialization Complete ==========");
-        println!("Summary:");
-        println!("  - Total routes: {}", self.routes.len());
-        println!("  - Total paths compiled: {}", total_paths);
-        println!("  - Unique radix tree nodes: {}", self.tree_idx_to_path_idx.len());
-        println!("  - RadixPath entries: {}", self.radix_paths.len());
-        println!("==============================================\n");
+        tracing::debug!("========== Initialization Complete ==========");
+        tracing::debug!(
+            "Summary: Total routes: {}, Total paths compiled: {}, Unique radix tree nodes: {}, RadixPath entries: {}",
+            self.routes.len(),
+            total_paths,
+            self.tree_idx_to_path_idx.len(),
+            self.radix_paths.len()
+        );
+        tracing::debug!("==============================================");
         Ok(())
     }
 }

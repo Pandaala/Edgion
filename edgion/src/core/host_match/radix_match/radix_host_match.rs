@@ -54,28 +54,27 @@ impl<T> RadixHostMatchEngine<T> {
         let hostname_lower = hostname.to_lowercase();
         let reversed = RadixHost::<T>::reverse_hostname(&hostname_lower);
 
-        println!("\n========== Radix Host Matching ==========");
-        println!("Request Hostname: '{}'", hostname);
-        println!("Reversed: '{}'", reversed);
-        println!("Available hosts: {}", self.hosts.len());
+        tracing::trace!("========== Radix Host Matching ==========");
+        tracing::trace!("Request Hostname: '{}', Reversed: '{}', Available hosts: {}",
+            hostname, reversed, self.hosts.len());
 
         // Create iterator
         let iter = match self.tree.create_iter() {
             Ok(iter) => iter,
             Err(e) => {
-                eprintln!("ERROR: Failed to create iterator: {}", e);
+                tracing::error!("Failed to create iterator: {}", e);
                 return None;
             }
         };
 
         // Use search to initialize iterator, then iterate from longest to shortest using next_prefix
-        println!("\n[Step 1] Searching in radix tree...");
+        tracing::trace!("[Step 1] Searching in radix tree...");
         if !self.tree.search(&iter, &reversed) {
-            println!("FAIL no match_engine found in radix tree\n");
+            tracing::trace!("No match found in radix tree");
             return None;
         }
 
-        println!("  OK found matches, iterating from longest to shortest...");
+        tracing::trace!("Found matches, iterating from longest to shortest...");
 
         // Get the first match_engine (longest)
         let mut match_count = 0;
@@ -95,21 +94,21 @@ impl<T> RadixHostMatchEngine<T> {
             };
 
             match_count += 1;
-            println!("  [Match #{}] Checking tree_idx: {}", match_count, tree_idx);
+            tracing::trace!("  [Match #{}] Checking tree_idx: {}", match_count, tree_idx);
 
             if let Some(host_indices) = self.tree_idx_to_host_idx.get(&tree_idx) {
-                println!("    -> {} host(s) at this tree node", host_indices.len());
+                tracing::trace!("    -> {} host(s) at this tree node", host_indices.len());
                 for &host_idx in host_indices {
                     if let Some(radix_host) = self.hosts.get(host_idx) {
-                        println!(
+                        tracing::trace!(
                             "      Testing: original='{}', radix_key='{}', is_wildcard={}",
                             radix_host.original, radix_host.radix_key, radix_host.is_wildcard
                         );
                         if radix_host.matches(hostname) {
-                            println!("      OK matched!");
+                            tracing::trace!("      Matched!");
                             return Some(radix_host.runtime.clone());
                         } else {
-                            println!("      FAIL pattern did not match_engine");
+                            tracing::trace!("      Pattern did not match");
                         }
                     }
                 }
@@ -117,9 +116,9 @@ impl<T> RadixHostMatchEngine<T> {
         }
 
         if match_count == 0 {
-            println!("FAIL no matches found\n");
+            tracing::trace!("No matches found");
         } else {
-            println!("FAIL checked {} match_engine(es), none matched\n", match_count);
+            tracing::trace!("Checked {} match(es), none matched", match_count);
         }
         None
     }
@@ -132,14 +131,14 @@ impl<T> RadixHostMatchEngine<T> {
     /// # Returns
     /// `Ok(())` on success, `Err(String)` on failure
     pub fn initialize(&mut self, hosts: Vec<RadixHost<T>>) -> Result<(), String> {
-        println!("\n========== RadixHostMatchEngine Initialize ==========");
-        println!("Total hosts: {}", hosts.len());
+        tracing::debug!("========== RadixHostMatchEngine Initialize ==========");
+        tracing::debug!("Total hosts: {}", hosts.len());
 
         let mut next_tree_idx = 1i32;
 
         for radix_host in hosts {
-            println!(
-                "\n  [Host] pattern='{}', radix_key='{}', is_wildcard={}, wildcard_count={}",
+            tracing::debug!(
+                "  [Host] pattern='{}', radix_key='{}', is_wildcard={}, wildcard_count={}",
                 radix_host.original, radix_host.radix_key, radix_host.is_wildcard, radix_host.wildcard_count
             );
 
@@ -147,7 +146,7 @@ impl<T> RadixHostMatchEngine<T> {
 
             // Check if this radix_key already exists in the tree
             let tree_idx = if let Some(existing_tree_idx) = self.tree.find_exact(&radix_key) {
-                println!(
+                tracing::debug!(
                     "    Reusing tree_idx: {} for radix_key: '{}'",
                     existing_tree_idx, radix_key
                 );
@@ -162,7 +161,7 @@ impl<T> RadixHostMatchEngine<T> {
                     )
                 })?;
 
-                println!("    Inserted radix_key: '{}' -> tree_idx: {}", radix_key, new_tree_idx);
+                tracing::debug!("    Inserted radix_key: '{}' -> tree_idx: {}", radix_key, new_tree_idx);
                 next_tree_idx += 1;
                 new_tree_idx
             };
@@ -178,11 +177,13 @@ impl<T> RadixHostMatchEngine<T> {
                 .push(host_idx);
         }
 
-        println!("\n========== Initialization Complete ==========");
-        println!("Summary:");
-        println!("  - Total hosts: {}", self.hosts.len());
-        println!("  - Unique radix tree nodes: {}", self.tree_idx_to_host_idx.len());
-        println!("==============================================\n");
+        tracing::debug!("========== Initialization Complete ==========");
+        tracing::debug!(
+            "Summary: Total hosts: {}, Unique radix tree nodes: {}",
+            self.hosts.len(),
+            self.tree_idx_to_host_idx.len()
+        );
+        tracing::debug!("==============================================");
         Ok(())
     }
 }

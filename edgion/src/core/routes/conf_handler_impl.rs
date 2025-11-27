@@ -199,10 +199,10 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         for (gateway_key, domain_rules_map) in gateway_domain_rules_new.into_iter() {
             // Check if gateway exists in store
             if gateway_store_guard.get_gateway(&gateway_key).is_err() {
-                tracing::warn!(
+                tracing::debug!(
                     component = "route_manager",
                     gateway_key = %gateway_key,
-                    "Gateway not found in store, skipping routes"
+                    "Gateway not found in store, skipping routes (may not be managed by this instance)"
                 );
                 skipped_gateways += 1;
                 continue;

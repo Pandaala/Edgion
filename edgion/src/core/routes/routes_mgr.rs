@@ -87,13 +87,25 @@ impl RouteManager {
     /// This ensures the gateway has a route map even if no HTTPRoutes exist yet
     pub fn get_or_create_domain_routes(&self, namespace: &str, name: &str) -> Arc<DomainRouteRules> {
         let gateway_key = format!("{}/{}", namespace, name);
-        self.gateway_routes_map
-            .entry(gateway_key)
+        
+        let entry = self.gateway_routes_map.entry(gateway_key.clone());
+        let is_new = matches!(entry, dashmap::mapref::entry::Entry::Vacant(_));
+        
+        let domain_routes = entry
             .or_insert_with(|| Arc::new(DomainRouteRules {
                 domain_routes_map: ArcSwap::from_pointee(Arc::new(HashMap::new())),
             }))
             .value()
-            .clone()
+            .clone();
+        
+        if is_new {
+            tracing::info!(
+                gateway_key = %gateway_key,
+                "Created new domain routes for gateway"
+            );
+        }
+        
+        domain_routes
     }
 
     pub fn add_http_routes(&self, http_routes: Vec<HTTPRoute>) {

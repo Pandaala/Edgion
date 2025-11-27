@@ -136,6 +136,19 @@ impl ConfigSyncClient {
         let key = self.config_client.get_gateway_class_key().clone();
         self.fetch_and_init_base_conf(&key).await?;
         tracing::info!("Base Conf Initialized.");
+        
+        // Print base_conf as pretty JSON for debugging
+        if let Some(base_conf) = self.config_client.get_base_conf() {
+            match serde_json::to_string_pretty(&base_conf) {
+                Ok(json) => {
+                    tracing::info!("Base Configuration:\n{}", json);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to serialize base_conf to JSON: {}", e);
+                }
+            }
+        }
+        
         Ok(())
     }
 
