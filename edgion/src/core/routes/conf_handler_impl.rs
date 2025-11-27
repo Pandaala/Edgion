@@ -113,17 +113,12 @@ impl RouteManager {
         let mut resource_keys = domain_hashmap
             .get(hostname)
             .map(|rr| rr.resource_keys.read().unwrap().clone())
-            .unwrap_or_else(std::collections::HashSet::new);
+            .unwrap_or_else(HashSet::new);
         
         // Step 1: Remove resource keys
         for key in remove.iter() {
             if resource_keys.remove(key) {
-                tracing::debug!(
-                    component = "route_manager",
-                    hostname = %hostname,
-                    resource_key = %key,
-                    "Removed resource key from hostname"
-                );
+                tracing::debug!(component="route_manager",hostname=%hostname,key=%key,"rm key");
             }
         }
         
@@ -137,12 +132,7 @@ impl RouteManager {
             
             if applies {
                 resource_keys.insert(resource_key.clone());
-                tracing::debug!(
-                    component = "route_manager",
-                    hostname = %hostname,
-                    resource_key = %resource_key,
-                    "Added resource key to hostname"
-                );
+                tracing::debug!(component="route_manager",hostname=%hostname,key=%resource_key,"add key");
             }
         }
         
@@ -150,11 +140,7 @@ impl RouteManager {
         if resource_keys.is_empty() {
             // No more routes for this hostname, remove it
             domain_hashmap.remove(hostname);
-            tracing::info!(
-                component = "route_manager",
-                hostname = %hostname,
-                "Removed hostname (no more routes)"
-            );
+            tracing::info!(component="route_manager",hostname=%hostname,"rm hostname");
         } else {
             // Rebuild from http_routes storage
             let mut route_rules_list = Vec::new();
@@ -177,11 +163,7 @@ impl RouteManager {
                         }
                     }
                 } else {
-                    tracing::warn!(
-                        component = "route_manager",
-                        resource_key = %resource_key,
-                        "Resource key in set but not found in http_routes storage"
-                    );
+                    tracing::warn!(component="route_manager",key=%resource_key,"key not found in storage");
                 }
             }
             
@@ -200,21 +182,10 @@ impl RouteManager {
                     });
                     
                     domain_hashmap.insert(hostname.to_string(), new_route_rules);
-                    
-                    tracing::debug!(
-                        component = "route_manager",
-                        hostname = %hostname,
-                        routes_count = route_entries.len(),
-                        "Updated RouteRules for hostname"
-                    );
+                    tracing::debug!(component="route_manager",hostname=%hostname,cnt=route_entries.len(),"updated");
                 }
                 Err(e) => {
-                    tracing::error!(
-                        component = "route_manager",
-                        hostname = %hostname,
-                        error = %e,
-                        "Failed to rebuild match engine"
-                    );
+                    tracing::error!(component="route_manager",hostname=%hostname,err=%e,"rebuild failed");
                 }
             }
         }
@@ -279,13 +250,7 @@ fn parse_http_routes_to_gateway_domain_rules(
         }
     }
 
-    tracing::debug!(
-        component = "route_manager",
-        processed_routes = processed_routes,
-        skipped_routes = skipped_routes,
-        gateways = gateway_domain_rules.len(),
-        "Parsed HTTPRoutes into gateway-domain structure"
-    );
+    tracing::debug!(component="route_manager",proc=processed_routes,skip=skipped_routes,gws=gateway_domain_rules.len(),"parsed");
 
     gateway_domain_rules
 }
@@ -303,10 +268,7 @@ fn validate_http_route(route: &HTTPRoute) -> Option<(
     let parent_refs = match &route.spec.parent_refs {
         Some(refs) if !refs.is_empty() => refs,
         _ => {
-            tracing::warn!(
-                route_key = %route.key_name(),
-                "HTTPRoute has no parent_refs, skipping"
-            );
+            tracing::warn!(route=%route.key_name(),"no parent_refs");
             return None;
         }
     };
@@ -315,10 +277,7 @@ fn validate_http_route(route: &HTTPRoute) -> Option<(
     let rules = match &route.spec.rules {
         Some(rules) if !rules.is_empty() => rules,
         _ => {
-            tracing::warn!(
-                route_key = %route.key_name(),
-                "HTTPRoute has no rules, skipping"
-            );
+            tracing::warn!(route=%route.key_name(),"no rules");
             return None;
         }
     };
@@ -327,10 +286,7 @@ fn validate_http_route(route: &HTTPRoute) -> Option<(
     let hostnames = match &route.spec.hostnames {
         Some(hostnames) if !hostnames.is_empty() => hostnames,
         _ => {
-            tracing::warn!(
-                route_key = %route.key_name(),
-                "HTTPRoute has no hostnames, skipping"
-            );
+            tracing::warn!(route=%route.key_name(),"no hostnames");
             return None;
         }
     };
@@ -339,10 +295,7 @@ fn validate_http_route(route: &HTTPRoute) -> Option<(
     let route_namespace = match &route.metadata.namespace {
         Some(ns) if !ns.is_empty() => ns.clone(),
         _ => {
-            tracing::warn!(
-                route_key = %route.key_name(),
-                "HTTPRoute has no namespace, skipping"
-            );
+            tracing::warn!(route=%route.key_name(),"no namespace");
             return None;
         }
     };
@@ -351,10 +304,7 @@ fn validate_http_route(route: &HTTPRoute) -> Option<(
     let route_name = match &route.metadata.name {
         Some(name) if !name.is_empty() => name.clone(),
         _ => {
-            tracing::warn!(
-                route_key = %route.key_name(),
-                "HTTPRoute has no name, skipping"
-            );
+            tracing::warn!(route=%route.key_name(),"no name");
             return None;
         }
     };
@@ -367,12 +317,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
     /// This is typically called during initial sync
     fn full_build(&self, data: &HashMap<String, HTTPRoute>) {
         let start_time = Instant::now();
-        
-        tracing::info!(
-            component = "route_manager",
-            count = data.len(),
-            "Full build with HTTPRoutes - starting from scratch"
-        );
+        tracing::info!(component="route_manager",cnt=data.len(),"full build start");
 
         // Step 1: Parse all HTTPRoutes into temporary gateway->domain->rules structure
         let gateway_domain_rules_new = parse_http_routes_to_gateway_domain_rules(data);
@@ -387,11 +332,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         for (gateway_key, domain_rules_map) in gateway_domain_rules_new.into_iter() {
             // Check if gateway exists in store
             if gateway_store_guard.get_gateway(&gateway_key).is_err() {
-                tracing::debug!(
-                    component = "route_manager",
-                    gateway_key = %gateway_key,
-                    "Gateway not found in store, skipping routes (may not be managed by this instance)"
-                );
+                tracing::debug!(component="route_manager",gw=%gateway_key,"gw not in store");
                 skipped_gateways += 1;
                 continue;
             }
@@ -410,13 +351,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 let match_engine = match RadixRouteMatchEngine::build(route_entries) {
                     Ok(engine) => Arc::new(engine),
                     Err(e) => {
-                        tracing::error!(
-                            component = "route_manager",
-                            gateway_key = %gateway_key,
-                            domain = %domain,
-                            error = ?e,
-                            "Failed to build RadixRouteMatchEngine"
-                        );
+                        tracing::error!(component="route_manager",gw=%gateway_key,domain=%domain,err=?e,"build failed");
                         continue;
                     }
                 };
@@ -441,11 +376,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
             let domain_route_rules = if let Some(entry) = self.gateway_routes_map.get(&gateway_key) {
                 entry.value().clone()
             } else {
-                tracing::debug!(
-                    component = "route_manager",
-                    gateway_key = %gateway_key,
-                    "Gateway not found in routes map, skipping"
-                );
+                tracing::debug!(component="route_manager",gw=%gateway_key,"gw not in routes map");
                 skipped_gateways += 1;
                 continue;
             };
@@ -459,15 +390,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         }
 
         let elapsed = start_time.elapsed();
-        tracing::info!(
-            component = "route_manager",
-            total_gateways = processed_gateways + skipped_gateways,
-            processed = processed_gateways,
-            skipped = skipped_gateways,
-            elapsed_ms = elapsed.as_millis(),
-            "Full build completed in {:?}",
-            elapsed
-        );
+        tracing::info!(component="route_manager",total=processed_gateways+skipped_gateways,proc=processed_gateways,skip=skipped_gateways,ms=elapsed.as_millis(),"full build done");
     }
 
     /// Handle incremental configuration changes
@@ -489,12 +412,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
 
         // Step 2: For each gateway, update all affected hostnames in one RCU operation
         for (gateway_key, hostnames) in gateway_hostnames.iter() {
-            tracing::debug!(
-                component = "route_manager",
-                gateway_key = %gateway_key,
-                hostnames_count = hostnames.len(),
-                "Updating domain_routes_map for gateway"
-            );
+            tracing::debug!(component="route_manager",gw=%gateway_key,cnt=hostnames.len(),"updating gw");
             
             if let Some(domain_routes_ref) = self.gateway_routes_map.get(gateway_key) {
                 // Clone current domain_routes_map
@@ -515,13 +433,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 // Replace the entire domain_routes_map in one atomic operation
                 // Note: ArcSwap<Arc<T>> requires Arc<Arc<T>> for store() method
                 domain_routes_ref.domain_routes_map.store(Arc::new(Arc::new(new_hashmap)));
-                
-                tracing::info!(
-                    component = "route_manager",
-                    gateway_key = %gateway_key,
-                    updated_hostnames = hostnames.len(),
-                    "Updated domain_routes_map for gateway"
-                );
+                tracing::info!(component="route_manager",gw=%gateway_key,cnt=hostnames.len(),"updated gw");
             }
         }
         
@@ -530,11 +442,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
             let mut routes = self.http_routes.lock().unwrap();
             for key in remove.iter() {
                 if routes.remove(key).is_some() {
-                    tracing::debug!(
-                        component = "route_manager",
-                        route_key = %key,
-                        "Removed HTTPRoute from storage"
-                    );
+                    tracing::debug!(component="route_manager",key=%key,"rm route");
                 }
             }
         }
@@ -545,11 +453,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
     /// Trigger a rebuild/refresh of the route configuration
     /// This could be used to optimize internal data structures or refresh caches
     fn update_rebuild(&self) {
-        tracing::debug!(
-            component = "route_manager",
-            "Update rebuild triggered (no-op for now)"
-        );
-        
+        tracing::debug!(component="route_manager","update_rebuild(no-op)");
         // Currently no-op as RouteManager doesn't need periodic rebuilds
         // If needed in the future, we could:
         // - Rebuild internal match engines
