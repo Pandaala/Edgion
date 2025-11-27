@@ -62,9 +62,16 @@ impl DomainRouteRules {
 }
 
 type GatewayKey = String;
+type RouteKey = String; // Format: "namespace/name"
 
 pub struct RouteManager {
+    /// Maps gateway key to domain route rules
     pub(crate) gateway_routes_map: DashMap<GatewayKey, Arc<DomainRouteRules>>,
+    
+    /// Stores all HTTPRoute resources for lookup during delete events
+    /// Key format: "namespace/name"
+    /// Uses Mutex since route updates are serialized (no concurrent writes needed)
+    pub(crate) http_routes: std::sync::Mutex<HashMap<RouteKey, HTTPRoute>>,
 }
 
 // Global RouteManager instance
@@ -80,6 +87,7 @@ impl RouteManager {
     pub fn new() -> Self {
         Self {
             gateway_routes_map: DashMap::new(),
+            http_routes: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -126,6 +134,14 @@ impl RouteManager {
                 return;
             }
         };
+
+        // Store the HTTPRoute for later lookup (e.g., during delete events)
+        {
+            let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+            let name = route.metadata.name.as_deref().unwrap_or("");
+            let key = format!("{}/{}", namespace, name);
+            self.http_routes.lock().unwrap().insert(key, route.clone());
+        }
 
         let gateway_store = get_global_gateway_store();
         let gateway_store_guard = gateway_store.read().unwrap();
@@ -283,6 +299,150 @@ impl RouteManager {
                         hostname,
                         e
                     );
+                }
+            }
+            
+            Arc::new(new_hashmap)
+        });
+    }
+    
+    /// Remove an HTTPRoute by namespace and name
+    /// This method uses the stored HTTPRoute to find all affected domains
+    pub fn remove_http_route(&self, namespace: &str, name: &str) {
+        // Get and remove the stored HTTPRoute to find which domains and gateways it was bound to
+        let old_route = {
+            let key = format!("{}/{}", namespace, name);
+            let mut routes = self.http_routes.lock().unwrap();
+            match routes.remove(&key) {
+                Some(route) => route,
+                None => {
+                    tracing::warn!(
+                        "HTTPRoute '{}/{}' not found in stored routes, cannot determine affected domains",
+                        namespace, name
+                    );
+                    return;
+                }
+            }
+        };
+        
+        tracing::info!("Removing HTTPRoute '{}/{}' from all bound gateways", namespace, name);
+        
+        let parent_refs = match &old_route.spec.parent_refs {
+            Some(refs) => refs,
+            None => {
+                tracing::warn!("HTTPRoute '{}/{}' has no parent_refs", namespace, name);
+                return;
+            }
+        };
+        
+        let gateway_store = get_global_gateway_store();
+        let gateway_store_guard = gateway_store.read().unwrap();
+        
+        for parent_ref in parent_refs {
+            let gateway_key = Self::build_gateway_key(parent_ref, &old_route);
+            
+            // Check if gateway exists
+            if gateway_store_guard.get_gateway(&gateway_key).is_err() {
+                tracing::warn!(
+                    "Gateway '{}' referenced by HTTPRoute '{}/{}' not found",
+                    gateway_key, namespace, name
+                );
+                continue;
+            }
+            
+            // Get the domain routes map for this gateway
+            if let Some(domain_routes_map) = self.gateway_routes_map.get(&gateway_key) {
+                Self::remove_rules_from_domain_map(&domain_routes_map, &old_route);
+                
+                tracing::info!(
+                    "Removed HTTPRoute '{}/{}' from gateway '{}'",
+                    namespace, name, gateway_key
+                );
+            }
+        }
+    }
+    
+    /// Remove all rules from an HTTPRoute from the domain routes map
+    fn remove_rules_from_domain_map(domain_routes_map: &DomainRouteRules, route: &HTTPRoute) {
+        let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = route.metadata.name.as_deref().unwrap_or("");
+        let resource_key = format!("{}/{}", route_namespace, route_name);
+        
+        // Get all hostnames from the route
+        let hostnames = match &route.spec.hostnames {
+            Some(hostnames) if !hostnames.is_empty() => hostnames,
+            _ => {
+                tracing::debug!("HTTPRoute '{}/{}' has no hostnames, nothing to remove", route_namespace, route_name);
+                return;
+            }
+        };
+        
+        // Remove rules from each hostname
+        for hostname in hostnames {
+            Self::remove_route_from_hostname(domain_routes_map, hostname, &resource_key);
+        }
+    }
+    
+    /// Remove a specific route from a hostname's RouteRules
+    fn remove_route_from_hostname(
+        domain_routes_map: &DomainRouteRules,
+        hostname: &str,
+        resource_key: &str,
+    ) {
+        domain_routes_map.domain_routes_map.rcu(|current_map| {
+            let current_hashmap: &HashMap<DomainStr, Arc<RouteRules>> = current_map.as_ref();
+            let mut new_hashmap = current_hashmap.clone();
+            
+            // Get the RouteRules for this hostname
+            if let Some(route_rules_arc) = new_hashmap.get_mut(hostname) {
+                let route_rules_mut = Arc::make_mut(route_rules_arc);
+                
+                // Remove all rules matching this resource_key
+                {
+                    let mut route_rules_list = route_rules_mut.route_rules_list.write().unwrap();
+                    let original_len = route_rules_list.len();
+                    route_rules_list.retain(|unit| unit.resource_key != resource_key);
+                    let removed_count = original_len - route_rules_list.len();
+                    
+                    if removed_count > 0 {
+                        tracing::debug!(
+                            "Removed {} rule(s) for route '{}' from hostname '{}'",
+                            removed_count, resource_key, hostname
+                        );
+                    }
+                }
+                
+                // Rebuild match_engine with remaining rules
+                let route_entries: Vec<Arc<dyn crate::core::routes::match_engine::RouteEntry>> = {
+                    let route_rules_list = route_rules_mut.route_rules_list.read().unwrap();
+                    route_rules_list
+                        .iter()
+                        .map(|unit| Arc::new(unit.clone()) as Arc<dyn crate::core::routes::match_engine::RouteEntry>)
+                        .collect()
+                };
+                
+                if route_entries.is_empty() {
+                    // No more routes for this hostname, remove it
+                    new_hashmap.remove(hostname);
+                    tracing::info!("Removed hostname '{}' (no more routes)", hostname);
+                } else {
+                    // Rebuild match_engine with remaining routes
+                    match RadixRouteMatchEngine::build(route_entries.clone()) {
+                        Ok(new_engine) => {
+                            route_rules_mut.match_engine = Arc::new(new_engine);
+                            tracing::info!(
+                                "Rebuilt RadixRouteMatchEngine for hostname '{}' with {} remaining routes",
+                                hostname,
+                                route_entries.len()
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to rebuild RadixRouteMatchEngine for hostname '{}': {}",
+                                hostname, e
+                            );
+                        }
+                    }
                 }
             }
             
