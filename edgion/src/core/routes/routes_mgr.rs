@@ -1,5 +1,5 @@
-use std::sync::{Arc, RwLock};
-use std::collections::HashMap;
+use std::sync::{Arc, RwLock, Mutex};
+use std::collections::{HashMap, HashSet};
 use dashmap::DashMap;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
@@ -13,7 +13,7 @@ type DomainStr = String;
 pub struct RouteRules {
     /// All resource keys (HTTPRoute) that apply to this hostname
     /// Format: "namespace/name"
-    pub(crate) resource_keys: RwLock<std::collections::HashSet<String>>,
+    pub(crate) resource_keys: RwLock<HashSet<String>>,
     
     pub(crate) route_rules_list: RwLock<Vec<HttpRouteRuleUnit>>,
     pub(crate) match_engine: Arc<RadixRouteMatchEngine>,
@@ -76,7 +76,7 @@ pub struct RouteManager {
     /// Stores all HTTPRoute resources for lookup during delete events
     /// Key format: "namespace/name"
     /// Uses Mutex since route updates are serialized (no concurrent writes needed)
-    pub(crate) http_routes: std::sync::Mutex<HashMap<RouteKey, HTTPRoute>>,
+    pub(crate) http_routes: Mutex<HashMap<RouteKey, HTTPRoute>>,
 }
 
 // Global RouteManager instance
@@ -92,7 +92,7 @@ impl RouteManager {
     pub fn new() -> Self {
         Self {
             gateway_routes_map: DashMap::new(),
-            http_routes: std::sync::Mutex::new(HashMap::new()),
+            http_routes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -259,7 +259,7 @@ impl RouteManager {
             let route_rules_arc = new_hashmap
                 .entry(hostname_key.clone())
                 .or_insert_with(|| Arc::new(RouteRules {
-                    resource_keys: RwLock::new(std::collections::HashSet::new()),
+                    resource_keys: RwLock::new(HashSet::new()),
                     route_rules_list: RwLock::new(Vec::new()),
                     match_engine: Arc::new(RadixRouteMatchEngine::default()),
                 }));

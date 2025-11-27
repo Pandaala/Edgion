@@ -357,7 +357,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 };
 
                 // Collect resource keys for this domain
-                let resource_keys: std::collections::HashSet<String> = rules_vec
+                let resource_keys: HashSet<String> = rules_vec
                     .iter()
                     .map(|unit| unit.resource_key.clone())
                     .collect();
@@ -447,7 +447,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
             }
         }
         
-        tracing::info!( component = "route_manager","HTTPRoute changes processed successfully");
+        tracing::info!( component = "route_manager", "HTTPRoute changes processed successfully");
     }
 }
 
