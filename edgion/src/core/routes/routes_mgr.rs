@@ -268,19 +268,44 @@ impl RouteManager {
             let route_rules_mut = Arc::make_mut(route_rules_arc);
             
             // Create HttpRouteRuleUnit from HTTPRouteRule
+            // Each rule may have multiple matches
             let resource_key = format!("{}/{}", route_namespace, route_name);
-            let rule_unit = HttpRouteRuleUnit::new(
-                route_namespace.to_string(),
-                route_name.to_string(),
-                resource_key.clone(),
-                rule.clone(),
-            );
             
-            // Add the resource key to the set
+            if let Some(matches) = &rule.matches {
+                for match_item in matches {
+                    let rule_unit = HttpRouteRuleUnit::new(
+                        route_namespace.to_string(),
+                        route_name.to_string(),
+                        resource_key.clone(),
+                        match_item.clone(),
+                        Arc::new(rule.clone()),
+                    );
+                    
+                    // Add the rule to the list
+                    route_rules_mut.route_rules_list.write().unwrap().push(rule_unit);
+                }
+            } else {
+                // If no matches, create a default match (match all)
+                let default_match = crate::types::HTTPRouteMatch {
+                    path: None,
+                    headers: None,
+                    query_params: None,
+                    method: None,
+                };
+                let rule_unit = HttpRouteRuleUnit::new(
+                    route_namespace.to_string(),
+                    route_name.to_string(),
+                    resource_key.clone(),
+                    default_match,
+                    Arc::new(rule.clone()),
+                );
+                
+                // Add the rule to the list
+                route_rules_mut.route_rules_list.write().unwrap().push(rule_unit);
+            }
+            
+            // Add the resource key to the set (only once per route)
             route_rules_mut.resource_keys.write().unwrap().insert(resource_key);
-            
-            // Add the rule to the list
-            route_rules_mut.route_rules_list.write().unwrap().push(rule_unit);
             
             // Rebuild match_engine with updated route rules
             // Collect route entries while holding the read lock

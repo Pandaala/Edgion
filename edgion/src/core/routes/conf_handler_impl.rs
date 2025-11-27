@@ -149,13 +149,36 @@ impl RouteManager {
                     
                     if let Some(rules) = &route.spec.rules {
                         for rule in rules {
-                            let rule_unit = HttpRouteRuleUnit::new(
-                                route_namespace.to_string(),
-                                route_name.to_string(),
-                                resource_key.clone(),
-                                rule.clone(),
-                            );
-                            route_rules_list.push(rule_unit);
+                            // Each rule may have multiple matches
+                            // Create a HttpRouteRuleUnit for each match
+                            if let Some(matches) = &rule.matches {
+                                for match_item in matches {
+                                    let rule_unit = HttpRouteRuleUnit::new(
+                                        route_namespace.to_string(),
+                                        route_name.to_string(),
+                                        resource_key.clone(),
+                                        match_item.clone(),
+                                        Arc::new(rule.clone()),
+                                    );
+                                    route_rules_list.push(rule_unit);
+                                }
+                            } else {
+                                // If no matches, create a default match (match all)
+                                let default_match = crate::types::HTTPRouteMatch {
+                                    path: None,
+                                    headers: None,
+                                    query_params: None,
+                                    method: None,
+                                };
+                                let rule_unit = HttpRouteRuleUnit::new(
+                                    route_namespace.to_string(),
+                                    route_name.to_string(),
+                                    resource_key.clone(),
+                                    default_match,
+                                    Arc::new(rule.clone()),
+                                );
+                                route_rules_list.push(rule_unit);
+                            }
                         }
                     }
                 } else {
@@ -226,19 +249,46 @@ fn parse_http_routes_to_gateway_domain_rules(
             // Process each hostname and rule combination
             for hostname in hostnames {
                 for rule in rules {
-                    // Create HttpRouteRuleUnit
-                    let rule_unit = HttpRouteRuleUnit::new(
-                        route_namespace.clone(),
-                        route_name.clone(),
-                        route.key_name(),
-                        rule.clone(),
-                    );
+                    // Each rule may have multiple matches
+                    // Create a HttpRouteRuleUnit for each match
+                    if let Some(matches) = &rule.matches {
+                        for match_item in matches {
+                            let rule_unit = HttpRouteRuleUnit::new(
+                                route_namespace.clone(),
+                                route_name.clone(),
+                                route.key_name(),
+                                match_item.clone(),
+                                Arc::new(rule.clone()),
+                            );
 
-                    // Add to the domain's rule list
-                    domain_map
-                        .entry(hostname.clone())
-                        .or_insert_with(Vec::new)
-                        .push(rule_unit);
+                            // Add to the domain's rule list
+                            domain_map
+                                .entry(hostname.clone())
+                                .or_insert_with(Vec::new)
+                                .push(rule_unit);
+                        }
+                    } else {
+                        // If no matches, create a default match (match all)
+                        let default_match = crate::types::HTTPRouteMatch {
+                            path: None,
+                            headers: None,
+                            query_params: None,
+                            method: None,
+                        };
+                        let rule_unit = HttpRouteRuleUnit::new(
+                            route_namespace.clone(),
+                            route_name.clone(),
+                            route.key_name(),
+                            default_match,
+                            Arc::new(rule.clone()),
+                        );
+
+                        // Add to the domain's rule list
+                        domain_map
+                            .entry(hostname.clone())
+                            .or_insert_with(Vec::new)
+                            .push(rule_unit);
+                    }
                 }
             }
 
