@@ -27,15 +27,14 @@ impl<T: ResourceMeta> CacheData<T> {
     /// Reset cache with a complete set of resources
     /// Uses resource.key_name() (namespace/name) as the key for each resource
     pub(crate) fn reset(&mut self, resources: Vec<T>, resource_version: u64) {
-        self.data.clear();
-        for resource in resources {
-            let key = resource.key_name();
-            self.data.insert(key, resource);
-        }
+        // Build new HashMap directly from resources
+        self.data = resources.into_iter()
+            .map(|resource| (resource.key_name(), resource))
+            .collect();
         self.resource_version = resource_version;
         if let Some(ref handler) = self.handler {
-            // Pass reference to full_build, no need to clone or move data
-            handler.processor.full_build(&self.data);
+            // Pass reference to full_set, no need to clone or move data
+            handler.processor.full_set(&self.data);
         }
         if let Some(ref mut handler) = self.handler {
             handler.compressed_events.clear();
@@ -168,8 +167,7 @@ impl<T: ResourceMeta> CacheData<T> {
             
             // Process events with immutable borrow
             if let Some(handler) = cache.handler.as_ref() {
-                handler.processor.conf_change(add_or_update, remove);
-                handler.processor.update_rebuild();
+                handler.processor.partial_update(add_or_update, remove);
             } else {
                 tracing::error!(component = "cache_client", "Handler was removed before processing events");
                 return false;
@@ -188,15 +186,9 @@ impl<T: ResourceMeta> CacheData<T> {
     pub(crate) fn add_compress_event(&mut self, key: String, change: ResourceChange) {
         // Only add event if handler exists (which means processor is set)
         // Events added before processor is set will be lost, but that's acceptable
-        // as the processor will do a full_build on reset anyway
+        // as the processor will do a full_set on reset anyway
         if let Some(ref mut handler) = self.handler {
             handler.compressed_events.add_event(key, change);
-        }
-    }
-
-    pub(crate) fn clear_compress_events(&mut self) {
-        if let Some(ref mut handler) = self.handler {
-            handler.compressed_events.clear();
         }
     }
 }

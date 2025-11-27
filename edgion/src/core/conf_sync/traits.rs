@@ -24,17 +24,13 @@ pub trait CacheEventDispatch<T> {
 /// 
 /// This trait must be Send + Sync to allow safe sharing across threads
 pub trait ConfHandler<T>: Send + Sync {
-    /// Full rebuild with a complete set of resources
+    /// Full set with a complete set of resources
     /// This is typically called during initial sync or when a complete refresh is needed
-    fn full_build(&self, data: &HashMap<String, T>);
+    fn full_set(&self, data: &HashMap<String, T>);
 
-    /// Handle configuration changes (add/update/remove)
+    /// Handle partial configuration updates (add/update/remove)
     /// For remove, only the key is needed since the resource is already deleted
-    fn conf_change(&self, add_or_update: HashMap<String, T>, remove: HashSet<String>);
-
-    /// Trigger a rebuild/refresh of the configuration
-    /// This is called when the processor needs to update its internal state
-    fn update_rebuild(&self);
+    fn partial_update(&self, add_or_update: HashMap<String, T>, remove: HashSet<String>);
 }
 
 pub trait ConfigServerEventDispatcher: Send + Sync {

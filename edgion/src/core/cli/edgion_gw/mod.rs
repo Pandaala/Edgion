@@ -114,7 +114,7 @@ impl EdgionGwCli {
                 }
             }
         }
-
+        
         Ok((gateway, log_guard))
     }
 

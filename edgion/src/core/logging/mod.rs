@@ -96,7 +96,7 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
             subscriber.try_init()?;
         }
     } else {
-        // Build env filter
+    // Build env filter
         let env_filter = EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new(&config.level));
 
@@ -111,14 +111,14 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
             .with(env_filter)
             .with(file_layer);
 
-        if config.console {
-            let console_layer = tracing_subscriber::fmt::layer()
-                .with_target(true)
+    if config.console {
+        let console_layer = tracing_subscriber::fmt::layer()
+            .with_target(true)
                 .with_line_number(true)
                 .with_ansi(true);
-            subscriber.with(console_layer).try_init()?;
-        } else {
-            subscriber.try_init()?;
+        subscriber.with(console_layer).try_init()?;
+    } else {
+        subscriber.try_init()?;
         }
     }
 

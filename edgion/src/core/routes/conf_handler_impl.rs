@@ -14,16 +14,12 @@ type DomainStr = String;
 
 /// Implement ConfHandler for Arc<RouteManager> to allow using the global instance
 impl ConfHandler<HTTPRoute> for Arc<RouteManager> {
-    fn full_build(&self, data: &HashMap<String, HTTPRoute>) {
-        (**self).full_build(data)
+    fn full_set(&self, data: &HashMap<String, HTTPRoute>) {
+        (**self).full_set(data)
     }
 
-    fn conf_change(&self, add_or_update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
-        (**self).conf_change(add_or_update, remove)
-    }
-
-    fn update_rebuild(&self) {
-        (**self).update_rebuild()
+    fn partial_update(&self, add_or_update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
+        (**self).partial_update(add_or_update, remove)
     }
 }
 
@@ -313,11 +309,15 @@ fn validate_http_route(route: &HTTPRoute) -> Option<(
 }
 
 impl ConfHandler<HTTPRoute> for RouteManager {
-    /// Full rebuild with a complete set of HTTPRoutes
-    /// This is typically called during initial sync
-    fn full_build(&self, data: &HashMap<String, HTTPRoute>) {
+    /// Full set with a complete set of HTTPRoutes
+    /// This is typically called during initial sync or re-list
+    fn full_set(&self, data: &HashMap<String, HTTPRoute>) {
         let start_time = Instant::now();
-        tracing::info!(component="route_manager",cnt=data.len(),"full build start");
+        tracing::info!(component="route_manager",cnt=data.len(),"full set start");
+
+        // Step 0: Store all HTTPRoute resources for future lookups (e.g., during deletions)
+        *self.http_routes.lock().unwrap() = data.clone();
+        tracing::debug!(component="route_manager",cnt=data.len(),"stored http_routes");
 
         // Step 1: Parse all HTTPRoutes into temporary gateway->domain->rules structure
         let gateway_domain_rules_new = parse_http_routes_to_gateway_domain_rules(data);
@@ -390,12 +390,12 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         }
 
         let elapsed = start_time.elapsed();
-        tracing::info!(component="route_manager",total=processed_gateways+skipped_gateways,proc=processed_gateways,skip=skipped_gateways,ms=elapsed.as_millis(),"full build done");
+        tracing::info!(component="route_manager",total=processed_gateways+skipped_gateways,proc=processed_gateways,skip=skipped_gateways,ms=elapsed.as_millis(),"full set done");
     }
 
-    /// Handle incremental configuration changes
+    /// Handle partial configuration updates
     /// Processes additions, updates, and removals of HTTPRoutes
-    fn conf_change(&self, add_or_update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
+    fn partial_update(&self, add_or_update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
         tracing::info!(component = "route_manager",au = add_or_update.len(),rm = remove.len(),"Processing HTTPRoute changes");
 
         // Step 0: First update http_routes storage (before rebuilding, so we have the latest data)
@@ -448,17 +448,6 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         }
         
         tracing::info!( component = "route_manager","HTTPRoute changes processed successfully");
-    }
-
-    /// Trigger a rebuild/refresh of the route configuration
-    /// This could be used to optimize internal data structures or refresh caches
-    fn update_rebuild(&self) {
-        tracing::debug!(component="route_manager","update_rebuild(no-op)");
-        // Currently no-op as RouteManager doesn't need periodic rebuilds
-        // If needed in the future, we could:
-        // - Rebuild internal match engines
-        // - Optimize route lookup structures
-        // - Refresh cached data
     }
 }
 
