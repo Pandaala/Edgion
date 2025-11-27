@@ -71,6 +71,9 @@ impl RouteManager {
 impl RouteManager {
     /// Build gateway_hostnames map from add_or_update and remove sets
     /// Returns a map of gateway_key -> set of affected hostnames
+    /// 
+    /// For updated routes, this includes both old and new hostnames to ensure
+    /// old hostnames are properly cleaned up when they're removed.
     fn build_gateway_hostnames_map(
         &self,
         add_or_update: &HashMap<String, HTTPRoute>,
@@ -78,29 +81,56 @@ impl RouteManager {
     ) -> HashMap<String, HashSet<String>> {
         let mut gateway_hostnames: HashMap<String, HashSet<String>> = HashMap::new();
         
+        // Get http_routes lock once for efficiency
+        let http_routes = self.http_routes.lock().unwrap();
+        
         // Process add_or_update routes
-        for route in add_or_update.values() {
+        // For updates, we need to include both old and new hostnames
+        for (resource_key, route) in add_or_update.iter() {
+            // Check if this is an update (route already exists)
+            let old_route = http_routes.get(resource_key);
+            
+            // Collect hostnames from both old and new routes
+            let mut all_hostnames = HashSet::new();
+            
+            // Add new hostnames
             if let Some(hostnames) = &route.spec.hostnames {
-                if let Some(parent_refs) = &route.spec.parent_refs {
-                    for parent_ref in parent_refs {
-                        let gateway_key = if let Some(ns) = &parent_ref.namespace {
-                            format!("{}/{}", ns, parent_ref.name)
-                        } else if let Some(ns) = &route.metadata.namespace {
-                            format!("{}/{}", ns, parent_ref.name)
-                        } else {
-                            parent_ref.name.clone()
-                        };
-                        
-                        let hostname_set = gateway_hostnames
-                            .entry(gateway_key)
-                            .or_insert_with(HashSet::new);
-                        for hostname in hostnames {
-                            hostname_set.insert(hostname.clone());
-                        }
+                for hostname in hostnames {
+                    all_hostnames.insert(hostname.clone());
+                }
+            }
+            
+            // Add old hostnames (if this is an update)
+            if let Some(old_route) = old_route {
+                if let Some(old_hostnames) = &old_route.spec.hostnames {
+                    for hostname in old_hostnames {
+                        all_hostnames.insert(hostname.clone());
+                    }
+                }
+            }
+            
+            // Process parent_refs and add all hostnames to gateway_hostnames
+            if let Some(parent_refs) = &route.spec.parent_refs {
+                for parent_ref in parent_refs {
+                    let gateway_key = if let Some(ns) = &parent_ref.namespace {
+                        format!("{}/{}", ns, parent_ref.name)
+                    } else if let Some(ns) = &route.metadata.namespace {
+                        format!("{}/{}", ns, parent_ref.name)
+                    } else {
+                        parent_ref.name.clone()
+                    };
+                    
+                    let hostname_set = gateway_hostnames
+                        .entry(gateway_key)
+                        .or_insert_with(HashSet::new);
+                    for hostname in &all_hostnames {
+                        hostname_set.insert(hostname.clone());
                     }
                 }
             }
         }
+        
+        drop(http_routes); // Release lock before processing remove routes
         
         // Process remove routes - find which gateways/hostnames they affect
         let http_routes = self.http_routes.lock().unwrap();
@@ -267,18 +297,12 @@ impl RouteManager {
     }
 }
 
-/// Domain route rules split by type
-struct DomainRouteRulesSplit {
-    normal_routes: Vec<HttpRouteRuleUnit>,
-    regex_routes: Vec<HttpRouteRuleRegexUnit>,
-}
-
 /// Parse all HTTPRoutes and collect rules into gateway->domain->rules structure
-/// Returns HashMap<GatewayKey, HashMap<DomainStr, DomainRouteRulesSplit>>
+/// Returns HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleRegexUnit>)>>
 fn parse_http_routes_to_gateway_domain_rules(
     data: &HashMap<String, HTTPRoute>
-) -> HashMap<GatewayKey, HashMap<DomainStr, DomainRouteRulesSplit>> {
-    let mut gateway_domain_rules: HashMap<GatewayKey, HashMap<DomainStr, DomainRouteRulesSplit>> = HashMap::new();
+) -> HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleRegexUnit>)>> {
+    let mut gateway_domain_rules: HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleRegexUnit>)>> = HashMap::new();
 
     let mut processed_routes = 0;
     let mut skipped_routes = 0;
@@ -318,10 +342,7 @@ fn parse_http_routes_to_gateway_domain_rules(
                         for match_item in matches {
                             let split = domain_map
                                 .entry(hostname.clone())
-                                .or_insert_with(|| DomainRouteRulesSplit {
-                                    normal_routes: Vec::new(),
-                                    regex_routes: Vec::new(),
-                                });
+                                .or_insert_with(|| (Vec::new(), Vec::new()));
                             
                             // Check if this is a regex path
                             if RouteManager::is_regex_path(match_item) {
@@ -334,7 +355,7 @@ fn parse_http_routes_to_gateway_domain_rules(
                                     rule_arc.clone(),
                                 ) {
                                     Ok(regex_unit) => {
-                                        split.regex_routes.push(regex_unit);
+                                        split.1.push(regex_unit);
                                     }
                                     Err(e) => {
                                         tracing::warn!(route=%route.key_name(),err=%e,"failed to create regex route");
@@ -349,7 +370,7 @@ fn parse_http_routes_to_gateway_domain_rules(
                                     match_item.clone(),
                                     rule_arc.clone(),
                                 );
-                                split.normal_routes.push(rule_unit);
+                                split.0.push(rule_unit);
                             }
                         }
                     } else {
@@ -370,11 +391,8 @@ fn parse_http_routes_to_gateway_domain_rules(
                         
                         domain_map
                             .entry(hostname.clone())
-                            .or_insert_with(|| DomainRouteRulesSplit {
-                                normal_routes: Vec::new(),
-                                regex_routes: Vec::new(),
-                            })
-                            .normal_routes
+                            .or_insert_with(|| (Vec::new(), Vec::new()))
+                            .0
                             .push(rule_unit);
                     }
                 }
@@ -480,7 +498,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
 
             for (domain, split) in domain_rules_map.into_iter() {
                 // Convert Vec<HttpRouteRuleUnit> to Vec<Arc<dyn RouteEntry>>
-                let route_entries: Vec<Arc<dyn RouteEntry>> = split.normal_routes
+                let route_entries: Vec<Arc<dyn RouteEntry>> = split.0
                     .iter()
                     .map(|unit| Arc::new(unit.clone()) as Arc<dyn RouteEntry>)
                     .collect();
@@ -495,18 +513,18 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 };
 
                 // Collect resource keys for this domain (from both normal and regex routes)
-                let mut resource_keys: HashSet<String> = split.normal_routes
+                let mut resource_keys: HashSet<String> = split.0
                     .iter()
                     .map(|unit| unit.resource_key.clone())
                     .collect();
-                resource_keys.extend(split.regex_routes.iter().map(|unit| unit.resource_key.clone()));
+                resource_keys.extend(split.1.iter().map(|unit| unit.resource_key.clone()));
                 
                 // Create RouteRules
                 let route_rules = Arc::new(RouteRules {
                     resource_keys: RwLock::new(resource_keys),
-                    route_rules_list: RwLock::new(split.normal_routes),
+                    route_rules_list: RwLock::new(split.0),
                     match_engine,
-                    regex_routes: RwLock::new(split.regex_routes),
+                    regex_routes: RwLock::new(split.1),
                 });
 
                 new_domain_routes.insert(domain, route_rules);
@@ -538,7 +556,12 @@ impl ConfHandler<HTTPRoute> for RouteManager {
     fn partial_update(&self, add_or_update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
         tracing::info!(component = "route_manager",au = add_or_update.len(),rm = remove.len(),"Processing HTTPRoute changes");
 
-        // Step 0: First update http_routes storage (before rebuilding, so we have the latest data)
+        // Step 0: Build gateway_hostnames map BEFORE updating http_routes storage
+        // This is important because we need to access old hostnames from existing routes
+        // before they are overwritten with new data
+        let gateway_hostnames = self.build_gateway_hostnames_map(&add_or_update, &remove);
+        
+        // Step 1: Update http_routes storage (after building hostnames map, so we have the latest data for rebuilding)
         {
             let mut routes = self.http_routes.lock().unwrap();
             for (key, route) in add_or_update.iter() {
@@ -546,9 +569,6 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 tracing::debug!(component = "route_manager",route_key = %key,"add/update HTTPRoute");
             }
         }
-        
-        // Step 1: Build gateway_hostnames map
-        let gateway_hostnames = self.build_gateway_hostnames_map(&add_or_update, &remove);
 
         // Step 2: For each gateway, update all affected hostnames in one RCU operation
         for (gateway_key, hostnames) in gateway_hostnames.iter() {

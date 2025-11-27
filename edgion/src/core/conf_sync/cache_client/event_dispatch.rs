@@ -210,10 +210,14 @@ where
                                                         ResourceChange::InitAdd
                                                         | ResourceChange::EventAdd
                                                         | ResourceChange::EventUpdate => {
-                                                            cache.insert(resource_key, resource);
+                                                            cache.insert(resource_key.clone(), resource);
+                                                            // Add compress event to trigger partial_update
+                                                            cache.add_compress_event(resource_key, change);
                                                         }
                                                         ResourceChange::EventDelete => {
                                                             cache.remove(&resource_key);
+                                                            // Add compress event to trigger partial_update
+                                                            cache.add_compress_event(resource_key, change);
                                                         }
                                                     }
                                                 }

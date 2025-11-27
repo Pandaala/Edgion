@@ -10,7 +10,7 @@ spec:
       sectionName: https18443
 
   hostnames:
-    - "ccc3.example.com"
+    - "ccc1.example.com"
     - "ddd3.example.com"
   rules:
     - matches:

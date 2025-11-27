@@ -105,6 +105,8 @@ impl ProxyHttp for EdgionHttp {
     }
 
     async fn upstream_peer(&self, _session: &mut Session, _ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
-        todo!()
+        // TODO: 实现后端服务选择逻辑
+        // 当前简单跳过，返回错误
+        Err(pingora_core::Error::new_str("Upstream peer selection not implemented yet"))
     }
 } 

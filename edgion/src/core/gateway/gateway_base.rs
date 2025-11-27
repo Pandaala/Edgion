@@ -60,6 +60,7 @@ impl GatewayBase {
             if let Some(listeners) = &gateway.spec.listeners {
                 for listener in listeners {
                     let listener = listener.clone();
+                    let listener_name = listener.name.clone();
                     let host = listener.hostname.as_deref().unwrap_or("0.0.0.0");
                     let addr = format!("{}:{}", host, listener.port);
 
@@ -81,8 +82,22 @@ impl GatewayBase {
                     if enable_tls {
                         let tls_settings = TlsCallback::new_tls_settings_with_callback()?;
                         http_service.add_tls_with_settings(&addr, None, tls_settings);
+                        tracing::info!(
+                            gateway=%gateway.key_name(),
+                            listener=%listener_name,
+                            addr=%addr,
+                            protocol="HTTPS",
+                            "Adding TLS listener"
+                        );
                     } else {
                         http_service.add_tcp(&addr);
+                        tracing::info!(
+                            gateway=%gateway.key_name(),
+                            listener=%listener_name,
+                            addr=%addr,
+                            protocol="HTTP",
+                            "Adding TCP listener"
+                        );
                     }
 
                     pingora_server.add_service(http_service);
@@ -92,6 +107,26 @@ impl GatewayBase {
         
         // Save the configured server
         *self.pingora_server.lock().unwrap() = Some(pingora_server);
+        
+        // Print summary of all listeners
+        tracing::info!("Gateway bootstrap completed. Configured listeners:");
+        for gateway in self.base_conf.gateways().iter() {
+            if let Some(listeners) = &gateway.spec.listeners {
+                for listener in listeners {
+                    let host = listener.hostname.as_deref().unwrap_or("0.0.0.0");
+                    let addr = format!("{}:{}", host, listener.port);
+                    let enable_tls = listener.tls.is_some() || listener.port == 443 || listener.port == 8443;
+                    let protocol = if enable_tls { "HTTPS" } else { "HTTP" };
+                    tracing::info!(
+                        gateway=%gateway.key_name(),
+                        listener=%listener.name,
+                        addr=%addr,
+                        protocol=%protocol,
+                        "Listener configured"
+                    );
+                }
+            }
+        }
         
         Ok(())
     }
@@ -144,7 +179,25 @@ impl GatewayBase {
         let mut server_guard = self.pingora_server.lock().unwrap();
         
         if let Some(pingora_server) = server_guard.take() {
-            tracing::info!("Starting Pingora server...");
+            // Print all listening addresses before starting
+            tracing::info!("Starting Pingora server with the following listeners:");
+            for gateway in self.base_conf.gateways().iter() {
+                if let Some(listeners) = &gateway.spec.listeners {
+                    for listener in listeners {
+                        let host = listener.hostname.as_deref().unwrap_or("0.0.0.0");
+                        let addr = format!("{}:{}", host, listener.port);
+                        let enable_tls = listener.tls.is_some() || listener.port == 443 || listener.port == 8443;
+                        let protocol = if enable_tls { "HTTPS" } else { "HTTP" };
+                        tracing::info!(
+                            gateway=%gateway.key_name(),
+                            listener=%listener.name,
+                            addr=%addr,
+                            protocol=%protocol,
+                            "Listening on"
+                        );
+                    }
+                }
+            }
             pingora_server.run_forever();
         } else {
             panic!("Pingora server not initialized. Call bootstrap() first.");
