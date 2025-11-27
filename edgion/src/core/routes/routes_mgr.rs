@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
-use crate::core::routes::HttpRouteRuleUnit;
+use crate::core::routes::{HttpRouteRuleUnit, HttpRouteRuleRegexUnit, MatchedRoute};
 use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::types::{HTTPRoute, ResourceMeta};
 
@@ -15,8 +15,12 @@ pub struct RouteRules {
     /// Format: "namespace/name"
     pub(crate) resource_keys: RwLock<HashSet<String>>,
     
+    /// Exact and prefix match routes (handled by radix tree)
     pub(crate) route_rules_list: RwLock<Vec<HttpRouteRuleUnit>>,
     pub(crate) match_engine: Arc<RadixRouteMatchEngine>,
+    
+    /// Regex match routes (handled separately)
+    pub(crate) regex_routes: RwLock<Vec<HttpRouteRuleRegexUnit>>,
 }
 
 impl Clone for RouteRules {
@@ -25,17 +29,56 @@ impl Clone for RouteRules {
             resource_keys: RwLock::new(self.resource_keys.read().unwrap().clone()),
             route_rules_list: RwLock::new(self.route_rules_list.read().unwrap().clone()),
             match_engine: self.match_engine.clone(),
+            regex_routes: RwLock::new(self.regex_routes.read().unwrap().clone()),
         }
     }
 }
 
 impl RouteRules {
     /// Match a route using the match_engine engine
+    /// Try match in order: exact → regex → prefix
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-    ) -> Result<Arc<dyn crate::core::routes::match_engine::RouteEntry>, crate::types::err::EdError> {
-        self.match_engine.match_route(session)
+    ) -> Result<MatchedRoute, crate::types::err::EdError> {
+        let path = session.req_header().uri.path().to_string();
+        
+        // Step 1: Try exact match first (highest priority)
+        if let Some(route_entry) = self.match_engine.exact_match(session)? {
+            tracing::debug!(path=%path,"exact match ok");
+            // Convert RouteEntry back to HttpRouteRuleUnit
+            let route_entry_id = route_entry.identifier();
+            let route_rules = self.route_rules_list.read().unwrap();
+            if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.namespace, u.name) == route_entry_id) {
+                return Ok(MatchedRoute::Normal(Arc::new(unit.clone())));
+            }
+        }
+        
+        // Step 2: Try regex match
+        let regex_routes = self.regex_routes.read().unwrap();
+        for regex_route in regex_routes.iter() {
+            if regex_route.matches_path(&path) {
+                if regex_route.deep_match(session)? {
+                    tracing::debug!(path=%path,regex=%regex_route.path_regex.as_str(),"regex match ok");
+                    return Ok(MatchedRoute::Regex(regex_route.clone()));
+                }
+            }
+        }
+        drop(regex_routes);
+        
+        // Step 3: Fall back to prefix match
+        let route_entry = self.match_engine.prefix_match(session)?;
+        tracing::debug!(path=%path,"prefix match ok");
+        
+        // Convert RouteEntry back to HttpRouteRuleUnit
+        let route_entry_id = route_entry.identifier();
+        let route_rules = self.route_rules_list.read().unwrap();
+        if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.namespace, u.name) == route_entry_id) {
+            return Ok(MatchedRoute::Normal(Arc::new(unit.clone())));
+        }
+        
+        // Should not happen
+        Err(crate::types::err::EdError::RouteNotFound())
     }
 }
 
@@ -45,15 +88,15 @@ pub struct DomainRouteRules {
 
 impl DomainRouteRules {
     /// Match a route for the given hostname and session
-    /// Returns the matched RouteEntry if found, or an error if no route matches
+    /// Returns the matched route if found, or an error if no route matches
     pub fn match_route(
         &self,
         hostname: &str,
         session: &mut pingora_proxy::Session,
-    ) -> Result<Arc<dyn crate::core::routes::match_engine::RouteEntry>, crate::types::err::EdError> {
+    ) -> Result<MatchedRoute, crate::types::err::EdError> {
         let domain_routes_map = self.domain_routes_map.load();
         
-        // Try to find RouteRules for the hostname (exact match_engine only)
+        // Try to find RouteRules for the hostname (exact match only)
         let route_rules = domain_routes_map
             .get(hostname)
             .cloned();
@@ -262,6 +305,7 @@ impl RouteManager {
                     resource_keys: RwLock::new(HashSet::new()),
                     route_rules_list: RwLock::new(Vec::new()),
                     match_engine: Arc::new(RadixRouteMatchEngine::default()),
+                    regex_routes: RwLock::new(Vec::new()),
                 }));
             
             // Get mutable access to RouteRules

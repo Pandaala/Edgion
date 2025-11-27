@@ -78,15 +78,12 @@ impl RadixRouteMatchEngine {
         Ok(None)
     }
 
-    pub fn match_route(&self, session: &mut Session) -> Result<Arc<dyn RouteEntry>, EdError> {
+    /// Try exact match for the request path
+    /// Returns matched route if found, None if no exact match
+    pub fn exact_match(&self, session: &mut Session) -> Result<Option<Arc<dyn RouteEntry>>, EdError> {
         let path = session.req_header().uri.path();
-
-        tracing::trace!("========== Radix Route Matching ==========");
-        tracing::trace!("Request Path: '{}', Available routes: {}, Available paths: {}", 
-            path, self.routes.len(), self.radix_paths.len());
-
-        // Step 1: Try exact match_engine first (highest priority)
-        tracing::trace!("[Step 1] Trying exact match for '{}'...", path);
+        
+        tracing::trace!("[exact_match] Trying exact match for '{}'...", path);
         if let Some(tree_idx) = self.tree.find_exact(path) {
             tracing::trace!("Found exact tree_idx: {}", tree_idx);
             if let Some(path_indices) = self.tree_idx_to_path_idx.get(&tree_idx) {
@@ -103,26 +100,33 @@ impl RadixRouteMatchEngine {
                         }
                         tracing::trace!("Pattern matched, trying deep match...");
                         if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session)? {
-                            tracing::debug!("Route matched");
-                            return Ok(runtime);
+                            tracing::debug!("Exact match succeeded");
+                            return Ok(Some(runtime));
                         }
                     }
                 }
             }
-        } else {
-            tracing::trace!("No exact match found");
         }
-
-        // Step 2: Try prefix matching (if exact match_engine failed or didn't exist)
-        tracing::trace!("[Step 2] Trying prefix matching...");
+        
+        tracing::trace!("No exact match found");
+        Ok(None)
+    }
+    
+    /// Try prefix match for the request path
+    /// Returns matched route if found, RouteNotFound error if no match
+    pub fn prefix_match(&self, session: &mut Session) -> Result<Arc<dyn RouteEntry>, EdError> {
+        let path = session.req_header().uri.path();
+        
+        tracing::trace!("[prefix_match] Trying prefix matching...");
         let iter = self
             .tree
             .create_iter()
             .map_err(|e| EdError::InternalError(format!("Failed to create iterator: {}", e)))?;
         let all_prefixes = self.tree.find_all_prefixes(&iter, &path);
         tracing::trace!("Found {} prefix(es) in radix tree", all_prefixes.len());
+        
         if all_prefixes.is_empty() {
-            tracing::debug!("No route matched (no prefixes found)");
+            tracing::debug!("No prefix match found");
             return Err(RouteNotFound());
         }
 
@@ -149,11 +153,11 @@ impl RadixRouteMatchEngine {
         }
 
         if matched_paths.is_empty() {
-            tracing::debug!("No route matched (no patterns matched)");
+            tracing::debug!("No prefix match found (no patterns matched)");
             return Err(RouteNotFound());
         }
 
-        tracing::trace!("[Step 3] Sorting {} matched path(s) by priority...", matched_paths.len());
+        tracing::trace!("Sorting {} matched path(s) by priority...", matched_paths.len());
         matched_paths.sort_by(|a, b| {
             let weight_a = self.radix_paths[*a].priority_weight;
             let weight_b = self.radix_paths[*b].priority_weight;
@@ -170,7 +174,7 @@ impl RadixRouteMatchEngine {
                 radix_path.route_idx
             );
             if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session)? {
-                tracing::debug!("Route matched");
+                tracing::debug!("Prefix match succeeded");
                 return Ok(runtime);
             }
         }
@@ -178,6 +182,20 @@ impl RadixRouteMatchEngine {
         // No route matched after trying all candidates
         tracing::debug!("No route matched (all deep matches failed)");
         Err(RouteNotFound())
+    }
+    
+    /// Combined match route (for backward compatibility)
+    /// Try exact match first, then prefix match
+    pub fn match_route(&self, session: &mut Session) -> Result<Arc<dyn RouteEntry>, EdError> {
+        tracing::trace!("========== Radix Route Matching ==========");
+        
+        // Try exact match first
+        if let Some(route) = self.exact_match(session)? {
+            return Ok(route);
+        }
+        
+        // Fall back to prefix match
+        self.prefix_match(session)
     }
 
     fn initialize_internal(&mut self, route_runtimes: Vec<Arc<dyn RouteEntry>>) -> Result<(), EdError> {
