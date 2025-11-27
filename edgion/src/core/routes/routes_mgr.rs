@@ -3,11 +3,11 @@ use std::collections::{HashMap, HashSet};
 use dashmap::DashMap;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
-use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::core::routes::{HttpRouteRuleUnit, HttpRouteRuleRegexUnit};
 use crate::types::HTTPRouteRule;
 use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
-use crate::types::{HTTPRoute, ResourceMeta};
+use crate::core::routes::match_engine::regex_routes_engine::RegexRoutesEngine;
+use crate::types::HTTPRoute;
 
 type DomainStr = String;
 
@@ -22,7 +22,10 @@ pub struct RouteRules {
     pub(crate) match_engine: Option<Arc<RadixRouteMatchEngine>>,
     
     /// Regex match routes (handled separately)
+    /// Kept for backward compatibility and debugging, but matching uses regex_routes_engine
     pub(crate) regex_routes: RwLock<Vec<HttpRouteRuleRegexUnit>>,
+    /// Regex routes engine for lock-free matching. None if there are no regex routes
+    pub(crate) regex_routes_engine: Option<Arc<RegexRoutesEngine>>,
 }
 
 impl Clone for RouteRules {
@@ -32,6 +35,7 @@ impl Clone for RouteRules {
             route_rules_list: RwLock::new(self.route_rules_list.read().unwrap().clone()),
             match_engine: self.match_engine.clone(),
             regex_routes: RwLock::new(self.regex_routes.read().unwrap().clone()),
+            regex_routes_engine: self.regex_routes_engine.clone(),
         }
     }
 }
@@ -43,12 +47,10 @@ impl RouteRules {
         &self,
         session: &mut pingora_proxy::Session,
     ) -> Result<Arc<HTTPRouteRule>, crate::types::err::EdError> {
-        let path = session.req_header().uri.path().to_string();
-        
         // Step 1: Try exact match first (highest priority) - only if match_engine exists
         if let Some(ref match_engine) = self.match_engine {
             if let Some(route_entry) = match_engine.exact_match(session)? {
-                tracing::debug!(path=%path,"exact match ok");
+                tracing::debug!(path=%session.req_header().uri.path(),"exact match ok");
                 // Convert RouteEntry back to HttpRouteRuleUnit
                 let route_entry_id = route_entry.identifier();
                 let route_rules = self.route_rules_list.read().unwrap();
@@ -58,22 +60,18 @@ impl RouteRules {
             }
         }
         
-        // Step 2: Try regex match
-        let regex_routes = self.regex_routes.read().unwrap();
-        for regex_route in regex_routes.iter() {
-            if regex_route.matches_path(&path) {
-                if regex_route.deep_match(session)? {
-                    tracing::debug!(path=%path,regex=%regex_route.path_regex.as_str(),"regex match ok");
-                    return Ok(regex_route.rule.clone());
-                }
+        // Step 2: Try regex match - use engine if available
+        if let Some(ref regex_engine) = self.regex_routes_engine {
+            if let Some(rule) = regex_engine.match_route(session)? {
+                tracing::debug!(path=%session.req_header().uri.path(),"regex match ok");
+                return Ok(rule);
             }
         }
-        drop(regex_routes);
         
         // Step 3: Fall back to prefix match - only if match_engine exists
         if let Some(ref match_engine) = self.match_engine {
             let route_entry = match_engine.prefix_match(session)?;
-            tracing::debug!(path=%path,"prefix match ok");
+            tracing::debug!(path=%session.req_header().uri.path(),"prefix match ok");
             
             // Convert RouteEntry back to HttpRouteRuleUnit
             let route_entry_id = route_entry.identifier();

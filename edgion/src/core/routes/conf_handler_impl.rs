@@ -5,6 +5,7 @@ use crate::core::conf_sync::traits::ConfHandler;
 use crate::core::routes::{RouteManager, HttpRouteRuleUnit, HttpRouteRuleRegexUnit, get_global_route_manager};
 use crate::core::routes::routes_mgr::RouteRules;
 use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
+use crate::core::routes::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::core::routes::match_engine::RouteEntry;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::types::{HTTPRoute, ResourceMeta, HTTPRouteMatch, HTTPRouteRule};
@@ -303,6 +304,10 @@ impl RouteManager {
             }
         };
         
+        // Build regex routes engine (only if there are regex routes)
+        let regex_routes_engine = (!regex_routes_list.is_empty())
+            .then(|| Arc::new(RegexRoutesEngine::build(regex_routes_list.clone())));
+        
         let normal_routes_count = route_rules_list.len();
         let regex_routes_count = regex_routes_list.len();
         
@@ -311,6 +316,7 @@ impl RouteManager {
             route_rules_list: RwLock::new(route_rules_list),
             match_engine,
             regex_routes: RwLock::new(regex_routes_list),
+            regex_routes_engine,
         });
         
         domain_hashmap.insert(hostname.to_string(), new_route_rules);
@@ -551,6 +557,10 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                     }
                 };
 
+                // Build regex routes engine (only if there are regex routes)
+                let regex_routes_engine = (!split.1.is_empty())
+                    .then(|| Arc::new(RegexRoutesEngine::build(split.1.clone())));
+
                 // Collect resource keys for this domain (from both normal and regex routes)
                 let mut resource_keys: HashSet<String> = split.0
                     .iter()
@@ -564,6 +574,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                     route_rules_list: RwLock::new(split.0),
                     match_engine,
                     regex_routes: RwLock::new(split.1),
+                    regex_routes_engine,
                 });
 
                 new_domain_routes.insert(domain, route_rules);
