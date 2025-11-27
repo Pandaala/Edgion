@@ -1,9 +1,8 @@
 use edgion::EdgionGwCli;
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() {
+fn main() {
     let cli = EdgionGwCli::parse_args();
-    if let Err(err) = cli.run().await {
+    if let Err(err) = cli.run() {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }

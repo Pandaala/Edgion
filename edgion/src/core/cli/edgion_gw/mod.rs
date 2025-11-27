@@ -44,7 +44,11 @@ impl EdgionGwCli {
         });
     }
 
-    pub async fn run(&self) -> Result<()> {
+    /// Async bootstrap function that handles all async initialization
+    /// 
+    /// Returns a tuple of (GatewayBase, WorkerGuard).
+    /// The WorkerGuard MUST be kept alive for logging to work properly.
+    async fn bootstrap(&self) -> Result<(Arc<GatewayBase>, tracing_appender::non_blocking::WorkerGuard)> {
         // Initialize logging system
         // Use RUST_LOG environment variable if set, otherwise default to "info"
         let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
@@ -58,10 +62,11 @@ impl EdgionGwCli {
             json_format: false,
             console: true,
             level: log_level.clone(),
-            buffer_size: 10_000,
         };
 
-        init_logging(log_config).await?;
+        // Initialize logging and get the WorkerGuard
+        // The guard owns a background thread that performs actual file writes
+        let log_guard = init_logging(log_config).await?;
 
         let server_addr = self
             .server_addr
@@ -86,7 +91,7 @@ impl EdgionGwCli {
             .ok_or_else(|| anyhow!("Base configuration not available"))?;
 
         // bootstrap Gateway
-        let gateway = GatewayBase::new(base_conf);
+        let gateway = Arc::new(GatewayBase::new(base_conf));
         gateway.bootstrap()?;
         tracing::info!("Gateway bootstrap completed successfully");
 
@@ -109,10 +114,28 @@ impl EdgionGwCli {
             }
         }
 
-        // Keep the program running indefinitely
-        tracing::info!("Gateway is running. Press Ctrl+C to exit.");
+        Ok((gateway, log_guard))
+    }
+
+    pub fn run(&self) -> Result<()> {
+        // Create a Tokio runtime for async operations
+        let runtime = tokio::runtime::Runtime::new()?;
         
-        // Run the Pingora server forever (this will block)
+        // Bootstrap all async operations in one block_on call
+        // Keep the log_guard alive for the entire lifetime of the application
+        let (gateway, _log_guard) = runtime.block_on(self.bootstrap())?;
+        
+        // Move the Tokio runtime to a background thread for async tasks
+        // (config printer, config watchers, etc.)
+        std::thread::spawn(move || {
+            runtime.block_on(async {
+                std::future::pending::<()>().await;
+            });
+        });
+        
+        // Run Pingora in the MAIN thread to properly handle system signals
+        // This ensures graceful shutdown (Ctrl+C, SIGTERM) and zero-downtime upgrades work correctly
+        // With tracing-appender, logging works from any thread without runtime context dependency
         gateway.run_forever();
         
         Ok(())

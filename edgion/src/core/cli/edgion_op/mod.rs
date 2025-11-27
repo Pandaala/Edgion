@@ -43,7 +43,7 @@ impl EdgionOpCli {
 
         // Initialize logging system
         let log_config = config.to_log_config();
-        init_logging(log_config).await?;
+        let _log_guard = init_logging(log_config).await?;
 
         // Log system startup
         tracing::info!(

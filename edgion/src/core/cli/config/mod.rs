@@ -317,7 +317,6 @@ impl EdgionOpConfig {
             json_format: self.json_format(),
             console: true,
             level: self.log_level(),
-            buffer_size: self.logging.buffer_size,
         }
     }
 }

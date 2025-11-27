@@ -1,14 +1,9 @@
 use anyhow::Result;
 use std::path::PathBuf;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
-
-mod layer;
-mod writer;
-
-pub use layer::AsyncLogLayer;
-pub use writer::{log_worker, AsyncLogWriter};
 
 /// Configuration for the logging system
 #[derive(Debug, Clone)]
@@ -27,9 +22,6 @@ pub struct LogConfig {
 
     /// Log level filter (e.g., "info", "debug", "warn")
     pub level: String,
-
-    /// Channel buffer size for async logging
-    pub buffer_size: usize,
 }
 
 impl Default for LogConfig {
@@ -40,65 +32,101 @@ impl Default for LogConfig {
             json_format: false,
             console: true,
             level: "info".to_string(),
-            buffer_size: 10_000,
         }
     }
 }
 
-/// Initialize the logging system
+/// Initialize the logging system using tracing-appender
 ///
 /// This sets up a multi-layered logging system with:
-/// - File rotation (daily)
+/// - Daily file rotation (automatic via tracing-appender)
 /// - Optional JSON formatting
 /// - Optional console output
-/// - Async non-blocking writes
-pub async fn init_logging(config: LogConfig) -> Result<()> {
+/// - Non-blocking async writes (automatic via tracing-appender's background thread)
+///
+/// Returns a WorkerGuard that must be kept alive for logging to work.
+/// The guard owns a background thread that performs actual file writes.
+/// Drop the guard when you want to shutdown logging gracefully.
+///
+/// # Compatibility
+/// This implementation works in ANY thread context:
+/// - ✅ Tokio runtime threads
+/// - ✅ Pingora runtime threads
+/// - ✅ Regular OS threads
+/// - ✅ No runtime dependency required!
+pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
     // Create log directory if it doesn't exist
     tokio::fs::create_dir_all(&config.log_dir).await?;
 
-    // Create async channel for log messages
-    let (tx, rx) = tokio::sync::mpsc::channel::<String>(config.buffer_size);
+    // Create daily rotating file appender
+    let file_appender = tracing_appender::rolling::daily(&config.log_dir, &config.file_prefix);
+    
+    // Wrap with non_blocking for async writes
+    // This creates a background OS thread (not a Tokio task) that handles actual writes
+    // The guard MUST be kept alive, otherwise the background thread will shut down
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let writer = AsyncLogWriter::new(tx);
+    // Build subscriber based on format and console settings
+    // We need to handle different layer types separately due to type constraints
+    if config.json_format {
+        // Build env filter
+        let env_filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(&config.level));
 
-    // Spawn background worker for file writing with rotation
-    let log_dir = config.log_dir.clone();
-    let file_prefix = config.file_prefix.clone();
-    tokio::spawn(async move {
-        if let Err(e) = log_worker(rx, log_dir, file_prefix).await {
-            eprintln!("Log worker error: {}", e);
-        }
-    });
-
-    // Build env filter
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
-
-    // Create async log layer
-    let async_layer = AsyncLogLayer {
-        json_fmt: config.json_format,
-        writer,
-    };
-
-    // Build subscriber with layers
-    let subscriber = tracing_subscriber::registry().with(env_filter).with(async_layer);
-
-    // Add console layer if enabled
-    if config.console {
-        let console_layer = tracing_subscriber::fmt::layer()
+        // JSON format file layer
+        let file_layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(non_blocking)
             .with_target(true)
-            .with_thread_ids(false)
-            .with_line_number(true);
+            .with_line_number(true)
+            .with_current_span(false)
+            .with_ansi(false);
 
-        subscriber.with(console_layer).try_init()?;
+        let subscriber = tracing_subscriber::registry()
+            .with(env_filter)
+            .with(file_layer);
+
+        if config.console {
+            let console_layer = tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_line_number(true)
+                .with_ansi(true);
+            subscriber.with(console_layer).try_init()?;
+        } else {
+            subscriber.try_init()?;
+        }
     } else {
-        subscriber.try_init()?;
+        // Build env filter
+        let env_filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(&config.level));
+
+        // Plain text format file layer
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(non_blocking)
+            .with_target(true)
+            .with_line_number(true)
+            .with_ansi(false);
+
+        let subscriber = tracing_subscriber::registry()
+            .with(env_filter)
+            .with(file_layer);
+
+        if config.console {
+            let console_layer = tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_line_number(true)
+                .with_ansi(true);
+            subscriber.with(console_layer).try_init()?;
+        } else {
+            subscriber.try_init()?;
+        }
     }
 
-    Ok(())
+    Ok(guard)
 }
 
 /// Initialize logging with default configuration
-pub async fn init_default() -> Result<()> {
+pub async fn init_default() -> Result<WorkerGuard> {
     init_logging(LogConfig::default()).await
 }
 
@@ -113,18 +141,43 @@ mod tests {
         let config = LogConfig {
             log_dir: temp_dir,
             file_prefix: "test".to_string(),
-            json_format: true,
+            json_format: false,
             console: false,
             level: "debug".to_string(),
-            buffer_size: 1000,
         };
 
-        init_logging(config).await.unwrap();
+        let _guard = init_logging(config).await.unwrap();
 
-        tracing::info!(event = "test", message = "This is a test log");
+        tracing::info!("This is a test log");
         tracing::debug!(user_id = 123, action = "login");
 
         // Give time for async writes
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test]
+    async fn test_logging_from_different_threads() {
+        let temp_dir = std::env::temp_dir().join("edgion_test_multithread");
+        let config = LogConfig {
+            log_dir: temp_dir,
+            file_prefix: "multithread".to_string(),
+            json_format: false,
+            console: false,
+            level: "info".to_string(),
+        };
+
+        let _guard = init_logging(config).await.unwrap();
+
+        // Test from Tokio task
+        tokio::spawn(async {
+            tracing::info!("Log from tokio task");
+        }).await.unwrap();
+
+        // Test from regular thread
+        std::thread::spawn(|| {
+            tracing::info!("Log from regular thread");
+        }).join().unwrap();
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 }
