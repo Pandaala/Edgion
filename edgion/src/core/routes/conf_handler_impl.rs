@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use crate::core::conf_sync::traits::ConfHandler;
-use crate::core::routes::{RouteManager, HttpRouteRuleUnit};
+use crate::core::routes::{RouteManager, HttpRouteRuleUnit, get_global_route_manager};
 use crate::core::routes::routes_mgr::RouteRules;
 use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::routes::match_engine::RouteEntry;
@@ -25,8 +25,8 @@ impl ConfHandler<HTTPRoute> for Arc<RouteManager> {
 
 /// Create a RouteManager handler for registration with ConfigClient
 /// Returns the global RouteManager instance
-pub fn create_route_manager_handler() -> Box<dyn crate::core::conf_sync::traits::ConfHandler<HTTPRoute> + Send + Sync> {
-    Box::new(crate::core::routes::get_global_route_manager())
+pub fn create_route_manager_handler() -> Box<dyn ConfHandler<HTTPRoute> + Send + Sync> {
+    Box::new(get_global_route_manager())
 }
 
 /// Private helper methods for RouteManager
@@ -451,3 +451,261 @@ impl ConfHandler<HTTPRoute> for RouteManager {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Gateway, HTTPRoute};
+    
+    /// Helper function to create a test Gateway from JSON
+    fn create_test_gateway(namespace: &str, name: &str, hostnames: Vec<&str>) -> Gateway {
+        let listeners_json: Vec<serde_json::Value> = hostnames.iter().map(|h| {
+            serde_json::json!({
+                "name": format!("listener-{}", h),
+                "hostname": h,
+                "port": 80,
+                "protocol": "HTTP"
+            })
+        }).collect();
+        
+        let json = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "Gateway",
+            "metadata": {
+                "namespace": namespace,
+                "name": name
+            },
+            "spec": {
+                "gatewayClassName": "test-class",
+                "listeners": listeners_json
+            }
+        });
+        
+        serde_json::from_value(json).expect("Failed to create Gateway")
+    }
+    
+    /// Helper function to create a test HTTPRoute from JSON
+    fn create_test_httproute(
+        namespace: &str,
+        name: &str,
+        hostnames: Vec<&str>,
+        gateway_refs: Vec<(&str, &str)>, // (namespace, name)
+    ) -> HTTPRoute {
+        let parent_refs_json: Vec<serde_json::Value> = gateway_refs.iter().map(|(ns, n)| {
+            serde_json::json!({
+                "group": "gateway.networking.k8s.io",
+                "kind": "Gateway",
+                "namespace": ns,
+                "name": n
+            })
+        }).collect();
+        
+        let json = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {
+                "namespace": namespace,
+                "name": name
+            },
+            "spec": {
+                "parentRefs": parent_refs_json,
+                "hostnames": hostnames,
+                "rules": [{
+                    "matches": []
+                }]
+            }
+        });
+        
+        serde_json::from_value(json).expect("Failed to create HTTPRoute")
+    }
+    
+    #[test]
+    fn test_build_gateway_hostnames_map_with_add_routes() {
+        let mgr = RouteManager::new();
+        
+        // Create test routes
+        let mut add_or_update = HashMap::new();
+        let route1 = create_test_httproute("default", "route1", vec!["api.example.com"], vec![("default", "gateway1")]);
+        let route2 = create_test_httproute("default", "route2", vec!["web.example.com"], vec![("default", "gateway1")]);
+        add_or_update.insert("default/route1".to_string(), route1);
+        add_or_update.insert("default/route2".to_string(), route2);
+        
+        let remove = HashSet::new();
+        
+        // Build gateway_hostnames map
+        let result = mgr.build_gateway_hostnames_map(&add_or_update, &remove);
+        
+        // Verify
+        assert_eq!(result.len(), 1);
+        let hostnames = result.get("default/gateway1").unwrap();
+        assert_eq!(hostnames.len(), 2);
+        assert!(hostnames.contains("api.example.com"));
+        assert!(hostnames.contains("web.example.com"));
+    }
+    
+    #[test]
+    fn test_build_gateway_hostnames_map_with_remove_routes() {
+        let mgr = RouteManager::new();
+        
+        // First add a route
+        let route1 = create_test_httproute("default", "route1", vec!["api.example.com"], vec![("default", "gateway1")]);
+        mgr.http_routes.lock().unwrap().insert("default/route1".to_string(), route1);
+        
+        // Now test remove
+        let add_or_update = HashMap::new();
+        let mut remove = HashSet::new();
+        remove.insert("default/route1".to_string());
+        
+        // Build gateway_hostnames map
+        let result = mgr.build_gateway_hostnames_map(&add_or_update, &remove);
+        
+        // Verify
+        assert_eq!(result.len(), 1);
+        let hostnames = result.get("default/gateway1").unwrap();
+        assert_eq!(hostnames.len(), 1);
+        assert!(hostnames.contains("api.example.com"));
+    }
+    
+    #[test]
+    fn test_build_gateway_hostnames_map_with_multiple_gateways() {
+        let mgr = RouteManager::new();
+        
+        // Create test routes targeting different gateways
+        let mut add_or_update = HashMap::new();
+        let route1 = create_test_httproute("default", "route1", vec!["api.example.com"], vec![("default", "gateway1")]);
+        let route2 = create_test_httproute("default", "route2", vec!["web.example.com"], vec![("default", "gateway2")]);
+        add_or_update.insert("default/route1".to_string(), route1);
+        add_or_update.insert("default/route2".to_string(), route2);
+        
+        let remove = HashSet::new();
+        
+        // Build gateway_hostnames map
+        let result = mgr.build_gateway_hostnames_map(&add_or_update, &remove);
+        
+        // Verify
+        assert_eq!(result.len(), 2);
+        assert!(result.contains_key("default/gateway1"));
+        assert!(result.contains_key("default/gateway2"));
+    }
+    
+    #[test]
+    fn test_build_gateway_hostnames_map_with_same_hostname_different_gateways() {
+        let mgr = RouteManager::new();
+        
+        // Create test routes with same hostname but different gateways
+        let mut add_or_update = HashMap::new();
+        let route1 = create_test_httproute("default", "route1", vec!["api.example.com"], vec![("default", "gateway1")]);
+        let route2 = create_test_httproute("default", "route2", vec!["api.example.com"], vec![("default", "gateway2")]);
+        add_or_update.insert("default/route1".to_string(), route1);
+        add_or_update.insert("default/route2".to_string(), route2);
+        
+        let remove = HashSet::new();
+        
+        // Build gateway_hostnames map
+        let result = mgr.build_gateway_hostnames_map(&add_or_update, &remove);
+        
+        // Verify both gateways have the same hostname
+        assert_eq!(result.len(), 2);
+        let gw1_hostnames = result.get("default/gateway1").unwrap();
+        let gw2_hostnames = result.get("default/gateway2").unwrap();
+        assert!(gw1_hostnames.contains("api.example.com"));
+        assert!(gw2_hostnames.contains("api.example.com"));
+    }
+    
+    #[test]
+    fn test_partial_update_add_routes() {
+        let mgr = RouteManager::new();
+        
+        // Setup: Create a gateway and add it to the gateway routes map
+        let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
+        let _domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        
+        // Add gateway to store
+        {
+            let store = get_global_gateway_store();
+            let mut store_guard = store.write().unwrap();
+            let _ = store_guard.add_gateway(gateway);
+        }
+        
+        // Create test routes to add
+        let mut add_or_update = HashMap::new();
+        let route1 = create_test_httproute("default", "route1", vec!["api.example.com"], vec![("default", "gateway1")]);
+        add_or_update.insert("default/route1".to_string(), route1);
+        
+        let remove = HashSet::new();
+        
+        // Execute partial_update
+        mgr.partial_update(add_or_update, remove);
+        
+        // Verify the route was stored
+        let http_routes = mgr.http_routes.lock().unwrap();
+        assert!(http_routes.contains_key("default/route1"));
+    }
+    
+    #[test]
+    fn test_partial_update_remove_routes() {
+        let mgr = RouteManager::new();
+        
+        // Setup: Add a route first
+        let route1 = create_test_httproute("default", "route1", vec!["api.example.com"], vec![("default", "gateway1")]);
+        mgr.http_routes.lock().unwrap().insert("default/route1".to_string(), route1);
+        
+        // Create remove set
+        let add_or_update = HashMap::new();
+        let mut remove = HashSet::new();
+        remove.insert("default/route1".to_string());
+        
+        // Execute partial_update
+        mgr.partial_update(add_or_update, remove);
+        
+        // Verify the route was removed
+        let http_routes = mgr.http_routes.lock().unwrap();
+        assert!(!http_routes.contains_key("default/route1"));
+    }
+    
+    #[test]
+    fn test_full_set_stores_routes() {
+        let mgr = RouteManager::new();
+        
+        // Create test data
+        let mut data = HashMap::new();
+        let route1 = create_test_httproute("default", "route1", vec!["api.example.com"], vec![("default", "gateway1")]);
+        let route2 = create_test_httproute("default", "route2", vec!["web.example.com"], vec![("default", "gateway1")]);
+        data.insert("default/route1".to_string(), route1);
+        data.insert("default/route2".to_string(), route2);
+        
+        // Execute full_set
+        mgr.full_set(&data);
+        
+        // Verify routes were stored
+        let http_routes = mgr.http_routes.lock().unwrap();
+        assert_eq!(http_routes.len(), 2);
+        assert!(http_routes.contains_key("default/route1"));
+        assert!(http_routes.contains_key("default/route2"));
+    }
+    
+    #[test]
+    fn test_full_set_replaces_existing_routes() {
+        let mgr = RouteManager::new();
+        
+        // Setup: Add some existing routes
+        {
+            let mut http_routes = mgr.http_routes.lock().unwrap();
+            let old_route = create_test_httproute("default", "old-route", vec!["old.example.com"], vec![("default", "gateway1")]);
+            http_routes.insert("default/old-route".to_string(), old_route);
+        }
+        
+        // Create new test data (without old route)
+        let mut data = HashMap::new();
+        let route1 = create_test_httproute("default", "route1", vec!["api.example.com"], vec![("default", "gateway1")]);
+        data.insert("default/route1".to_string(), route1);
+        
+        // Execute full_set
+        mgr.full_set(&data);
+        
+        // Verify old route was replaced
+        let http_routes = mgr.http_routes.lock().unwrap();
+        assert_eq!(http_routes.len(), 1);
+        assert!(!http_routes.contains_key("default/old-route"));
+        assert!(http_routes.contains_key("default/route1"));
+    }
+}
