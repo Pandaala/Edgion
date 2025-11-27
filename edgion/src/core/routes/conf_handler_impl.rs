@@ -35,205 +35,189 @@ pub fn create_route_manager_handler() -> Box<dyn crate::core::conf_sync::traits:
 
 /// Private helper methods for RouteManager
 impl RouteManager {
-    /// Collect all hostnames affected by add/update/remove operations
-    fn collect_affected_hostnames(
+    /// Build gateway_hostnames map from add_or_update and remove sets
+    /// Returns a map of gateway_key -> set of affected hostnames
+    fn build_gateway_hostnames_map(
         &self,
         add_or_update: &HashMap<String, HTTPRoute>,
         remove: &HashSet<String>,
-    ) -> HashSet<String> {
-        let mut affected_hostnames = HashSet::new();
+    ) -> HashMap<String, HashSet<String>> {
+        let mut gateway_hostnames: HashMap<String, HashSet<String>> = HashMap::new();
         
-        // Collect hostnames from additions/updates
-        for (key, route) in add_or_update.iter() {
+        // Process add_or_update routes
+        for route in add_or_update.values() {
             if let Some(hostnames) = &route.spec.hostnames {
-                for hostname in hostnames {
-                    affected_hostnames.insert(hostname.clone());
+                if let Some(parent_refs) = &route.spec.parent_refs {
+                    for parent_ref in parent_refs {
+                        let gateway_key = if let Some(ns) = &parent_ref.namespace {
+                            format!("{}/{}", ns, parent_ref.name)
+                        } else if let Some(ns) = &route.metadata.namespace {
+                            format!("{}/{}", ns, parent_ref.name)
+                        } else {
+                            parent_ref.name.clone()
+                        };
+                        
+                        let hostname_set = gateway_hostnames
+                            .entry(gateway_key)
+                            .or_insert_with(HashSet::new);
+                        for hostname in hostnames {
+                            hostname_set.insert(hostname.clone());
+                        }
+                    }
                 }
-                tracing::debug!(
-                    component = "route_manager",
-                    route_key = %key,
-                    hostnames = ?hostnames,
-                    "HTTPRoute add/update affects hostnames"
-                );
             }
         }
-
-        // Collect hostnames from removals (lookup from storage)
-        for key in remove.iter() {
-            let old_hostnames = {
-                let routes = self.http_routes.lock().unwrap();
-                routes.get(key).and_then(|route| route.spec.hostnames.clone())
-            };
-            
-            if let Some(hostnames) = old_hostnames {
-                for hostname in hostnames.iter() {
-                    affected_hostnames.insert(hostname.clone());
-                }
-                tracing::debug!(
-                    component = "route_manager",
-                    route_key = %key,
-                    hostnames = ?hostnames,
-                    "HTTPRoute removal affects hostnames"
-                );
-            } else {
-                tracing::warn!(
-                    component = "route_manager",
-                    route_key = %key,
-                    "Old HTTPRoute not found in storage, cannot determine affected hostnames"
-                );
-            }
-        }
-
-        tracing::info!(
-            component = "route_manager",
-            total_affected_hostnames = affected_hostnames.len(),
-            hostnames = ?affected_hostnames,
-            "Collected all affected hostnames"
-        );
         
-        affected_hostnames
+        // Process remove routes - find which gateways/hostnames they affect
+        let http_routes = self.http_routes.lock().unwrap();
+        for resource_key in remove.iter() {
+            if let Some(route) = http_routes.get(resource_key) {
+                if let Some(hostnames) = &route.spec.hostnames {
+                    if let Some(parent_refs) = &route.spec.parent_refs {
+                        for parent_ref in parent_refs {
+                            let gateway_key = if let Some(ns) = &parent_ref.namespace {
+                                format!("{}/{}", ns, parent_ref.name)
+                            } else if let Some(ns) = &route.metadata.namespace {
+                                format!("{}/{}", ns, parent_ref.name)
+                            } else {
+                                parent_ref.name.clone()
+                            };
+                            
+                            let hostname_set = gateway_hostnames
+                                .entry(gateway_key)
+                                .or_insert_with(HashSet::new);
+                            for hostname in hostnames {
+                                hostname_set.insert(hostname.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        gateway_hostnames
     }
 
-    /// Update route_rules for a specific hostname by modifying its resource_keys HashSet
-    /// Then rebuild from http_routes storage
-    fn update_hostname_routes(
+    /// Collect all hostnames affected by add/update/remove operations
+
+    /// Update a single hostname's RouteRules in the given HashMap
+    /// This modifies the HashMap in place and does NOT do RCU
+    fn update_single_hostname(
         &self,
+        domain_hashmap: &mut HashMap<DomainStr, Arc<RouteRules>>,
         hostname: &str,
-        gateway_key: &str,
         add_or_update: &HashMap<String, HTTPRoute>,
         remove: &HashSet<String>,
     ) {
-        // Get the domain routes map for this gateway
-        let domain_routes_map = match self.gateway_routes_map.get(gateway_key) {
-            Some(map) => map,
-            None => {
-                tracing::warn!(
-                    component = "route_manager",
-                    gateway_key = %gateway_key,
-                    hostname = %hostname,
-                    "Gateway not found in routes map"
-                );
-                return;
-            }
-        };
-
-        // Use RCU to update the route rules for this hostname
-        domain_routes_map.domain_routes_map.rcu(|current_map| {
-            let current_hashmap: &HashMap<DomainStr, Arc<RouteRules>> = current_map.as_ref();
-            let mut new_hashmap = current_hashmap.clone();
-            
-            // Get existing resource_keys or create empty set
-            let mut resource_keys = new_hashmap
-                .get(hostname)
-                .map(|rr| rr.resource_keys.read().unwrap().clone())
-                .unwrap_or_else(std::collections::HashSet::new);
-            
-            // Step 1: Remove resource keys
-            for key in remove.iter() {
-                if resource_keys.remove(key) {
-                    tracing::debug!(
-                        component = "route_manager",
-                        hostname = %hostname,
-                        resource_key = %key,
-                        "Removed resource key from hostname"
-                    );
-                }
-            }
-            
-            // Step 2: Add/update resource keys from add_or_update
-            for (resource_key, route) in add_or_update.iter() {
-                // Check if this route applies to this hostname
-                let applies = route.spec.hostnames
-                    .as_ref()
-                    .map(|hostnames| hostnames.contains(&hostname.to_string()))
-                    .unwrap_or(false);
-                
-                if applies {
-                    resource_keys.insert(resource_key.clone());
-                    tracing::debug!(
-                        component = "route_manager",
-                        hostname = %hostname,
-                        resource_key = %resource_key,
-                        "Added resource key to hostname"
-                    );
-                }
-            }
-            
-            // Step 3: Rebuild route_rules_list and match_engine from resource_keys
-            if resource_keys.is_empty() {
-                // No more routes for this hostname, remove it
-                new_hashmap.remove(hostname);
-                tracing::info!(
+        // Get existing resource_keys or create empty set
+        let mut resource_keys = domain_hashmap
+            .get(hostname)
+            .map(|rr| rr.resource_keys.read().unwrap().clone())
+            .unwrap_or_else(std::collections::HashSet::new);
+        
+        // Step 1: Remove resource keys
+        for key in remove.iter() {
+            if resource_keys.remove(key) {
+                tracing::debug!(
                     component = "route_manager",
                     hostname = %hostname,
-                    "Removed hostname (no more routes)"
+                    resource_key = %key,
+                    "Removed resource key from hostname"
                 );
-            } else {
-                // Rebuild from http_routes storage
-                let mut route_rules_list = Vec::new();
-                
-                let http_routes = self.http_routes.lock().unwrap();
-                for resource_key in resource_keys.iter() {
-                    if let Some(route) = http_routes.get(resource_key) {
-                        let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-                        let route_name = route.metadata.name.as_deref().unwrap_or("");
-                        
-                        if let Some(rules) = &route.spec.rules {
-                            for rule in rules {
-                                let rule_unit = HttpRouteRuleUnit::new(
-                                    route_namespace.to_string(),
-                                    route_name.to_string(),
-                                    resource_key.clone(),
-                                    rule.clone(),
-                                );
-                                route_rules_list.push(rule_unit);
-                            }
+            }
+        }
+        
+        // Step 2: Add/update resource keys from add_or_update
+        for (resource_key, route) in add_or_update.iter() {
+            // Check if this route applies to this hostname
+            let applies = route.spec.hostnames
+                .as_ref()
+                .map(|hostnames| hostnames.contains(&hostname.to_string()))
+                .unwrap_or(false);
+            
+            if applies {
+                resource_keys.insert(resource_key.clone());
+                tracing::debug!(
+                    component = "route_manager",
+                    hostname = %hostname,
+                    resource_key = %resource_key,
+                    "Added resource key to hostname"
+                );
+            }
+        }
+        
+        // Step 3: Rebuild route_rules_list and match_engine from resource_keys
+        if resource_keys.is_empty() {
+            // No more routes for this hostname, remove it
+            domain_hashmap.remove(hostname);
+            tracing::info!(
+                component = "route_manager",
+                hostname = %hostname,
+                "Removed hostname (no more routes)"
+            );
+        } else {
+            // Rebuild from http_routes storage
+            let mut route_rules_list = Vec::new();
+            
+            let http_routes = self.http_routes.lock().unwrap();
+            for resource_key in resource_keys.iter() {
+                if let Some(route) = http_routes.get(resource_key) {
+                    let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+                    let route_name = route.metadata.name.as_deref().unwrap_or("");
+                    
+                    if let Some(rules) = &route.spec.rules {
+                        for rule in rules {
+                            let rule_unit = HttpRouteRuleUnit::new(
+                                route_namespace.to_string(),
+                                route_name.to_string(),
+                                resource_key.clone(),
+                                rule.clone(),
+                            );
+                            route_rules_list.push(rule_unit);
                         }
-                    } else {
-                        tracing::warn!(
-                            component = "route_manager",
-                            resource_key = %resource_key,
-                            "Resource key in set but not found in http_routes storage"
-                        );
                     }
-                }
-                
-                // Build match engine
-                let route_entries: Vec<Arc<dyn RouteEntry>> = route_rules_list
-                    .iter()
-                    .map(|unit| Arc::new(unit.clone()) as Arc<dyn RouteEntry>)
-                    .collect();
-                
-                match RadixRouteMatchEngine::build(route_entries.clone()) {
-                    Ok(new_engine) => {
-                        let new_route_rules = Arc::new(RouteRules {
-                            resource_keys: RwLock::new(resource_keys),
-                            route_rules_list: RwLock::new(route_rules_list),
-                            match_engine: Arc::new(new_engine),
-                        });
-                        
-                        new_hashmap.insert(hostname.to_string(), new_route_rules);
-                        
-                        tracing::info!(
-                            component = "route_manager",
-                            hostname = %hostname,
-                            resource_keys_count = route_entries.len(),
-                            "Rebuilt match engine for hostname"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            component = "route_manager",
-                            hostname = %hostname,
-                            error = %e,
-                            "Failed to rebuild match engine"
-                        );
-                    }
+                } else {
+                    tracing::warn!(
+                        component = "route_manager",
+                        resource_key = %resource_key,
+                        "Resource key in set but not found in http_routes storage"
+                    );
                 }
             }
             
-            Arc::new(new_hashmap)
-        });
+            // Build match engine
+            let route_entries: Vec<Arc<dyn RouteEntry>> = route_rules_list
+                .iter()
+                .map(|unit| Arc::new(unit.clone()) as Arc<dyn RouteEntry>)
+                .collect();
+            
+            match RadixRouteMatchEngine::build(route_entries.clone()) {
+                Ok(new_engine) => {
+                    let new_route_rules = Arc::new(RouteRules {
+                        resource_keys: RwLock::new(resource_keys),
+                        route_rules_list: RwLock::new(route_rules_list),
+                        match_engine: Arc::new(new_engine),
+                    });
+                    
+                    domain_hashmap.insert(hostname.to_string(), new_route_rules);
+                    
+                    tracing::debug!(
+                        component = "route_manager",
+                        hostname = %hostname,
+                        routes_count = route_entries.len(),
+                        "Updated RouteRules for hostname"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        component = "route_manager",
+                        hostname = %hostname,
+                        error = %e,
+                        "Failed to rebuild match engine"
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -489,79 +473,61 @@ impl ConfHandler<HTTPRoute> for RouteManager {
     /// Handle incremental configuration changes
     /// Processes additions, updates, and removals of HTTPRoutes
     fn conf_change(&self, add_or_update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
-        tracing::info!(
-            component = "route_manager",
-            add_or_update_count = add_or_update.len(),
-            remove_count = remove.len(),
-            "Processing HTTPRoute changes"
-        );
+        tracing::info!(component = "route_manager",au = add_or_update.len(),rm = remove.len(),"Processing HTTPRoute changes");
 
-        // Step 1: Collect all affected hostnames
-        let affected_hostnames = self.collect_affected_hostnames(&add_or_update, &remove);
-
-        // Step 2 & 3: For each affected hostname, update its route_rules_list and rebuild match engine
-        // We need to find which gateways each hostname belongs to
-        for hostname in affected_hostnames.iter() {
-            // Find all gateways that have this hostname
-            for gateway_entry in self.gateway_routes_map.iter() {
-                let gateway_key = gateway_entry.key();
-                
-                // Check if this gateway has routes for this hostname
-                let has_hostname = {
-                    let domain_map = gateway_entry.value().domain_routes_map.load();
-                    domain_map.contains_key(hostname)
-                };
-                
-                if has_hostname {
-                    tracing::debug!(
-                        component = "route_manager",
-                        hostname = %hostname,
-                        gateway_key = %gateway_key,
-                        "Updating routes for hostname in gateway"
-                    );
-                    
-                    self.update_hostname_routes(hostname, gateway_key, &add_or_update, &remove);
-                } else {
-                    // Even if gateway doesn't have this hostname yet, check if add_or_update contains routes for it
-                    let should_add = add_or_update.values().any(|route| {
-                        route.spec.hostnames
-                            .as_ref()
-                            .map(|hostnames| hostnames.contains(&hostname.to_string()))
-                            .unwrap_or(false)
-                            && route.spec.parent_refs
-                                .as_ref()
-                                .map(|refs| refs.iter().any(|ref_| {
-                                    let key = if let Some(ns) = &ref_.namespace {
-                                        format!("{}/{}", ns, ref_.name)
-                                    } else if let Some(ns) = &route.metadata.namespace {
-                                        format!("{}/{}", ns, ref_.name)
-                                    } else {
-                                        ref_.name.clone()
-                                    };
-                                    &key == gateway_key
-                                }))
-                                .unwrap_or(false)
-                    });
-                    
-                    if should_add {
-                        tracing::debug!(
-                            component = "route_manager",
-                            hostname = %hostname,
-                            gateway_key = %gateway_key,
-                            "Adding new hostname to gateway"
-                        );
-                        
-                        self.update_hostname_routes(hostname, gateway_key, &add_or_update, &remove);
-                    }
-                }
+        // Step 0: First update http_routes storage (before rebuilding, so we have the latest data)
+        {
+            let mut routes = self.http_routes.lock().unwrap();
+            for (key, route) in add_or_update.iter() {
+                routes.insert(key.clone(), route.clone());
+                tracing::debug!(component = "route_manager",route_key = %key,"add/update HTTPRoute");
             }
         }
         
-        // Step 4: Update stored http_routes
+        // Step 1: Build gateway_hostnames map
+        let gateway_hostnames = self.build_gateway_hostnames_map(&add_or_update, &remove);
+
+        // Step 2: For each gateway, update all affected hostnames in one RCU operation
+        for (gateway_key, hostnames) in gateway_hostnames.iter() {
+            tracing::debug!(
+                component = "route_manager",
+                gateway_key = %gateway_key,
+                hostnames_count = hostnames.len(),
+                "Updating domain_routes_map for gateway"
+            );
+            
+            if let Some(domain_routes_ref) = self.gateway_routes_map.get(gateway_key) {
+                // Clone current domain_routes_map
+                let current_map = domain_routes_ref.domain_routes_map.load();
+                let current_hashmap: &HashMap<DomainStr, Arc<RouteRules>> = current_map.as_ref();
+                let mut new_hashmap: HashMap<String, Arc<RouteRules>> = current_hashmap.clone();
+                
+                // Update all affected hostnames
+                for hostname in hostnames.iter() {
+                    self.update_single_hostname(
+                        &mut new_hashmap,
+                        hostname,
+                        &add_or_update,
+                        &remove,
+                    );
+                }
+                
+                // Replace the entire domain_routes_map in one atomic operation
+                // Note: ArcSwap<Arc<T>> requires Arc<Arc<T>> for store() method
+                domain_routes_ref.domain_routes_map.store(Arc::new(Arc::new(new_hashmap)));
+                
+                tracing::info!(
+                    component = "route_manager",
+                    gateway_key = %gateway_key,
+                    updated_hostnames = hostnames.len(),
+                    "Updated domain_routes_map for gateway"
+                );
+            }
+        }
+        
+        // Step 3: Remove deleted routes from http_routes storage (after rebuilding)
         {
             let mut routes = self.http_routes.lock().unwrap();
-            
-            // Remove deleted routes
             for key in remove.iter() {
                 if routes.remove(key).is_some() {
                     tracing::debug!(
@@ -571,22 +537,9 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                     );
                 }
             }
-            
-            // Add or update routes
-            for (key, route) in add_or_update.iter() {
-                routes.insert(key.clone(), route.clone());
-                tracing::debug!(
-                    component = "route_manager",
-                    route_key = %key,
-                    "Stored/updated HTTPRoute in storage"
-                );
-            }
         }
         
-        tracing::info!(
-            component = "route_manager",
-            "HTTPRoute changes processed successfully"
-        );
+        tracing::info!( component = "route_manager","HTTPRoute changes processed successfully");
     }
 
     /// Trigger a rebuild/refresh of the route configuration
