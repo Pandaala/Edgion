@@ -1,10 +1,14 @@
 use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
 use crate::core::gateway::gateway_base::GatewayBase;
-use crate::core::logging::{init_logging, LogConfig};
+use crate::core::logging::init_logging;
 use anyhow::{anyhow, Result};
 use clap::Parser;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+
+mod log_config;
+use log_config::GatewayLogConfig;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -25,6 +29,10 @@ pub struct EdgionGwCli {
     /// Gateway admin HTTP listen address
     #[arg(long, value_name = "ADDR")]
     pub admin_listen: Option<String>,
+
+    /// Log directory path (defaults to ./logs if not specified)
+    #[arg(long, value_name = "DIR")]
+    pub log_dir: Option<PathBuf>,
 }
 
 impl EdgionGwCli {
@@ -49,24 +57,17 @@ impl EdgionGwCli {
     /// Returns a tuple of (GatewayBase, WorkerGuard).
     /// The WorkerGuard MUST be kept alive for logging to work properly.
     async fn bootstrap(&self) -> Result<(Arc<GatewayBase>, tracing_appender::non_blocking::WorkerGuard)> {
-        // Initialize logging system
-        // Use RUST_LOG environment variable if set, otherwise default to "info"
-        let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
-
-        // Use temp directory for logs to avoid permission issues
-        let log_dir = std::env::temp_dir().join("edgion-gw-logs");
+        // Initialize logging system with configuration
+        let log_config = GatewayLogConfig::new(self.log_dir.clone());
         
-        let log_config = LogConfig {
-            log_dir,
-            file_prefix: "edgion-gateway".to_string(),
-            json_format: false,
-            console: true,
-            level: log_level.clone(),
-        };
-
+        // Validate configuration
+        log_config.validate()?;
+        
+        tracing::info!("Logging initialized at: {:?}", log_config.log_dir);
+        
         // Initialize logging and get the WorkerGuard
         // The guard owns a background thread that performs actual file writes
-        let log_guard = init_logging(log_config).await?;
+        let log_guard = init_logging(log_config.to_log_config()).await?;
 
         let server_addr = self
             .server_addr
