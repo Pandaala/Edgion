@@ -4,7 +4,8 @@ use dashmap::DashMap;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
-use crate::core::routes::{HttpRouteRuleUnit, HttpRouteRuleRegexUnit, MatchedRoute};
+use crate::core::routes::{HttpRouteRuleUnit, HttpRouteRuleRegexUnit};
+use crate::types::HTTPRouteRule;
 use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::types::{HTTPRoute, ResourceMeta};
 
@@ -40,7 +41,7 @@ impl RouteRules {
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-    ) -> Result<MatchedRoute, crate::types::err::EdError> {
+    ) -> Result<Arc<HTTPRouteRule>, crate::types::err::EdError> {
         let path = session.req_header().uri.path().to_string();
         
         // Step 1: Try exact match first (highest priority)
@@ -50,7 +51,7 @@ impl RouteRules {
             let route_entry_id = route_entry.identifier();
             let route_rules = self.route_rules_list.read().unwrap();
             if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.namespace, u.name) == route_entry_id) {
-                return Ok(MatchedRoute::Normal(Arc::new(unit.clone())));
+                return Ok(unit.rule.clone());
             }
         }
         
@@ -60,7 +61,7 @@ impl RouteRules {
             if regex_route.matches_path(&path) {
                 if regex_route.deep_match(session)? {
                     tracing::debug!(path=%path,regex=%regex_route.path_regex.as_str(),"regex match ok");
-                    return Ok(MatchedRoute::Regex(regex_route.clone()));
+                    return Ok(regex_route.rule.clone());
                 }
             }
         }
@@ -74,7 +75,7 @@ impl RouteRules {
         let route_entry_id = route_entry.identifier();
         let route_rules = self.route_rules_list.read().unwrap();
         if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.namespace, u.name) == route_entry_id) {
-            return Ok(MatchedRoute::Normal(Arc::new(unit.clone())));
+            return Ok(unit.rule.clone());
         }
         
         // Should not happen
@@ -88,12 +89,12 @@ pub struct DomainRouteRules {
 
 impl DomainRouteRules {
     /// Match a route for the given hostname and session
-    /// Returns the matched route if found, or an error if no route matches
+    /// Returns the matched route rule if found, or an error if no route matches
     pub fn match_route(
         &self,
         hostname: &str,
         session: &mut pingora_proxy::Session,
-    ) -> Result<MatchedRoute, crate::types::err::EdError> {
+    ) -> Result<Arc<HTTPRouteRule>, crate::types::err::EdError> {
         let domain_routes_map = self.domain_routes_map.load();
         
         // Try to find RouteRules for the hostname (exact match only)

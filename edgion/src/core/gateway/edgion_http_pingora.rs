@@ -75,14 +75,13 @@ impl ProxyHttp for EdgionHttp {
 
         // Match route using domain_routes
         match self.domain_routes.match_route(&hostname, session) {
-            Ok(matched_route) => {
+            Ok(_matched_rule) => {
                 tracing::info!(
-                    "Route matched: {} for hostname: {}, path: {}",
-                    matched_route.identifier(),
+                    "Route matched for hostname: {}, path: {}",
                     hostname,
                     session.req_header().uri.path()
                 );
-                // TODO: Store matched route in context for later use (plugins, upstream selection, etc.)
+                // TODO: Store matched route rule in context for later use (plugins, upstream selection, etc.)
                 // For now, just return true to continue processing
                 Ok(true)
             }
