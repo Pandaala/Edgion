@@ -11,6 +11,10 @@ use crate::types::{HTTPRoute, ResourceMeta};
 type DomainStr = String;
 
 pub struct RouteRules {
+    /// All resource keys (HTTPRoute) that apply to this hostname
+    /// Format: "namespace/name"
+    pub(crate) resource_keys: RwLock<std::collections::HashSet<String>>,
+    
     pub(crate) route_rules_list: RwLock<Vec<HttpRouteRuleUnit>>,
     pub(crate) match_engine: Arc<RadixRouteMatchEngine>,
 }
@@ -18,6 +22,7 @@ pub struct RouteRules {
 impl Clone for RouteRules {
     fn clone(&self) -> Self {
         Self {
+            resource_keys: RwLock::new(self.resource_keys.read().unwrap().clone()),
             route_rules_list: RwLock::new(self.route_rules_list.read().unwrap().clone()),
             match_engine: self.match_engine.clone(),
         }
@@ -254,6 +259,7 @@ impl RouteManager {
             let route_rules_arc = new_hashmap
                 .entry(hostname_key.clone())
                 .or_insert_with(|| Arc::new(RouteRules {
+                    resource_keys: RwLock::new(std::collections::HashSet::new()),
                     route_rules_list: RwLock::new(Vec::new()),
                     match_engine: Arc::new(RadixRouteMatchEngine::default()),
                 }));
@@ -266,9 +272,12 @@ impl RouteManager {
             let rule_unit = HttpRouteRuleUnit::new(
                 route_namespace.to_string(),
                 route_name.to_string(),
-                resource_key,
+                resource_key.clone(),
                 rule.clone(),
             );
+            
+            // Add the resource key to the set
+            route_rules_mut.resource_keys.write().unwrap().insert(resource_key);
             
             // Add the rule to the list
             route_rules_mut.route_rules_list.write().unwrap().push(rule_unit);
