@@ -6,7 +6,7 @@ use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use parking_lot::RwLock;
 use pingora_core::protocols::l4::socket::SocketAddr;
-use crate::types::HTTPBackendRef;
+use crate::types::{HTTPBackendRef, HTTPRouteRule};
 
 static GLOBAL_SERVICE_MGR: Lazy<Arc<ServiceMgr>> =
     Lazy::new(|| Arc::new(ServiceMgr::new()));
@@ -46,7 +46,7 @@ impl ServiceMgr {
         Self { services: DashMap::new() }
     }
 
-    pub fn get_peer(&self, br: &HTTPBackendRef) -> Option<SocketAddr> {
+    pub fn get_peer(&self, route: Arc<HTTPRouteRule>, br: &HTTPBackendRef) -> Option<SocketAddr> {
 
         None
     }

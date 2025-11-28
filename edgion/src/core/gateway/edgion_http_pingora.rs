@@ -40,7 +40,7 @@ impl ProxyHttp for EdgionHttp {
 
 
         let srv_mgr = get_global_service_mgr();
-        if let Some(addr) = srv_mgr.get_peer(&backend_ref) {
+        if let Some(addr) = srv_mgr.get_peer(matched_route, &backend_ref) {
             let peer = Box::new(HttpPeer::new(addr, false, String::new()));
             return Ok(peer)
         }
