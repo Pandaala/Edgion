@@ -3,12 +3,12 @@
 //! HTTPRoute defines HTTP rules for mapping requests to backends
 
 use std::fmt;
-use std::sync::Arc;
+use arc_swap::ArcSwap;
 use kube::CustomResource;
-use pingora_load_balancing::LoadBalancer;
-use pingora_load_balancing::selection::RoundRobin;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::core::backend::WeightedRoundRobin;
 
 /// API group for HTTPRoute
 pub const HTTP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -67,7 +67,7 @@ pub struct ParentReference {
     pub port: Option<i32>,
 }
 
-#[derive(Deserialize, Serialize, Clone, JsonSchema)]
+#[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteRule {
     /// Matches define conditions used for matching the rule against requests
@@ -82,10 +82,23 @@ pub struct HTTPRouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_refs: Option<Vec<HTTPBackendRef>>,
 
-    /// Load balancer for temporary context (not serialized/deserialized)
+    /// Weighted round-robin selector for backend selection (not serialized/deserialized)
     #[serde(skip)]
     #[schemars(skip)]
-    pub lb: Option<Arc<LoadBalancer<RoundRobin>>>,
+    pub lb: ArcSwap<Option<WeightedRoundRobin<HTTPBackendRef>>>,
+}
+
+impl Clone for HTTPRouteRule {
+    fn clone(&self) -> Self {
+        Self {
+            matches: self.matches.clone(),
+            filters: self.filters.clone(),
+            backend_refs: self.backend_refs.clone(),
+            // Create a new empty ArcSwap for cloned instance
+            // The selector will be initialized lazily when needed
+            lb: ArcSwap::from_pointee(None),
+        }
+    }
 }
 
 impl fmt::Debug for HTTPRouteRule {

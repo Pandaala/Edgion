@@ -1,3 +1,4 @@
+pub mod backend;
 pub mod cli;
 pub mod conf_load;
 pub mod conf_sync;

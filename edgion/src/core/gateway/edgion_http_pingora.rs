@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use async_trait::async_trait;
 use pingora_core::modules::http::grpc_web::{GrpcWeb, GrpcWebBridge};
@@ -5,6 +6,7 @@ use pingora_core::modules::http::HttpModules;
 use pingora_core::prelude::HttpPeer;
 use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
+use crate::core::backend::WeightedRoundRobin;
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::core::gateway::edgion_http_context::EdgionHttpContext;
 use crate::types::EdgionErrCode;
@@ -140,9 +142,42 @@ impl ProxyHttp for EdgionHttp {
             );
         }
 
-        // TODO: 实现后端服务选择逻辑
-        // 根据 backend_refs 选择后端服务并创建 HttpPeer
-        // 当前简单跳过，返回错误
-        Err(pingora_core::Error::new_str("Upstream peer selection not implemented yet"))
+        // 检查 lb 是否已初始化，如果未初始化则创建
+        if matched_route.lb.load().is_none() {
+            // 从 backend_refs 提取权重列表
+            let weights: Vec<usize> = backend_refs
+                .iter()
+                .map(|br| br.weight.unwrap_or(1) as usize)
+                .collect();
+
+            // 创建加权轮询选择器（克隆 backend_refs）
+            let selector = WeightedRoundRobin::new(backend_refs.clone(), weights);
+            matched_route.lb.store(Arc::new(Some(selector)));
+            tracing::debug!("WeightedRoundRobin initialized with {} backends", backend_refs.len());
+        }
+
+        // 使用选择器选择后端
+        let lb_guard = matched_route.lb.load();
+        let selector = match &**lb_guard {
+            Some(s) => s,
+            None => {
+                tracing::error!("Selector not initialized after initialization attempt");
+                return Err(pingora_core::Error::new_str("Selector not initialized"));
+            }
+        };
+
+        // 直接选择后端引用
+        let backend_ref = selector.select();
+        tracing::info!(
+            "Selected backend: name={}, port={:?}",
+            backend_ref.name,
+            backend_ref.port
+        );
+
+        // 构建 HttpPeer（使用 name:port 作为地址）
+        let addr = format!("{}:{}", backend_ref.name, backend_ref.port.unwrap_or(80));
+        let peer = HttpPeer::new(addr, false, String::new());
+        
+        Ok(Box::new(peer))
     }
 } 
