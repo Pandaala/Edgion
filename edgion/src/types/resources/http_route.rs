@@ -2,7 +2,11 @@
 //!
 //! HTTPRoute defines HTTP rules for mapping requests to backends
 
+use std::fmt;
+use std::sync::Arc;
 use kube::CustomResource;
+use pingora_load_balancing::LoadBalancer;
+use pingora_load_balancing::selection::RoundRobin;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -63,7 +67,7 @@ pub struct ParentReference {
     pub port: Option<i32>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteRule {
     /// Matches define conditions used for matching the rule against requests
@@ -77,6 +81,22 @@ pub struct HTTPRouteRule {
     /// BackendRefs defines the backend(s) where matching requests should be sent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_refs: Option<Vec<HTTPBackendRef>>,
+
+    /// Load balancer for temporary context (not serialized/deserialized)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub lb: Option<Arc<LoadBalancer<RoundRobin>>>,
+}
+
+impl fmt::Debug for HTTPRouteRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HTTPRouteRule")
+            .field("matches", &self.matches)
+            .field("filters", &self.filters)
+            .field("backend_refs", &self.backend_refs)
+            .field("lb", &"<skipped>")
+            .finish()
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]

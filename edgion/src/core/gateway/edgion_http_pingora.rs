@@ -98,17 +98,50 @@ impl ProxyHttp for EdgionHttp {
                     err_code.message()
                 );
                 let resp = Box::new(ResponseHeader::build(err_code.http_status(), None).unwrap());
-                // end_of_stream = true 表示响应已经完成，不需要继续处理
                 session.write_response_header(resp, true).await?;
-                // shutdown() 确保会话被正确关闭，防止继续进入upstream阶段
                 session.shutdown().await;
                 Ok(false)
             }
         }
     }
 
-    async fn upstream_peer(&self, _session: &mut Session, _ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
+    async fn upstream_peer(&self, _session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
+        // 检查是否有匹配的路由
+        let matched_route = match &ctx.matched_http_route {
+            Some(route) => route,
+            None => {
+                tracing::warn!("No matched route found in context");
+                return Err(pingora_core::Error::new_str("No matched route found in context"));
+            }
+        };
+
+        // 从匹配的路由中提取 backend_refs
+        let backend_refs = match &matched_route.backend_refs {
+            Some(refs) if !refs.is_empty() => refs,
+            _ => {
+                tracing::warn!("No backend_refs found in matched route");
+                return Err(pingora_core::Error::new_str("No backend_refs found in matched route"));
+            }
+        };
+
+        // 打印 backend_refs 信息用于调试
+        tracing::debug!(
+            "Found {} backend reference(s) in matched route",
+            backend_refs.len()
+        );
+        for (idx, backend_ref) in backend_refs.iter().enumerate() {
+            tracing::debug!(
+                "Backend[{}]: name={}, namespace={:?}, port={:?}, weight={:?}",
+                idx,
+                backend_ref.name,
+                backend_ref.namespace,
+                backend_ref.port,
+                backend_ref.weight
+            );
+        }
+
         // TODO: 实现后端服务选择逻辑
+        // 根据 backend_refs 选择后端服务并创建 HttpPeer
         // 当前简单跳过，返回错误
         Err(pingora_core::Error::new_str("Upstream peer selection not implemented yet"))
     }
