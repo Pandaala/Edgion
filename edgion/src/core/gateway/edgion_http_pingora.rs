@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use async_trait::async_trait;
-use pingora_core::InternalError;
 use pingora_core::modules::http::grpc_web::{GrpcWeb, GrpcWebBridge};
 use pingora_core::modules::http::HttpModules;
 use pingora_core::prelude::HttpPeer;
+use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::{ProxyHttp, Session};
 use crate::core::lb::WeightedRoundRobin;
 use crate::core::gateway::edgion_http::EdgionHttp;
@@ -73,7 +73,7 @@ impl ProxyHttp for EdgionHttp {
                 ctx.matched_http_route = Some(matched_rule);
                 Ok(true)
             }
-            Err(e) => {
+            Err(_e) => {
                 ctx.add_error(EdgionErrStatus::RouteNotFound);
                 end_response_404(session).await?;
                 ctx.matched_http_route = None;
@@ -88,13 +88,13 @@ impl ProxyHttp for EdgionHttp {
             Some(route) => route,
             None => {
                 ctx.add_error(EdgionErrStatus::UpstreamNotRouteMatched);
-                return InternalError;
+                return Err(PingoraError::new(ErrorType::InternalError));
             }
         };
 
         if matched_route.backend_refs.is_none() {
             ctx.add_error(EdgionErrStatus::UpstreamNotRouteMatched);
-            return InternalError;
+            return Err(PingoraError::new(ErrorType::InternalError));
         }
 
         // Extract backend_refs from the matched route
@@ -102,7 +102,7 @@ impl ProxyHttp for EdgionHttp {
             Some(refs) if !refs.is_empty() => refs,
             _ => {
                 tracing::warn!("No backend_refs found in matched route");
-                return Err(pingora_core::Error::new_str("No backend_refs found in matched route"));
+                return Err(PingoraError::new(ErrorType::InternalError));
             }
         };
 
@@ -142,7 +142,7 @@ impl ProxyHttp for EdgionHttp {
             Some(s) => s,
             None => {
                 tracing::error!("Selector not initialized after initialization attempt");
-                return Err(pingora_core::Error::new_str("Selector not initialized"));
+                return Err(PingoraError::new(ErrorType::InternalError));
             }
         };
 

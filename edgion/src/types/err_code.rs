@@ -8,10 +8,8 @@ pub enum EdgionErrStatus {
     /// Route Not Found
     RouteNotFound = 0x40401,
 
+    /// Upstream route not matched
     UpstreamNotRouteMatched = 0x50001,
-
-    UpstreamNotRouteMatched = 0x50001,
-
 }
 
 
