@@ -1,6 +1,6 @@
 //! Smooth Weighted Round Robin selector
 //!
-//! A thread-safe smooth weighted round-robin algorithm for backend selection.
+//! A thread-safe smooth weighted round-robin algorithm for lb selection.
 //! This algorithm distributes requests more evenly compared to simple weighted round-robin.
 
 use parking_lot::Mutex;
@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 ///
 /// Uses Nginx's smooth weighted round-robin algorithm to distribute requests
 /// evenly based on weights. Unlike simple weighted round-robin, this algorithm
-/// avoids "burst" behavior where a high-weight backend receives many consecutive requests.
+/// avoids "burst" behavior where a high-weight lb receives many consecutive requests.
 ///
 /// # Type Parameters
 /// * `T` - The type of items to select from

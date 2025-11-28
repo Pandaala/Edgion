@@ -8,7 +8,7 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::core::backend::WeightedRoundRobin;
+use crate::core::lb::WeightedRoundRobin;
 
 /// API group for HTTPRoute
 pub const HTTP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -78,11 +78,11 @@ pub struct HTTPRouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<serde_json::Value>>,
 
-    /// BackendRefs defines the backend(s) where matching requests should be sent
+    /// BackendRefs defines the lb(s) where matching requests should be sent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_refs: Option<Vec<HTTPBackendRef>>,
 
-    /// Weighted round-robin selector for backend selection (not serialized/deserialized)
+    /// Weighted round-robin selector for lb selection (not serialized/deserialized)
     #[serde(skip)]
     #[schemars(skip)]
     pub lb: ArcSwap<Option<WeightedRoundRobin<HTTPBackendRef>>>,
@@ -175,10 +175,10 @@ pub struct HTTPQueryParamMatch {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPBackendRef {
-    /// Name is the name of the backend Service
+    /// Name is the name of the lb Service
     pub name: String,
 
-    /// Namespace is the namespace of the backend Service
+    /// Namespace is the namespace of the lb Service
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
 
@@ -186,7 +186,7 @@ pub struct HTTPBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<i32>,
 
-    /// Weight specifies the proportion of requests forwarded to the backend
+    /// Weight specifies the proportion of requests forwarded to the lb
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weight: Option<i32>,
 

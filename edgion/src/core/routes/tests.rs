@@ -74,7 +74,7 @@ mod route_matching_tests {
                 "rules": [{
                     "matches": matches_json,
                     "backendRefs": [{
-                        "name": format!("{}-backend", name),
+                        "name": format!("{}-lb", name),
                         "port": 8080
                     }]
                 }]
@@ -123,7 +123,7 @@ mod route_matching_tests {
                 "rules": [{
                     "matches": matches_json,
                     "backendRefs": [{
-                        "name": format!("{}-backend", name),
+                        "name": format!("{}-lb", name),
                         "port": 8080
                     }]
                 }]

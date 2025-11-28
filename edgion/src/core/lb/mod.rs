@@ -1,6 +1,6 @@
 //! Backend selection algorithms
 //!
-//! This module provides weighted load balancing algorithms for backend selection.
+//! This module provides weighted load balancing algorithms for lb selection.
 
 mod weighted_selector;
 

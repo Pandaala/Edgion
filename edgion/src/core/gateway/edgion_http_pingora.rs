@@ -1,15 +1,16 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use async_trait::async_trait;
+use pingora_core::InternalError;
 use pingora_core::modules::http::grpc_web::{GrpcWeb, GrpcWebBridge};
 use pingora_core::modules::http::HttpModules;
 use pingora_core::prelude::HttpPeer;
-use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
-use crate::core::backend::WeightedRoundRobin;
+use crate::core::lb::WeightedRoundRobin;
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::core::gateway::edgion_http_context::EdgionHttpContext;
-use crate::types::EdgionErrCode;
+use crate::core::gateway::{end_response_400, end_response_404};
+use crate::types::EdgionErrStatus;
 
 #[async_trait]
 impl ProxyHttp for EdgionHttp {
@@ -33,6 +34,7 @@ impl ProxyHttp for EdgionHttp {
 
         // process gprc
         let req_header = session.req_header();
+
         if let Some(content_type) = req_header.headers.get("content-type") {
             if let Ok(ct_str) = content_type.to_str() {
                 if ct_str.len() >= 21 && ct_str[..21].eq_ignore_ascii_case("application/grpc-web") {
@@ -51,73 +53,51 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
-        // Get hostname from request header
-        let hostname = match session
-            .req_header()
-            .headers
-            .get("host")
-            .and_then(|h| h.to_str().ok())
+
+        let req_header = session.req_header();
+        match req_header.headers.get("host").and_then(|h| h.to_str().ok())
         {
-            Some(host) => host.to_string(),
-            None => {
-                // No hostname provided, add error code and return 400
-                let err_code = EdgionErrCode::HostMissing;
-                ctx.add_error(err_code);
-                tracing::warn!(
-                    "Request missing Host header, path: {}, error_code: 0x{:X}, message: {}",
-                    session.req_header().uri.path(),
-                    err_code.code(),
-                    err_code.message()
-                );
-                let resp = Box::new(ResponseHeader::build(err_code.http_status(), None).unwrap());
-                session.write_response_header(resp, true).await?;
-                session.shutdown().await;
-                return Ok(false);
+            Some(host) => {
+                ctx.hostname = host.to_string();
             }
-        };
+            None => {
+                ctx.add_error(EdgionErrStatus::HostMissing);
+                end_response_400(session).await?;
+                return Ok(true);
+            }
+        }
 
         // Match route using domain_routes
-        match self.domain_routes.match_route(&hostname, session) {
+        match self.domain_routes.match_route(&ctx.hostname, session) {
             Ok(matched_rule) => {
-                tracing::info!(
-                    "Route matched for hostname: {}, path: {}",
-                    hostname,
-                    session.req_header().uri.path()
-                );
-                ctx.matched_http_route = Option::from(matched_rule);
+                ctx.matched_http_route = Some(matched_rule);
                 Ok(true)
             }
             Err(e) => {
-                // Route not found, add error code and return 404
-                let err_code = EdgionErrCode::RouteNotFound;
-                ctx.add_error(err_code);
-                tracing::info!(
-                    "No route matched for hostname: {}, path: {}, error: {:?}, error_code: 0x{:X}, message: {}",
-                    hostname,
-                    session.req_header().uri.path(),
-                    e,
-                    err_code.code(),
-                    err_code.message()
-                );
-                let resp = Box::new(ResponseHeader::build(err_code.http_status(), None).unwrap());
-                session.write_response_header(resp, true).await?;
-                session.shutdown().await;
-                Ok(false)
+                ctx.add_error(EdgionErrStatus::RouteNotFound);
+                end_response_404(session).await?;
+                ctx.matched_http_route = None;
+                Ok(true)
             }
         }
     }
 
-    async fn upstream_peer(&self, _session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
-        // 检查是否有匹配的路由
+    async fn upstream_peer(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
+
         let matched_route = match &ctx.matched_http_route {
             Some(route) => route,
             None => {
-                tracing::warn!("No matched route found in context");
-                return Err(pingora_core::Error::new_str("No matched route found in context"));
+                ctx.add_error(EdgionErrStatus::UpstreamNotRouteMatched);
+                return InternalError;
             }
         };
 
-        // 从匹配的路由中提取 backend_refs
+        if matched_route.backend_refs.is_none() {
+            ctx.add_error(EdgionErrStatus::UpstreamNotRouteMatched);
+            return InternalError;
+        }
+
+        // Extract backend_refs from the matched route
         let backend_refs = match &matched_route.backend_refs {
             Some(refs) if !refs.is_empty() => refs,
             _ => {
@@ -126,9 +106,9 @@ impl ProxyHttp for EdgionHttp {
             }
         };
 
-        // 打印 backend_refs 信息用于调试
+        // Log backend_refs information for debugging
         tracing::debug!(
-            "Found {} backend reference(s) in matched route",
+            "Found {} lb reference(s) in matched route",
             backend_refs.len()
         );
         for (idx, backend_ref) in backend_refs.iter().enumerate() {
@@ -142,21 +122,21 @@ impl ProxyHttp for EdgionHttp {
             );
         }
 
-        // 检查 lb 是否已初始化，如果未初始化则创建
+        // Check if lb is initialized, create it if not
         if matched_route.lb.load().is_none() {
-            // 从 backend_refs 提取权重列表
+            // Extract weight list from backend_refs
             let weights: Vec<usize> = backend_refs
                 .iter()
                 .map(|br| br.weight.unwrap_or(1) as usize)
                 .collect();
 
-            // 创建加权轮询选择器（克隆 backend_refs）
+            // Create weighted round-robin selector (clone backend_refs)
             let selector = WeightedRoundRobin::new(backend_refs.clone(), weights);
             matched_route.lb.store(Arc::new(Some(selector)));
-            tracing::debug!("WeightedRoundRobin initialized with {} backends", backend_refs.len());
+            tracing::info!("WeightedRoundRobin initialized with {} backends", backend_refs.len());
         }
 
-        // 使用选择器选择后端
+        // Use selector to choose lb
         let lb_guard = matched_route.lb.load();
         let selector = match &**lb_guard {
             Some(s) => s,
@@ -166,15 +146,11 @@ impl ProxyHttp for EdgionHttp {
             }
         };
 
-        // 直接选择后端引用
+        // Select lb reference directly
         let backend_ref = selector.select();
-        tracing::info!(
-            "Selected backend: name={}, port={:?}",
-            backend_ref.name,
-            backend_ref.port
-        );
+        tracing::info!("Selected lb: {:?}", backend_ref);
 
-        // 构建 HttpPeer（使用 name:port 作为地址）
+        // Build HttpPeer (use name:port as address)
         let addr = format!("{}:{}", backend_ref.name, backend_ref.port.unwrap_or(80));
         let peer = HttpPeer::new(addr, false, String::new());
         
