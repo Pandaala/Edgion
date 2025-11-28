@@ -1,4 +1,5 @@
-use crate::types::EdgionErrCode;
+use std::sync::Arc;
+use crate::types::{EdgionErrCode, HTTPRouteRule};
 
 pub struct EdgionHttpContext {
     pub x_trace_id: Option<String>,
@@ -8,6 +9,8 @@ pub struct EdgionHttpContext {
     
     /// Error codes collected during request processing
     pub error_codes: Vec<EdgionErrCode>,
+
+    pub matched_http_route: Option<Arc<HTTPRouteRule>>,
 }
 
 impl EdgionHttpContext {
@@ -17,6 +20,7 @@ impl EdgionHttpContext {
             request_id: None,
             auto_gprc: false,
             error_codes: Vec::new(),
+            matched_http_route: None,
         }
     }
 

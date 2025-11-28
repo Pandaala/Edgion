@@ -44,7 +44,7 @@ impl EdgionGwCli {
     /// This can be easily removed in the future if not needed
     fn spawn_config_printer(config_client: Arc<ConfigClient>) {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            let mut interval = tokio::time::interval(Duration::from_secs(120));
             loop {
                 interval.tick().await;
                 config_client.print_config();

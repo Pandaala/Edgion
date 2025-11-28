@@ -68,28 +68,28 @@ impl ProxyHttp for EdgionHttp {
                     err_code.message()
                 );
                 let resp = Box::new(ResponseHeader::build(err_code.http_status(), None).unwrap());
-                session.write_response_header(resp, false).await?;
+                session.write_response_header(resp, true).await?;
+                session.shutdown().await;
                 return Ok(false);
             }
         };
 
         // Match route using domain_routes
         match self.domain_routes.match_route(&hostname, session) {
-            Ok(_matched_rule) => {
+            Ok(matched_rule) => {
                 tracing::info!(
                     "Route matched for hostname: {}, path: {}",
                     hostname,
                     session.req_header().uri.path()
                 );
-                // TODO: Store matched route rule in context for later use (plugins, upstream selection, etc.)
-                // For now, just return true to continue processing
+                ctx.matched_http_route = Option::from(matched_rule);
                 Ok(true)
             }
             Err(e) => {
                 // Route not found, add error code and return 404
                 let err_code = EdgionErrCode::RouteNotFound;
                 ctx.add_error(err_code);
-                tracing::debug!(
+                tracing::info!(
                     "No route matched for hostname: {}, path: {}, error: {:?}, error_code: 0x{:X}, message: {}",
                     hostname,
                     session.req_header().uri.path(),
@@ -98,7 +98,10 @@ impl ProxyHttp for EdgionHttp {
                     err_code.message()
                 );
                 let resp = Box::new(ResponseHeader::build(err_code.http_status(), None).unwrap());
-                session.write_response_header(resp, false).await?;
+                // end_of_stream = true 表示响应已经完成，不需要继续处理
+                session.write_response_header(resp, true).await?;
+                // shutdown() 确保会话被正确关闭，防止继续进入upstream阶段
+                session.shutdown().await;
                 Ok(false)
             }
         }
