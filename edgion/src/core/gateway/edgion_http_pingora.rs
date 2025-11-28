@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use async_trait::async_trait;
 use pingora_core::modules::http::grpc_web::{GrpcWeb, GrpcWebBridge};
@@ -6,10 +5,9 @@ use pingora_core::modules::http::HttpModules;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::{ProxyHttp, Session};
-use crate::core::lb::WeightedRoundRobin;
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::core::gateway::edgion_http_context::EdgionHttpContext;
-use crate::core::gateway::{end_response_400, end_response_404};
+use crate::core::gateway::{end_response_400, end_response_404, end_response_500, select_backend_ref};
 use crate::types::EdgionErrStatus;
 
 #[async_trait]
@@ -70,8 +68,9 @@ impl ProxyHttp for EdgionHttp {
         // Match route using domain_routes
         match self.domain_routes.match_route(&ctx.hostname, session) {
             Ok(matched_rule) => {
+                tracing::info!("matched_rule: {:?}", matched_rule);
                 ctx.matched_http_route = Some(matched_rule);
-                Ok(true)
+                Ok(false)
             }
             Err(_e) => {
                 ctx.add_error(EdgionErrStatus::RouteNotFound);
@@ -83,72 +82,21 @@ impl ProxyHttp for EdgionHttp {
     }
 
     async fn upstream_peer(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
+        tracing::info!("upstream_peer");
 
+        // Get matched route from context
         let matched_route = match &ctx.matched_http_route {
-            Some(route) => route,
+            Some(route) => route.clone(),
             None => {
                 ctx.add_error(EdgionErrStatus::UpstreamNotRouteMatched);
+                end_response_500(session).await?;
                 return Err(PingoraError::new(ErrorType::InternalError));
             }
         };
 
-        if matched_route.backend_refs.is_none() {
-            ctx.add_error(EdgionErrStatus::UpstreamNotRouteMatched);
-            return Err(PingoraError::new(ErrorType::InternalError));
-        }
-
-        // Extract backend_refs from the matched route
-        let backend_refs = match &matched_route.backend_refs {
-            Some(refs) if !refs.is_empty() => refs,
-            _ => {
-                tracing::warn!("No backend_refs found in matched route");
-                return Err(PingoraError::new(ErrorType::InternalError));
-            }
-        };
-
-        // Log backend_refs information for debugging
-        tracing::debug!(
-            "Found {} lb reference(s) in matched route",
-            backend_refs.len()
-        );
-        for (idx, backend_ref) in backend_refs.iter().enumerate() {
-            tracing::debug!(
-                "Backend[{}]: name={}, namespace={:?}, port={:?}, weight={:?}",
-                idx,
-                backend_ref.name,
-                backend_ref.namespace,
-                backend_ref.port,
-                backend_ref.weight
-            );
-        }
-
-        // Check if lb is initialized, create it if not
-        if matched_route.lb.load().is_none() {
-            // Extract weight list from backend_refs
-            let weights: Vec<usize> = backend_refs
-                .iter()
-                .map(|br| br.weight.unwrap_or(1) as usize)
-                .collect();
-
-            // Create weighted round-robin selector (clone backend_refs)
-            let selector = WeightedRoundRobin::new(backend_refs.clone(), weights);
-            matched_route.lb.store(Arc::new(Some(selector)));
-            tracing::info!("WeightedRoundRobin initialized with {} backends", backend_refs.len());
-        }
-
-        // Use selector to choose lb
-        let lb_guard = matched_route.lb.load();
-        let selector = match &**lb_guard {
-            Some(s) => s,
-            None => {
-                tracing::error!("Selector not initialized after initialization attempt");
-                return Err(PingoraError::new(ErrorType::InternalError));
-            }
-        };
-
-        // Select lb reference directly
-        let backend_ref = selector.select();
-        tracing::info!("Selected lb: {:?}", backend_ref);
+        // Select backend using weighted round-robin
+        let backend_ref = select_backend_ref(session, ctx, &matched_route).await?;
+        tracing::info!("Selected backend: {:?}", backend_ref);
 
         // Build HttpPeer (use name:port as address)
         let addr = format!("{}:{}", backend_ref.name, backend_ref.port.unwrap_or(80));

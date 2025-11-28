@@ -23,35 +23,12 @@ spec:
       backendRefs:
         - name: aaa-service
           port: 30001
-
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /bbb/123
-        - path:
-            type: Exact
-            value: /bbb/{id1}/ccc/{id2}/eee
-      backendRefs:
-        - name: aaa-service
-          port: 30002
-          weight: 1
-        - name: bbb-service
-          port: 30003
-          weight: 3
-
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /ccc/api/
-        - path:
-            type: Exact
-            value: /ccc/{id1}/{id2}/ddd
-      backendRefs:
+          weight: 0
         - name: aaa-service
           port: 30002
           kind: Service
           weight: 1
         - name: bbb-service
           port: 30003
-          weight: 3
+          weight: 0
           kind: Service

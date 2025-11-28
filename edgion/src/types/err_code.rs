@@ -3,13 +3,19 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgionErrStatus {
     /// Missing Host header (HTTP 400)
-    HostMissing = 0x40001,
+    HostMissing = 400_01,
 
     /// Route Not Found
-    RouteNotFound = 0x40401,
+    RouteNotFound = 404_01,
 
     /// Upstream route not matched
-    UpstreamNotRouteMatched = 0x50001,
+    UpstreamNotRouteMatched = 500_01,
+
+    /// No backend refs found
+    UpstreamNotBackendRefs = 500_02,
+
+    /// Inconsistent weight configuration (some backends have weight, some don't)
+    UpstreamInconsistentWeight = 500_03,
 }
 
 

@@ -3,12 +3,11 @@
 //! HTTPRoute defines HTTP rules for mapping requests to backends
 
 use std::fmt;
-use arc_swap::ArcSwap;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::core::lb::WeightedRoundRobin;
+use crate::core::lb::BackendSelector;
 
 /// API group for HTTPRoute
 pub const HTTP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -82,10 +81,10 @@ pub struct HTTPRouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_refs: Option<Vec<HTTPBackendRef>>,
 
-    /// Weighted round-robin selector for lb selection (not serialized/deserialized)
+    /// Backend finder for load balancing (not serialized/deserialized)
     #[serde(skip)]
     #[schemars(skip)]
-    pub lb: ArcSwap<Option<WeightedRoundRobin<HTTPBackendRef>>>,
+    pub backend_finder: BackendSelector<HTTPBackendRef>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -94,9 +93,9 @@ impl Clone for HTTPRouteRule {
             matches: self.matches.clone(),
             filters: self.filters.clone(),
             backend_refs: self.backend_refs.clone(),
-            // Create a new empty ArcSwap for cloned instance
+            // Create a new uninitialized selector for cloned instance
             // The selector will be initialized lazily when needed
-            lb: ArcSwap::from_pointee(None),
+            backend_finder: BackendSelector::new(),
         }
     }
 }
