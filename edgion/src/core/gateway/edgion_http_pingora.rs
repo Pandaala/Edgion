@@ -75,14 +75,16 @@ impl ProxyHttp for EdgionHttp {
 
         // Match route using domain_routes
         match self.domain_routes.match_route(&ctx.hostname, session) {
-            Ok(matched_rule) => {
+            Ok((match_info, matched_rule)) => {
                 tracing::info!("matched_rule: {:?}", matched_rule);
+                ctx.matched_info = Some(match_info);
                 ctx.matched_http_route = Some(matched_rule);
                 Ok(false)
             }
             Err(_e) => {
                 ctx.add_error(EdgionErrStatus::RouteNotFound);
                 end_response_404(session).await?;
+                ctx.matched_info = None;
                 ctx.matched_http_route = None;
                 Ok(true)
             }

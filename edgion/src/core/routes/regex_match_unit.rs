@@ -1,5 +1,5 @@
 use crate::types::err::EdError;
-use crate::types::{HTTPRouteMatch, HTTPRouteRule};
+use crate::types::{HTTPRouteMatch, HTTPRouteRule, MatchInfo};
 use crate::core::routes::match_unit::HttpRouteRuleUnit;
 use pingora_proxy::Session;
 use regex::Regex;
@@ -8,11 +8,9 @@ use std::sync::Arc;
 /// Regex-based route rule unit for RegularExpression path matching
 #[derive(Clone)]
 pub struct HttpRouteRuleRegexUnit {
-    pub namespace: String,
-    pub name: String,
     pub resource_key: String,
-    /// Single match item from the rule's matches
-    pub match_item: HTTPRouteMatch,
+    /// Match info containing namespace, name and match item
+    pub matched_info: Arc<MatchInfo>,
     /// Reference to the original rule (for backend_refs, filters, etc.)
     pub rule: Arc<HTTPRouteRule>,
     /// Compiled regex for path matching
@@ -29,10 +27,8 @@ impl HttpRouteRuleRegexUnit {
         path_regex: Regex,
     ) -> HttpRouteRuleRegexUnit {
         Self {
-            namespace,
-            name,
             resource_key,
-            match_item,
+            matched_info: Arc::new(MatchInfo::new(namespace, name, match_item)),
             rule,
             path_regex,
         }
@@ -47,11 +43,11 @@ impl HttpRouteRuleRegexUnit {
     /// Uses common deep match logic shared with HttpRouteRuleUnit
     pub fn deep_match(&self, session: &Session) -> Result<bool, EdError> {
         let req_header = session.req_header();
-        HttpRouteRuleUnit::deep_match_common(&self.match_item, req_header, &self.identifier())
+        HttpRouteRuleUnit::deep_match_common(&self.matched_info.m, req_header, &self.identifier())
     }
     
     pub fn identifier(&self) -> String {
-        format!("{}/{}", self.namespace, self.name)
+        format!("{}/{}", self.matched_info.rns, self.matched_info.rn)
     }
 }
 

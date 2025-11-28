@@ -1,6 +1,6 @@
 use super::match_engine::RouteEntry;
 use crate::types::err::EdError;
-use crate::types::{HTTPRouteMatch, HTTPRouteRule};
+use crate::types::{HTTPRouteMatch, HTTPRouteRule, MatchInfo};
 use pingora_proxy::Session;
 use regex::Regex;
 use std::collections::HashMap;
@@ -8,11 +8,9 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct HttpRouteRuleUnit {
-    pub namespace: String,
-    pub name: String,
     pub resource_key: String,
-    /// Single match item from the rule's matches
-    pub match_item: HTTPRouteMatch,
+    /// Match info containing namespace, name and match item
+    pub matched_info: Arc<MatchInfo>,
     /// Reference to the original rule (for backend_refs, filters, etc.)
     pub rule: Arc<HTTPRouteRule>,
 }
@@ -26,10 +24,8 @@ impl HttpRouteRuleUnit {
         rule: Arc<HTTPRouteRule>,
     ) -> HttpRouteRuleUnit {
         Self {
-            namespace,
-            name,
             resource_key,
-            match_item,
+            matched_info: Arc::new(MatchInfo::new(namespace, name, match_item)),
             rule,
         }
     }
@@ -215,7 +211,7 @@ impl RouteEntry for HttpRouteRuleUnit {
         let mut paths = Vec::new();
 
         // Extract path from the single match_item
-        if let Some(path) = &self.match_item.path {
+        if let Some(path) = &self.matched_info.m.path {
             if let Some(value) = &path.value {
                 let is_prefix = path.match_type.as_deref().map(|t| t == "PathPrefix").unwrap_or(false);
                 paths.push((value.clone(), is_prefix));
@@ -226,13 +222,13 @@ impl RouteEntry for HttpRouteRuleUnit {
     }
 
     fn identifier(&self) -> String {
-        format!("{}/{}", self.namespace, self.name)
+        format!("{}/{}", self.matched_info.rns, self.matched_info.rn)
     }
 
     // Host , Path , Header , QueryParam , Method
     fn deep_match(&self, session: &Session) -> Result<bool, EdError> {
         let req_header = session.req_header();
-        Self::deep_match_common(&self.match_item, req_header, &self.identifier())
+        Self::deep_match_common(&self.matched_info.m, req_header, &self.identifier())
     }
 }
 

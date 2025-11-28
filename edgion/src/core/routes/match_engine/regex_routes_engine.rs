@@ -1,6 +1,6 @@
 use crate::core::routes::regex_match_unit::HttpRouteRuleRegexUnit;
 use crate::types::err::EdError;
-use crate::types::HTTPRouteRule;
+use crate::types::{HTTPRouteRule, MatchInfo};
 use pingora_proxy::Session;
 use std::sync::Arc;
 
@@ -46,12 +46,12 @@ impl RegexRoutesEngine {
     }
 
     /// Match a route against the request path
-    /// Returns the first matching route rule, or None if no route matches
+    /// Returns the first matching (MatchInfo, HTTPRouteRule), or None if no route matches
     /// Routes are checked in order of pattern length (longest first)
     pub fn match_route(
         &self,
         session: &mut Session,
-    ) -> Result<Option<Arc<HTTPRouteRule>>, EdError> {
+    ) -> Result<Option<(Arc<MatchInfo>, Arc<HTTPRouteRule>)>, EdError> {
         let path = session.req_header().uri.path();
 
         // Try each regex route in order (already sorted by length, longest first)
@@ -64,7 +64,7 @@ impl RegexRoutesEngine {
                         regex = %regex_route.path_regex.as_str(),
                         "Regex match succeeded"
                     );
-                    return Ok(Some(regex_route.rule.clone()));
+                    return Ok(Some((regex_route.matched_info.clone(), regex_route.rule.clone())));
                 }
             }
         }
