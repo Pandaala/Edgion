@@ -196,6 +196,10 @@ pub struct HTTPBackendRef {
     /// Kind is the kind of the referent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+
+    /// Filters defined at this level should be executed if and only if the request is being forwarded to this backend
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<HTTPRouteFilter>>,
 }
 
 /// HTTPRouteFilter defines processing steps that must be completed during the request/response lifecycle

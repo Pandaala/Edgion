@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use k8s_openapi::api::core::v1::Service;
 use crate::core::conf_sync::traits::ConfHandler;
-use crate::core::services::{ServiceMgr, get_global_service_mgr};
+use crate::core::services::{ServiceMgr, UpstreamService, get_global_service_mgr};
 
 /// Implement ConfHandler for Arc<ServiceMgr> to allow using the global instance
 impl ConfHandler<Service> for Arc<ServiceMgr> {
@@ -26,7 +26,11 @@ impl ConfHandler<Service> for ServiceMgr {
     /// This is typically called during initial sync or re-list
     fn full_set(&self, data: &HashMap<String, Service>) {
         tracing::info!(component = "service_mgr", cnt = data.len(), "full set");
-        self.replace_all(data.clone());
+        let converted: HashMap<String, Arc<UpstreamService>> = data
+            .iter()
+            .map(|(k, v)| (k.clone(), Arc::new(UpstreamService::with_service(v.clone()))))
+            .collect();
+        self.replace_all(converted);
     }
 
     /// Handle partial configuration updates
@@ -38,7 +42,11 @@ impl ConfHandler<Service> for ServiceMgr {
             rm = remove.len(),
             "partial update"
         );
-        self.update(add_or_update, &remove);
+        let converted: HashMap<String, Arc<UpstreamService>> = add_or_update
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(UpstreamService::with_service(v))))
+            .collect();
+        self.update(converted, &remove);
     }
 }
 
