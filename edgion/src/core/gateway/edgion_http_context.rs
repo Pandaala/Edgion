@@ -14,7 +14,7 @@ pub struct EdgionHttpContext {
     pub error_codes: Vec<EdgionErrStatus>,
 
     /// Matched route info (namespace, name, match item)
-    pub matched_info: Option<Arc<MatchInfo>>,
+    pub matched_info: Option<MatchInfo>,
     
     /// Matched HTTP route rule
     pub matched_http_route: Option<Arc<HTTPRouteRule>>,
@@ -27,7 +27,7 @@ impl EdgionHttpContext {
             request_id: None,
             auto_gprc: false,
             hostname: String::new(),
-            error_codes: Vec::new(),
+            error_codes: Vec::with_capacity(5),
             matched_info: None,
             matched_http_route: None,
         }

@@ -40,7 +40,8 @@ impl ProxyHttp for EdgionHttp {
 
 
         let srv_mgr = get_global_service_mgr();
-        if let Some(addr) = srv_mgr.get_peer(matched_route, &backend_ref) {
+        let match_info = ctx.matched_info.as_ref().unwrap();
+        if let Some(addr) = srv_mgr.get_peer(match_info, &backend_ref) {
             let peer = Box::new(HttpPeer::new(addr, false, String::new()));
             return Ok(peer)
         }
@@ -77,7 +78,7 @@ impl ProxyHttp for EdgionHttp {
         match self.domain_routes.match_route(&ctx.hostname, session) {
             Ok((match_info, matched_rule)) => {
                 tracing::info!("matched_rule: {:?}", matched_rule);
-                ctx.matched_info = Some(match_info);
+                ctx.matched_info = Some((*match_info).clone());
                 ctx.matched_http_route = Some(matched_rule);
                 Ok(false)
             }
