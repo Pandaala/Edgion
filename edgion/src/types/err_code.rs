@@ -16,6 +16,8 @@ pub enum EdgionErrStatus {
 
     /// Inconsistent weight configuration (some backends have weight, some don't)
     UpstreamInconsistentWeight = 500_03,
+
+    UpstreamNotFound = 500_50,
 }
 
 

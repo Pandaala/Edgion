@@ -46,7 +46,7 @@ impl ServiceMgr {
         Self { services: DashMap::new() }
     }
 
-    pub fn get_peer(&self, br: HTTPBackendRef) -> Option<SocketAddr> {
+    pub fn get_peer(&self, br: &HTTPBackendRef) -> Option<SocketAddr> {
 
         None
     }
