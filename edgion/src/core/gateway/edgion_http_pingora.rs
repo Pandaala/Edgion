@@ -7,9 +7,10 @@ use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::{ProxyHttp, Session};
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::core::gateway::edgion_http_context::EdgionHttpContext;
-use crate::core::gateway::{end_response_400, end_response_404, end_response_500, select_backend_ref};
+use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
 use crate::core::services::get_global_service_mgr;
 use crate::types::EdgionErrStatus;
+use crate::types::err::EdError;
 
 #[async_trait]
 impl ProxyHttp for EdgionHttp {
@@ -24,24 +25,20 @@ impl ProxyHttp for EdgionHttp {
     async fn upstream_peer(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
         tracing::info!("upstream_peer");
 
-        // Get matched route from context
-        let matched_route = match &ctx.matched_http_route {
-            Some(route) => route.clone(),
+        // Get selected backend from context (already selected in request_filter)
+        let backend_ref = match &ctx.selected_backend {
+            Some(backend) => backend,
             None => {
                 ctx.add_error(EdgionErrStatus::UpstreamNotRouteMatched);
                 end_response_500(session).await?;
                 return Err(PingoraError::new(ErrorType::InternalError));
             }
         };
-
-        // Select backend using weighted round-robin
-        let backend_ref = select_backend_ref(session, ctx, &matched_route).await?;
         tracing::info!("Selected backend: {:?}", backend_ref);
-
 
         let srv_mgr = get_global_service_mgr();
         let match_info = ctx.matched_info.as_ref().unwrap();
-        if let Some(addr) = srv_mgr.get_peer(match_info, &backend_ref) {
+        if let Some(addr) = srv_mgr.get_peer(match_info, backend_ref) {
             let peer = Box::new(HttpPeer::new(addr, false, String::new()));
             return Ok(peer)
         }
@@ -74,19 +71,35 @@ impl ProxyHttp for EdgionHttp {
             }
         }
 
-        // Match route using domain_routes
+        // Match route and select backend
         match self.domain_routes.match_route(&ctx.hostname, session) {
-            Ok((match_info, matched_rule)) => {
-                tracing::info!("matched_rule: {:?}", matched_rule);
-                ctx.matched_info = Some((*match_info).clone());
-                ctx.matched_http_route = Some(matched_rule);
+            Ok((match_info, selected_backend)) => {
+                tracing::info!("selected_backend: {:?}", selected_backend);
+                ctx.matched_info = Some(match_info);
+                ctx.selected_backend = Some(selected_backend);
                 Ok(false)
             }
-            Err(_e) => {
-                ctx.add_error(EdgionErrStatus::RouteNotFound);
-                end_response_404(session).await?;
+            Err(e) => {
+                match e {
+                    EdError::RouteNotFound() => {
+                        ctx.add_error(EdgionErrStatus::RouteNotFound);
+                        end_response_404(session).await?;
+                    }
+                    EdError::BackendNotFound() => {
+                        ctx.add_error(EdgionErrStatus::UpstreamNotBackendRefs);
+                        end_response_500(session).await?;
+                    }
+                    EdError::InconsistentWeight() => {
+                        ctx.add_error(EdgionErrStatus::UpstreamInconsistentWeight);
+                        end_response_500(session).await?;
+                    }
+                    _ => {
+                        ctx.add_error(EdgionErrStatus::RouteNotFound);
+                        end_response_500(session).await?;
+                    }
+                }
                 ctx.matched_info = None;
-                ctx.matched_http_route = None;
+                ctx.selected_backend = None;
                 Ok(true)
             }
         }

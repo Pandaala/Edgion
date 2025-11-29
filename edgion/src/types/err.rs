@@ -29,4 +29,10 @@ pub enum EdError {
     
     #[error("Route match error: {0}")]
     RouteMatchError(String),
+
+    #[error("No backend available")]
+    BackendNotFound(),
+
+    #[error("Inconsistent backend weight configuration")]
+    InconsistentWeight(),
 }

@@ -3,9 +3,7 @@ mod server_header;
 mod edgion_http_pingora;
 mod edgion_http_context;
 mod err_resp;
-mod backend;
 pub mod gateway_base;
 pub mod gateway_store;
 
 pub use err_resp::{end_response_400, end_response_404, end_response_500, end_response_503};
-pub use backend::select_backend_ref;

@@ -1,5 +1,4 @@
-use std::sync::Arc;
-use crate::types::{EdgionErrStatus, HTTPRouteRule, MatchInfo};
+use crate::types::{EdgionErrStatus, HTTPBackendRef, MatchInfo};
 
 pub struct EdgionHttpContext {
     pub x_trace_id: Option<String>,
@@ -16,8 +15,8 @@ pub struct EdgionHttpContext {
     /// Matched route info (namespace, name, match item)
     pub matched_info: Option<MatchInfo>,
     
-    /// Matched HTTP route rule
-    pub matched_http_route: Option<Arc<HTTPRouteRule>>,
+    /// Selected backend from load balancing
+    pub selected_backend: Option<HTTPBackendRef>,
 }
 
 impl EdgionHttpContext {
@@ -29,7 +28,7 @@ impl EdgionHttpContext {
             hostname: String::new(),
             error_codes: Vec::with_capacity(5),
             matched_info: None,
-            matched_http_route: None,
+            selected_backend: None,
         }
     }
 

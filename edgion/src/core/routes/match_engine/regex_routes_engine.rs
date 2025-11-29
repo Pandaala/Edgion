@@ -1,6 +1,7 @@
 use crate::core::routes::regex_match_unit::HttpRouteRuleRegexUnit;
+use crate::core::lb::{ERR_NO_BACKEND_REFS, ERR_INCONSISTENT_WEIGHT};
 use crate::types::err::EdError;
-use crate::types::{HTTPRouteRule, MatchInfo};
+use crate::types::{HTTPRouteRule, MatchInfo, HTTPBackendRef};
 use pingora_proxy::Session;
 use std::sync::Arc;
 
@@ -45,13 +46,38 @@ impl RegexRoutesEngine {
         self.routes.len()
     }
 
+    /// Select backend from the matched route rule
+    fn select_backend(rule: &Arc<HTTPRouteRule>) -> Result<HTTPBackendRef, EdError> {
+        // Initialize selector if not yet initialized
+        if !rule.backend_finder.is_initialized() {
+            let (items, weights) = match &rule.backend_refs {
+                Some(refs) if !refs.is_empty() => {
+                    let items: Vec<HTTPBackendRef> = refs.clone();
+                    let weights: Vec<Option<i32>> = refs.iter().map(|br| br.weight).collect();
+                    (items, weights)
+                }
+                _ => (vec![], vec![]),
+            };
+            rule.backend_finder.init(items, weights);
+        }
+
+        // Select backend
+        rule.backend_finder.select().map_err(|err_code| {
+            match err_code {
+                ERR_NO_BACKEND_REFS => EdError::BackendNotFound(),
+                ERR_INCONSISTENT_WEIGHT => EdError::InconsistentWeight(),
+                _ => EdError::BackendNotFound(),
+            }
+        })
+    }
+
     /// Match a route against the request path
-    /// Returns the first matching (MatchInfo, HTTPRouteRule), or None if no route matches
+    /// Returns the first matching (MatchInfo, HTTPBackendRef), or None if no route matches
     /// Routes are checked in order of pattern length (longest first)
     pub fn match_route(
         &self,
         session: &mut Session,
-    ) -> Result<Option<(Arc<MatchInfo>, Arc<HTTPRouteRule>)>, EdError> {
+    ) -> Result<Option<(MatchInfo, HTTPBackendRef)>, EdError> {
         let path = session.req_header().uri.path();
 
         // Try each regex route in order (already sorted by length, longest first)
@@ -64,7 +90,8 @@ impl RegexRoutesEngine {
                         regex = %regex_route.path_regex.as_str(),
                         "Regex match succeeded"
                     );
-                    return Ok(Some((regex_route.matched_info.clone(), regex_route.rule.clone())));
+                    let backend = Self::select_backend(&regex_route.rule)?;
+                    return Ok(Some(((*regex_route.matched_info).clone(), backend)));
                 }
             }
         }

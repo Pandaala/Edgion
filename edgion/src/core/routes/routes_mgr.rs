@@ -4,10 +4,12 @@ use dashmap::DashMap;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use crate::core::routes::{HttpRouteRuleUnit, HttpRouteRuleRegexUnit};
-use crate::types::{HTTPRouteRule, MatchInfo};
+use crate::types::{HTTPRouteRule, MatchInfo, HTTPBackendRef};
+use crate::types::err::EdError;
 use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::routes::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::types::HTTPRoute;
+use crate::core::lb::{ERR_NO_BACKEND_REFS, ERR_INCONSISTENT_WEIGHT};
 
 type DomainStr = String;
 
@@ -41,13 +43,38 @@ impl Clone for RouteRules {
 }
 
 impl RouteRules {
+    /// Select backend from the matched route rule
+    fn select_backend(rule: &Arc<HTTPRouteRule>) -> Result<HTTPBackendRef, EdError> {
+        // Initialize selector if not yet initialized
+        if !rule.backend_finder.is_initialized() {
+            let (items, weights) = match &rule.backend_refs {
+                Some(refs) if !refs.is_empty() => {
+                    let items: Vec<HTTPBackendRef> = refs.clone();
+                    let weights: Vec<Option<i32>> = refs.iter().map(|br| br.weight).collect();
+                    (items, weights)
+                }
+                _ => (vec![], vec![]),
+            };
+            rule.backend_finder.init(items, weights);
+        }
+
+        // Select backend
+        rule.backend_finder.select().map_err(|err_code| {
+            match err_code {
+                ERR_NO_BACKEND_REFS => EdError::BackendNotFound(),
+                ERR_INCONSISTENT_WEIGHT => EdError::InconsistentWeight(),
+                _ => EdError::BackendNotFound(),
+            }
+        })
+    }
+
     /// Match a route using the match_engine engine
     /// Try match in order: exact → regex → prefix
-    /// Returns (MatchInfo, HTTPRouteRule) on success
+    /// Returns (MatchInfo, HTTPBackendRef) on success
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-    ) -> Result<(Arc<MatchInfo>, Arc<HTTPRouteRule>), crate::types::err::EdError> {
+    ) -> Result<(MatchInfo, HTTPBackendRef), EdError> {
         // Step 1: Try exact match first (highest priority) - only if match_engine exists
         if let Some(ref match_engine) = self.match_engine {
             if let Some(route_entry) = match_engine.exact_match(session)? {
@@ -56,16 +83,17 @@ impl RouteRules {
                 let route_entry_id = route_entry.identifier();
                 let route_rules = self.route_rules_list.read().unwrap();
                 if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.matched_info.rns, u.matched_info.rn) == route_entry_id) {
-                    return Ok((unit.matched_info.clone(), unit.rule.clone()));
+                    let backend = Self::select_backend(&unit.rule)?;
+                    return Ok(((*unit.matched_info).clone(), backend));
                 }
             }
         }
         
         // Step 2: Try regex match - use engine if available
         if let Some(ref regex_engine) = self.regex_routes_engine {
-            if let Some((match_info, rule)) = regex_engine.match_route(session)? {
+            if let Some(result) = regex_engine.match_route(session)? {
                 tracing::debug!(path=%session.req_header().uri.path(),"regex match ok");
-                return Ok((match_info, rule));
+                return Ok(result);
             }
         }
         
@@ -78,12 +106,13 @@ impl RouteRules {
             let route_entry_id = route_entry.identifier();
             let route_rules = self.route_rules_list.read().unwrap();
             if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.matched_info.rns, u.matched_info.rn) == route_entry_id) {
-                return Ok((unit.matched_info.clone(), unit.rule.clone()));
+                let backend = Self::select_backend(&unit.rule)?;
+                return Ok(((*unit.matched_info).clone(), backend));
             }
         }
         
         // No route matched
-        Err(crate::types::err::EdError::RouteNotFound())
+        Err(EdError::RouteNotFound())
     }
 }
 
@@ -93,12 +122,12 @@ pub struct DomainRouteRules {
 
 impl DomainRouteRules {
     /// Match a route for the given hostname and session
-    /// Returns (MatchInfo, HTTPRouteRule) if found, or an error if no route matches
+    /// Returns (MatchInfo, HTTPBackendRef) if found, or an error if no route matches
     pub fn match_route(
         &self,
         hostname: &str,
         session: &mut pingora_proxy::Session,
-    ) -> Result<(Arc<MatchInfo>, Arc<HTTPRouteRule>), crate::types::err::EdError> {
+    ) -> Result<(MatchInfo, HTTPBackendRef), EdError> {
         let domain_routes_map = self.domain_routes_map.load();
         
         // Try to find RouteRules for the hostname (exact match only)
@@ -109,7 +138,7 @@ impl DomainRouteRules {
         if let Some(route_rules) = route_rules {
             route_rules.match_route(session)
         } else {
-            Err(crate::types::err::EdError::RouteNotFound())
+            Err(EdError::RouteNotFound())
         }
     }
 }
