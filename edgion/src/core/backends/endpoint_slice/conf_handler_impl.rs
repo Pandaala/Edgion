@@ -10,8 +10,8 @@ impl ConfHandler<EndpointSlice> for Arc<EpSliceStore> {
         (**self).full_set(data)
     }
 
-    fn partial_update(&self, add_or_update: HashMap<String, EndpointSlice>, remove: HashSet<String>) {
-        (**self).partial_update(add_or_update, remove)
+    fn partial_update(&self, add: HashMap<String, EndpointSlice>, update: HashMap<String, EndpointSlice>, remove: HashSet<String>) {
+        (**self).partial_update(add, update, remove)
     }
 }
 
@@ -26,13 +26,19 @@ impl ConfHandler<EndpointSlice> for EpSliceStore {
         self.replace_all(data.clone());
     }
 
-    fn partial_update(&self, add_or_update: HashMap<String, EndpointSlice>, remove: HashSet<String>) {
+    fn partial_update(&self, add: HashMap<String, EndpointSlice>, update: HashMap<String, EndpointSlice>, remove: HashSet<String>) {
         tracing::info!(
             component = "ep_slice_store",
-            au = add_or_update.len(),
+            add = add.len(),
+            update = update.len(),
             rm = remove.len(),
             "partial update"
         );
+        
+        // Merge add and update for storage
+        let mut add_or_update = add;
+        add_or_update.extend(update);
+        
         self.update(add_or_update, &remove);
     }
 }
@@ -101,13 +107,31 @@ mod tests {
     }
 
     #[test]
+    fn test_partial_update_add() {
+        let store = EpSliceStore::new();
+        
+        let mut add = HashMap::new();
+        add.insert("default/svc1-abc".to_string(), create_test_ep_slice("default", "svc1-abc", "svc1"));
+        
+        store.partial_update(add, HashMap::new(), HashSet::new());
+        
+        assert!(store.contains("default/svc1-abc"));
+    }
+    
+    #[test]
     fn test_partial_update() {
         let store = EpSliceStore::new();
         
-        let mut add_or_update = HashMap::new();
-        add_or_update.insert("default/svc1-abc".to_string(), create_test_ep_slice("default", "svc1-abc", "svc1"));
+        // First add an endpoint slice
+        let mut data = HashMap::new();
+        data.insert("default/svc1-abc".to_string(), create_test_ep_slice("default", "svc1-abc", "svc1"));
+        store.full_set(&data);
         
-        store.partial_update(add_or_update, HashSet::new());
+        // Then update it
+        let mut update = HashMap::new();
+        update.insert("default/svc1-abc".to_string(), create_test_ep_slice("default", "svc1-abc", "svc1"));
+        
+        store.partial_update(HashMap::new(), update, HashSet::new());
         
         assert!(store.contains("default/svc1-abc"));
     }

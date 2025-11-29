@@ -310,7 +310,7 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
         
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         // Verify route was added
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -339,14 +339,14 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_exists(&domain_routes, "api.example.com", true);
         
         // Remove the route
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
-        mgr.partial_update(HashMap::new(), remove);
+        mgr.partial_update(HashMap::new(), HashMap::new(), remove);
         
         // Verify route was removed and hostname cleaned up
         verify_route_exists(&domain_routes, "api.example.com", false);
@@ -374,7 +374,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_exists(&domain_routes, "api.example.com", true);
         verify_route_exists(&domain_routes, "api1.example.com", false);
@@ -388,7 +388,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1_updated);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         // Verify old hostname was cleaned up and new hostname has route
         verify_route_exists(&domain_routes, "api.example.com", false);
@@ -417,7 +417,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_exists(&domain_routes, "api.example.com", true);
         
@@ -430,7 +430,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1_updated);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         // Verify hostname was cleaned up (route no longer applies to this hostname)
         verify_route_exists(&domain_routes, "api.example.com", false);
@@ -458,7 +458,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
         
@@ -471,14 +471,14 @@ mod route_matching_tests {
             vec![("PathPrefix", "/api/posts")],
         );
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 2, 0);
         
         // Remove first route
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
-        mgr.partial_update(HashMap::new(), remove);
+        mgr.partial_update(HashMap::new(), HashMap::new(), remove);
         
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
     }
@@ -505,7 +505,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/users$"],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 0, 1);
         
@@ -518,7 +518,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1_updated);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
     }
@@ -545,14 +545,14 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_exists(&domain_routes, "api.example.com", true);
         
         // Remove route
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
-        mgr.partial_update(HashMap::new(), remove);
+        mgr.partial_update(HashMap::new(), HashMap::new(), remove);
         
         // Verify hostname was cleaned up
         verify_route_exists(&domain_routes, "api.example.com", false);
@@ -587,7 +587,7 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
         
@@ -595,7 +595,7 @@ mod route_matching_tests {
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
         remove.insert("default/route2".to_string());
-        mgr.partial_update(HashMap::new(), remove);
+        mgr.partial_update(HashMap::new(), HashMap::new(), remove);
         
         // Verify hostname was cleaned up (both routes removed)
         verify_route_exists(&domain_routes, "api.example.com", false);
@@ -630,14 +630,14 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
         
         // Remove only normal route
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
-        mgr.partial_update(HashMap::new(), remove);
+        mgr.partial_update(HashMap::new(), HashMap::new(), remove);
         
         // Verify hostname still exists (regex route remains)
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -864,7 +864,7 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
         
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         // Verify route was added
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -894,7 +894,7 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
         
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         // Verify route was added
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -931,7 +931,7 @@ mod route_matching_tests {
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
         
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         // Verify routes were added
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -967,14 +967,14 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
         
         // Remove only normal route
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
-        mgr.partial_update(HashMap::new(), remove);
+        mgr.partial_update(HashMap::new(), HashMap::new(), remove);
         
         // Verify hostname still exists (regex route remains)
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -1010,14 +1010,14 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
         
         // Remove only regex route
         let mut remove = HashSet::new();
         remove.insert("default/route2".to_string());
-        mgr.partial_update(HashMap::new(), remove);
+        mgr.partial_update(HashMap::new(), HashMap::new(), remove);
         
         // Verify hostname still exists (normal route remains)
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -1046,7 +1046,7 @@ mod route_matching_tests {
             vec![("PathPrefix", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
         
@@ -1059,7 +1059,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1_updated);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
     }
@@ -1086,7 +1086,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
         
@@ -1099,7 +1099,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/users$"],
         );
         add_or_update.insert("default/route1".to_string(), route1_updated);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 0, 1);
     }
@@ -1126,7 +1126,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/users$"],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 0, 1);
         
@@ -1139,7 +1139,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/posts$"],
         );
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 0, 2);
     }
@@ -1166,7 +1166,7 @@ mod route_matching_tests {
             vec![("PathPrefix", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
         
@@ -1179,7 +1179,7 @@ mod route_matching_tests {
             vec![("PathPrefix", "/api/posts")],
         );
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 2, 0);
     }
@@ -1220,7 +1220,7 @@ mod route_matching_tests {
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
         add_or_update.insert("default/route3".to_string(), route3);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 2, 1);
         
@@ -1229,7 +1229,7 @@ mod route_matching_tests {
         remove.insert("default/route1".to_string());
         remove.insert("default/route2".to_string());
         remove.insert("default/route3".to_string());
-        mgr.partial_update(HashMap::new(), remove);
+        mgr.partial_update(HashMap::new(), HashMap::new(), remove);
         
         // Verify hostname was cleaned up
         verify_route_exists(&domain_routes, "api.example.com", false);
@@ -1257,7 +1257,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/users$"],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 0, 1);
         
@@ -1270,7 +1270,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/posts")],
         );
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
     }
@@ -1297,7 +1297,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
         
@@ -1310,7 +1310,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/posts$"],
         );
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashSet::new());
+        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
         
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
     }

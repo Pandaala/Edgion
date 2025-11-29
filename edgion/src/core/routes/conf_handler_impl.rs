@@ -20,8 +20,8 @@ impl ConfHandler<HTTPRoute> for Arc<RouteManager> {
         (**self).full_set(data)
     }
 
-    fn partial_update(&self, add_or_update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
-        (**self).partial_update(add_or_update, remove)
+    fn partial_update(&self, add: HashMap<String, HTTPRoute>, update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
+        (**self).partial_update(add, update, remove)
     }
 }
 
@@ -603,8 +603,18 @@ impl ConfHandler<HTTPRoute> for RouteManager {
 
     /// Handle partial configuration updates
     /// Processes additions, updates, and removals of HTTPRoutes
-    fn partial_update(&self, add_or_update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
-        tracing::info!(component = "route_manager",au = add_or_update.len(),rm = remove.len(),"Processing HTTPRoute changes");
+    fn partial_update(&self, add: HashMap<String, HTTPRoute>, update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
+        tracing::info!(
+            component = "route_manager",
+            add = add.len(),
+            update = update.len(),
+            rm = remove.len(),
+            "Processing HTTPRoute changes"
+        );
+
+        // Merge add and update for processing
+        let mut add_or_update = add;
+        add_or_update.extend(update);
 
         // Step 0: Build gateway_hostnames map BEFORE updating http_routes storage
         // This is important because we need to access old hostnames from existing routes
@@ -837,14 +847,14 @@ mod tests {
         }
         
         // Create test routes to add
-        let mut add_or_update = HashMap::new();
+        let mut add = HashMap::new();
         let route1 = create_test_httproute("default", "route1", vec!["api.example.com"], vec![("default", "gateway1")]);
-        add_or_update.insert("default/route1".to_string(), route1);
+        add.insert("default/route1".to_string(), route1);
         
         let remove = HashSet::new();
         
         // Execute partial_update
-        mgr.partial_update(add_or_update, remove);
+        mgr.partial_update(add, HashMap::new(), remove);
         
         // Verify the route was stored
         let http_routes = mgr.http_routes.lock().unwrap();
@@ -860,12 +870,11 @@ mod tests {
         mgr.http_routes.lock().unwrap().insert("default/route1".to_string(), route1);
         
         // Create remove set
-        let add_or_update = HashMap::new();
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
         
         // Execute partial_update
-        mgr.partial_update(add_or_update, remove);
+        mgr.partial_update(HashMap::new(), HashMap::new(), remove);
         
         // Verify the route was removed
         let http_routes = mgr.http_routes.lock().unwrap();

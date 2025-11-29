@@ -137,17 +137,31 @@ impl<T: ResourceMeta> CacheData<T> {
             return true; // Continue
         }
 
-        // Collect event keys first (to avoid borrowing conflicts)
-        let event_keys: Vec<String> = handler.compressed_events.events.keys().cloned().collect();
+        // Collect event keys and their event types first (to avoid borrowing conflicts)
+        let event_infos: Vec<(String, Vec<ResourceChange>)> = handler.compressed_events.events.iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        
+        // The mutable borrow of handler ends here, allowing us to access cache.data below
 
-        // Classify events based on current state in cache.data
-        // Note: We can access cache.data here because handler borrow is released after collecting keys
-        let mut add_or_update = HashMap::new();
+        // Classify events based on ResourceChange type and current state in cache.data
+        let mut add = HashMap::new();
+        let mut update = HashMap::new();
         let mut remove = HashSet::new();
-        for key in &event_keys {
-            if let Some(resource) = cache.data.get(key).cloned() {
-                add_or_update.insert(key.clone(), resource);
-                tracing::info!(key = %key, "Processed compressed event: add_or_update");
+        
+        for (key, events) in event_infos {
+            if let Some(resource) = cache.data.get(&key).cloned() {
+                // Resource exists in cache - check event history to determine if it's add or update
+                // Check if any event in the history is InitAdd or EventAdd
+                let is_add = events.iter().any(|e| matches!(e, ResourceChange::InitAdd | ResourceChange::EventAdd));
+                
+                if is_add {
+                    add.insert(key.clone(), resource);
+                    tracing::info!(key = %key, "Processed compressed event: add");
+                } else {
+                    update.insert(key.clone(), resource);
+                    tracing::info!(key = %key, "Processed compressed event: update");
+                }
             } else {
                 remove.insert(key.clone());
                 tracing::info!(key = %key, "Processed compressed event: remove");
@@ -155,19 +169,21 @@ impl<T: ResourceMeta> CacheData<T> {
         }
 
         // Process events if there are any
-        if !add_or_update.is_empty() || !remove.is_empty() {
-            let add_keys: Vec<&String> = add_or_update.keys().collect();
+        if !add.is_empty() || !update.is_empty() || !remove.is_empty() {
+            let add_keys: Vec<&String> = add.keys().collect();
+            let update_keys: Vec<&String> = update.keys().collect();
             let remove_keys: Vec<&String> = remove.iter().collect();
             tracing::info!(
                 component = "cache_client",
-                add_or_update_keys = ?add_keys,
+                add_keys = ?add_keys,
+                update_keys = ?update_keys,
                 remove_keys = ?remove_keys,
                 "Processing compressed events"
             );
             
             // Process events with immutable borrow
             if let Some(handler) = cache.handler.as_ref() {
-                handler.processor.partial_update(add_or_update, remove);
+                handler.processor.partial_update(add, update, remove);
             } else {
                 tracing::error!(component = "cache_client", "Handler was removed before processing events");
                 return false;

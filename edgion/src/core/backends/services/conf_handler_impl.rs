@@ -10,8 +10,8 @@ impl ConfHandler<Service> for Arc<ServiceStore> {
         (**self).full_set(data)
     }
 
-    fn partial_update(&self, add_or_update: HashMap<String, Service>, remove: HashSet<String>) {
-        (**self).partial_update(add_or_update, remove)
+    fn partial_update(&self, add: HashMap<String, Service>, update: HashMap<String, Service>, remove: HashSet<String>) {
+        (**self).partial_update(add, update, remove)
     }
 }
 
@@ -26,13 +26,19 @@ impl ConfHandler<Service> for ServiceStore {
         self.replace_all(data.clone());
     }
 
-    fn partial_update(&self, add_or_update: HashMap<String, Service>, remove: HashSet<String>) {
+    fn partial_update(&self, add: HashMap<String, Service>, update: HashMap<String, Service>, remove: HashSet<String>) {
         tracing::info!(
             component = "service_store",
-            au = add_or_update.len(),
+            add = add.len(),
+            update = update.len(),
             rm = remove.len(),
             "partial update"
         );
+        
+        // Merge add and update for storage
+        let mut add_or_update = add;
+        add_or_update.extend(update);
+        
         self.update(add_or_update, &remove);
     }
 }
@@ -81,10 +87,28 @@ mod tests {
     fn test_partial_update_add() {
         let store = ServiceStore::new();
         
-        let mut add_or_update = HashMap::new();
-        add_or_update.insert("default/svc1".to_string(), create_test_service("default", "svc1"));
+        let mut add = HashMap::new();
+        add.insert("default/svc1".to_string(), create_test_service("default", "svc1"));
         
-        store.partial_update(add_or_update, HashSet::new());
+        store.partial_update(add, HashMap::new(), HashSet::new());
+        
+        assert!(store.contains("default/svc1"));
+    }
+    
+    #[test]
+    fn test_partial_update_update() {
+        let store = ServiceStore::new();
+        
+        // First add a service
+        let mut data = HashMap::new();
+        data.insert("default/svc1".to_string(), create_test_service("default", "svc1"));
+        store.full_set(&data);
+        
+        // Then update it
+        let mut update = HashMap::new();
+        update.insert("default/svc1".to_string(), create_test_service("default", "svc1"));
+        
+        store.partial_update(HashMap::new(), update, HashSet::new());
         
         assert!(store.contains("default/svc1"));
     }
@@ -101,7 +125,7 @@ mod tests {
         // Then remove it
         let mut remove = HashSet::new();
         remove.insert("default/svc1".to_string());
-        store.partial_update(HashMap::new(), remove);
+        store.partial_update(HashMap::new(), HashMap::new(), remove);
         
         assert!(!store.contains("default/svc1"));
     }

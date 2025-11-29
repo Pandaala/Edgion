@@ -29,8 +29,10 @@ pub trait ConfHandler<T>: Send + Sync {
     fn full_set(&self, data: &HashMap<String, T>);
 
     /// Handle partial configuration updates (add/update/remove)
-    /// For remove, only the key is needed since the resource is already deleted
-    fn partial_update(&self, add_or_update: HashMap<String, T>, remove: HashSet<String>);
+    /// - add: new resources that didn't exist before
+    /// - update: existing resources that are being modified
+    /// - remove: keys of resources to be removed
+    fn partial_update(&self, add: HashMap<String, T>, update: HashMap<String, T>, remove: HashSet<String>);
 }
 
 pub trait ConfigServerEventDispatcher: Send + Sync {
