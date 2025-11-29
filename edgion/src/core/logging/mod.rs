@@ -135,27 +135,6 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_init_logging() {
-        // Use temp directory to avoid creating test_logs in the project
-        let temp_dir = std::env::temp_dir().join("edgion_test_logs");
-        let config = LogConfig {
-            log_dir: temp_dir,
-            file_prefix: "test".to_string(),
-            json_format: false,
-            console: false,
-            level: "debug".to_string(),
-        };
-
-        let _guard = init_logging(config).await.unwrap();
-
-        tracing::info!("This is a test log");
-        tracing::debug!(user_id = 123, action = "login");
-
-        // Give time for async writes
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    }
-
-    #[tokio::test]
     async fn test_logging_from_different_threads() {
         let temp_dir = std::env::temp_dir().join("edgion_test_multithread");
         let config = LogConfig {

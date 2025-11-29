@@ -420,13 +420,16 @@ mod tests {
         };
         let updated = TestResource {
             name: "foo-updated".to_string(),
-            version: 1,
+            version: 2,  // version must be greater than original
             metadata: ObjectMeta {
                 name: Some("test-resource".to_string()),
                 namespace: Some("default".to_string()),
                 ..Default::default()
             },
         };
+
+        // Set cache as ready before applying changes
+        cache.set_ready();
 
         cache.apply_change(ResourceChange::EventAdd, original.clone());
         wait_for_async_store_update().await;
@@ -452,15 +455,28 @@ mod tests {
                 ..Default::default()
             },
         };
+        
+        let resource_delete = TestResource {
+            name: "foo".to_string(),
+            version: 43,  // version must be greater than the added resource
+            metadata: ObjectMeta {
+                name: Some("test-resource".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+        };
+
+        // Set cache as ready before applying changes
+        cache.set_ready();
 
         cache.apply_change(ResourceChange::EventAdd, resource.clone());
         wait_for_async_store_update().await;
 
-        cache.apply_change(ResourceChange::EventDelete, resource.clone());
+        cache.apply_change(ResourceChange::EventDelete, resource_delete.clone());
         wait_for_async_store_update().await;
 
         let snapshot = cache.list_owned();
         assert!(snapshot.data.is_empty());
-        assert_eq!(snapshot.resource_version, resource.version);
+        assert_eq!(snapshot.resource_version, resource_delete.version);
     }
 }
