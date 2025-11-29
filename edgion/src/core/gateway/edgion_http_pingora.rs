@@ -8,7 +8,7 @@ use pingora_proxy::{ProxyHttp, Session};
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::core::gateway::edgion_http_context::EdgionHttpContext;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
-use crate::core::services::get_global_service_mgr;
+use crate::core::backends::get_peer;
 use crate::types::EdgionErrStatus;
 use crate::types::err::EdError;
 
@@ -36,9 +36,8 @@ impl ProxyHttp for EdgionHttp {
         };
         tracing::info!("Selected backend: {:?}", backend_ref);
 
-        let srv_mgr = get_global_service_mgr();
         let match_info = ctx.matched_info.as_ref().unwrap();
-        if let Some(addr) = srv_mgr.get_peer(match_info, backend_ref) {
+        if let Some(addr) = get_peer(match_info, backend_ref) {
             let peer = Box::new(HttpPeer::new(addr, false, String::new()));
             return Ok(peer)
         }
