@@ -59,9 +59,7 @@ impl ServiceMgr {
             // key format is typically "namespace/ep-slice-name"
             // We need to find the corresponding service and clear its ep_slice
             // This is a simplified approach - in production, you might want to maintain a reverse mapping
-            if let Some(upstream) = self.get(key) {
-                *upstream.ep_slice.write() = None;
-            }
+            self.remove_ep_slice(key);
         }
         
         // Handle additions/updates
@@ -119,8 +117,7 @@ mod tests {
         
         mgr.full_set_ep_slice(&data);
         
-        let upstream = mgr.get("default/svc1").expect("Should have upstream");
-        assert!(upstream.ep_slice.read().is_some());
+        assert!(mgr.has_ep_slice("default/svc1"));
     }
 
     #[test]
@@ -132,8 +129,7 @@ mod tests {
         
         mgr.partial_update_ep_slice(add_or_update, HashSet::new());
         
-        let upstream = mgr.get("default/svc1").expect("Should have upstream");
-        assert!(upstream.ep_slice.read().is_some());
+        assert!(mgr.has_ep_slice("default/svc1"));
     }
 }
 

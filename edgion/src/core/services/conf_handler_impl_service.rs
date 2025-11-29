@@ -26,9 +26,9 @@ impl ConfHandler<Service> for ServiceMgr {
     /// This is typically called during initial sync or re-list
     fn full_set(&self, data: &HashMap<String, Service>) {
         tracing::info!(component = "service_mgr", cnt = data.len(), "full set");
-        let converted: HashMap<String, Arc<UpstreamService>> = data
+        let converted: HashMap<String, UpstreamService> = data
             .iter()
-            .map(|(k, v)| (k.clone(), Arc::new(UpstreamService::with_service(v.clone()))))
+            .map(|(k, v)| (k.clone(), UpstreamService::with_service(v.clone())))
             .collect();
         self.replace_all(converted);
     }
@@ -42,9 +42,9 @@ impl ConfHandler<Service> for ServiceMgr {
             rm = remove.len(),
             "partial update"
         );
-        let converted: HashMap<String, Arc<UpstreamService>> = add_or_update
+        let converted: HashMap<String, UpstreamService> = add_or_update
             .into_iter()
-            .map(|(k, v)| (k, Arc::new(UpstreamService::with_service(v))))
+            .map(|(k, v)| (k, UpstreamService::with_service(v)))
             .collect();
         self.update(converted, &remove);
     }
@@ -85,9 +85,9 @@ mod tests {
         
         mgr.full_set(&data);
         
-        assert!(mgr.get("default/svc1").is_some());
-        assert!(mgr.get("default/svc2").is_some());
-        assert!(mgr.get("default/svc3").is_none());
+        assert!(mgr.contains("default/svc1"));
+        assert!(mgr.contains("default/svc2"));
+        assert!(!mgr.contains("default/svc3"));
     }
 
     #[test]
@@ -99,7 +99,7 @@ mod tests {
         
         mgr.partial_update(add_or_update, HashSet::new());
         
-        assert!(mgr.get("default/svc1").is_some());
+        assert!(mgr.contains("default/svc1"));
     }
 
     #[test]
@@ -116,7 +116,7 @@ mod tests {
         remove.insert("default/svc1".to_string());
         mgr.partial_update(HashMap::new(), remove);
         
-        assert!(mgr.get("default/svc1").is_none());
+        assert!(!mgr.contains("default/svc1"));
     }
 }
 
