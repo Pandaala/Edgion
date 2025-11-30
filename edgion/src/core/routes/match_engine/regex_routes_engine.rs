@@ -53,7 +53,8 @@ impl RegexRoutesEngine {
             let (items, weights) = match &rule.backend_refs {
                 Some(refs) if !refs.is_empty() => {
                     let items: Vec<HTTPBackendRef> = refs.clone();
-                    let weights: Vec<Option<i32>> = refs.iter().map(|br| br.weight).collect();
+                    // Default weight to 1 if not specified
+                    let weights: Vec<Option<i32>> = refs.iter().map(|br| br.weight.or(Some(1))).collect();
                     (items, weights)
                 }
                 _ => (vec![], vec![]),

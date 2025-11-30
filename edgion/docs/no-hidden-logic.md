@@ -9,6 +9,7 @@
 ## 目录
 
 - [#1 EdgionService 类型系统与后端路由](#1-edgionservice-类型系统与后端路由)
+- [#2 BackendRefs Weight 字段默认值与权重分配](#2-backendrefs-weight-字段默认值与权重分配)
 
 ---
 
@@ -94,7 +95,125 @@
 
 ---
 
-## #2 待添加
+## #2 BackendRefs Weight 字段默认值与权重分配
+
+**位置**: 
+- `edgion/src/core/routes/match_engine/regex_routes_engine.rs:56`
+- `edgion/src/core/routes/routes_mgr.rs:53`
+
+**日期**: 2025-11-30
+
+### 背景
+
+在 Gateway API 的 HTTPRoute 配置中，`BackendRefs` 用于定义后端服务列表及其权重分配，用于负载均衡。`weight` 字段控制流量分配比例，但该字段是可选的，需要合理的默认值处理。
+
+**Gateway API 关联**：该逻辑对应 [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) 规范中 `HTTPRoute.spec.rules[].backendRefs[].weight` 字段。
+
+### 实现细节
+
+在初始化后端选择器（`backend_finder`）时，系统会处理每个 `BackendRef` 的权重：
+
+```rust
+// Default weight to 1 if not specified
+let weights: Vec<Option<i32>> = refs.iter().map(|br| br.weight.or(Some(1))).collect();
+```
+
+**关键行为**：
+- 如果 `BackendRef.weight` 为 `None`（未指定），则自动设置为 `Some(1)`
+- 如果显式指定了权重值（包括 0），则使用指定的值
+- 权重会传递给负载均衡器进行流量分配
+
+### ⚠️ 隐藏逻辑
+
+#### 1. 默认权重为 1
+- **未指定 `weight` 字段时，系统自动设置权重为 1**
+- 这确保了所有后端在没有明确权重配置时获得相等的流量分配
+- 符合常见的负载均衡配置习惯
+
+#### 2. 权重为 0 的特殊用途
+- **权重可以显式设置为 0**
+- **权重为 0 的后端不会接收任何流量**
+- **可用于蓝绿发布、金丝雀发布等场景**
+
+**典型使用场景**：
+
+```yaml
+# 场景 1: 蓝绿发布 - 只有蓝环境接收流量
+backendRefs:
+  - name: blue-service
+    weight: 1        # 接收所有流量
+  - name: green-service
+    weight: 0        # 不接收流量（待切换）
+
+# 场景 2: 金丝雀发布 - 10% 流量到新版本
+backendRefs:
+  - name: stable-service
+    weight: 9        # 90% 流量
+  - name: canary-service
+    weight: 1        # 10% 流量
+
+# 场景 3: 未指定权重 - 平均分配
+backendRefs:
+  - name: backend-1  # 自动权重 1
+  - name: backend-2  # 自动权重 1
+  - name: backend-3  # 自动权重 1
+  # 三个后端各接收 33.3% 流量
+```
+
+### 设计理由
+
+1. **默认权重为 1**：
+   - 简化配置：用户不需要为每个后端都显式指定权重
+   - 直观行为：多个后端默认均匀分配流量
+   - 向后兼容：与常见的负载均衡器行为一致
+
+2. **支持权重为 0**：
+   - 灵活的流量控制：可以在不删除后端的情况下临时停止流量
+   - 渐进式发布：支持蓝绿部署、金丝雀部署等高级发布策略
+   - 快速回滚：只需调整权重即可切换流量，无需修改后端列表
+
+3. **权重比例计算**：
+   - 负载均衡器根据权重比例分配请求
+   - 例如：权重 `[3, 1, 1]` 表示第一个后端接收 60% 流量，其他各 20%
+   - 总权重为 0 时会导致错误（`ERR_INCONSISTENT_WEIGHT`）
+
+### 未来考虑事项
+
+- **添加权重验证**：
+  * 检测所有权重为 0 的情况并提供友好的错误信息
+  * 添加权重配置的验证日志
+- **增强可观测性**：
+  * 添加指标记录每个后端的实际流量分配比例
+  * 记录权重变更事件以便追踪发布过程
+- **动态权重调整**：
+  * 考虑支持基于健康检查自动调整权重
+  * 支持基于性能指标的自适应权重分配
+
+### 相关代码
+
+- **HTTPBackendRef 结构体**: `edgion/src/types/resources/http_route.rs:174-203`
+  * 包含 `weight` 字段作为 `Option<i32>`
+  * 对应 Gateway API 规范中的 `BackendRef.weight` 字段
+  * 在 HTTPRoute 中作为 `spec.rules[].backendRefs[].weight` 使用
+- **BackendSelector**: `edgion/src/core/lb/backend_selector.rs`
+  * 负责根据权重进行后端选择
+  * 实现加权随机负载均衡算法
+- **权重初始化位置**：
+  * Regex 路由引擎: `regex_routes_engine.rs` 的 `select_backend()` 方法
+  * 普通路由管理器: `routes_mgr.rs` 的 `select_backend()` 方法
+
+### Gateway API 规范参考
+
+根据 [Gateway API BackendRef 规范](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.BackendObjectReference)：
+- `weight` 字段是可选的 (optional)，类型为 `int32`
+- 默认值为 `1`（但需要实现层处理）
+- 有效范围：`0` 到 `1000000`
+- 权重为 `0` 表示该后端不接收流量
+- 权重是相对值，实际流量分配按比例计算
+
+---
+
+## #3 待添加
 
 _预留位置_
 
