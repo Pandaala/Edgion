@@ -49,24 +49,36 @@ pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef) -> Option<SocketAdd
     
     let service_key = format!("{}/{}", match_info.rns, br.name);
     
-    // Get endpoint slice for this service
+    // Get endpoint slice discovery for this service
     let ep_store = get_global_ep_slice_store();
-    let ep_slice = ep_store.get_by_service(&service_key)?;
+    let ep_slice_discovery = ep_store.get_by_service(&service_key)?;
     
-    // Get ready endpoint address
-    for endpoint in ep_slice.endpoints {
-        if let Some(conditions) = &endpoint.conditions {
-            if conditions.ready != Some(true) {
-                continue;
+    // Execute with read access to the underlying endpoint slice
+    ep_slice_discovery.with_endpoint_slice(|ep_slice| {
+        // Check if this is IPv6
+        let is_ipv6 = ep_slice.address_type == "IPv6";
+        
+        // Get ready endpoint address
+        for endpoint in &ep_slice.endpoints {
+            if let Some(conditions) = &endpoint.conditions {
+                if conditions.ready != Some(true) {
+                    continue;
+                }
+            }
+            if let Some(addr) = endpoint.addresses.first() {
+                let port = br.port.unwrap_or(80);
+                // Format address with port, IPv6 addresses need brackets
+                let addr_with_port = if is_ipv6 {
+                    format!("[{}]:{}", addr, port)
+                } else {
+                    format!("{}:{}", addr, port)
+                };
+                if let Ok(socket_addr) = addr_with_port.parse::<SocketAddr>() {
+                    return Some(socket_addr);
+                }
             }
         }
-        if let Some(addr) = endpoint.addresses.first() {
-            let port = br.port.unwrap_or(80);
-            let socket_addr: SocketAddr = format!("{}:{}", addr, port).parse().ok()?;
-            return Some(socket_addr);
-        }
-    }
-    
-    None
+        None
+    })
 }
 

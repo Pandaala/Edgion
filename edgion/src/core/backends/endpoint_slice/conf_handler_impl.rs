@@ -3,6 +3,7 @@ use std::sync::Arc;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use crate::core::conf_sync::traits::ConfHandler;
 use super::{EpSliceStore, get_global_ep_slice_store};
+use super::discovery_impl::EndpointSliceDiscovery;
 
 /// Implement ConfHandler for Arc<EpSliceStore>
 impl ConfHandler<EndpointSlice> for Arc<EpSliceStore> {
@@ -23,7 +24,26 @@ pub fn create_ep_slice_handler() -> Box<dyn ConfHandler<EndpointSlice> + Send + 
 impl ConfHandler<EndpointSlice> for EpSliceStore {
     fn full_set(&self, data: &HashMap<String, EndpointSlice>) {
         tracing::info!(component = "ep_slice_store", cnt = data.len(), "full set");
-        self.replace_all(data.clone());
+        
+        // Convert EndpointSlice to Arc<EndpointSliceDiscovery>
+        let discovery_map: HashMap<String, Arc<EndpointSliceDiscovery>> = data
+            .iter()
+            .filter_map(|(key, ep_slice)| {
+                match EndpointSliceDiscovery::from_endpoint_slice(ep_slice.clone()) {
+                    Ok(discovery) => Some((key.clone(), discovery)),
+                    Err(e) => {
+                        tracing::warn!(
+                            key = %key,
+                            error = %e,
+                            "Failed to create EndpointSliceDiscovery, skipping"
+                        );
+                        None
+                    }
+                }
+            })
+            .collect();
+        
+        self.replace_all(discovery_map);
     }
 
     fn partial_update(&self, add: HashMap<String, EndpointSlice>, update: HashMap<String, EndpointSlice>, remove: HashSet<String>) {
@@ -35,11 +55,51 @@ impl ConfHandler<EndpointSlice> for EpSliceStore {
             "partial update"
         );
         
-        // Merge add and update for storage
-        let mut add_or_update = add;
-        add_or_update.extend(update);
+        // Try to update existing entries in-place
+        let mut failed_updates = Vec::new();
+        for (key, ep_slice) in &update {
+            match self.update_in_place(key, ep_slice.clone()) {
+                Ok(true) => {
+                    // Successfully updated in-place
+                    tracing::debug!(key = %key, "In-place update succeeded");
+                }
+                Ok(false) => {
+                    // Key not found, add to failed list for full update
+                    failed_updates.push((key.clone(), ep_slice.clone()));
+                }
+                Err(e) => {
+                    // Update failed, add to failed list for full update
+                    tracing::warn!(key = %key, error = %e, "In-place update failed, will do full update");
+                    failed_updates.push((key.clone(), ep_slice.clone()));
+                }
+            }
+        }
         
-        self.update(add_or_update, &remove);
+        // Merge add and failed updates for storage
+        let mut add_or_update = add;
+        add_or_update.extend(failed_updates);
+        
+        // Only create new EndpointSliceDiscovery for additions and failed updates
+        if !add_or_update.is_empty() || !remove.is_empty() {
+            let discovery_map: HashMap<String, Arc<EndpointSliceDiscovery>> = add_or_update
+                .iter()
+                .filter_map(|(key, ep_slice)| {
+                    match EndpointSliceDiscovery::from_endpoint_slice(ep_slice.clone()) {
+                        Ok(discovery) => Some((key.clone(), discovery)),
+                        Err(e) => {
+                            tracing::warn!(
+                                key = %key,
+                                error = %e,
+                                "Failed to create EndpointSliceDiscovery, skipping"
+                            );
+                            None
+                        }
+                    }
+                })
+                .collect();
+            
+            self.update(discovery_map, &remove);
+        }
     }
 }
 

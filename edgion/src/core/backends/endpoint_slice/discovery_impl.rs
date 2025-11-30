@@ -7,8 +7,11 @@ use async_trait::async_trait;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_load_balancing::discovery::ServiceDiscovery;
+use pingora_load_balancing::selection::RoundRobin;
+use pingora_load_balancing::{Backends, LoadBalancer};
 use pingora_load_balancing::Backend;
 use std::collections::{BTreeSet, HashMap};
+use std::sync::{Arc, RwLock, Weak};
 
 /// Extension trait to add port information for service discovery
 pub trait EndpointSliceExt {
@@ -84,25 +87,57 @@ impl EndpointSliceExt for EndpointSlice {
 /// Wrapper for EndpointSlice that implements ServiceDiscovery
 /// 
 /// This allows using EndpointSlice directly with Pingora's load balancing.
+/// Uses Arc<RwLock<>> for interior mutability to allow in-place updates.
 pub struct EndpointSliceDiscovery {
-    /// The EndpointSlice to discover backends from
-    endpoint_slice: EndpointSlice,
+    /// The EndpointSlice to discover backends from (with interior mutability)
+    endpoint_slice: Arc<RwLock<EndpointSlice>>,
     /// Default port to use for backend connections (from first port in EndpointSlice)
-    default_port: u16,
+    default_port: Arc<RwLock<u16>>,
+    /// Load balancer with RoundRobin selection (with interior mutability)
+    /// Uses Option to allow delayed initialization
+    lb: Arc<RwLock<Option<LoadBalancer<RoundRobin>>>>,
+    /// Weak self-reference for service discovery
+    _self: Weak<Self>,
+}
+
+// Manual Clone implementation
+impl Clone for EndpointSliceDiscovery {
+    fn clone(&self) -> Self {
+        Self {
+            endpoint_slice: self.endpoint_slice.clone(),
+            default_port: self.default_port.clone(),
+            lb: self.lb.clone(),
+            _self: self._self.clone(),
+        }
+    }
 }
 
 impl EndpointSliceDiscovery {
     /// Create a new EndpointSliceDiscovery with explicit port
-    pub fn new(endpoint_slice: EndpointSlice, default_port: u16) -> Self {
-        Self {
-            endpoint_slice,
-            default_port,
-        }
+    pub fn new(endpoint_slice: EndpointSlice, default_port: u16) -> Arc<Self> {
+        // Create Arc with None lb first
+        let discovery = Arc::new_cyclic(|weak| Self {
+            endpoint_slice: Arc::new(RwLock::new(endpoint_slice)),
+            default_port: Arc::new(RwLock::new(default_port)),
+            lb: Arc::new(RwLock::new(None)),
+            _self: weak.clone(),
+        });
+        
+        // Now create LoadBalancer using this discovery
+        // We need to box it as dyn ServiceDiscovery
+        let discovery_boxed: Box<dyn ServiceDiscovery + Send + Sync> = Box::new(discovery.as_ref().clone());
+        let backends = Backends::new(discovery_boxed);
+        let lb = LoadBalancer::from_backends(backends);
+        
+        // Store the LoadBalancer
+        *discovery.lb.write().unwrap() = Some(lb);
+        
+        discovery
     }
     
     /// Create a new EndpointSliceDiscovery using the first port from EndpointSlice as default
     /// Returns error if no ports are defined
-    pub fn from_endpoint_slice(endpoint_slice: EndpointSlice) -> Result<Self, String> {
+    pub fn from_endpoint_slice(endpoint_slice: EndpointSlice) -> Result<Arc<Self>, String> {
         // Get the first port as default port, return error if no ports defined
         let default_port = endpoint_slice.ports
             .as_ref()
@@ -110,10 +145,96 @@ impl EndpointSliceDiscovery {
             .and_then(|p| p.port)
             .ok_or_else(|| "No port defined in EndpointSlice".to_string())?;
         
-        Ok(Self {
-            endpoint_slice,
-            default_port: default_port as u16,
+        let default_port = default_port as u16;
+        
+        Ok(Self::new(endpoint_slice, default_port))
+    }
+    
+    /// Update the EndpointSlice data in-place
+    /// This updates the EndpointSlice without replacing the entire EndpointSliceDiscovery
+    pub fn update(&self, new_endpoint_slice: EndpointSlice) -> Result<(), String> {
+        // Get or keep the default port
+        let port = {
+            let current_port = *self.default_port.read().unwrap();
+            // Try to get port from new endpoint slice, fallback to current port
+            new_endpoint_slice.ports
+                .as_ref()
+                .and_then(|ports| ports.first())
+                .and_then(|p| p.port)
+                .map(|p| p as u16)
+                .unwrap_or(current_port)
+        };
+        
+        // Update endpoint_slice and port
+        *self.endpoint_slice.write().unwrap() = new_endpoint_slice;
+        *self.default_port.write().unwrap() = port;
+        
+        tracing::debug!("Updated EndpointSliceDiscovery in-place");
+        Ok(())
+    }
+    
+    /// Trigger LoadBalancer update
+    /// This will call lb.update() which internally calls self.discover()
+    /// to rebuild backends from the updated EndpointSlice
+    /// Note: This is an async method
+    pub async fn update_load_balancer(&self) -> Result<(), String> {
+        let lb_arc = self.lb.clone();
+        
+        // Get LoadBalancer without holding lock during async call
+        let lb_guard = lb_arc.read().unwrap();
+        if let Some(_) = lb_guard.as_ref() {
+            // Release the lock before calling async update
+            drop(lb_guard);
+            
+            // Re-acquire to call update
+            let lb_guard = lb_arc.read().unwrap();
+            if let Some(lb) = lb_guard.as_ref() {
+                lb.update()
+                    .await
+                    .map_err(|e| format!("Failed to update LoadBalancer: {}", e))?;
+                
+                tracing::debug!("LoadBalancer updated via discover()");
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Get a reference to the load balancer (returns Arc for shared access)
+    pub fn load_balancer(&self) -> Option<Arc<RwLock<Option<LoadBalancer<RoundRobin>>>>> {
+        Some(self.lb.clone())
+    }
+    
+    /// Execute a function with read access to the underlying EndpointSlice
+    pub fn with_endpoint_slice<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&EndpointSlice) -> R,
+    {
+        let ep_slice = self.endpoint_slice.read().unwrap();
+        f(&ep_slice)
+    }
+    
+    /// Get a clone of the underlying EndpointSlice
+    pub fn endpoint_slice(&self) -> EndpointSlice {
+        self.endpoint_slice.read().unwrap().clone()
+    }
+    
+    /// Get service key from this EndpointSlice
+    /// Returns "namespace/service-name" based on the kubernetes.io/service-name label
+    pub fn service_key(&self) -> Option<String> {
+        const SERVICE_NAME_LABEL: &str = "kubernetes.io/service-name";
+        self.with_endpoint_slice(|ep_slice| {
+            let metadata = &ep_slice.metadata;
+            let namespace = metadata.namespace.as_deref()?;
+            let labels = metadata.labels.as_ref()?;
+            let service_name = labels.get(SERVICE_NAME_LABEL)?;
+            Some(format!("{}/{}", namespace, service_name))
         })
+    }
+    
+    /// Get the default port
+    pub fn default_port(&self) -> u16 {
+        *self.default_port.read().unwrap()
     }
 }
 
@@ -125,7 +246,9 @@ impl ServiceDiscovery for EndpointSliceDiscovery {
     /// This method is called by Pingora's load balancer to get the current
     /// list of available backends based on the EndpointSlice data.
     async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>), Box<pingora_core::Error>> {
-        let backends = self.endpoint_slice.build_backends(self.default_port);
+        let ep_slice = self.endpoint_slice.read().unwrap();
+        let port = *self.default_port.read().unwrap();
+        let backends = ep_slice.build_backends(port);
         
         // Return empty health map - all backends default to healthy
         let health = HashMap::new();
