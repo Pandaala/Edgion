@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 use arc_swap::ArcSwap;
-use super::WeightedRoundRobin;
+use super::weighted_selector::WeightedRoundRobin;
 
 /// Error codes for backend selection configuration
 pub const ERR_NO_BACKEND_REFS: u32 = 1;

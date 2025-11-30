@@ -2,10 +2,8 @@
 //!
 //! This module provides weighted load balancing algorithms for lb selection.
 
-mod weighted_selector;
-mod backend_selector;
+pub mod simple_lb;
 pub mod optional_lb;
 
-pub use weighted_selector::WeightedRoundRobin;
-pub use backend_selector::{BackendSelector, ERR_NO_BACKEND_REFS, ERR_INCONSISTENT_WEIGHT};
+pub use simple_lb::{BackendSelector, WeightedRoundRobin, ERR_NO_BACKEND_REFS, ERR_INCONSISTENT_WEIGHT};
 
