@@ -8,10 +8,10 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_load_balancing::discovery::ServiceDiscovery;
 use pingora_load_balancing::selection::RoundRobin;
-use pingora_load_balancing::{Backends, LoadBalancer};
+use pingora_load_balancing::LoadBalancer;
 use pingora_load_balancing::Backend;
 use std::collections::{BTreeSet, HashMap};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, RwLock};
 
 /// Extension trait to add port information for service discovery
 pub trait EndpointSliceExt {
@@ -87,48 +87,37 @@ impl EndpointSliceExt for EndpointSlice {
 /// Wrapper for EndpointSlice that implements ServiceDiscovery
 /// 
 /// This allows using EndpointSlice directly with Pingora's load balancing.
-/// Uses Arc<RwLock<>> for interior mutability to allow in-place updates.
+/// Provides interior mutability for EndpointSlice updates without cloning.
+/// Note: This struct is typically wrapped in Arc at the storage layer.
 pub struct EndpointSliceDiscovery {
     /// The EndpointSlice to discover backends from (with interior mutability)
     endpoint_slice: Arc<RwLock<EndpointSlice>>,
-    /// Load balancer with RoundRobin selection (with interior mutability)
-    /// Uses Option to allow delayed initialization
-    lb: Arc<RwLock<Option<LoadBalancer<RoundRobin>>>>,
-    /// Weak self-reference for service discovery
-    _self: Weak<Self>,
-}
-
-// Manual Clone implementation
-impl Clone for EndpointSliceDiscovery {
-    fn clone(&self) -> Self {
-        Self {
-            endpoint_slice: self.endpoint_slice.clone(),
-            lb: self.lb.clone(),
-            _self: self._self.clone(),
-        }
-    }
+    /// Load balancer with RoundRobin selection (immutable Arc, only update())
+    lb: Arc<LoadBalancer<RoundRobin>>,
 }
 
 impl EndpointSliceDiscovery {
     /// Create a new EndpointSliceDiscovery from EndpointSlice
+    /// Returns Arc<Self> since it's typically used with Arc at storage layer
     pub fn new(endpoint_slice: EndpointSlice) -> Arc<Self> {
-        // Create Arc with None lb first
-        let discovery = Arc::new_cyclic(|weak| Self {
+        // Build initial backends
+        let port = endpoint_slice.ports
+            .as_ref()
+            .and_then(|ports| ports.first())
+            .and_then(|p| p.port)
+            .map(|p| p as u16)
+            .unwrap_or(80);
+        
+        let backends = endpoint_slice.build_backends(port);
+        
+        // Create LoadBalancer with static backends
+        let lb = LoadBalancer::try_from_iter(backends)
+            .expect("Failed to create LoadBalancer");
+        
+        Arc::new(Self {
             endpoint_slice: Arc::new(RwLock::new(endpoint_slice)),
-            lb: Arc::new(RwLock::new(None)),
-            _self: weak.clone(),
-        });
-        
-        // Now create LoadBalancer using this discovery
-        // We need to box it as dyn ServiceDiscovery
-        let discovery_boxed: Box<dyn ServiceDiscovery + Send + Sync> = Box::new(discovery.as_ref().clone());
-        let backends = Backends::new(discovery_boxed);
-        let lb = LoadBalancer::from_backends(backends);
-        
-        // Store the LoadBalancer
-        *discovery.lb.write().unwrap() = Some(lb);
-        
-        discovery
+            lb: Arc::new(lb),
+        })
     }
     
     /// Get the port from EndpointSlice (returns first port or 80 as default)
@@ -159,35 +148,19 @@ impl EndpointSliceDiscovery {
     }
     
     /// Trigger LoadBalancer update
-    /// This will call lb.update() which internally calls self.discover()
-    /// to rebuild backends from the updated EndpointSlice
-    /// Note: This is an async method
+    /// Calls lb.update() which will refresh backends
     pub async fn update_load_balancer(&self) -> Result<(), String> {
-        let lb_arc = self.lb.clone();
+        self.lb.update()
+            .await
+            .map_err(|e| format!("Failed to update LoadBalancer: {}", e))?;
         
-        // Get LoadBalancer without holding lock during async call
-        let lb_guard = lb_arc.read().unwrap();
-        if let Some(_) = lb_guard.as_ref() {
-            // Release the lock before calling async update
-            drop(lb_guard);
-            
-            // Re-acquire to call update
-            let lb_guard = lb_arc.read().unwrap();
-            if let Some(lb) = lb_guard.as_ref() {
-                lb.update()
-                    .await
-                    .map_err(|e| format!("Failed to update LoadBalancer: {}", e))?;
-                
-                tracing::debug!("LoadBalancer updated via discover()");
-            }
-        }
-        
+        tracing::debug!("LoadBalancer updated");
         Ok(())
     }
     
-    /// Get a reference to the load balancer (returns Arc for shared access)
-    pub fn load_balancer(&self) -> Option<Arc<RwLock<Option<LoadBalancer<RoundRobin>>>>> {
-        Some(self.lb.clone())
+    /// Get the load balancer reference
+    pub fn load_balancer(&self) -> Arc<LoadBalancer<RoundRobin>> {
+        self.lb.clone()
     }
     
     /// Execute a function with read access to the underlying EndpointSlice
