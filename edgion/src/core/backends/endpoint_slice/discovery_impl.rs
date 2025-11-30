@@ -91,8 +91,6 @@ impl EndpointSliceExt for EndpointSlice {
 pub struct EndpointSliceDiscovery {
     /// The EndpointSlice to discover backends from (with interior mutability)
     endpoint_slice: Arc<RwLock<EndpointSlice>>,
-    /// Default port to use for backend connections (from first port in EndpointSlice)
-    default_port: Arc<RwLock<u16>>,
     /// Load balancer with RoundRobin selection (with interior mutability)
     /// Uses Option to allow delayed initialization
     lb: Arc<RwLock<Option<LoadBalancer<RoundRobin>>>>,
@@ -105,7 +103,6 @@ impl Clone for EndpointSliceDiscovery {
     fn clone(&self) -> Self {
         Self {
             endpoint_slice: self.endpoint_slice.clone(),
-            default_port: self.default_port.clone(),
             lb: self.lb.clone(),
             _self: self._self.clone(),
         }
@@ -113,12 +110,11 @@ impl Clone for EndpointSliceDiscovery {
 }
 
 impl EndpointSliceDiscovery {
-    /// Create a new EndpointSliceDiscovery with explicit port
-    pub fn new(endpoint_slice: EndpointSlice, default_port: u16) -> Arc<Self> {
+    /// Create a new EndpointSliceDiscovery from EndpointSlice
+    pub fn new(endpoint_slice: EndpointSlice) -> Arc<Self> {
         // Create Arc with None lb first
         let discovery = Arc::new_cyclic(|weak| Self {
             endpoint_slice: Arc::new(RwLock::new(endpoint_slice)),
-            default_port: Arc::new(RwLock::new(default_port)),
             lb: Arc::new(RwLock::new(None)),
             _self: weak.clone(),
         });
@@ -135,39 +131,28 @@ impl EndpointSliceDiscovery {
         discovery
     }
     
-    /// Create a new EndpointSliceDiscovery using the first port from EndpointSlice as default
-    /// Returns error if no ports are defined
-    pub fn from_endpoint_slice(endpoint_slice: EndpointSlice) -> Result<Arc<Self>, String> {
-        // Get the first port as default port, return error if no ports defined
-        let default_port = endpoint_slice.ports
+    /// Get the port from EndpointSlice (returns first port or 80 as default)
+    fn get_port(&self) -> u16 {
+        let ep_slice = self.endpoint_slice.read().unwrap();
+        ep_slice.ports
             .as_ref()
             .and_then(|ports| ports.first())
             .and_then(|p| p.port)
-            .ok_or_else(|| "No port defined in EndpointSlice".to_string())?;
-        
-        let default_port = default_port as u16;
-        
-        Ok(Self::new(endpoint_slice, default_port))
+            .map(|p| p as u16)
+            .unwrap_or(80)
+    }
+    
+    /// Create a new EndpointSliceDiscovery from EndpointSlice
+    /// This is an alias for new() for backward compatibility
+    pub fn from_endpoint_slice(endpoint_slice: EndpointSlice) -> Result<Arc<Self>, String> {
+        Ok(Self::new(endpoint_slice))
     }
     
     /// Update the EndpointSlice data in-place
     /// This updates the EndpointSlice without replacing the entire EndpointSliceDiscovery
     pub fn update(&self, new_endpoint_slice: EndpointSlice) -> Result<(), String> {
-        // Get or keep the default port
-        let port = {
-            let current_port = *self.default_port.read().unwrap();
-            // Try to get port from new endpoint slice, fallback to current port
-            new_endpoint_slice.ports
-                .as_ref()
-                .and_then(|ports| ports.first())
-                .and_then(|p| p.port)
-                .map(|p| p as u16)
-                .unwrap_or(current_port)
-        };
-        
-        // Update endpoint_slice and port
+        // Update endpoint_slice
         *self.endpoint_slice.write().unwrap() = new_endpoint_slice;
-        *self.default_port.write().unwrap() = port;
         
         tracing::debug!("Updated EndpointSliceDiscovery in-place");
         Ok(())
@@ -231,11 +216,6 @@ impl EndpointSliceDiscovery {
             Some(format!("{}/{}", namespace, service_name))
         })
     }
-    
-    /// Get the default port
-    pub fn default_port(&self) -> u16 {
-        *self.default_port.read().unwrap()
-    }
 }
 
 
@@ -247,7 +227,7 @@ impl ServiceDiscovery for EndpointSliceDiscovery {
     /// list of available backends based on the EndpointSlice data.
     async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>), Box<pingora_core::Error>> {
         let ep_slice = self.endpoint_slice.read().unwrap();
-        let port = *self.default_port.read().unwrap();
+        let port = self.get_port();
         let backends = ep_slice.build_backends(port);
         
         // Return empty health map - all backends default to healthy
@@ -309,7 +289,7 @@ mod tests {
     #[tokio::test]
     async fn test_discovery() {
         let ep_slice = create_test_endpoint_slice();
-        let discovery = EndpointSliceDiscovery::new(ep_slice, 8080);
+        let discovery = EndpointSliceDiscovery::new(ep_slice);
         
         let result = discovery.discover().await;
         assert!(result.is_ok());
