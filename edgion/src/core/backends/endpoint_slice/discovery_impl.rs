@@ -89,6 +89,7 @@ impl EndpointSliceExt for EndpointSlice {
 /// This allows using EndpointSlice directly with Pingora's load balancing.
 /// Provides interior mutability for EndpointSlice updates without cloning.
 /// Note: This struct is typically wrapped in Arc at the storage layer.
+#[derive(Clone)]
 pub struct EndpointSliceDiscovery {
     /// The EndpointSlice to discover backends from (with interior mutability)
     endpoint_slice: Arc<RwLock<EndpointSlice>>,
@@ -97,10 +98,10 @@ pub struct EndpointSliceDiscovery {
 impl EndpointSliceDiscovery {
     /// Create a new EndpointSliceDiscovery from EndpointSlice
     /// Returns Arc<Self> since it's typically used with Arc at storage layer
-    pub fn new(endpoint_slice: EndpointSlice) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(endpoint_slice: EndpointSlice) -> Self {
+        Self {
             endpoint_slice: Arc::new(RwLock::new(endpoint_slice)),
-        })
+        }
     }
     
     /// Get the port from EndpointSlice (returns first port or 80 as default)
@@ -114,12 +115,7 @@ impl EndpointSliceDiscovery {
             .unwrap_or(80)
     }
     
-    /// Create a new EndpointSliceDiscovery from EndpointSlice
-    /// This is an alias for new() for backward compatibility
-    pub fn from_endpoint_slice(endpoint_slice: EndpointSlice) -> Result<Arc<Self>, String> {
-        Ok(Self::new(endpoint_slice))
-    }
-    
+
     /// Update the EndpointSlice data in-place
     /// This updates the EndpointSlice without replacing the entire EndpointSliceDiscovery
     pub fn update(&self, new_endpoint_slice: EndpointSlice) -> Result<(), String> {
@@ -197,7 +193,7 @@ impl ServiceDiscovery for ArcDiscoveryWrapper {
 /// eliminates circular dependencies.
 pub struct EndpointSliceLoadBalancer {
     /// The discovery implementation
-    discovery: Arc<EndpointSliceDiscovery>,
+    discovery: EndpointSliceDiscovery,
     /// The load balancer using the discovery
     lb: Arc<LoadBalancer<RoundRobin>>,
 }
@@ -208,15 +204,9 @@ impl EndpointSliceLoadBalancer {
     pub fn new(endpoint_slice: EndpointSlice) -> Arc<Self> {
         let discovery = EndpointSliceDiscovery::new(endpoint_slice);
         
-        // Use EndpointSliceDiscovery as the ServiceDiscovery for LoadBalancer
-        // Wrap Arc in ArcDiscoveryWrapper to implement ServiceDiscovery
-        let discovery_clone = Arc::clone(&discovery);
-        let wrapper = ArcDiscoveryWrapper {
-            inner: discovery_clone,
-        };
-        let backends = Backends::new(Box::new(wrapper));
+        let backends = Backends::new(Box::new(discovery.clone()));
         let lb = LoadBalancer::from_backends(backends);
-        
+
         Arc::new(Self {
             discovery,
             lb: Arc::new(lb),
