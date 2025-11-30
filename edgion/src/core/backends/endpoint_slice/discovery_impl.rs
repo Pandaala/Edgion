@@ -4,6 +4,7 @@
 //! allowing it to be used with Pingora's load balancing infrastructure.
 
 use async_trait::async_trait;
+use futures::FutureExt;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_load_balancing::discovery::ServiceDiscovery;
@@ -173,19 +174,6 @@ impl ServiceDiscovery for EndpointSliceDiscovery {
     }
 }
 
-/// Wrapper to allow Arc<EndpointSliceDiscovery> to implement ServiceDiscovery
-/// This is needed to avoid orphan rules when passing Arc to Backends
-struct ArcDiscoveryWrapper {
-    inner: Arc<EndpointSliceDiscovery>,
-}
-
-#[async_trait]
-impl ServiceDiscovery for ArcDiscoveryWrapper {
-    async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>), Box<pingora_core::Error>> {
-        self.inner.discover().await
-    }
-}
-
 /// EndpointSliceLoadBalancer combines EndpointSliceDiscovery with LoadBalancer
 ///
 /// This struct wraps an EndpointSliceDiscovery and creates a LoadBalancer that uses it
@@ -206,6 +194,30 @@ impl EndpointSliceLoadBalancer {
         
         let backends = Backends::new(Box::new(discovery.clone()));
         let lb = LoadBalancer::from_backends(backends);
+        
+        // Initialize backends by calling update once
+        // This triggers the first discovery to populate backends
+        match lb.update().now_or_never() {
+            Some(Ok(_)) => {
+                tracing::debug!("LoadBalancer initialized with backends");
+            }
+            Some(Err(e)) => {
+                // Check if it's a "no backends" error (expected) or real error
+                let err_msg = format!("{:?}", e);
+                if err_msg.contains("empty") || err_msg.contains("no backend") {
+                    tracing::debug!("LoadBalancer initialized with no backends (expected for empty EndpointSlice)");
+                } else {
+                    tracing::error!(
+                        error = ?e,
+                        "Unexpected error initializing LoadBalancer, this may cause issues"
+                    );
+                }
+            }
+            None => {
+                // This should never happen for our discovery implementation
+                tracing::error!("LoadBalancer update blocked - this indicates a bug in EndpointSliceDiscovery");
+            }
+        }
 
         Arc::new(Self {
             discovery,
