@@ -13,6 +13,7 @@ use pingora_load_balancing::{Backends, LoadBalancer};
 use pingora_load_balancing::Backend;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
+use crate::core::lb::optional_lb::{OptionalLoadBalancers, get_policies_for_service};
 
 /// Extension trait to add port information for service discovery
 pub trait EndpointSliceExt {
@@ -182,8 +183,10 @@ impl ServiceDiscovery for EndpointSliceDiscovery {
 pub struct EndpointSliceLoadBalancer {
     /// The discovery implementation
     discovery: EndpointSliceDiscovery,
-    /// The load balancer using the discovery
+    /// The load balancer using the discovery (RoundRobin, always present)
     lb: Arc<LoadBalancer<RoundRobin>>,
+    /// Optional load balancing algorithms (None if not needed)
+    optional_lbs: Option<Arc<OptionalLoadBalancers>>,
 }
 
 impl EndpointSliceLoadBalancer {
@@ -218,10 +221,40 @@ impl EndpointSliceLoadBalancer {
                 tracing::error!("LoadBalancer update blocked - this indicates a bug in EndpointSliceDiscovery");
             }
         }
+        
+        // Create optional load balancers if configured for this service
+        let optional_lbs = if let Some(service_key) = discovery.service_key() {
+            let policies = get_policies_for_service(&service_key);
+            if !policies.is_empty() {
+                match OptionalLoadBalancers::new(&discovery, policies.clone()) {
+                    Ok(opts) => {
+                        tracing::info!(
+                            service_key = %service_key,
+                            policies = ?policies,
+                            "Optional LBs created"
+                        );
+                        Some(Arc::new(opts))
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            service_key = %service_key,
+                            error = %e,
+                            "Failed to create optional LBs"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         Arc::new(Self {
             discovery,
             lb: Arc::new(lb),
+            optional_lbs,
         })
     }
     
@@ -235,9 +268,14 @@ impl EndpointSliceLoadBalancer {
     pub async fn update_load_balancer(&self) -> Result<(), String> {
         self.lb.update()
             .await
-            .map_err(|e| format!("Failed to update LoadBalancer: {}", e))?;
+            .map_err(|e| format!("Failed to update RoundRobin LB: {}", e))?;
         
-        tracing::debug!("LoadBalancer updated");
+        // Update optional algorithms if present
+        if let Some(ref opts) = self.optional_lbs {
+            opts.update_all().await?;
+        }
+        
+        tracing::debug!("LoadBalancer(s) updated");
         Ok(())
     }
     
@@ -262,6 +300,16 @@ impl EndpointSliceLoadBalancer {
     /// Get a clone of the underlying EndpointSlice
     pub fn endpoint_slice(&self) -> EndpointSlice {
         self.discovery.endpoint_slice()
+    }
+    
+    /// Get optional load balancers if available
+    pub fn optional_lbs(&self) -> Option<&Arc<OptionalLoadBalancers>> {
+        self.optional_lbs.as_ref()
+    }
+    
+    /// Check if optional algorithms are enabled
+    pub fn has_optional_algorithms(&self) -> bool {
+        self.optional_lbs.is_some()
     }
 }
 
