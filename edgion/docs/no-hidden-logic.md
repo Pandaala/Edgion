@@ -213,21 +213,104 @@ backendRefs:
 
 ---
 
-## #3 待添加
+## #3 可选负载均衡算法配置 (待实现)
 
-_预留位置_
+### 概述
+
+Edgion 将支持为每个 Backend 配置额外的负载均衡算法（除默认的 RoundRobin 外）。通过 HTTPRoute 的 `HTTPRouteFilter.extension_ref` 字段，可以为特定服务启用以下算法：
+
+- **Ketama**: 一致性哈希（Consistent Hashing）
+- **FnvHash**: FNV 哈希算法
+- **LeastConnection**: 最少连接数算法
+
+### Gateway API 对应字段
+
+**HTTPRoute.spec.rules[].filters[].extension_ref** (Gateway API 标准字段)
+
+这是 Gateway API 标准的扩展机制，通过引用自定义资源来配置特定实现的功能。
+
+### 规划的配置格式
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: example-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: public-gateway
+  hostnames:
+    - api.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /cache
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: LoadBalancingPolicy
+            name: ketama-policy
+      backendRefs:
+        - name: cache-service
+          port: 6379
 
 ---
+# 自定义 LoadBalancingPolicy 资源（待定义）
+apiVersion: edgion.io/v1alpha1
+kind: LoadBalancingPolicy
+metadata:
+  name: ketama-policy
+  namespace: default
+spec:
+  # 策略应用到的服务
+  targetServices:
+    - name: cache-service
+      namespace: default
+  # 启用的算法
+  algorithms:
+    - ketama
+    - fnvhash
+```
 
-## #3 待添加
+### 实现计划
 
-_预留位置_
+1. **定义 CRD**: 创建 `LoadBalancingPolicy` 自定义资源
+2. **策略提取**: 在 HTTPRoute 同步时，解析 `extension_ref` 引用的策略资源
+3. **全局存储**: 提取的策略保存在全局 `PolicyStore`（使用 `DashMap` 实现）
+   - Key: `namespace/service-name`
+   - Value: `Vec<LbPolicy>`
+4. **懒加载**: 当 `EndpointSliceLoadBalancer` 初始化时，查询 `PolicyStore`，仅为配置了策略的服务创建对应的 `LoadBalancer` 实例
+5. **内存优化**: 未使用的算法不会被初始化，每个未使用算法仅占用 `Option<Arc<...>>` 的空间（约 24 字节）
 
----
+### 代码位置
 
-## #4 待添加
+- **策略定义**: `edgion/src/core/lb/optional_lb/types.rs` (`LbPolicy` enum)
+- **策略存储**: `edgion/src/core/lb/optional_lb/policy_store.rs` (`PolicyStore`)
+- **策略提取**: `edgion/src/core/routes/conf_handler_impl.rs` (`extract_and_update_lb_policies` - 待实现)
+- **CRD 定义**: 待创建
 
-_预留位置_
+### 优势
+
+1. **符合 Gateway API 规范**: 使用标准的 `extension_ref` 机制而非自定义字段
+2. **解耦策略配置**: 策略与路由规则分离，更易管理和复用
+3. **更灵活**: 可以为多个服务定义统一的策略
+4. **易于扩展**: 未来可以添加更多策略配置选项（如权重、健康检查等）
+
+### 状态
+
+⚠️ **当前状态**: 基础架构已完成（`PolicyStore`, `LbPolicy`, `OptionalLoadBalancers`），但策略提取逻辑待实现。
+
+### 待完成任务
+
+- [ ] 定义 `LoadBalancingPolicy` CRD
+- [ ] 实现 `extract_and_update_lb_policies` 从 `extension_ref` 提取策略
+- [ ] 添加策略资源的 Watch 和同步逻辑
+- [ ] 实现策略的生命周期管理（创建/更新/删除）
+- [ ] 添加配置验证和错误处理
+- [ ] 编写测试用例和文档
 
 ---
 

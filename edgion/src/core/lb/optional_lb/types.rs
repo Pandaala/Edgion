@@ -24,7 +24,7 @@ impl LbPolicy {
         match s.to_lowercase().as_str() {
             "ketama" | "consistent-hash" => Some(Self::Ketama),
             "fnvhash" | "fnv-hash" => Some(Self::FnvHash),
-            "leastconn" | "least-connection" => Some(Self::LeastConnection),
+            "leastconn" | "least-connection" | "leastconnection" | "least_connection" => Some(Self::LeastConnection),
             _ => None,
         }
     }
@@ -36,6 +36,42 @@ impl LbPolicy {
             Self::FnvHash => "fnvhash",
             Self::LeastConnection => "leastconn",
         }
+    }
+    
+    /// Parse LB policies from comma-separated string
+    /// 
+    /// Supports multiple aliases for each policy type:
+    /// - Ketama: "ketama", "consistent-hash"
+    /// - FnvHash: "fnvhash", "fnv-hash"
+    /// - LeastConnection: "leastconn", "least-connection", "leastconnection", "least_connection"
+    /// 
+    /// # Examples
+    /// ```ignore
+    /// let policies = LbPolicy::parse_from_string("ketama");
+    /// assert_eq!(policies, vec![LbPolicy::Ketama]);
+    /// 
+    /// let policies = LbPolicy::parse_from_string("ketama,fnvhash");
+    /// assert_eq!(policies.len(), 2);
+    /// 
+    /// let policies = LbPolicy::parse_from_string("ketama, leastconnection");
+    /// assert_eq!(policies.len(), 2);
+    /// ```
+    pub fn parse_from_string(policy_str: &str) -> Vec<Self> {
+        policy_str
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                match Self::from_str(trimmed) {
+                    Some(policy) => Some(policy),
+                    None => {
+                        if !trimmed.is_empty() {
+                            tracing::warn!(policy = %trimmed, "Unknown LB policy");
+                        }
+                        None
+                    }
+                }
+            })
+            .collect()
     }
 }
 
@@ -55,10 +91,11 @@ impl OptionalLoadBalancers {
     /// Try to create optional load balancers if needed
     /// 
     /// This is a convenience method that:
-    /// 1. Queries policies via get_policies_for_service
-    /// 2. Returns None if no policies configured
-    /// 3. Returns None if initialization fails
-    /// 4. Returns Some(Arc<...>) on success
+    /// 1. Extracts service key from EndpointSlice metadata
+    /// 2. Queries policies via get_policies_for_service
+    /// 3. Returns None if no policies configured
+    /// 4. Returns None if initialization fails
+    /// 5. Returns Some(Arc<...>) on success
     /// 
     /// # Arguments
     /// * `discovery` - The service discovery implementation
@@ -66,10 +103,40 @@ impl OptionalLoadBalancers {
     /// # Returns
     /// * `Option<Arc<Self>>` - The initialized load balancers or None
     pub fn try_new(discovery: &EndpointSliceDiscovery) -> Option<Arc<Self>> {
-        let policies = get_policies_for_service();
+        // Extract service_key from EndpointSlice metadata
+        const SERVICE_NAME_LABEL: &str = "kubernetes.io/service-name";
+        
+        let service_key = discovery.with_endpoint_slice(|ep_slice| {
+            let metadata = &ep_slice.metadata;
+            let namespace = metadata.namespace.as_deref()?;
+            let labels = metadata.labels.as_ref()?;
+            let service_name = labels.get(SERVICE_NAME_LABEL)?;
+            Some(format!("{}/{}", namespace, service_name))
+        });
+        
+        let service_key = match service_key {
+            Some(key) => key,
+            None => {
+                tracing::debug!("Cannot extract service_key from EndpointSlice, skipping optional LBs");
+                return None;
+            }
+        };
+        
+        // Query policies for this service
+        let policies = get_policies_for_service(&service_key);
         if policies.is_empty() {
+            tracing::debug!(
+                service_key = %service_key,
+                "No optional LB policies configured for service"
+            );
             return None;
         }
+        
+        tracing::debug!(
+            service_key = %service_key,
+            policies = ?policies,
+            "Creating optional load balancers for service"
+        );
         
         Self::new(discovery, policies).ok().map(Arc::new)
     }

@@ -1,42 +1,24 @@
 //! Configuration query for optional load balancing algorithms
 
 use super::types::LbPolicy;
+use super::policy_store::get_global_policy_store;
 
 /// Get list of LB policies for a service from configuration
 /// 
-/// This function queries global configuration to determine which
-/// optional algorithms should be enabled.
+/// This function queries the global policy store to determine which
+/// optional algorithms should be enabled for a specific service.
 /// 
-/// Configuration sources (priority order):
-/// 1. Global configuration (EdgionGatewayConfig)
-/// 2. Environment variables
-/// 3. Default: empty Vec (only RoundRobin)
+/// The policy store is populated during HTTPRoute parsing when backends
+/// specify their preferred load balancing algorithms via extension_ref.
+/// 
+/// # Arguments
+/// * `service_key` - The service key (format: "namespace/service-name")
 /// 
 /// # Returns
 /// * `Vec<LbPolicy>` - List of policies to initialize (empty = no optional LBs)
-pub fn get_policies_for_service() -> Vec<LbPolicy> {
-    // TODO: Implement actual configuration query
-    // 
-    // Implementation ideas:
-    // 1. Query global configuration
-    //    ```rust
-    //    let config = get_global_gateway_config();
-    //    if config.load_balancing.enable_optional_algorithms {
-    //        return parse_policies(&config.load_balancing.algorithms);
-    //    }
-    //    ```
-    // 
-    // 2. Query environment variables
-    //    ```rust
-    //    if let Ok(algos) = std::env::var("EDGION_LB_ALGORITHMS") {
-    //        return parse_policies(&algos);
-    //    }
-    //    ```
-    // 
-    // 3. Feature flags or dynamic config from etcd
-    
-    // Current: default to empty (only RoundRobin)
-    Vec::new()
+pub fn get_policies_for_service(service_key: &str) -> Vec<LbPolicy> {
+    let store = get_global_policy_store();
+    store.get(service_key)
 }
 
 /// Parse policy list from string (e.g., "ketama,fnvhash,leastconn")
