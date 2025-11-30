@@ -45,11 +45,18 @@ impl EpSliceStore {
         // EndpointSlice key format: "namespace/ep-slice-name"
         // Service key format: "namespace/service-name"
         // We need to find ep_slice with matching service label
+        const SERVICE_NAME_LABEL: &str = "kubernetes.io/service-name";
         for (_, ep_slice_lb) in map.iter() {
-            if let Some(svc_key) = ep_slice_lb.service_key() {
-                if svc_key == service_key {
-                    return Some(Arc::clone(ep_slice_lb));
-                }
+            let matches = ep_slice_lb.with_endpoint_slice(|ep_slice| {
+                let metadata = &ep_slice.metadata;
+                let namespace = metadata.namespace.as_deref()?;
+                let labels = metadata.labels.as_ref()?;
+                let service_name = labels.get(SERVICE_NAME_LABEL)?;
+                let key = format!("{}/{}", namespace, service_name);
+                Some(key == service_key)
+            });
+            if matches == Some(true) {
+                return Some(Arc::clone(ep_slice_lb));
             }
         }
         None

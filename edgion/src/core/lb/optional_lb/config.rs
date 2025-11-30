@@ -4,48 +4,38 @@ use super::types::LbPolicy;
 
 /// Get list of LB policies for a service from configuration
 /// 
-/// This function queries configuration sources to determine which
-/// optional algorithms should be enabled for the service.
+/// This function queries global configuration to determine which
+/// optional algorithms should be enabled.
 /// 
 /// Configuration sources (priority order):
-/// 1. Service annotation (e.g., `edgion.io/lb-algorithms: "ketama,fnvhash"`)
-/// 2. Global configuration (EdgionGatewayConfig)
+/// 1. Global configuration (EdgionGatewayConfig)
+/// 2. Environment variables
 /// 3. Default: empty Vec (only RoundRobin)
-/// 
-/// # Arguments
-/// * `service_key` - The service key (format: "namespace/service")
 /// 
 /// # Returns
 /// * `Vec<LbPolicy>` - List of policies to initialize (empty = no optional LBs)
-pub fn get_policies_for_service(service_key: &str) -> Vec<LbPolicy> {
+pub fn get_policies_for_service() -> Vec<LbPolicy> {
     // TODO: Implement actual configuration query
     // 
     // Implementation ideas:
-    // 1. Query Service annotation: "edgion.io/lb-algorithms: ketama,fnvhash"
+    // 1. Query global configuration
     //    ```rust
-    //    let svc_store = get_global_service_store();
-    //    if let Some(service) = svc_store.get(service_key) {
-    //        if let Some(annotations) = service.metadata.annotations.as_ref() {
-    //            if let Some(algos) = annotations.get("edgion.io/lb-algorithms") {
-    //                return parse_policies(algos);
-    //            }
-    //        }
+    //    let config = get_global_gateway_config();
+    //    if config.load_balancing.enable_optional_algorithms {
+    //        return parse_policies(&config.load_balancing.algorithms);
     //    }
     //    ```
     // 
-    // 2. Query global configuration
+    // 2. Query environment variables
     //    ```rust
-    //    let config = get_global_gateway_config();
-    //    config.load_balancing.default_optional_policies.clone()
+    //    if let Ok(algos) = std::env::var("EDGION_LB_ALGORITHMS") {
+    //        return parse_policies(&algos);
+    //    }
     //    ```
     // 
-    // 3. Support wildcard rules (e.g., "production/*" namespace)
+    // 3. Feature flags or dynamic config from etcd
     
     // Current: default to empty (only RoundRobin)
-    tracing::debug!(
-        service_key = %service_key,
-        "Checking optional LB policies (current: always empty)"
-    );
     Vec::new()
 }
 

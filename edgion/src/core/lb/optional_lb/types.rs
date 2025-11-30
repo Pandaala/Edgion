@@ -5,6 +5,7 @@ use futures::FutureExt;
 use pingora_load_balancing::selection::{BackendSelection, Random};
 use pingora_load_balancing::{Backends, LoadBalancer};
 use crate::core::backends::endpoint_slice::EndpointSliceDiscovery;
+use crate::core::lb::optional_lb::get_policies_for_service;
 
 /// Load balancing policy types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,6 +52,28 @@ pub struct OptionalLoadBalancers {
 }
 
 impl OptionalLoadBalancers {
+    /// Try to create optional load balancers if needed
+    /// 
+    /// This is a convenience method that:
+    /// 1. Queries policies via get_policies_for_service
+    /// 2. Returns None if no policies configured
+    /// 3. Returns None if initialization fails
+    /// 4. Returns Some(Arc<...>) on success
+    /// 
+    /// # Arguments
+    /// * `discovery` - The service discovery implementation
+    /// 
+    /// # Returns
+    /// * `Option<Arc<Self>>` - The initialized load balancers or None
+    pub fn try_new(discovery: &EndpointSliceDiscovery) -> Option<Arc<Self>> {
+        let policies = get_policies_for_service();
+        if policies.is_empty() {
+            return None;
+        }
+        
+        Self::new(discovery, policies).ok().map(Arc::new)
+    }
+    
     /// Create optional load balancers based on requested policies
     /// 
     /// # Arguments

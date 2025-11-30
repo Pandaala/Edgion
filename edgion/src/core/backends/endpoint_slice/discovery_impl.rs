@@ -13,7 +13,7 @@ use pingora_load_balancing::{Backends, LoadBalancer};
 use pingora_load_balancing::Backend;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
-use crate::core::lb::optional_lb::{OptionalLoadBalancers, get_policies_for_service};
+use crate::core::lb::optional_lb::OptionalLoadBalancers;
 
 /// Extension trait to add port information for service discovery
 pub trait EndpointSliceExt {
@@ -142,18 +142,6 @@ impl EndpointSliceDiscovery {
         self.endpoint_slice.read().unwrap().clone()
     }
     
-    /// Get service key from this EndpointSlice
-    /// Returns "namespace/service-name" based on the kubernetes.io/service-name label
-    pub fn service_key(&self) -> Option<String> {
-        const SERVICE_NAME_LABEL: &str = "kubernetes.io/service-name";
-        self.with_endpoint_slice(|ep_slice| {
-            let metadata = &ep_slice.metadata;
-            let namespace = metadata.namespace.as_deref()?;
-            let labels = metadata.labels.as_ref()?;
-            let service_name = labels.get(SERVICE_NAME_LABEL)?;
-            Some(format!("{}/{}", namespace, service_name))
-        })
-    }
 }
 
 
@@ -222,34 +210,8 @@ impl EndpointSliceLoadBalancer {
             }
         }
         
-        // Create optional load balancers if configured for this service
-        let optional_lbs = if let Some(service_key) = discovery.service_key() {
-            let policies = get_policies_for_service(&service_key);
-            if !policies.is_empty() {
-                match OptionalLoadBalancers::new(&discovery, policies.clone()) {
-                    Ok(opts) => {
-                        tracing::info!(
-                            service_key = %service_key,
-                            policies = ?policies,
-                            "Optional LBs created"
-                        );
-                        Some(Arc::new(opts))
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            service_key = %service_key,
-                            error = %e,
-                            "Failed to create optional LBs"
-                        );
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        // Create optional load balancers if configured
+        let optional_lbs = OptionalLoadBalancers::try_new(&discovery);
 
         Arc::new(Self {
             discovery,
@@ -282,11 +244,6 @@ impl EndpointSliceLoadBalancer {
     /// Get the load balancer reference
     pub fn load_balancer(&self) -> Arc<LoadBalancer<RoundRobin>> {
         self.lb.clone()
-    }
-    
-    /// Get service key from this EndpointSlice
-    pub fn service_key(&self) -> Option<String> {
-        self.discovery.service_key()
     }
     
     /// Execute a function with read access to the underlying EndpointSlice
@@ -419,11 +376,8 @@ mod tests {
         
         // Test if LoadBalancer::try_from_iter can handle empty backends
         println!("Testing with empty endpoints...");
-        let discovery = EndpointSliceDiscovery::new(ep_slice);
+        let _discovery = EndpointSliceDiscovery::new(ep_slice);
         println!("✅ EndpointSliceDiscovery created successfully with empty endpoints (no panic!)");
-        
-        // Verify the discovery was created
-        assert_eq!(discovery.service_key(), Some("default/test-svc".to_string()));
     }
 
     #[test]
@@ -469,11 +423,8 @@ mod tests {
         
         // Test if LoadBalancer can handle no ready endpoints (all not ready)
         println!("Testing with all not-ready endpoints...");
-        let discovery = EndpointSliceDiscovery::new(ep_slice);
+        let _discovery = EndpointSliceDiscovery::new(ep_slice);
         println!("✅ EndpointSliceDiscovery created successfully with not-ready endpoints (no panic!)");
-        
-        // Verify the discovery was created and has service key
-        assert_eq!(discovery.service_key(), Some("default/test-svc".to_string()));
     }
 
     #[test]
