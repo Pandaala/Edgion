@@ -1,7 +1,7 @@
 /// Error code for Edgion gateway
 /// Each error code has a fixed numeric code (0Xxx format) and a message string
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EdgionErrStatus {
+pub enum EdgionStatus {
     /// Missing Host header (HTTP 400)
     HostMissing = 400_01,
 

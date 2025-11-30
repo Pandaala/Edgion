@@ -1,4 +1,4 @@
-use crate::types::{EdgionErrStatus, HTTPBackendRef, MatchInfo};
+use crate::types::{EdgionStatus, HTTPBackendRef, MatchInfo};
 
 pub struct EdgionHttpContext {
     pub x_trace_id: Option<String>,
@@ -10,7 +10,7 @@ pub struct EdgionHttpContext {
     pub hostname: String,
     
     /// Error codes collected during request processing
-    pub error_codes: Vec<EdgionErrStatus>,
+    pub error_codes: Vec<EdgionStatus>,
 
     /// Matched route info (namespace, name, match item)
     pub matched_info: Option<MatchInfo>,
@@ -33,7 +33,7 @@ impl EdgionHttpContext {
     }
 
     /// Add an error code to the context
-    pub fn add_error(&mut self, err_code: EdgionErrStatus) {
+    pub fn add_error(&mut self, err_code: EdgionStatus) {
         self.error_codes.push(err_code);
     }
 }

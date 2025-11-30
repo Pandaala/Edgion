@@ -9,7 +9,7 @@ use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::core::gateway::edgion_http_context::EdgionHttpContext;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
 use crate::core::backends::get_peer;
-use crate::types::EdgionErrStatus;
+use crate::types::EdgionStatus;
 use crate::types::err::EdError;
 
 #[async_trait]
@@ -29,7 +29,7 @@ impl ProxyHttp for EdgionHttp {
         let backend_ref = match &ctx.selected_backend {
             Some(backend) => backend,
             None => {
-                ctx.add_error(EdgionErrStatus::UpstreamNotRouteMatched);
+                ctx.add_error(EdgionStatus::UpstreamNotRouteMatched);
                 end_response_500(session).await?;
                 return Err(PingoraError::new(ErrorType::InternalError));
             }
@@ -67,7 +67,7 @@ impl ProxyHttp for EdgionHttp {
                 ctx.hostname = host.to_string();
             }
             None => {
-                ctx.add_error(EdgionErrStatus::HostMissing);
+                ctx.add_error(EdgionStatus::HostMissing);
                 end_response_400(session).await?;
                 return Ok(true);
             }
@@ -84,19 +84,19 @@ impl ProxyHttp for EdgionHttp {
             Err(e) => {
                 match e {
                     EdError::RouteNotFound() => {
-                        ctx.add_error(EdgionErrStatus::RouteNotFound);
+                        ctx.add_error(EdgionStatus::RouteNotFound);
                         end_response_404(session).await?;
                     }
                     EdError::BackendNotFound() => {
-                        ctx.add_error(EdgionErrStatus::UpstreamNotBackendRefs);
+                        ctx.add_error(EdgionStatus::UpstreamNotBackendRefs);
                         end_response_500(session).await?;
                     }
                     EdError::InconsistentWeight() => {
-                        ctx.add_error(EdgionErrStatus::UpstreamInconsistentWeight);
+                        ctx.add_error(EdgionStatus::UpstreamInconsistentWeight);
                         end_response_500(session).await?;
                     }
                     _ => {
-                        ctx.add_error(EdgionErrStatus::RouteNotFound);
+                        ctx.add_error(EdgionStatus::RouteNotFound);
                         end_response_500(session).await?;
                     }
                 }

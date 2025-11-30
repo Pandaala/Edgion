@@ -1,5 +1,5 @@
 pub mod err;
-pub mod err_code;
+pub mod edgion_status;
 pub mod global_def;
 pub mod resource_kind;
 pub mod resources;
@@ -9,7 +9,7 @@ pub mod gateway_base_conf;
 pub mod ctx;
 
 pub use self::err::{EdError, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
-pub use self::err_code::EdgionErrStatus;
+pub use self::edgion_status::EdgionStatus;
 pub use self::global_def::*;
 pub use self::resource_kind::ResourceKind;
 pub use self::resources::*;
