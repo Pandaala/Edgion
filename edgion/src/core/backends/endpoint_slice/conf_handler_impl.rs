@@ -3,7 +3,7 @@ use std::sync::Arc;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use crate::core::conf_sync::traits::ConfHandler;
 use super::{EpSliceStore, get_global_ep_slice_store};
-use super::discovery_impl::EndpointSliceDiscovery;
+use super::discovery_impl::EndpointSliceLoadBalancer;
 
 /// Implement ConfHandler for Arc<EpSliceStore>
 impl ConfHandler<EndpointSlice> for Arc<EpSliceStore> {
@@ -25,25 +25,16 @@ impl ConfHandler<EndpointSlice> for EpSliceStore {
     fn full_set(&self, data: &HashMap<String, EndpointSlice>) {
         tracing::info!(component = "ep_slice_store", cnt = data.len(), "full set");
         
-        // Convert EndpointSlice to Arc<EndpointSliceDiscovery>
-        let discovery_map: HashMap<String, Arc<EndpointSliceDiscovery>> = data
+        // Convert EndpointSlice to Arc<EndpointSliceLoadBalancer>
+        let lb_map: HashMap<String, Arc<EndpointSliceLoadBalancer>> = data
             .iter()
-            .filter_map(|(key, ep_slice)| {
-                match EndpointSliceDiscovery::from_endpoint_slice(ep_slice.clone()) {
-                    Ok(discovery) => Some((key.clone(), discovery)),
-                    Err(e) => {
-                        tracing::warn!(
-                            key = %key,
-                            error = %e,
-                            "Failed to create EndpointSliceDiscovery, skipping"
-                        );
-                        None
-                    }
-                }
+            .map(|(key, ep_slice)| {
+                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
+                (key.clone(), lb)
             })
             .collect();
         
-        self.replace_all(discovery_map);
+        self.replace_all(lb_map);
     }
 
     fn partial_update(&self, add: HashMap<String, EndpointSlice>, update: HashMap<String, EndpointSlice>, remove: HashSet<String>) {
@@ -81,24 +72,15 @@ impl ConfHandler<EndpointSlice> for EpSliceStore {
         
         // Only create new EndpointSliceDiscovery for additions and failed updates
         if !add_or_update.is_empty() || !remove.is_empty() {
-            let discovery_map: HashMap<String, Arc<EndpointSliceDiscovery>> = add_or_update
+            let lb_map: HashMap<String, Arc<EndpointSliceLoadBalancer>> = add_or_update
                 .iter()
-                .filter_map(|(key, ep_slice)| {
-                    match EndpointSliceDiscovery::from_endpoint_slice(ep_slice.clone()) {
-                        Ok(discovery) => Some((key.clone(), discovery)),
-                        Err(e) => {
-                            tracing::warn!(
-                                key = %key,
-                                error = %e,
-                                "Failed to create EndpointSliceDiscovery, skipping"
-                            );
-                            None
-                        }
-                    }
+                .map(|(key, ep_slice)| {
+                    let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
+                    (key.clone(), lb)
                 })
                 .collect();
             
-            self.update(discovery_map, &remove);
+            self.update(lb_map, &remove);
         }
     }
 }

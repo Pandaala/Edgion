@@ -37,7 +37,7 @@ impl EdgionService {
     }
 }
 
-/// Get peer address from service and endpoint slice stores
+/// Get peer address from service and endpoint slice stores using load balancing
 pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef) -> Option<SocketAddr> {
     // Determine service type from br.kind
     let service_type = EdgionService::from_kind(br.kind.as_ref());
@@ -49,36 +49,18 @@ pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef) -> Option<SocketAdd
     
     let service_key = format!("{}/{}", match_info.rns, br.name);
     
-    // Get endpoint slice discovery for this service
+    // Get endpoint slice load balancer for this service
     let ep_store = get_global_ep_slice_store();
-    let ep_slice_discovery = ep_store.get_by_service(&service_key)?;
+    let ep_lb = ep_store.get_by_service(&service_key)?;
     
-    // Execute with read access to the underlying endpoint slice
-    ep_slice_discovery.with_endpoint_slice(|ep_slice| {
-        // Check if this is IPv6
-        let is_ipv6 = ep_slice.address_type == "IPv6";
-        
-        // Get ready endpoint address
-        for endpoint in &ep_slice.endpoints {
-            if let Some(conditions) = &endpoint.conditions {
-                if conditions.ready != Some(true) {
-                    continue;
-                }
-            }
-            if let Some(addr) = endpoint.addresses.first() {
-                let port = br.port.unwrap_or(80);
-                // Format address with port, IPv6 addresses need brackets
-                let addr_with_port = if is_ipv6 {
-                    format!("[{}]:{}", addr, port)
-                } else {
-                    format!("{}:{}", addr, port)
-                };
-                if let Ok(socket_addr) = addr_with_port.parse::<SocketAddr>() {
-                    return Some(socket_addr);
-                }
-            }
-        }
-        None
-    })
+    // Use load balancer to select a backend using RoundRobin algorithm
+    let lb = ep_lb.load_balancer();
+    
+    // Use request_id or other key for consistent hashing if needed
+    // For now, use empty key for pure round-robin
+    let backend = lb.select(b"", 256)?;
+    
+    // Return the backend address
+    Some(backend.addr)
 }
 

@@ -8,7 +8,7 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_load_balancing::discovery::ServiceDiscovery;
 use pingora_load_balancing::selection::RoundRobin;
-use pingora_load_balancing::LoadBalancer;
+use pingora_load_balancing::{Backends, LoadBalancer};
 use pingora_load_balancing::Backend;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
@@ -92,31 +92,14 @@ impl EndpointSliceExt for EndpointSlice {
 pub struct EndpointSliceDiscovery {
     /// The EndpointSlice to discover backends from (with interior mutability)
     endpoint_slice: Arc<RwLock<EndpointSlice>>,
-    /// Load balancer with RoundRobin selection (immutable Arc, only update())
-    lb: Arc<LoadBalancer<RoundRobin>>,
 }
 
 impl EndpointSliceDiscovery {
     /// Create a new EndpointSliceDiscovery from EndpointSlice
     /// Returns Arc<Self> since it's typically used with Arc at storage layer
     pub fn new(endpoint_slice: EndpointSlice) -> Arc<Self> {
-        // Build initial backends
-        let port = endpoint_slice.ports
-            .as_ref()
-            .and_then(|ports| ports.first())
-            .and_then(|p| p.port)
-            .map(|p| p as u16)
-            .unwrap_or(80);
-        
-        let backends = endpoint_slice.build_backends(port);
-        
-        // Create LoadBalancer with static backends
-        let lb = LoadBalancer::try_from_iter(backends)
-            .expect("Failed to create LoadBalancer");
-        
         Arc::new(Self {
             endpoint_slice: Arc::new(RwLock::new(endpoint_slice)),
-            lb: Arc::new(lb),
         })
     }
     
@@ -145,22 +128,6 @@ impl EndpointSliceDiscovery {
         
         tracing::debug!("Updated EndpointSliceDiscovery in-place");
         Ok(())
-    }
-    
-    /// Trigger LoadBalancer update
-    /// Calls lb.update() which will refresh backends
-    pub async fn update_load_balancer(&self) -> Result<(), String> {
-        self.lb.update()
-            .await
-            .map_err(|e| format!("Failed to update LoadBalancer: {}", e))?;
-        
-        tracing::debug!("LoadBalancer updated");
-        Ok(())
-    }
-    
-    /// Get the load balancer reference
-    pub fn load_balancer(&self) -> Arc<LoadBalancer<RoundRobin>> {
-        self.lb.clone()
     }
     
     /// Execute a function with read access to the underlying EndpointSlice
@@ -207,6 +174,92 @@ impl ServiceDiscovery for EndpointSliceDiscovery {
         let health = HashMap::new();
         
         Ok((backends, health))
+    }
+}
+
+/// Wrapper to allow Arc<EndpointSliceDiscovery> to implement ServiceDiscovery
+/// This is needed to avoid orphan rules when passing Arc to Backends
+struct ArcDiscoveryWrapper {
+    inner: Arc<EndpointSliceDiscovery>,
+}
+
+#[async_trait]
+impl ServiceDiscovery for ArcDiscoveryWrapper {
+    async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>), Box<pingora_core::Error>> {
+        self.inner.discover().await
+    }
+}
+
+/// EndpointSliceLoadBalancer combines EndpointSliceDiscovery with LoadBalancer
+///
+/// This struct wraps an EndpointSliceDiscovery and creates a LoadBalancer that uses it
+/// for service discovery. This avoids the need for a Static discovery wrapper and
+/// eliminates circular dependencies.
+pub struct EndpointSliceLoadBalancer {
+    /// The discovery implementation
+    discovery: Arc<EndpointSliceDiscovery>,
+    /// The load balancer using the discovery
+    lb: Arc<LoadBalancer<RoundRobin>>,
+}
+
+impl EndpointSliceLoadBalancer {
+    /// Create a new EndpointSliceLoadBalancer from EndpointSlice
+    /// Returns Arc<Self> since it's typically used with Arc at storage layer
+    pub fn new(endpoint_slice: EndpointSlice) -> Arc<Self> {
+        let discovery = EndpointSliceDiscovery::new(endpoint_slice);
+        
+        // Use EndpointSliceDiscovery as the ServiceDiscovery for LoadBalancer
+        // Wrap Arc in ArcDiscoveryWrapper to implement ServiceDiscovery
+        let discovery_clone = Arc::clone(&discovery);
+        let wrapper = ArcDiscoveryWrapper {
+            inner: discovery_clone,
+        };
+        let backends = Backends::new(Box::new(wrapper));
+        let lb = LoadBalancer::from_backends(backends);
+        
+        Arc::new(Self {
+            discovery,
+            lb: Arc::new(lb),
+        })
+    }
+    
+    /// Update the EndpointSlice data in-place
+    pub fn update(&self, new_endpoint_slice: EndpointSlice) -> Result<(), String> {
+        self.discovery.update(new_endpoint_slice)
+    }
+    
+    /// Trigger LoadBalancer update
+    /// Calls lb.update() which will refresh backends from discovery
+    pub async fn update_load_balancer(&self) -> Result<(), String> {
+        self.lb.update()
+            .await
+            .map_err(|e| format!("Failed to update LoadBalancer: {}", e))?;
+        
+        tracing::debug!("LoadBalancer updated");
+        Ok(())
+    }
+    
+    /// Get the load balancer reference
+    pub fn load_balancer(&self) -> Arc<LoadBalancer<RoundRobin>> {
+        self.lb.clone()
+    }
+    
+    /// Get service key from this EndpointSlice
+    pub fn service_key(&self) -> Option<String> {
+        self.discovery.service_key()
+    }
+    
+    /// Execute a function with read access to the underlying EndpointSlice
+    pub fn with_endpoint_slice<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&EndpointSlice) -> R,
+    {
+        self.discovery.with_endpoint_slice(f)
+    }
+    
+    /// Get a clone of the underlying EndpointSlice
+    pub fn endpoint_slice(&self) -> EndpointSlice {
+        self.discovery.endpoint_slice()
     }
 }
 
@@ -288,6 +341,89 @@ mod tests {
         
         let backends = ep_slice.build_backends(8080);
         assert!(backends.is_empty());
+    }
+
+    #[test]
+    fn test_discovery_with_empty_endpoints() {
+        // Test creating EndpointSliceDiscovery with no ready endpoints
+        use std::collections::BTreeMap;
+        let mut labels = BTreeMap::new();
+        labels.insert("kubernetes.io/service-name".to_string(), "test-svc".to_string());
+        
+        let ep_slice = EndpointSlice {
+            address_type: "IPv4".to_string(),
+            endpoints: vec![],
+            metadata: ObjectMeta {
+                name: Some("empty-slice".to_string()),
+                namespace: Some("default".to_string()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            ports: Some(vec![k8s_openapi::api::discovery::v1::EndpointPort {
+                port: Some(8080),
+                name: Some("http".to_string()),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        
+        // Test if LoadBalancer::try_from_iter can handle empty backends
+        println!("Testing with empty endpoints...");
+        let discovery = EndpointSliceDiscovery::new(ep_slice);
+        println!("✅ EndpointSliceDiscovery created successfully with empty endpoints (no panic!)");
+        
+        // Verify the discovery was created
+        assert_eq!(discovery.service_key(), Some("default/test-svc".to_string()));
+    }
+
+    #[test]
+    fn test_discovery_with_all_not_ready_endpoints() {
+        // Test creating EndpointSliceDiscovery with endpoints that are not ready
+        use std::collections::BTreeMap;
+        let mut labels = BTreeMap::new();
+        labels.insert("kubernetes.io/service-name".to_string(), "test-svc".to_string());
+        
+        let ep_slice = EndpointSlice {
+            address_type: "IPv4".to_string(),
+            endpoints: vec![
+                k8s_openapi::api::discovery::v1::Endpoint {
+                    addresses: vec!["10.0.0.1".to_string()],
+                    conditions: Some(k8s_openapi::api::discovery::v1::EndpointConditions {
+                        ready: Some(false),  // Not ready
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                k8s_openapi::api::discovery::v1::Endpoint {
+                    addresses: vec!["10.0.0.2".to_string()],
+                    conditions: Some(k8s_openapi::api::discovery::v1::EndpointConditions {
+                        ready: Some(false),  // Not ready
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ],
+            metadata: ObjectMeta {
+                name: Some("not-ready-slice".to_string()),
+                namespace: Some("default".to_string()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            ports: Some(vec![k8s_openapi::api::discovery::v1::EndpointPort {
+                port: Some(8080),
+                name: Some("http".to_string()),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        
+        // Test if LoadBalancer can handle no ready endpoints (all not ready)
+        println!("Testing with all not-ready endpoints...");
+        let discovery = EndpointSliceDiscovery::new(ep_slice);
+        println!("✅ EndpointSliceDiscovery created successfully with not-ready endpoints (no panic!)");
+        
+        // Verify the discovery was created and has service key
+        assert_eq!(discovery.service_key(), Some("default/test-svc".to_string()));
     }
 
     #[test]
