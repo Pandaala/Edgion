@@ -17,7 +17,30 @@ pub enum EdgionErrStatus {
     /// Inconsistent weight configuration (some backends have weight, some don't)
     UpstreamInconsistentWeight = 500_03,
 
-    UpstreamNotFound = 500_50,
+    /// EndpointSlice not found for service
+    BackendEndpointSliceNotFound = 503_01,
+
+    /// Service not found in service store
+    BackendServiceNotFound = 503_02,
+
+    /// Service ClusterIP not configured
+    BackendClusterIpNotFound = 503_03,
+
+    /// Service ExternalName not configured
+    BackendExternalNameNotFound = 503_04,
+
+    /// Port resolution failed
+    BackendPortResolutionFailed = 503_05,
+
+    /// Backend address parsing failed
+    BackendAddressParsingFailed = 503_06,
+
+    /// LoadBalancer backend selection failed
+    BackendLoadBalancerSelectionFailed = 503_07,
+
+    /// ServiceImport not yet implemented
+    BackendServiceImportNotImplemented = 503_08,
+
 }
 
 

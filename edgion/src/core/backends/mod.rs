@@ -5,6 +5,7 @@ pub use services::{ServiceStore, get_global_service_store, create_service_handle
 pub use endpoint_slice::{EpSliceStore, get_global_ep_slice_store, get_service_key, create_ep_slice_handler};
 
 use pingora_core::protocols::l4::socket::SocketAddr;
+use crate::types::err_code::EdgionErrStatus;
 use crate::types::{HTTPBackendRef, MatchInfo};
 
 /// EdgionService defines the types of backend services
@@ -38,35 +39,43 @@ impl EdgionService {
 }
 
 /// Get port from BackendRef or Service spec
-/// Returns None if port is not available in either place
+/// Returns error if port is not available in either place
 #[inline]
-fn get_port_from_backend_ref_or_service(br: &HTTPBackendRef, service: &k8s_openapi::api::core::v1::Service) -> Option<u16> {
+fn get_port_from_backend_ref_or_service(br: &HTTPBackendRef, service: &k8s_openapi::api::core::v1::Service) -> Result<u16, EdgionErrStatus> {
     match br.port {
-        Some(p) => Some(p as u16),
+        Some(p) => Ok(p as u16),
         None => {
             service.spec.as_ref()
                 .and_then(|spec| spec.ports.as_ref())
                 .and_then(|ports| ports.first())
                 .map(|p| p.port as u16)
+                .ok_or(EdgionErrStatus::BackendPortResolutionFailed)
         }
     }
 }
 
 /// Get peer address from service and endpoint slice stores using load balancing
-pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef) -> Option<SocketAddr> {
+pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef) -> Result<SocketAddr, EdgionErrStatus> {
     // Determine service type from br.kind
     let service_type = EdgionService::from_kind(br.kind.as_ref());
-    let service_key = format!("{}/{}", match_info.rns, br.name);
+    
+    // Prefer br.namespace, fallback to match_info.rns
+    let namespace = br.namespace.as_ref()
+        .map(|s| s.as_str())
+        .unwrap_or(&match_info.rns);
+    let service_key = format!("{}/{}", namespace, br.name);
     
     match service_type {
         EdgionService::Service => {
             let ep_store = get_global_ep_slice_store();
-            let ep_lb = ep_store.get_by_service(&service_key)?;
+            let ep_lb = ep_store.get_by_service(&service_key)
+                .ok_or(EdgionErrStatus::BackendEndpointSliceNotFound)?;
             let lb = ep_lb.load_balancer();
             
             // Use request_id or other key for consistent hashing if needed
             // For now, use empty key for pure round-robin
-            let backend = lb.select(b"", 256)?;
+            let backend = lb.select(b"", 256)
+                .ok_or(EdgionErrStatus::BackendLoadBalancerSelectionFailed)?;
             
             // Override port if specified in BackendRef
             let mut addr = backend.addr;
@@ -74,34 +83,39 @@ pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef) -> Option<SocketAdd
                 addr.set_port(port as u16);
             }
             
-            Some(addr)
+            Ok(addr)
         }
         
         EdgionService::ServiceClusterIp => {
             // Use Service ClusterIP directly (no load balancing, cluster IP is virtual)
             let svc_store = get_global_service_store();
-            let service = svc_store.get(&service_key)?;
+            let service = svc_store.get(&service_key)
+                .ok_or(EdgionErrStatus::BackendServiceNotFound)?;
             
             // Get ClusterIP from Service spec
             let cluster_ip = service.spec.as_ref()
-                .and_then(|spec| spec.cluster_ip.as_ref())?;
+                .and_then(|spec| spec.cluster_ip.as_ref())
+                .ok_or(EdgionErrStatus::BackendClusterIpNotFound)?;
             
             // Get port from BackendRef or Service spec
             let port = get_port_from_backend_ref_or_service(br, &service)?;
             
             // Parse ClusterIP:port as SocketAddr
             let addr_str = format!("{}:{}", cluster_ip, port);
-            addr_str.parse::<SocketAddr>().ok()
+            addr_str.parse::<SocketAddr>()
+                .map_err(|_| EdgionErrStatus::BackendAddressParsingFailed)
         }
         
         EdgionService::ServiceExternalName => {
             // Use Service ExternalName (DNS name)
             let svc_store = get_global_service_store();
-            let service = svc_store.get(&service_key)?;
+            let service = svc_store.get(&service_key)
+                .ok_or(EdgionErrStatus::BackendServiceNotFound)?;
             
             // Get ExternalName from Service spec
             let external_name = service.spec.as_ref()
-                .and_then(|spec| spec.external_name.as_ref())?;
+                .and_then(|spec| spec.external_name.as_ref())
+                .ok_or(EdgionErrStatus::BackendExternalNameNotFound)?;
             
             // Get port from BackendRef or Service spec
             let port = get_port_from_backend_ref_or_service(br, &service)?;
@@ -109,7 +123,8 @@ pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef) -> Option<SocketAdd
             // Parse ExternalName:port as SocketAddr
             // Note: ExternalName can be a DNS name, so parsing may fail
             let addr_str = format!("{}:{}", external_name, port);
-            addr_str.parse::<SocketAddr>().ok()
+            addr_str.parse::<SocketAddr>()
+                .map_err(|_| EdgionErrStatus::BackendAddressParsingFailed)
         }
         
         EdgionService::ServiceImport => {
@@ -118,7 +133,7 @@ pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef) -> Option<SocketAdd
                 service_key = %service_key,
                 "ServiceImport is not yet implemented"
             );
-            None
+            Err(EdgionErrStatus::BackendServiceImportNotImplemented)
         }
     }
 }

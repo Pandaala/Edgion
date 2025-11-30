@@ -37,14 +37,17 @@ impl ProxyHttp for EdgionHttp {
         tracing::info!("Selected backend: {:?}", backend_ref);
 
         let match_info = ctx.matched_info.as_ref().unwrap();
-        if let Some(addr) = get_peer(match_info, backend_ref) {
-            let peer = Box::new(HttpPeer::new(addr, false, String::new()));
-            return Ok(peer)
+        match get_peer(match_info, backend_ref) {
+            Ok(addr) => {
+                let peer = Box::new(HttpPeer::new(addr, false, String::new()));
+                return Ok(peer)
+            }
+            Err(err_status) => {
+                ctx.add_error(err_status);
+                end_response_500(session).await?;
+                Err(PingoraError::new(ErrorType::InternalError))
+            }
         }
-
-        ctx.add_error(EdgionErrStatus::UpstreamNotFound);
-        end_response_500(session).await?;
-        Err(PingoraError::new(ErrorType::InternalError))
     }
 
 
