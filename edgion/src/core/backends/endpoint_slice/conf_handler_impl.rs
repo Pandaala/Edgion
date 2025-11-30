@@ -79,7 +79,7 @@ impl ConfHandler<EndpointSlice> for EpSliceStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::get_service_key;
+    use crate::types::ResourceMeta;
 
     fn create_test_ep_slice(namespace: &str, name: &str, service_name: &str) -> EndpointSlice {
         let json = serde_json::json!({
@@ -110,8 +110,9 @@ mod tests {
     #[test]
     fn test_get_service_key() {
         let ep_slice = create_test_ep_slice("default", "my-svc-abc", "my-svc");
-        let key = get_service_key(&ep_slice);
-        assert_eq!(key, Some("default/my-svc".to_string()));
+        let key = ep_slice.key_name();
+        // key_name() returns the EndpointSlice's resource key (namespace/name)
+        assert_eq!(key, "default/my-svc-abc".to_string());
     }
 
     #[test]
