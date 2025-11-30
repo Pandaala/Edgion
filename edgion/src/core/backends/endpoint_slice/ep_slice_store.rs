@@ -85,6 +85,19 @@ impl EpSliceStore {
         self.ep_slices.store(Arc::new(Arc::new(new_map)));
     }
     
+    /// Apply modifications to the map atomically with a single ArcSwap operation
+    /// This is more efficient when you need to do multiple operations at once
+    pub fn apply_modifications<F>(&self, f: F)
+    where
+        F: FnOnce(&mut HashMap<String, Arc<EndpointSliceLoadBalancer>>),
+    {
+        let current = self.ep_slices.load();
+        let current_map: &EpSliceMap = &**current;
+        let mut new_map: EpSliceMap = current_map.clone();
+        f(&mut new_map);
+        self.ep_slices.store(Arc::new(Arc::new(new_map)));
+    }
+    
     /// Update an existing EndpointSlice in-place without rebuilding the map
     /// Returns Ok(true) if updated, Ok(false) if key not found, Err on update failure
     pub fn update_in_place(&self, key: &str, new_endpoint_slice: k8s_openapi::api::discovery::v1::EndpointSlice) -> Result<bool, String> {
@@ -94,6 +107,38 @@ impl EpSliceStore {
             tracing::debug!(key = %key, "Updated EndpointSlice in-place");
             Ok(true)
         } else {
+            Ok(false)
+        }
+    }
+    
+    /// Update EndpointSlice in-place and refresh LoadBalancer
+    /// This is more efficient than rebuilding the entire ArcSwap map
+    /// Errors are logged internally. Returns Ok(true) if updated, Ok(false) if key not found.
+    pub fn update_in_place_and_refresh_lb(&self, key: &str, new_endpoint_slice: k8s_openapi::api::discovery::v1::EndpointSlice) -> Result<bool, String> {
+        let map = self.ep_slices.load();
+        if let Some(lb) = map.get(key) {
+            // Update EndpointSlice data
+            if let Err(e) = lb.update(new_endpoint_slice) {
+                tracing::error!(key = %key, error = %e, "Failed to update EndpointSlice data");
+                return Err(e);
+            }
+            
+            // Trigger LoadBalancer update using now_or_never for sync execution
+            use futures::FutureExt;
+            match lb.update_load_balancer().now_or_never() {
+                Some(Ok(_)) => {
+                    tracing::debug!(key = %key, "Updated EndpointSlice and LoadBalancer in-place");
+                }
+                Some(Err(e)) => {
+                    tracing::warn!(key = %key, error = %e, "Failed to refresh LoadBalancer, will retry on next update");
+                }
+                None => {
+                    tracing::error!(key = %key, "LoadBalancer update blocked unexpectedly");
+                }
+            }
+            Ok(true)
+        } else {
+            tracing::debug!(key = %key, "Key not found for in-place update");
             Ok(false)
         }
     }

@@ -38,50 +38,41 @@ impl ConfHandler<EndpointSlice> for EpSliceStore {
     }
 
     fn partial_update(&self, add: HashMap<String, EndpointSlice>, update: HashMap<String, EndpointSlice>, remove: HashSet<String>) {
+        let add_count = add.len();
+        let update_count = update.len();
+        let remove_count = remove.len();
+        
+        // Handle updates in-place (no ArcSwap rebuild)
+        // Update EndpointSlice data + trigger LoadBalancer refresh
+        for (key, ep_slice) in update {
+            let _ = self.update_in_place_and_refresh_lb(&key, ep_slice);
+        }
+        
+        // Only rebuild ArcSwap for add/remove operations
+        let arcswap_rebuilt = if !add.is_empty() || !remove.is_empty() {
+            self.apply_modifications(|map| {
+                for key in &remove {
+                    map.remove(key);
+                }
+                for (key, ep_slice) in add {
+                    let lb = EndpointSliceLoadBalancer::new(ep_slice);
+                    map.insert(key, lb);
+                }
+            });
+            true
+        } else {
+            false
+        };
+        
+        // Log summary at the end
         tracing::info!(
             component = "ep_slice_store",
-            add = add.len(),
-            update = update.len(),
-            rm = remove.len(),
-            "partial update"
+            add_count = add_count,
+            update_count = update_count,
+            remove_count = remove_count,
+            arcswap_rebuilt = arcswap_rebuilt,
+            "Partial update completed"
         );
-        
-        // Try to update existing entries in-place
-        let mut failed_updates = Vec::new();
-        for (key, ep_slice) in &update {
-            match self.update_in_place(key, ep_slice.clone()) {
-                Ok(true) => {
-                    // Successfully updated in-place
-                    tracing::debug!(key = %key, "In-place update succeeded");
-                }
-                Ok(false) => {
-                    // Key not found, add to failed list for full update
-                    failed_updates.push((key.clone(), ep_slice.clone()));
-                }
-                Err(e) => {
-                    // Update failed, add to failed list for full update
-                    tracing::warn!(key = %key, error = %e, "In-place update failed, will do full update");
-                    failed_updates.push((key.clone(), ep_slice.clone()));
-                }
-            }
-        }
-        
-        // Merge add and failed updates for storage
-        let mut add_or_update = add;
-        add_or_update.extend(failed_updates);
-        
-        // Only create new EndpointSliceDiscovery for additions and failed updates
-        if !add_or_update.is_empty() || !remove.is_empty() {
-            let lb_map: HashMap<String, Arc<EndpointSliceLoadBalancer>> = add_or_update
-                .iter()
-                .map(|(key, ep_slice)| {
-                    let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                    (key.clone(), lb)
-                })
-                .collect();
-            
-            self.update(lb_map, &remove);
-        }
     }
 }
 
