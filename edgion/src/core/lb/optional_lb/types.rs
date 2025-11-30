@@ -91,39 +91,20 @@ impl OptionalLoadBalancers {
     /// Try to create optional load balancers if needed
     /// 
     /// This is a convenience method that:
-    /// 1. Extracts service key from EndpointSlice metadata
-    /// 2. Queries policies via get_policies_for_service
-    /// 3. Returns None if no policies configured
-    /// 4. Returns None if initialization fails
-    /// 5. Returns Some(Arc<...>) on success
+    /// 1. Queries policies via get_policies_for_service
+    /// 2. Returns None if no policies configured
+    /// 3. Returns None if initialization fails
+    /// 4. Returns Some(Arc<...>) on success
     /// 
     /// # Arguments
+    /// * `service_key` - The service key (format: "namespace/service-name")
     /// * `discovery` - The service discovery implementation
     /// 
     /// # Returns
     /// * `Option<Arc<Self>>` - The initialized load balancers or None
-    pub fn try_new(discovery: &EndpointSliceDiscovery) -> Option<Arc<Self>> {
-        // Extract service_key from EndpointSlice metadata
-        const SERVICE_NAME_LABEL: &str = "kubernetes.io/service-name";
-        
-        let service_key = discovery.with_endpoint_slice(|ep_slice| {
-            let metadata = &ep_slice.metadata;
-            let namespace = metadata.namespace.as_deref()?;
-            let labels = metadata.labels.as_ref()?;
-            let service_name = labels.get(SERVICE_NAME_LABEL)?;
-            Some(format!("{}/{}", namespace, service_name))
-        });
-        
-        let service_key = match service_key {
-            Some(key) => key,
-            None => {
-                tracing::debug!("Cannot extract service_key from EndpointSlice, skipping optional LBs");
-                return None;
-            }
-        };
-        
+    pub fn try_new(service_key: &str, discovery: &EndpointSliceDiscovery) -> Option<Arc<Self>> {
         // Query policies for this service
-        let policies = get_policies_for_service(&service_key);
+        let policies = get_policies_for_service(service_key);
         if policies.is_empty() {
             tracing::debug!(
                 service_key = %service_key,
@@ -132,7 +113,7 @@ impl OptionalLoadBalancers {
             return None;
         }
         
-        tracing::debug!(
+        tracing::info!(
             service_key = %service_key,
             policies = ?policies,
             "Creating optional load balancers for service"

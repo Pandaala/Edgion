@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
-use k8s_openapi::api::discovery::v1::EndpointSlice;
 use super::discovery_impl::EndpointSliceLoadBalancer;
 
 static GLOBAL_EP_SLICE_STORE: Lazy<Arc<EpSliceStore>> =
@@ -149,16 +148,5 @@ impl EpSliceStore {
             Ok(false)
         }
     }
-}
-
-/// Extract service key from EndpointSlice (for backward compatibility)
-/// Returns "namespace/service-name" based on the kubernetes.io/service-name label
-pub fn get_service_key(ep_slice: &EndpointSlice) -> Option<String> {
-    const SERVICE_NAME_LABEL: &str = "kubernetes.io/service-name";
-    let metadata = &ep_slice.metadata;
-    let namespace = metadata.namespace.as_deref()?;
-    let labels = metadata.labels.as_ref()?;
-    let service_name = labels.get(SERVICE_NAME_LABEL)?;
-    Some(format!("{}/{}", namespace, service_name))
 }
 

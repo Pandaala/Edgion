@@ -14,6 +14,7 @@ use pingora_load_balancing::Backend;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use crate::core::lb::optional_lb::OptionalLoadBalancers;
+use crate::types::ResourceMeta;
 
 /// Extension trait to add port information for service discovery
 pub trait EndpointSliceExt {
@@ -181,6 +182,9 @@ impl EndpointSliceLoadBalancer {
     /// Create a new EndpointSliceLoadBalancer from EndpointSlice
     /// Returns Arc<Self> since it's typically used with Arc at storage layer
     pub fn new(endpoint_slice: EndpointSlice) -> Arc<Self> {
+        // Extract service_key before moving endpoint_slice
+        let service_key = endpoint_slice.key_name();
+        
         let discovery = EndpointSliceDiscovery::new(endpoint_slice);
         
         let backends = Backends::new(Box::new(discovery.clone()));
@@ -211,7 +215,7 @@ impl EndpointSliceLoadBalancer {
         }
         
         // Create optional load balancers if configured
-        let optional_lbs = OptionalLoadBalancers::try_new(&discovery);
+        let optional_lbs = OptionalLoadBalancers::try_new(&service_key, &discovery);
 
         Arc::new(Self {
             discovery,
