@@ -227,6 +227,11 @@ impl ConfigClient {
         self.secrets.list_owned()
     }
 
+    /// Trigger update event for an endpoint slice by key
+    pub fn trigger_endpoint_slice_update_event(&self, key: &str) {
+        self.endpoint_slices.trigger_update_event_by_key(key);
+    }
+
     /// Print all configuration for the gateway class key
     /// Format is identical to ConfigCenter::print_config
     pub fn print_config(&self) {

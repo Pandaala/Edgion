@@ -98,6 +98,11 @@ impl EdgionGwCli {
 
         // Start watching for changes
         sync_client.start_watch_all().await?;
+        
+        // Initialize global sync client for access from other modules
+        // This is done after start_watch_all since that requires &mut self
+        crate::core::conf_sync::init_global_sync_client(sync_client)
+            .map_err(|e| anyhow!("Failed to initialize global sync client: {}", e))?;
 
         Self::spawn_config_printer(config_client.clone());
 

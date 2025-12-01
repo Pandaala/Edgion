@@ -138,4 +138,16 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         let cache = self.cache_data.read().unwrap();
         cache.len()
     }
+    
+    pub fn trigger_update_event_by_key(&self, key: &str) {
+        // Add compress event to trigger partial_update
+        let mut cache = self.cache_data.write().unwrap();
+        cache.add_compress_event(key.to_string(), crate::core::conf_sync::traits::ResourceChange::EventUpdate);
+
+        tracing::info!(
+            component = "cache_client",
+            key = %key,
+            "Manually triggered update event for resource"
+        );
+    }
 }
