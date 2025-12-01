@@ -82,10 +82,13 @@ impl EdgionGwCli {
         )
         .await?;
 
+        // Get config_client and set as global immediately
+        let config_client = sync_client.get_config_client();
+        crate::core::conf_sync::init_global_config_client(config_client.clone())
+            .map_err(|e| anyhow!("Failed to initialize global config client: {}", e))?;
+
         // Initialize base configuration and sync all resources
         sync_client.init_base_conf().await?;
-
-        let config_client = sync_client.get_config_client();
 
         // Initialize GatewayBase and bootstrap (before start_watch_all)
         let base_conf = config_client.get_base_conf()
@@ -98,11 +101,6 @@ impl EdgionGwCli {
 
         // Start watching for changes
         sync_client.start_watch_all().await?;
-        
-        // Initialize global sync client for access from other modules
-        // This is done after start_watch_all since that requires &mut self
-        crate::core::conf_sync::init_global_sync_client(sync_client)
-            .map_err(|e| anyhow!("Failed to initialize global sync client: {}", e))?;
 
         Self::spawn_config_printer(config_client.clone());
 

@@ -14,30 +14,24 @@ pub use conf_server::{ConfigServer, ConfigSyncServer};
 pub use traits::{CacheEventDispatch, ConfHandler, ConfigServerEventDispatcher};
 pub use crate::types::{GatewayBaseConf, ResourceMeta};
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
-/// Global ConfigSyncClient instance
-static GLOBAL_SYNC_CLIENT: OnceLock<ConfigSyncClient> = OnceLock::new();
+/// Global ConfigClient instance
+static GLOBAL_CONFIG_CLIENT: OnceLock<Arc<ConfigClient>> = OnceLock::new();
 
-/// Initialize the global ConfigSyncClient
+/// Initialize the global ConfigClient
 /// This should be called once during application startup
 /// Returns error if already initialized
-pub fn init_global_sync_client(sync_client: ConfigSyncClient) -> Result<(), String> {
-    GLOBAL_SYNC_CLIENT
-        .set(sync_client)
-        .map_err(|_| "Global ConfigSyncClient already initialized".to_string())
+pub fn init_global_config_client(config_client: Arc<ConfigClient>) -> Result<(), String> {
+    GLOBAL_CONFIG_CLIENT
+        .set(config_client)
+        .map_err(|_| "Global ConfigClient already initialized".to_string())
 }
 
-/// Get reference to the global ConfigSyncClient
+/// Get reference to the global ConfigClient
 /// Returns None if not yet initialized
-pub fn get_global_sync_client() -> Option<&'static ConfigSyncClient> {
-    GLOBAL_SYNC_CLIENT.get()
-}
-
-/// Get reference to the global ConfigClient through the sync client
-/// Returns None if sync client not yet initialized
-pub fn get_global_config_client() -> Option<std::sync::Arc<ConfigClient>> {
-    GLOBAL_SYNC_CLIENT.get().map(|sc| sc.get_config_client())
+pub fn get_global_config_client() -> Option<Arc<ConfigClient>> {
+    GLOBAL_CONFIG_CLIENT.get().cloned()
 }
 
 #[cfg(test)]
