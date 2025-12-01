@@ -106,23 +106,40 @@ impl PolicyStore {
     /// * `service_key` - The service key (format: "namespace/service-name")
     /// * `route_key` - The HTTPRoute resource key (format: "namespace/route-name")
     /// * `policies` - List of policies to add
-    pub fn add_policy(&self, service_key: String, route_key: String, policies: Vec<LbPolicy>) {
+    /// 
+    /// # Returns
+    /// * `bool` - true if there was a change (new key or new policies added), false otherwise
+    fn add_policy(&self, service_key: String, route_key: String, policies: Vec<LbPolicy>) -> bool {
         if policies.is_empty() {
-            return;
+            return false;
         }
+        
+        let mut changed = false;
         
         self.policies.entry(service_key.clone())
             .and_modify(|entry| {
+                let old_policies_len = entry.policies.len();
                 entry.add_route_ref(route_key.clone(), policies.clone());
+                // Check if any new policies were added
+                if entry.policies.len() > old_policies_len {
+                    changed = true;
+                }
             })
-            .or_insert_with(|| ServiceLbPolicy::new(policies.clone(), route_key.clone()));
+            .or_insert_with(|| {
+                // New service key, this is a change
+                changed = true;
+                ServiceLbPolicy::new(policies.clone(), route_key.clone())
+            });
         
         tracing::debug!(
             service_key = %service_key,
             route_key = %route_key,
             policies = ?policies,
+            changed = changed,
             "Added LB policies for service"
         );
+        
+        changed
     }
     
     /// Batch add policies for multiple services from a single route
@@ -132,16 +149,40 @@ impl PolicyStore {
     /// * `updates` - HashMap of service keys to their policies
     pub fn batch_add(&self, route_key: String, updates: HashMap<String, Vec<LbPolicy>>) {
         let service_count = updates.len();
+        let mut changed_services = Vec::new();
         
         for (service_key, policies) in updates {
             if !policies.is_empty() {
-                self.add_policy(service_key, route_key.clone(), policies);
+                let changed = self.add_policy(service_key.clone(), route_key.clone(), policies);
+                if changed {
+                    changed_services.push(service_key);
+                }
+            }
+        }
+        
+        // Trigger endpoint slice update events for changed services
+        if !changed_services.is_empty() {
+            if let Some(config_client) = crate::core::conf_sync::get_global_config_client() {
+                for service_key in &changed_services {
+                    config_client.trigger_endpoint_slice_update_event(service_key);
+                    tracing::debug!(
+                        service_key = %service_key,
+                        route_key = %route_key,
+                        "Triggered endpoint slice update event for LB policy change"
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    changed_services = ?changed_services,
+                    "Cannot trigger endpoint slice updates: global config client not initialized"
+                );
             }
         }
         
         tracing::debug!(
             route_key = %route_key,
             services = service_count,
+            changed_services = changed_services.len(),
             "Batch added LB policies"
         );
     }
