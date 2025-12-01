@@ -3,6 +3,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use super::discovery_impl::EndpointSliceLoadBalancer;
+use crate::types::ResourceMeta;
 
 static GLOBAL_EP_SLICE_STORE: Lazy<Arc<EpSliceStore>> =
     Lazy::new(|| Arc::new(EpSliceStore::new()));
@@ -119,34 +120,103 @@ impl EpSliceStore {
     
     /// Update EndpointSlice in-place and refresh LoadBalancer
     /// This is more efficient than rebuilding the entire ArcSwap map
-    /// Errors are logged internally. Returns Ok(true) if updated, Ok(false) if key not found.
-    pub fn update_in_place_and_refresh_lb(&self, key: &str, new_endpoint_slice: k8s_openapi::api::discovery::v1::EndpointSlice) -> Result<bool, String> {
+    /// 
+    /// # Arguments
+    /// * `key` - The EndpointSlice key
+    /// * `new_endpoint_slice` - The new EndpointSlice data
+    /// * `policies` - Optional policies to check for LB rebuild. Empty vec means no rebuild check.
+    /// 
+    /// # Returns
+    /// * `Ok(Some(new_lb))` - Rebuild was needed, returns new LB for map replacement
+    /// * `Ok(None)` - Updated in-place, no rebuild needed
+    /// * `Err(msg)` - Update failed or key not found
+    pub fn update_in_place_and_refresh_lb(
+        &self,
+        key: &str,
+        new_endpoint_slice: k8s_openapi::api::discovery::v1::EndpointSlice,
+        policies: Vec<crate::core::lb::optional_lb::LbPolicy>,
+    ) -> Result<Option<std::sync::Arc<super::discovery_impl::EndpointSliceLoadBalancer>>, String> {
         let map = self.ep_slices.load();
-        if let Some(lb) = map.get(key) {
-            // Update EndpointSlice data
-            if let Err(e) = lb.update(new_endpoint_slice) {
-                tracing::error!(key = %key, error = %e, "Failed to update EndpointSlice data");
-                return Err(e);
-            }
-            
-            // Trigger LoadBalancer update using now_or_never for sync execution
-            use futures::FutureExt;
-            match lb.update_load_balancer().now_or_never() {
-                Some(Ok(_)) => {
-                    tracing::debug!(key = %key, "Updated EndpointSlice and LoadBalancer in-place");
-                }
-                Some(Err(e)) => {
-                    tracing::warn!(key = %key, error = %e, "Failed to refresh LoadBalancer, will retry on next update");
-                }
-                None => {
-                    tracing::error!(key = %key, "LoadBalancer update blocked unexpectedly");
-                }
-            }
-            Ok(true)
-        } else {
+        let lb = map.get(key).ok_or_else(|| {
             tracing::debug!(key = %key, "Key not found for in-place update");
-            Ok(false)
+            format!("Key not found: {}", key)
+        })?;
+        
+        // Check if rebuild is needed (only if policies are provided)
+        if !policies.is_empty() {
+            let service_key = new_endpoint_slice.key_name();
+            
+            // Check what's currently initialized
+            let initialized_policies = if let Some(ref optional_lbs) = lb.optional_lbs() {
+                optional_lbs.initialized_policies()
+            } else {
+                Vec::new()
+            };
+            
+            // Check if any policy is missing
+            let needs_rebuild = policies.iter().any(|p| !initialized_policies.contains(p));
+            
+            if needs_rebuild {
+                // Rebuild with new optional LBs (will consume new_endpoint_slice)
+                if let Some(new_lb) = lb.check_and_rebuild_optional_lbs(&service_key, new_endpoint_slice) {
+                    // Update the new LB's backends
+                    use futures::FutureExt;
+                    match new_lb.update_load_balancer().now_or_never() {
+                        Some(Ok(_)) => {
+                            tracing::debug!(
+                                key = %key,
+                                service_key = %service_key,
+                                policies = ?policies,
+                                "Rebuilt and updated EndpointSliceLoadBalancer with new optional policies"
+                            );
+                        }
+                        Some(Err(e)) => {
+                            tracing::warn!(
+                                key = %key,
+                                error = %e,
+                                "Failed to update rebuilt LoadBalancer, will retry on next update"
+                            );
+                        }
+                        None => {
+                            tracing::error!(
+                                key = %key,
+                                "LoadBalancer update blocked unexpectedly"
+                            );
+                        }
+                    }
+                    return Ok(Some(new_lb));
+                } else {
+                    // Rebuild was expected but returned None, this shouldn't happen
+                    // Fall through to normal in-place update, but new_endpoint_slice was moved
+                    tracing::error!(
+                        key = %key,
+                        "Rebuild was expected but check_and_rebuild_optional_lbs returned None"
+                    );
+                    return Err("Failed to rebuild LB".to_string());
+                }
+            }
         }
+        
+        // No rebuild needed, update in-place
+        if let Err(e) = lb.update(new_endpoint_slice) {
+            tracing::error!(key = %key, error = %e, "Failed to update EndpointSlice data");
+            return Err(e);
+        }
+        
+        // Trigger LoadBalancer update using now_or_never for sync execution
+        use futures::FutureExt;
+        match lb.update_load_balancer().now_or_never() {
+            Some(Ok(_)) => {
+                tracing::debug!(key = %key, "Updated EndpointSlice and LoadBalancer in-place");
+            }
+            Some(Err(e)) => {
+                tracing::warn!(key = %key, error = %e, "Failed to refresh LoadBalancer, will retry on next update");
+            }
+            None => {
+                tracing::error!(key = %key, "LoadBalancer update blocked unexpectedly");
+            }
+        }
+        Ok(None)
     }
 }
 

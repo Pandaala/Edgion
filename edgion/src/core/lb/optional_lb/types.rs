@@ -82,9 +82,9 @@ impl LbPolicy {
 pub struct OptionalLoadBalancers {
     // Note: Using Random as placeholder for Ketama/FnvHash/LeastConnection
     // until we confirm exact Pingora 0.6 types
-    pub(super) ketama: Option<Arc<LoadBalancer<Random>>>,
-    pub(super) fnvhash: Option<Arc<LoadBalancer<Random>>>,
-    pub(super) least_conn: Option<Arc<LoadBalancer<Random>>>,
+    pub(crate) ketama: Option<Arc<LoadBalancer<Random>>>,
+    pub(crate) fnvhash: Option<Arc<LoadBalancer<Random>>>,
+    pub(crate) least_conn: Option<Arc<LoadBalancer<Random>>>,
 }
 
 impl OptionalLoadBalancers {
@@ -169,7 +169,7 @@ impl OptionalLoadBalancers {
     }
     
     /// Helper to initialize a load balancer
-    fn init_lb<S>(
+    pub(crate) fn init_lb<S>(
         discovery: &EndpointSliceDiscovery,
         name: &str,
     ) -> Result<Arc<LoadBalancer<S>>, String> 

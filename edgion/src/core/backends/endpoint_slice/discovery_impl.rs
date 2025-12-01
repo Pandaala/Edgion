@@ -272,6 +272,131 @@ impl EndpointSliceLoadBalancer {
     pub fn has_optional_algorithms(&self) -> bool {
         self.optional_lbs.is_some()
     }
+    
+    /// Check and update optional load balancers if new policies are available
+    /// 
+    /// This method checks if there are new policies in the policy store that aren't
+    /// currently initialized, and creates a new EndpointSliceLoadBalancer with all
+    /// required policies if needed. It preserves existing LBs and only creates new ones.
+    /// 
+    /// # Arguments
+    /// * `service_key` - The service key to check policies for
+    /// * `new_endpoint_slice` - The new EndpointSlice data to use
+    /// 
+    /// # Returns
+    /// * `Some(Arc<EndpointSliceLoadBalancer>)` - New LB with updated optional_lbs if rebuild needed
+    /// * `None` - No rebuild needed, all policies are already initialized
+    pub fn check_and_rebuild_optional_lbs(
+        &self,
+        service_key: &str,
+        new_endpoint_slice: EndpointSlice,
+    ) -> Option<Arc<Self>> {
+        use crate::core::lb::optional_lb::get_global_policy_store;
+        use crate::core::lb::optional_lb::{LbPolicy, OptionalLoadBalancers};
+        
+        // Get required policies from policy store
+        let required_policies = get_global_policy_store().get(service_key);
+        if required_policies.is_empty() {
+            return None; // No policies required
+        }
+        
+        // Check what's currently initialized
+        let initialized_policies = if let Some(ref optional_lbs) = self.optional_lbs {
+            optional_lbs.initialized_policies()
+        } else {
+            Vec::new()
+        };
+        
+        // Find missing policies that need to be created
+        let missing_policies: Vec<LbPolicy> = required_policies.iter()
+            .filter(|p| !initialized_policies.contains(p))
+            .copied()
+            .collect();
+        
+        if missing_policies.is_empty() {
+            return None; // All policies already initialized
+        }
+        
+        tracing::debug!(
+            service_key = %service_key,
+            required = ?required_policies,
+            initialized = ?initialized_policies,
+            missing = ?missing_policies,
+            "Rebuilding EndpointSliceLoadBalancer with new optional policies"
+        );
+        
+        // Update discovery with new endpoint slice data
+        if let Err(e) = self.discovery.update(new_endpoint_slice.clone()) {
+            tracing::error!(
+                error = %e,
+                "Failed to update discovery, falling back to full rebuild"
+            );
+            return Some(Self::new(new_endpoint_slice));
+        }
+        
+        // Create new optional LBs that include both existing and new policies
+        let new_optional_lbs = if let Some(ref existing_lbs) = self.optional_lbs {
+            // Preserve existing LBs and add new ones
+            let mut ketama = existing_lbs.ketama.clone();
+            let mut fnvhash = existing_lbs.fnvhash.clone();
+            let mut least_conn = existing_lbs.least_conn.clone();
+            
+            // Create new LBs for missing policies
+            for policy in &missing_policies {
+                match policy {
+                    LbPolicy::Ketama if ketama.is_none() => {
+                        match OptionalLoadBalancers::init_lb(&self.discovery, "Ketama") {
+                            Ok(lb) => {
+                                ketama = Some(lb);
+                                tracing::debug!("Created new Ketama LoadBalancer");
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "Failed to create Ketama LB");
+                            }
+                        }
+                    }
+                    LbPolicy::FnvHash if fnvhash.is_none() => {
+                        match OptionalLoadBalancers::init_lb(&self.discovery, "FnvHash") {
+                            Ok(lb) => {
+                                fnvhash = Some(lb);
+                                tracing::debug!("Created new FnvHash LoadBalancer");
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "Failed to create FnvHash LB");
+                            }
+                        }
+                    }
+                    LbPolicy::LeastConnection if least_conn.is_none() => {
+                        match OptionalLoadBalancers::init_lb(&self.discovery, "LeastConnection") {
+                            Ok(lb) => {
+                                least_conn = Some(lb);
+                                tracing::debug!("Created new LeastConnection LoadBalancer");
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "Failed to create LeastConnection LB");
+                            }
+                        }
+                    }
+                    _ => {} // Already exists
+                }
+            }
+            
+            Some(Arc::new(OptionalLoadBalancers {
+                ketama,
+                fnvhash,
+                least_conn,
+            }))
+        } else {
+            // No existing LBs, create all required ones
+            OptionalLoadBalancers::try_new(service_key, &self.discovery)
+        };
+        
+        Some(Arc::new(Self {
+            discovery: self.discovery.clone(),
+            lb: self.lb.clone(),
+            optional_lbs: new_optional_lbs,
+        }))
+    }
 }
 
 #[cfg(test)]
