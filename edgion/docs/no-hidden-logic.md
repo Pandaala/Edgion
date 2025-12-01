@@ -45,31 +45,39 @@
 
 ---
 
-## #4 负载均衡算法配置 (待实现)
+## #4 负载均衡算法配置
 
-**配置**: `HTTPRoute.spec.rules[].filters[].extensionRef` → `LoadBalancingPolicy` CRD
+**配置**: `HTTPRoute.spec.rules[].filters[].extensionRef.name` 直接指定算法
 
 **特殊处理**:
 - 默认使用 RoundRobin 算法
-- 可通过 `extension_ref` 启用 Ketama/FnvHash/LeastConnection 算法
+- 可通过 `extensionRef.name` 直接指定 Ketama/FnvHash/LeastConnection 算法
+- 算法配置自动应用到同一 rule 的所有 backendRefs
 - 算法按需懒加载，未使用时仅占用 24 字节
+- 支持引用计数，自动清理未使用的策略
 
 **示例配置**:
 ```yaml
 rules:
   - filters:
+      # 直接在 name 中指定算法，逗号分隔
       - type: ExtensionRef
         extensionRef:
-          group: edgion.io
-          kind: LoadBalancingPolicy
-          name: ketama-policy
+          name: ketama,fnvhash
+    backendRefs:
+      - name: my-service
+        port: 8080
+      - name: api-service
+        port: 9090
 ```
 
 **代码位置**:
 - 策略存储: `edgion/src/core/lb/optional_lb/policy_store.rs`
-- 策略提取: `edgion/src/core/routes/conf_handler_impl.rs` (待实现)
+- 策略提取: `edgion/src/core/routes/conf_handler_impl.rs::extract_and_update_lb_policies()`
+- ConfHandler 集成: `edgion/src/core/routes/conf_handler_impl.rs::ConfHandler<HTTPRoute>`
+- 使用文档: `edgion/docs/lb-policy-usage.md`
 
-**状态**: ⚠️ 基础架构已完成，CRD 定义和解析逻辑待实现
+**状态**: ✅ 已完成实现
 
 ---
 

@@ -194,6 +194,29 @@ impl PolicyStore {
         }
     }
     
+    /// Delete all policy references for a specific resource key (HTTPRoute)
+    /// 
+    /// This is an alias for `remove_by_route` with a more explicit name.
+    /// Cleans up entries where this was the last route reference.
+    /// 
+    /// # Arguments
+    /// * `resource_key` - The HTTPRoute resource key to delete (format: "namespace/route-name")
+    /// 
+    /// # Example
+    /// ```
+    /// use edgion::core::lb::optional_lb::get_global_policy_store;
+    /// 
+    /// let store = get_global_policy_store();
+    /// store.delete_lb_policies_by_resource_key("default/my-route");
+    /// ```
+    pub fn delete_lb_policies_by_resource_key(&self, resource_key: &str) {
+        self.remove_by_route(resource_key);
+        tracing::info!(
+            resource_key = %resource_key,
+            "Deleted LB policies by resource key"
+        );
+    }
+    
     /// Get all configured services
     pub fn all_services(&self) -> Vec<String> {
         self.policies.iter()
@@ -399,6 +422,55 @@ mod tests {
         // Remove route2 - service should be cleaned up
         store.remove_by_route("default/route2");
         assert!(store.get("default/service").is_empty());
+    }
+    
+    #[test]
+    fn test_delete_lb_policies_by_resource_key() {
+        let store = PolicyStore::new();
+        
+        // Add policies from multiple routes
+        store.add_policy(
+            "default/service1".to_string(),
+            "default/route1".to_string(),
+            vec![LbPolicy::Ketama]
+        );
+        store.add_policy(
+            "default/service2".to_string(),
+            "default/route1".to_string(),
+            vec![LbPolicy::FnvHash]
+        );
+        store.add_policy(
+            "default/service1".to_string(),
+            "default/route2".to_string(),
+            vec![LbPolicy::LeastConnection]
+        );
+        
+        // Verify policies exist
+        assert_eq!(store.get("default/service1").len(), 2);
+        assert_eq!(store.get("default/service2").len(), 1);
+        
+        // Delete by resource key (route1)
+        store.delete_lb_policies_by_resource_key("default/route1");
+        
+        // service1 should still exist (route2 still references it)
+        let policies1 = store.get("default/service1");
+        assert!(!policies1.is_empty());
+        
+        // service2 should be removed (only route1 referenced it)
+        let policies2 = store.get("default/service2");
+        assert!(policies2.is_empty());
+        
+        // Delete by resource key (route2)
+        store.delete_lb_policies_by_resource_key("default/route2");
+        
+        // service1 should now be removed (no more references)
+        let policies1 = store.get("default/service1");
+        assert!(policies1.is_empty());
+        
+        // Stats should show 0 services
+        let stats = store.stats();
+        assert_eq!(stats.total_services, 0);
+        assert_eq!(stats.total_route_refs, 0);
     }
 }
 

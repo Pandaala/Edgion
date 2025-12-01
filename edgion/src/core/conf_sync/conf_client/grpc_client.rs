@@ -199,7 +199,7 @@ impl ConfigSyncClient {
             EdgionTls,
             Secret,
         ];
-
+        
         for kind in resource_kinds {
             if let Err(e) = self.start_watch_sync(key.clone(), kind).await {
                 tracing::error!(kind = ?kind, error = %e, "Failed to start watch");

@@ -2,6 +2,7 @@ pub mod match_engine;
 pub mod match_unit;
 pub mod regex_match_unit;
 pub mod routes_mgr;
+pub mod lb_policy_sync;
 mod conf_handler_impl;
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ use crate::core::routes::routes_mgr::RouteRules;
 use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::routes::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::core::routes::match_engine::RouteEntry;
+use crate::core::routes::lb_policy_sync::{sync_lb_policies_for_routes, cleanup_lb_policies_for_routes};
 use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::types::{HTTPRoute, ResourceMeta, HTTPRouteMatch, HTTPRouteRule};
 use regex::Regex;
@@ -14,37 +15,26 @@ use regex::Regex;
 type GatewayKey = String;
 type DomainStr = String;
 
-/// Extract load balancing policies from HTTPRoute and update the global policy store
-/// 
-/// TODO: Implement LB policy extraction from HTTPRouteFilter.extension_ref
-/// 
-/// This function will iterate through all rules and filters in the HTTPRoute,
-/// extract LB policy configurations from extension_ref, and update the global policy store.
-/// 
-/// The extension_ref should reference a custom Edgion resource that defines LB policies
-/// for specific backend services.
-fn extract_and_update_lb_policies(routes: &HashMap<String, HTTPRoute>) {
-    // TODO: Implement extraction from HTTPRouteFilter.extension_ref
-    // 
-    // Planned implementation:
-    // 1. Iterate through route.spec.rules[].filters[]
-    // 2. Find filters with filter_type == ExtensionRef
-    // 3. Parse extension_ref to get LB policy configuration
-    // 4. Extract service-to-policy mappings
-    // 5. Update global policy store
-    
-    let _ = routes; // Suppress unused warning until implementation
-    
-    tracing::debug!("LB policy extraction from extension_ref not yet implemented");
-}
-
 /// Implement ConfHandler for Arc<RouteManager> to allow using the global instance
 impl ConfHandler<HTTPRoute> for Arc<RouteManager> {
     fn full_set(&self, data: &HashMap<String, HTTPRoute>) {
+        // Extract and update LB policies from all routes
+        sync_lb_policies_for_routes(data);
+        
         (**self).full_set(data)
     }
 
     fn partial_update(&self, add: HashMap<String, HTTPRoute>, update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
+        // Merge add and update for policy extraction
+        let mut add_or_update = add.clone();
+        add_or_update.extend(update.clone());
+        
+        // Extract and update LB policies from add/update routes
+        sync_lb_policies_for_routes(&add_or_update);
+        
+        // Clean up LB policies for removed routes
+        cleanup_lb_policies_for_routes(&remove);
+        
         (**self).partial_update(add, update, remove)
     }
 }
@@ -531,9 +521,6 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         // Step 0: Store all HTTPRoute resources for future lookups (e.g., during deletions)
         *self.http_routes.lock().unwrap() = data.clone();
         tracing::debug!(component="route_manager",cnt=data.len(),"stored http_routes");
-        
-        // TODO: Extract and update LB policies from all routes
-        // extract_and_update_lb_policies(data);
 
         // Step 1: Parse all HTTPRoutes into temporary gateway->domain->rules structure
         let gateway_domain_rules_new = parse_http_routes_to_gateway_domain_rules(data);
@@ -642,9 +629,6 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         // Merge add and update for processing
         let mut add_or_update = add;
         add_or_update.extend(update);
-
-        // TODO: Extract and update LB policies from add/update routes
-        // extract_and_update_lb_policies(&add_or_update);
 
         // Step 0: Build gateway_hostnames map BEFORE updating http_routes storage
         // This is important because we need to access old hostnames from existing routes
