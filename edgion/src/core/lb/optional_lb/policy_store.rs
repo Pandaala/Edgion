@@ -317,7 +317,7 @@ mod tests {
     fn test_policy_store_add_policy() {
         let store = PolicyStore::new();
         
-        let policies = vec![LbPolicy::Ketama, LbPolicy::FnvHash];
+        let policies = vec![LbPolicy::Consistent, LbPolicy::FnvHash];
         store.add_policy(
             "default/test-service".to_string(),
             "default/route1".to_string(),
@@ -326,7 +326,7 @@ mod tests {
         
         let retrieved = store.get("default/test-service");
         assert_eq!(retrieved.len(), 2);
-        assert!(retrieved.contains(&LbPolicy::Ketama));
+        assert!(retrieved.contains(&LbPolicy::Consistent));
         assert!(retrieved.contains(&LbPolicy::FnvHash));
     }
     
@@ -334,11 +334,11 @@ mod tests {
     fn test_policy_store_multiple_routes() {
         let store = PolicyStore::new();
         
-        // Route 1 adds Ketama
+        // Route 1 adds Consistent
         store.add_policy(
             "default/test-service".to_string(),
             "default/route1".to_string(),
-            vec![LbPolicy::Ketama]
+            vec![LbPolicy::Consistent]
         );
         
         // Route 2 adds FnvHash
@@ -351,7 +351,7 @@ mod tests {
         // Should have both policies
         let policies = store.get("default/test-service");
         assert_eq!(policies.len(), 2);
-        assert!(policies.contains(&LbPolicy::Ketama));
+        assert!(policies.contains(&LbPolicy::Consistent));
         assert!(policies.contains(&LbPolicy::FnvHash));
         
         // Stats should show 1 service, 2 route refs
@@ -368,7 +368,7 @@ mod tests {
         store.add_policy(
             "default/test-service".to_string(),
             "default/route1".to_string(),
-            vec![LbPolicy::Ketama]
+            vec![LbPolicy::Consistent]
         );
         store.add_policy(
             "default/test-service".to_string(),
@@ -396,12 +396,12 @@ mod tests {
         let store = PolicyStore::new();
         
         let mut updates = HashMap::new();
-        updates.insert("default/svc1".to_string(), vec![LbPolicy::Ketama]);
+        updates.insert("default/svc1".to_string(), vec![LbPolicy::Consistent]);
         updates.insert("default/svc2".to_string(), vec![LbPolicy::FnvHash, LbPolicy::LeastConnection]);
         
         store.batch_add("default/route1".to_string(), updates);
         
-        assert_eq!(store.get("default/svc1"), vec![LbPolicy::Ketama]);
+        assert_eq!(store.get("default/svc1"), vec![LbPolicy::Consistent]);
         assert_eq!(store.get("default/svc2").len(), 2);
         
         // Stats should show 2 services, 2 route refs (one route references both)
@@ -417,7 +417,7 @@ mod tests {
         store.add_policy(
             "default/svc1".to_string(),
             "default/route1".to_string(),
-            vec![LbPolicy::Ketama]
+            vec![LbPolicy::Consistent]
         );
         store.add_policy(
             "default/svc2".to_string(),
@@ -442,14 +442,14 @@ mod tests {
         store.add_policy(
             "default/service".to_string(),
             "default/route1".to_string(),
-            vec![LbPolicy::Ketama]
+            vec![LbPolicy::Consistent]
         );
         
         // Add from route2 with overlapping policy
         store.add_policy(
             "default/service".to_string(),
             "default/route2".to_string(),
-            vec![LbPolicy::Ketama, LbPolicy::FnvHash]
+            vec![LbPolicy::Consistent, LbPolicy::FnvHash]
         );
         
         // Should have deduped policies
@@ -473,7 +473,7 @@ mod tests {
         store.add_policy(
             "default/service1".to_string(),
             "default/route1".to_string(),
-            vec![LbPolicy::Ketama]
+            vec![LbPolicy::Consistent]
         );
         store.add_policy(
             "default/service2".to_string(),

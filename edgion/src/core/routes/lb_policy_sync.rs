@@ -14,7 +14,7 @@ use crate::types::{HTTPRoute, HTTPRouteFilterType};
 /// 
 /// The extension_ref.name contains the algorithms in format:
 /// "algorithm1,algorithm2,..."
-/// For example: "ketama" or "ketama,fnvhash,leastconn"
+/// For example: "consistent" or "consistent,fnvhash,leastconn"
 /// 
 /// # Arguments
 /// * `routes` - HashMap of HTTPRoute resources (key: resource_key, value: HTTPRoute)
@@ -202,14 +202,14 @@ mod tests {
         policy_store.clear();
         
         let mut routes = HashMap::new();
-        let route = create_test_route_with_lb_policy("default", "route1", "service1", "ketama");
+        let route = create_test_route_with_lb_policy("default", "route1", "service1", "consistent");
         routes.insert("default/route1".to_string(), route);
         
         sync_lb_policies_for_routes(&routes);
         
         let policies = policy_store.get("default/service1");
         assert!(!policies.is_empty());
-        assert!(policies.contains(&LbPolicy::Ketama));
+        assert!(policies.contains(&LbPolicy::Consistent));
         
         policy_store.clear();
     }
@@ -221,7 +221,7 @@ mod tests {
         
         // First add some policies
         let mut routes = HashMap::new();
-        let route = create_test_route_with_lb_policy("default", "route1", "service1", "ketama");
+        let route = create_test_route_with_lb_policy("default", "route1", "service1", "consistent");
         routes.insert("default/route1".to_string(), route);
         sync_lb_policies_for_routes(&routes);
         
@@ -254,7 +254,7 @@ mod tests {
         
         let policies1 = policy_store.get("default/service1");
         let policies2 = policy_store.get("default/service2");
-        assert!(policies1.contains(&LbPolicy::Ketama));
+        assert!(policies1.contains(&LbPolicy::Consistent));
         assert!(policies2.contains(&LbPolicy::FnvHash));
         
         policy_store.clear();

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use futures::FutureExt;
-use pingora_load_balancing::selection::{BackendSelection, Random};
+use pingora_load_balancing::selection::{BackendSelection, Consistent, Random};
 use pingora_load_balancing::{Backends, LoadBalancer};
 use crate::core::backends::endpoint_slice::EndpointSliceDiscovery;
 use crate::core::lb::optional_lb::get_policies_for_service;
@@ -10,8 +10,8 @@ use crate::core::lb::optional_lb::get_policies_for_service;
 /// Load balancing policy types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LbPolicy {
-    /// Ketama consistent hashing
-    Ketama,
+    /// Consistent hashing
+    Consistent,
     /// FNV hash-based selection  
     FnvHash,
     /// Least connection selection
@@ -22,7 +22,7 @@ impl LbPolicy {
     /// Parse policy from string
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "ketama" | "consistent-hash" => Some(Self::Ketama),
+            "consistent" | "consistent-hash" | "ketama" => Some(Self::Consistent),
             "fnvhash" | "fnv-hash" => Some(Self::FnvHash),
             "leastconn" | "least-connection" | "leastconnection" | "least_connection" => Some(Self::LeastConnection),
             _ => None,
@@ -32,7 +32,7 @@ impl LbPolicy {
     /// Get policy name
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Ketama => "ketama",
+            Self::Consistent => "consistent",
             Self::FnvHash => "fnvhash",
             Self::LeastConnection => "leastconn",
         }
@@ -41,19 +41,19 @@ impl LbPolicy {
     /// Parse LB policies from comma-separated string
     /// 
     /// Supports multiple aliases for each policy type:
-    /// - Ketama: "ketama", "consistent-hash"
+    /// - Consistent: "consistent", "consistent-hash", "ketama" (兼容旧配置)
     /// - FnvHash: "fnvhash", "fnv-hash"
     /// - LeastConnection: "leastconn", "least-connection", "leastconnection", "least_connection"
     /// 
     /// # Examples
     /// ```ignore
-    /// let policies = LbPolicy::parse_from_string("ketama");
-    /// assert_eq!(policies, vec![LbPolicy::Ketama]);
+    /// let policies = LbPolicy::parse_from_string("consistent");
+    /// assert_eq!(policies, vec![LbPolicy::Consistent]);
     /// 
-    /// let policies = LbPolicy::parse_from_string("ketama,fnvhash");
+    /// let policies = LbPolicy::parse_from_string("consistent,fnvhash");
     /// assert_eq!(policies.len(), 2);
     /// 
-    /// let policies = LbPolicy::parse_from_string("ketama, leastconnection");
+    /// let policies = LbPolicy::parse_from_string("consistent, leastconnection");
     /// assert_eq!(policies.len(), 2);
     /// ```
     pub fn parse_from_string(policy_str: &str) -> Vec<Self> {
@@ -79,12 +79,14 @@ impl LbPolicy {
 /// 
 /// Only requested algorithms are initialized based on Vec<LbPolicy>.
 /// No locks - immutable after creation for lock-free access.
+/// 
+/// Note: Pingora 0.6 的 selection 模块目前只提供部分算法类型。
+/// - Consistent 使用 Consistent (一致性哈希)
+/// - FnvHash 和 LeastConnection 暂时使用 Random 作为占位符
 pub struct OptionalLoadBalancers {
-    // Note: Using Random as placeholder for Ketama/FnvHash/LeastConnection
-    // until we confirm exact Pingora 0.6 types
-    pub(crate) ketama: Option<Arc<LoadBalancer<Random>>>,
-    pub(crate) fnvhash: Option<Arc<LoadBalancer<Random>>>,
-    pub(crate) least_conn: Option<Arc<LoadBalancer<Random>>>,
+    consistent: Option<LoadBalancer<Consistent>>,
+    fnvhash: Option<LoadBalancer<Random>>,      // TODO: 改为具体的 Fnv 类型当可用时  
+    least_conn: Option<LoadBalancer<Random>>,   // TODO: 改为具体的 LeastConn 类型当可用时
 }
 
 impl OptionalLoadBalancers {
@@ -135,22 +137,22 @@ impl OptionalLoadBalancers {
         discovery: &EndpointSliceDiscovery,
         policies: Vec<LbPolicy>,
     ) -> Result<Self, String> {
-        let mut ketama = None;
+        let mut consistent = None;
         let mut fnvhash = None;
         let mut least_conn = None;
         
         for policy in &policies {
             match policy {
-                LbPolicy::Ketama => {
-                    ketama = Some(Self::init_lb(discovery, "Ketama")?);
-                    tracing::debug!("Ketama LoadBalancer initialized");
+                LbPolicy::Consistent => {
+                    consistent = Some(Self::init_lb::<Consistent>(discovery, "Consistent")?);
+                    tracing::debug!("Consistent LoadBalancer initialized");
                 }
                 LbPolicy::FnvHash => {
-                    fnvhash = Some(Self::init_lb(discovery, "FnvHash")?);
+                    fnvhash = Some(Self::init_lb::<Random>(discovery, "FnvHash")?);
                     tracing::debug!("FnvHash LoadBalancer initialized");
                 }
                 LbPolicy::LeastConnection => {
-                    least_conn = Some(Self::init_lb(discovery, "LeastConnection")?);
+                    least_conn = Some(Self::init_lb::<Random>(discovery, "LeastConnection")?);
                     tracing::debug!("LeastConnection LoadBalancer initialized");
                 }
             }
@@ -162,17 +164,17 @@ impl OptionalLoadBalancers {
         );
         
         Ok(Self {
-            ketama,
+            consistent,
             fnvhash,
             least_conn,
         })
     }
     
     /// Helper to initialize a load balancer
-    pub(crate) fn init_lb<S>(
+    fn init_lb<S>(
         discovery: &EndpointSliceDiscovery,
         name: &str,
-    ) -> Result<Arc<LoadBalancer<S>>, String> 
+    ) -> Result<LoadBalancer<S>, String> 
     where
         S: BackendSelection + 'static,
         S::Iter: pingora_load_balancing::selection::BackendIter,
@@ -185,22 +187,22 @@ impl OptionalLoadBalancers {
             .ok_or_else(|| format!("{} LB update blocked", name))?
             .map_err(|e| format!("Failed to init {} LB: {:?}", name, e))?;
         
-        Ok(Arc::new(lb))
+        Ok(lb)
     }
     
     /// Update all initialized load balancers
     pub async fn update_all(&self) -> Result<(), String> {
-        if let Some(ref lb) = self.ketama {
+        if let Some(lb) = &self.consistent {
             lb.update().await
-                .map_err(|e| format!("Ketama update failed: {:?}", e))?;
+                .map_err(|e| format!("Consistent update failed: {:?}", e))?;
         }
         
-        if let Some(ref lb) = self.fnvhash {
+        if let Some(lb) = &self.fnvhash {
             lb.update().await
                 .map_err(|e| format!("FnvHash update failed: {:?}", e))?;
         }
         
-        if let Some(ref lb) = self.least_conn {
+        if let Some(lb) = &self.least_conn {
             lb.update().await
                 .map_err(|e| format!("LeastConnection update failed: {:?}", e))?;
         }
@@ -208,26 +210,26 @@ impl OptionalLoadBalancers {
         Ok(())
     }
     
-    /// Get Ketama load balancer if initialized
-    pub fn ketama(&self) -> Option<Arc<LoadBalancer<Random>>> {
-        self.ketama.clone()
+    /// Get Consistent load balancer if initialized
+    pub fn consistent(&self) -> Option<&LoadBalancer<Consistent>> {
+        self.consistent.as_ref()
     }
     
     /// Get FnvHash load balancer if initialized
-    pub fn fnvhash(&self) -> Option<Arc<LoadBalancer<Random>>> {
-        self.fnvhash.clone()
+    pub fn fnvhash(&self) -> Option<&LoadBalancer<Random>> {
+        self.fnvhash.as_ref()
     }
     
     /// Get LeastConnection load balancer if initialized
-    pub fn least_conn(&self) -> Option<Arc<LoadBalancer<Random>>> {
-        self.least_conn.clone()
+    pub fn least_conn(&self) -> Option<&LoadBalancer<Random>> {
+        self.least_conn.as_ref()
     }
     
     /// Check which policies are initialized
     pub fn initialized_policies(&self) -> Vec<LbPolicy> {
         let mut policies = Vec::new();
-        if self.ketama.is_some() {
-            policies.push(LbPolicy::Ketama);
+        if self.consistent.is_some() {
+            policies.push(LbPolicy::Consistent);
         }
         if self.fnvhash.is_some() {
             policies.push(LbPolicy::FnvHash);

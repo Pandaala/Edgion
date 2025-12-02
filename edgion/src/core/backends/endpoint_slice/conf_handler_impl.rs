@@ -45,7 +45,7 @@ impl ConfHandler<EndpointSlice> for EpSliceStore {
         let remove_count = remove.len();
         
         // Track EndpointSlices that need LB rebuild (new optional policies detected)
-        let mut needs_rebuild: HashMap<String, Arc<EndpointSliceLoadBalancer>> = HashMap::new();
+        let mut needs_rebuild: HashMap<String, EndpointSlice> = HashMap::new();
         let policy_store = get_global_policy_store();
         
         // Handle updates: check if we need to rebuild LB or just update in-place
@@ -57,14 +57,18 @@ impl ConfHandler<EndpointSlice> for EpSliceStore {
             
             // Call update_in_place_and_refresh_lb with policies
             // It will check internally if rebuild is needed
-            match self.update_in_place_and_refresh_lb(&key, ep_slice, policies) {
-                Ok(Some(new_lb)) => needs_rebuild.insert(key, new_lb),
-                Ok(None) => None, // Updated in-place, no action needed
+            match self.update_in_place_and_refresh_lb(&key, ep_slice.clone(), &policies) {
+                Ok(true) => {
+                    // Need rebuild, add to rebuild list
+                    needs_rebuild.insert(key, ep_slice);
+                }
+                Ok(false) => {
+                    // Updated in-place, no action needed
+                }
                 Err(e) => {
                     tracing::error!(key = %key, error = %e, "Failed to update EndpointSlice");
-                    None
                 }
-            };
+            }
         }
         
         let rebuild_count = needs_rebuild.len();
@@ -81,9 +85,10 @@ impl ConfHandler<EndpointSlice> for EpSliceStore {
                     let lb = EndpointSliceLoadBalancer::new(ep_slice);
                     map.insert(key, lb);
                 }
-                // Replace entries that were rebuilt with new optional LBs
-                for (key, new_lb) in needs_rebuild {
-                    map.insert(key, new_lb);
+                // Rebuild entries that need new optional LBs
+                for (key, ep_slice) in needs_rebuild {
+                    let lb = EndpointSliceLoadBalancer::new(ep_slice);
+                    map.insert(key, lb);
                 }
             });
             true

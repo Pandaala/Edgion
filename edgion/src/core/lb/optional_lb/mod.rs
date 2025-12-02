@@ -1,6 +1,6 @@
 //! Optional load balancing algorithms module
 //! 
-//! Provides additional load balancing algorithms (Ketama, FnvHash, LeastConnection)
+//! Provides additional load balancing algorithms (Consistent, FnvHash, LeastConnection)
 //! that can be optionally enabled per service based on configuration.
 
 mod types;
