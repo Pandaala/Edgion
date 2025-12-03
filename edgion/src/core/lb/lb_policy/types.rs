@@ -5,8 +5,6 @@
 pub enum LbPolicy {
     /// Consistent hashing
     Consistent,
-    /// FNV hash-based selection  
-    FnvHash,
     /// Least connection selection
     LeastConnection,
 }
@@ -16,7 +14,6 @@ impl LbPolicy {
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "consistent" | "consistent-hash" | "ketama" => Some(Self::Consistent),
-            "fnvhash" | "fnv-hash" => Some(Self::FnvHash),
             "leastconn" | "least-connection" | "leastconnection" | "least_connection" => Some(Self::LeastConnection),
             _ => None,
         }
@@ -26,7 +23,6 @@ impl LbPolicy {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Consistent => "consistent",
-            Self::FnvHash => "fnvhash",
             Self::LeastConnection => "leastconn",
         }
     }
@@ -35,7 +31,6 @@ impl LbPolicy {
     /// 
     /// Supports multiple aliases for each policy type:
     /// - Consistent: "consistent", "consistent-hash", "ketama" (兼容旧配置)
-    /// - FnvHash: "fnvhash", "fnv-hash"
     /// - LeastConnection: "leastconn", "least-connection", "leastconnection", "least_connection"
     /// 
     /// # Examples
@@ -43,10 +38,7 @@ impl LbPolicy {
     /// let policies = LbPolicy::parse_from_string("consistent");
     /// assert_eq!(policies, vec![LbPolicy::Consistent]);
     /// 
-    /// let policies = LbPolicy::parse_from_string("consistent,fnvhash");
-    /// assert_eq!(policies.len(), 2);
-    /// 
-    /// let policies = LbPolicy::parse_from_string("consistent, leastconnection");
+    /// let policies = LbPolicy::parse_from_string("consistent,leastconn");
     /// assert_eq!(policies.len(), 2);
     /// ```
     pub fn parse_from_string(policy_str: &str) -> Vec<Self> {
@@ -67,4 +59,3 @@ impl LbPolicy {
             .collect()
     }
 }
-

@@ -21,7 +21,7 @@ pub fn get_policies_for_service(service_key: &str) -> Vec<LbPolicy> {
     store.get(service_key)
 }
 
-/// Parse policy list from string (e.g., "consistent,fnvhash,leastconn")
+/// Parse policy list from string (e.g., "consistent,leastconn")
 #[allow(dead_code)]
 pub fn parse_policies(s: &str) -> Vec<LbPolicy> {
     s.split(',')
@@ -46,16 +46,16 @@ mod tests {
 
     #[test]
     fn test_parse_policies() {
-        let policies = parse_policies("ketama,fnvhash");
+        let policies = parse_policies("ketama,leastconn");
         assert_eq!(policies.len(), 2);
         assert!(policies.contains(&LbPolicy::Consistent));
-        assert!(policies.contains(&LbPolicy::FnvHash));
+        assert!(policies.contains(&LbPolicy::LeastConnection));
     }
     
     #[test]
     fn test_parse_policies_with_spaces() {
-        let policies = parse_policies("ketama, fnvhash , leastconn");
-        assert_eq!(policies.len(), 3);
+        let policies = parse_policies("ketama, leastconn");
+        assert_eq!(policies.len(), 2);
     }
     
     #[test]
@@ -83,4 +83,3 @@ mod tests {
         assert_eq!(parse_service_key("too/many/parts"), None);
     }
 }
-

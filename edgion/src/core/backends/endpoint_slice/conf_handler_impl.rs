@@ -64,7 +64,7 @@ impl EpSliceHandler {
         count
     }
     
-    /// Full set for Random store (for services with FnvHash or LeastConnection policy)
+    /// Full set for Random store (for services with LeastConnection policy)
     fn full_set_random(
         &self,
         data: &HashMap<String, EndpointSlice>,
@@ -78,7 +78,7 @@ impl EpSliceHandler {
             let service_key = ep_slice.key_name();
             let policies = policy_store.get(&service_key);
             
-            let needs_random = policies.iter().any(|p| matches!(p, LbPolicy::FnvHash | LbPolicy::LeastConnection));
+            let needs_random = policies.contains(&LbPolicy::LeastConnection);
             if !needs_random {
                 continue;
             }
@@ -199,7 +199,7 @@ impl EpSliceHandler {
             let service_key = ep_slice.key_name();
             let policies = policy_store.get(&service_key);
             
-            let needs_random = policies.iter().any(|p| matches!(p, LbPolicy::FnvHash | LbPolicy::LeastConnection));
+            let needs_random = policies.contains(&LbPolicy::LeastConnection);
             
             if needs_random {
                 if !random_store.contains(key) {
@@ -242,7 +242,7 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         // 2. Consistent for services with Consistent policy
         let consistent_count = self.full_set_consistent(data, &roundrobin_map);
         
-        // 3. Random for services with FnvHash/LeastConnection policy
+        // 3. Random for services with LeastConnection policy
         let random_count = self.full_set_random(data, &roundrobin_map);
         
         tracing::info!(

@@ -13,7 +13,7 @@ static ROUNDROBIN_STORE: Lazy<Arc<EpSliceStore<RoundRobin>>> =
 static CONSISTENT_STORE: Lazy<Arc<EpSliceStore<Consistent>>> =
     Lazy::new(|| Arc::new(EpSliceStore::new()));
 
-/// Store for Random LoadBalancers (optional, used for FnvHash and LeastConnection)
+/// Store for Random LoadBalancers (optional, used for LeastConnection)
 static RANDOM_STORE: Lazy<Arc<EpSliceStore<Random>>> =
     Lazy::new(|| Arc::new(EpSliceStore::new()));
 

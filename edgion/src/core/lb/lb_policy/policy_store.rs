@@ -317,7 +317,7 @@ mod tests {
     fn test_policy_store_add_policy() {
         let store = PolicyStore::new();
         
-        let policies = vec![LbPolicy::Consistent, LbPolicy::FnvHash];
+        let policies = vec![LbPolicy::Consistent, LbPolicy::LeastConnection];
         store.add_policy(
             "default/test-service".to_string(),
             "default/route1".to_string(),
@@ -327,7 +327,7 @@ mod tests {
         let retrieved = store.get("default/test-service");
         assert_eq!(retrieved.len(), 2);
         assert!(retrieved.contains(&LbPolicy::Consistent));
-        assert!(retrieved.contains(&LbPolicy::FnvHash));
+        assert!(retrieved.contains(&LbPolicy::LeastConnection));
     }
     
     #[test]
@@ -341,18 +341,18 @@ mod tests {
             vec![LbPolicy::Consistent]
         );
         
-        // Route 2 adds FnvHash
+        // Route 2 adds LeastConnection
         store.add_policy(
             "default/test-service".to_string(),
             "default/route2".to_string(),
-            vec![LbPolicy::FnvHash]
+            vec![LbPolicy::LeastConnection]
         );
         
         // Should have both policies
         let policies = store.get("default/test-service");
         assert_eq!(policies.len(), 2);
         assert!(policies.contains(&LbPolicy::Consistent));
-        assert!(policies.contains(&LbPolicy::FnvHash));
+        assert!(policies.contains(&LbPolicy::LeastConnection));
         
         // Stats should show 1 service, 2 route refs
         let stats = store.stats();
@@ -373,7 +373,7 @@ mod tests {
         store.add_policy(
             "default/test-service".to_string(),
             "default/route2".to_string(),
-            vec![LbPolicy::FnvHash]
+            vec![LbPolicy::LeastConnection]
         );
         
         // Remove route1
@@ -397,12 +397,12 @@ mod tests {
         
         let mut updates = HashMap::new();
         updates.insert("default/svc1".to_string(), vec![LbPolicy::Consistent]);
-        updates.insert("default/svc2".to_string(), vec![LbPolicy::FnvHash, LbPolicy::LeastConnection]);
+        updates.insert("default/svc2".to_string(), vec![LbPolicy::LeastConnection]);
         
         store.batch_add("default/route1".to_string(), updates);
         
         assert_eq!(store.get("default/svc1"), vec![LbPolicy::Consistent]);
-        assert_eq!(store.get("default/svc2").len(), 2);
+        assert_eq!(store.get("default/svc2"), vec![LbPolicy::LeastConnection]);
         
         // Stats should show 2 services, 2 route refs (one route references both)
         let stats = store.stats();
@@ -422,7 +422,7 @@ mod tests {
         store.add_policy(
             "default/svc2".to_string(),
             "default/route2".to_string(),
-            vec![LbPolicy::FnvHash]
+            vec![LbPolicy::LeastConnection]
         );
         
         store.clear();
@@ -449,7 +449,7 @@ mod tests {
         store.add_policy(
             "default/service".to_string(),
             "default/route2".to_string(),
-            vec![LbPolicy::Consistent, LbPolicy::FnvHash]
+            vec![LbPolicy::Consistent, LbPolicy::LeastConnection]
         );
         
         // Should have deduped policies
@@ -478,7 +478,7 @@ mod tests {
         store.add_policy(
             "default/service2".to_string(),
             "default/route1".to_string(),
-            vec![LbPolicy::FnvHash]
+            vec![LbPolicy::LeastConnection]
         );
         store.add_policy(
             "default/service1".to_string(),

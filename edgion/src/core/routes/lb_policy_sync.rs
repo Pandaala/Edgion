@@ -246,7 +246,7 @@ mod tests {
         
         let mut routes = HashMap::new();
         let route1 = create_test_route_with_lb_policy("default", "route1", "service1", "ketama");
-        let route2 = create_test_route_with_lb_policy("default", "route2", "service2", "fnvhash");
+        let route2 = create_test_route_with_lb_policy("default", "route2", "service2", "leastconn");
         routes.insert("default/route1".to_string(), route1);
         routes.insert("default/route2".to_string(), route2);
         
@@ -255,7 +255,7 @@ mod tests {
         let policies1 = policy_store.get("default/service1");
         let policies2 = policy_store.get("default/service2");
         assert!(policies1.contains(&LbPolicy::Consistent));
-        assert!(policies2.contains(&LbPolicy::FnvHash));
+        assert!(policies2.contains(&LbPolicy::LeastConnection));
         
         policy_store.clear();
     }
