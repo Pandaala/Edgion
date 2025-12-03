@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use async_trait::async_trait;
 use pingora_core::modules::http::grpc_web::{GrpcWeb, GrpcWebBridge};
 use pingora_core::modules::http::HttpModules;
@@ -18,7 +17,7 @@ impl ProxyHttp for EdgionHttp {
 
     fn new_ctx(&self) -> Self::CTX {
         let ctx = EdgionHttpContext::new();
-        self.ctx_cnt.fetch_add(1, Ordering::Relaxed);
+        self.metrics.ctx_created();
         ctx
     }
 

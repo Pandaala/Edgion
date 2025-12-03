@@ -75,6 +75,9 @@ pingora-load-balancing = "0.6"
 pingora-proxy = { version = "0.6", features = ["openssl_derived", "boringssl"] }
 etcd-client = "0.11"
 
+# Metrics
+metrics = "0.24"
+
 # CLI
 clap.workspace = true
 tracing.workspace = true

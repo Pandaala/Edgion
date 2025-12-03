@@ -9,4 +9,5 @@ pub mod routes;
 pub mod tls;
 pub mod utils;
 pub mod backends;
+pub mod misc;
 mod gateway;

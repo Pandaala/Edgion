@@ -73,7 +73,7 @@ impl GatewayBase {
                         listener,
                         server_start_time: SystemTime::now(),
                         server_header_opts: Default::default(),
-                        ctx_cnt: Arc::new(Default::default()),
+                        metrics: Default::default(),
                         domain_routes: domain_routes.clone(),
                     };
 
