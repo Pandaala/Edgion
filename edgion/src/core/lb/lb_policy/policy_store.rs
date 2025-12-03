@@ -245,8 +245,8 @@ impl PolicyStore {
     /// 
     /// # Example
     /// ```
-    /// use edgion::core::lb::optional_lb::get_global_policy_store;
-    /// 
+    /// use edgion::core::lb::lb_policy::get_global_policy_store;
+    ///
     /// let store = get_global_policy_store();
     /// store.delete_lb_policies_by_resource_key("default/my-route");
     /// ```

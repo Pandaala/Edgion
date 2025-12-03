@@ -5,7 +5,7 @@ use pingora_load_balancing::selection::RoundRobin;
 use crate::core::conf_sync::traits::ConfHandler;
 use super::{get_roundrobin_store, get_consistent_store, get_random_store, EpSliceStore};
 use super::discovery_impl::EndpointSliceLoadBalancer;
-use crate::core::lb::optional_lb::{get_global_policy_store, LbPolicy};
+use crate::core::lb::lb_policy::{get_global_policy_store, LbPolicy};
 use crate::types::ResourceMeta;
 
 /// Handler for EndpointSlice configuration updates

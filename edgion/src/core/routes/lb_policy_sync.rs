@@ -4,7 +4,7 @@
 //! and synchronizing them with the global policy store.
 
 use std::collections::{HashMap, HashSet};
-use crate::core::lb::optional_lb::{get_global_policy_store, LbPolicy};
+use crate::core::lb::lb_policy::{get_global_policy_store, LbPolicy};
 use crate::types::{HTTPRoute, HTTPRouteFilterType};
 
 /// Extract load balancing policies from HTTPRoute and update the global policy store
