@@ -94,6 +94,11 @@ impl RadixRouteMatchEngine {
                             "Checking: original='{}', radix_key='{}', is_prefix={}, route_idx={}",
                             radix_path.original, radix_path.radix_key, radix_path.is_prefix_match, radix_path.route_idx
                         );
+                        // Skip paths with variables - they should be handled by prefix_match
+                        if !radix_path.match_segments.is_empty() {
+                            tracing::trace!("Skipping path with variables for exact match");
+                            continue;
+                        }
                         if !radix_path.matches(&path) {
                             tracing::trace!("Pattern match failed");
                             continue;

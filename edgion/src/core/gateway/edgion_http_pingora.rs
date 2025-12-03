@@ -96,7 +96,7 @@ impl ProxyHttp for EdgionHttp {
                         end_response_500(session).await?;
                     }
                     _ => {
-                        ctx.add_error(EdgionStatus::RouteNotFound);
+                        ctx.add_error(EdgionStatus::Unknown);
                         end_response_500(session).await?;
                     }
                 }

@@ -2,6 +2,9 @@
 /// Each error code has a fixed numeric code (0Xxx format) and a message string
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgionStatus {
+
+    Unknown = 999,
+
     /// Missing Host header (HTTP 400)
     HostMissing = 400_01,
 
