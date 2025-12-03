@@ -5,9 +5,12 @@
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 use bytes::Bytes;
+use crate::types::EdgionHttpContext;
 
 /// Send 400 Bad Request error response (nginx-style)
-pub async fn end_response_400(session: &mut Session) -> pingora_core::Result<()> {
+pub async fn end_response_400(session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
+    ctx.request_info.status = 400;
+    
     let mut resp = ResponseHeader::build(400, None)?;
     resp.insert_header("Content-Type", "text/html").unwrap();
     
@@ -28,7 +31,9 @@ pub async fn end_response_400(session: &mut Session) -> pingora_core::Result<()>
 }
 
 /// Send 404 Not Found error response (nginx-style)
-pub async fn end_response_404(session: &mut Session) -> pingora_core::Result<()> {
+pub async fn end_response_404(session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
+    ctx.request_info.status = 404;
+    
     let mut resp = ResponseHeader::build(404, None)?;
     resp.insert_header("Content-Type", "text/html").unwrap();
     
@@ -48,15 +53,17 @@ pub async fn end_response_404(session: &mut Session) -> pingora_core::Result<()>
     Ok(())
 }
 
-/// Send 503 Service Temporarily Unavailable error response (nginx-style)
-pub async fn end_response_503(session: &mut Session) -> pingora_core::Result<()> {
-    let mut resp = ResponseHeader::build(503, None)?;
+/// Send 500 Internal Server Error error response (nginx-style)
+pub async fn end_response_500(session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
+    ctx.request_info.status = 500;
+    
+    let mut resp = ResponseHeader::build(500, None)?;
     resp.insert_header("Content-Type", "text/html").unwrap();
     
     let body = r#"<html>
-<head><title>503 Service Temporarily Unavailable</title></head>
+<head><title>500 Internal Server Error</title></head>
 <body>
-<center><h1>503 Service Temporarily Unavailable</h1></center>
+<center><h1>500 Internal Server Error</h1></center>
 <hr><center>edgion</center>
 </body>
 </html>"#;
@@ -69,15 +76,17 @@ pub async fn end_response_503(session: &mut Session) -> pingora_core::Result<()>
     Ok(())
 }
 
-/// Send 500 Internal Server Error error response (nginx-style)
-pub async fn end_response_500(session: &mut Session) -> pingora_core::Result<()> {
-    let mut resp = ResponseHeader::build(500, None)?;
+/// Send 503 Service Temporarily Unavailable error response (nginx-style)
+pub async fn end_response_503(session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
+    ctx.request_info.status = 503;
+    
+    let mut resp = ResponseHeader::build(503, None)?;
     resp.insert_header("Content-Type", "text/html").unwrap();
     
     let body = r#"<html>
-<head><title>500 Internal Server Error</title></head>
+<head><title>503 Service Temporarily Unavailable</title></head>
 <body>
-<center><h1>500 Internal Server Error</h1></center>
+<center><h1>503 Service Temporarily Unavailable</h1></center>
 <hr><center>edgion</center>
 </body>
 </html>"#;

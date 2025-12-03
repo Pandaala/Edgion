@@ -29,7 +29,7 @@ impl ProxyHttp for EdgionHttp {
             Some(backend) => backend,
             None => {
                 ctx.add_error(EdgionStatus::UpstreamNotRouteMatched);
-                end_response_500(session).await?;
+                end_response_500(session, ctx).await?;
                 return Err(PingoraError::new(ErrorType::InternalError));
             }
         };
@@ -43,7 +43,7 @@ impl ProxyHttp for EdgionHttp {
             }
             Err(err_status) => {
                 ctx.add_error(err_status);
-                end_response_500(session).await?;
+                end_response_500(session, ctx).await?;
                 Err(PingoraError::new(ErrorType::InternalError))
             }
         }
@@ -67,7 +67,7 @@ impl ProxyHttp for EdgionHttp {
             }
             None => {
                 ctx.add_error(EdgionStatus::HostMissing);
-                end_response_400(session).await?;
+                end_response_400(session, ctx).await?;
                 return Ok(true);
             }
         }
@@ -85,19 +85,19 @@ impl ProxyHttp for EdgionHttp {
                 match e {
                     EdError::RouteNotFound() => {
                         ctx.add_error(EdgionStatus::RouteNotFound);
-                        end_response_404(session).await?;
+                        end_response_404(session, ctx).await?;
                     }
                     EdError::BackendNotFound() => {
                         ctx.add_error(EdgionStatus::UpstreamNotBackendRefs);
-                        end_response_500(session).await?;
+                        end_response_500(session, ctx).await?;
                     }
                     EdError::InconsistentWeight() => {
                         ctx.add_error(EdgionStatus::UpstreamInconsistentWeight);
-                        end_response_500(session).await?;
+                        end_response_500(session, ctx).await?;
                     }
                     _ => {
                         ctx.add_error(EdgionStatus::Unknown);
-                        end_response_500(session).await?;
+                        end_response_500(session, ctx).await?;
                     }
                 }
                 ctx.matched_info = None;

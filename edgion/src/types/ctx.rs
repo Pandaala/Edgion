@@ -23,6 +23,8 @@ pub struct RequestInfo {
     pub hostname: String,
     /// Request path from URI
     pub path: String,
+    /// Response status code (e.g., 200, 400, 404, 500)
+    pub status: u16,
 }
 
 pub struct EdgionHttpContext {
