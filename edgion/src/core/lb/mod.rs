@@ -4,7 +4,7 @@
 
 pub mod leastconn;
 pub mod lb_policy;
-pub mod simple_lb;
+pub mod backend_selector;
 
-pub use simple_lb::{BackendSelector, WeightedRoundRobin, ERR_NO_BACKEND_REFS, ERR_INCONSISTENT_WEIGHT};
+pub use backend_selector::{BackendSelector, WeightedRoundRobin, ERR_NO_BACKEND_REFS, ERR_INCONSISTENT_WEIGHT};
 
