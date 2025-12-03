@@ -6,7 +6,7 @@ use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::{ProxyHttp, Session};
 use crate::core::gateway::edgion_http::EdgionHttp;
-use crate::core::gateway::edgion_http_context::EdgionHttpContext;
+use crate::types::EdgionHttpContext;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
 use crate::core::backends::get_peer;
 use crate::types::EdgionStatus;
@@ -64,7 +64,7 @@ impl ProxyHttp for EdgionHttp {
         match req_header.headers.get("host").and_then(|h| h.to_str().ok())
         {
             Some(host) => {
-                ctx.hostname = host.to_string();
+                ctx.request_info.hostname = host.to_string();
             }
             None => {
                 ctx.add_error(EdgionStatus::HostMissing);
@@ -72,9 +72,10 @@ impl ProxyHttp for EdgionHttp {
                 return Ok(true);
             }
         }
+        ctx.request_info.path = req_header.uri.path().to_string();
 
         // Match route and select backend
-        match self.domain_routes.match_route(&ctx.hostname, session) {
+        match self.domain_routes.match_route(&ctx.request_info.hostname, session) {
             Ok((match_info, selected_backend)) => {
                 tracing::info!("selected_backend: {:?}", selected_backend);
                 ctx.matched_info = Some(match_info);
