@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use pingora_load_balancing::selection::RoundRobin;
 use crate::core::conf_sync::traits::ConfHandler;
-use super::{get_roundrobin_store, get_consistent_store, get_random_store, EpSliceStore};
+use super::{get_roundrobin_store, get_consistent_store, get_random_store};
 use super::discovery_impl::EndpointSliceLoadBalancer;
 use crate::core::lb::lb_policy::{get_global_policy_store, LbPolicy};
 use crate::types::ResourceMeta;
@@ -18,9 +17,8 @@ impl EpSliceHandler {
     }
     
     /// Full set for RoundRobin store (all EndpointSlices get RoundRobin LB)
-    fn full_set_roundrobin(&self, data: &HashMap<String, EndpointSlice>) -> HashMap<String, Arc<EndpointSliceLoadBalancer<RoundRobin>>> {
+    fn full_set_roundrobin(&self, data: &HashMap<String, EndpointSlice>) {
         let roundrobin_store = get_roundrobin_store();
-        
         let roundrobin_map: HashMap<String, Arc<EndpointSliceLoadBalancer<_>>> = data
             .iter()
             .map(|(key, ep_slice)| {
@@ -28,17 +26,11 @@ impl EpSliceHandler {
                 (key.clone(), lb)
             })
             .collect();
-        
-        roundrobin_store.replace_all(roundrobin_map.clone());
-        roundrobin_map
+        roundrobin_store.replace_all(roundrobin_map);
     }
     
     /// Full set for Consistent store (only for services with Consistent policy)
-    fn full_set_consistent(
-        &self,
-        data: &HashMap<String, EndpointSlice>,
-        roundrobin_map: &HashMap<String, Arc<EndpointSliceLoadBalancer<RoundRobin>>>,
-    ) -> usize {
+    fn full_set_consistent(&self, data: &HashMap<String, EndpointSlice>) -> usize {
         let consistent_store = get_consistent_store();
         let policy_store = get_global_policy_store();
         let mut consistent_map = HashMap::new();
@@ -47,13 +39,8 @@ impl EpSliceHandler {
             let service_key = ep_slice.key_name();
             let policies = policy_store.get(&service_key);
             
-            if !policies.contains(&LbPolicy::Consistent) {
-                continue;
-            }
-            
-            if let Some(rr_lb) = roundrobin_map.get(key) {
-                let discovery = rr_lb.discovery().clone();
-                let lb = EndpointSliceLoadBalancer::new_from_discovery(discovery);
+            if policies.contains(&LbPolicy::Consistent) {
+                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
                 consistent_map.insert(key.clone(), lb);
                 tracing::debug!(key = %key, "Created Consistent LB");
             }
@@ -65,11 +52,7 @@ impl EpSliceHandler {
     }
     
     /// Full set for Random store (for services with LeastConnection policy)
-    fn full_set_random(
-        &self,
-        data: &HashMap<String, EndpointSlice>,
-        roundrobin_map: &HashMap<String, Arc<EndpointSliceLoadBalancer<RoundRobin>>>,
-    ) -> usize {
+    fn full_set_random(&self, data: &HashMap<String, EndpointSlice>) -> usize {
         let random_store = get_random_store();
         let policy_store = get_global_policy_store();
         let mut random_map = HashMap::new();
@@ -78,14 +61,8 @@ impl EpSliceHandler {
             let service_key = ep_slice.key_name();
             let policies = policy_store.get(&service_key);
             
-            let needs_random = policies.contains(&LbPolicy::LeastConnection);
-            if !needs_random {
-                continue;
-            }
-            
-            if let Some(rr_lb) = roundrobin_map.get(key) {
-                let discovery = rr_lb.discovery().clone();
-                let lb = EndpointSliceLoadBalancer::new_from_discovery(discovery);
+            if policies.contains(&LbPolicy::LeastConnection) {
+                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
                 random_map.insert(key.clone(), lb);
                 tracing::debug!(key = %key, "Created Random LB");
             }
@@ -132,7 +109,6 @@ impl EpSliceHandler {
         add: &HashMap<String, EndpointSlice>,
         update: &HashMap<String, EndpointSlice>,
         remove: &HashSet<String>,
-        roundrobin_store: &Arc<EpSliceStore<RoundRobin>>,
     ) {
         let consistent_store = get_consistent_store();
         let policy_store = get_global_policy_store();
@@ -152,20 +128,14 @@ impl EpSliceHandler {
             
             if policies.contains(&LbPolicy::Consistent) {
                 if !consistent_store.contains(key) {
-                    // Need to add
-                    if let Some(rr_lb) = roundrobin_store.get(key) {
-                        let discovery = rr_lb.discovery().clone();
-                        let lb = EndpointSliceLoadBalancer::new_from_discovery(discovery);
-                        consistent_add.insert(key.clone(), lb);
-                    }
+                    let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
+                    consistent_add.insert(key.clone(), lb);
                 } else if update.contains_key(key) {
-                    // Update existing
                     if let Err(e) = consistent_store.update_in_place_and_refresh_lb(key, ep_slice.clone()) {
                         tracing::error!(key = %key, error = %e, "Failed to update Consistent LB");
                     }
                 }
             } else {
-                // Policy removed
                 consistent_remove.insert(key.clone());
             }
         }
@@ -181,7 +151,6 @@ impl EpSliceHandler {
         add: &HashMap<String, EndpointSlice>,
         update: &HashMap<String, EndpointSlice>,
         remove: &HashSet<String>,
-        roundrobin_store: &Arc<EpSliceStore<RoundRobin>>,
     ) {
         let random_store = get_random_store();
         let policy_store = get_global_policy_store();
@@ -199,24 +168,16 @@ impl EpSliceHandler {
             let service_key = ep_slice.key_name();
             let policies = policy_store.get(&service_key);
             
-            let needs_random = policies.contains(&LbPolicy::LeastConnection);
-            
-            if needs_random {
+            if policies.contains(&LbPolicy::LeastConnection) {
                 if !random_store.contains(key) {
-                    // Need to add
-                    if let Some(rr_lb) = roundrobin_store.get(key) {
-                        let discovery = rr_lb.discovery().clone();
-                        let lb = EndpointSliceLoadBalancer::new_from_discovery(discovery);
-                        random_add.insert(key.clone(), lb);
-                    }
+                    let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
+                    random_add.insert(key.clone(), lb);
                 } else if update.contains_key(key) {
-                    // Update existing
                     if let Err(e) = random_store.update_in_place_and_refresh_lb(key, ep_slice.clone()) {
                         tracing::error!(key = %key, error = %e, "Failed to update Random LB");
                     }
                 }
             } else {
-                // Policy removed
                 random_remove.insert(key.clone());
             }
         }
@@ -237,13 +198,13 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         tracing::info!(component = "ep_slice_handler", cnt = data.len(), "full set");
         
         // 1. RoundRobin for all
-        let roundrobin_map = self.full_set_roundrobin(data);
+        self.full_set_roundrobin(data);
         
         // 2. Consistent for services with Consistent policy
-        let consistent_count = self.full_set_consistent(data, &roundrobin_map);
+        let consistent_count = self.full_set_consistent(data);
         
         // 3. Random for services with LeastConnection policy
-        let random_count = self.full_set_random(data, &roundrobin_map);
+        let random_count = self.full_set_random(data);
         
         tracing::info!(
             component = "ep_slice_handler",
@@ -259,16 +220,14 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         let update_count = update.len();
         let remove_count = remove.len();
         
-        let roundrobin_store = get_roundrobin_store();
-        
         // 1. RoundRobin store
         self.partial_update_roundrobin(&add, &update, &remove);
         
         // 2. Consistent store
-        self.partial_update_consistent(&add, &update, &remove, &roundrobin_store);
+        self.partial_update_consistent(&add, &update, &remove);
         
         // 3. Random store
-        self.partial_update_random(&add, &update, &remove, &roundrobin_store);
+        self.partial_update_random(&add, &update, &remove);
         
         tracing::info!(
             component = "ep_slice_handler",

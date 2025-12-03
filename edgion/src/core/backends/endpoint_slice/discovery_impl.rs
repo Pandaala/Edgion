@@ -220,33 +220,6 @@ where
         })
     }
     
-    /// Create from existing discovery (for creating additional LB types)
-    pub fn new_from_discovery(discovery: EndpointSliceDiscovery) -> Arc<Self> {
-        let backends = Backends::new(Box::new(discovery.clone()));
-        let lb = LoadBalancer::from_backends(backends);
-        
-        // Initialize backends
-        match lb.update().now_or_never() {
-            Some(Ok(_)) => tracing::debug!("LoadBalancer initialized"),
-            Some(Err(e)) => {
-                let err_msg = format!("{:?}", e);
-                if err_msg.contains("empty") || err_msg.contains("no backend") {
-                    tracing::debug!("LoadBalancer initialized with no backends");
-                } else {
-                    tracing::error!(error = ?e, "Error initializing LoadBalancer");
-                }
-            }
-            None => tracing::error!("LoadBalancer update blocked"),
-        }
-        
-        Arc::new(Self { discovery, lb })
-    }
-    
-    /// Get a reference to the discovery
-    pub fn discovery(&self) -> &EndpointSliceDiscovery {
-        &self.discovery
-    }
-    
     /// Update the EndpointSlice data in-place
     pub fn update(&self, new_endpoint_slice: EndpointSlice) -> Result<(), String> {
         self.discovery.update(new_endpoint_slice)
