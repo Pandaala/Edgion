@@ -1,45 +1,38 @@
-//! Smooth Weighted Round Robin selector
+//! Lock-free Smooth Weighted Round Robin selector
 //!
-//! A thread-safe smooth weighted round-robin algorithm for lb selection.
-//! This algorithm distributes requests more evenly compared to simple weighted round-robin.
+//! A thread-safe, lock-free smooth weighted round-robin algorithm for backend selection.
+//! Uses pre-computed smooth sequence + atomic counter for O(1) selection.
 
-use parking_lot::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Smooth Weighted Round Robin selector
+/// Lock-free Smooth Weighted Round Robin selector
 ///
-/// Uses Nginx's smooth weighted round-robin algorithm to distribute requests
-/// evenly based on weights. Unlike simple weighted round-robin, this algorithm
-/// avoids "burst" behavior where a high-weight lb receives many consecutive requests.
+/// Pre-computes a smooth sequence at construction time, then uses atomic counter
+/// for lock-free selection. Requests are evenly distributed across backends
+/// according to their weights.
 ///
 /// # Type Parameters
 /// * `T` - The type of items to select from
 ///
-/// # Algorithm
-/// For each selection:
-/// 1. Add `effective_weight` to `current_weight` for all items
-/// 2. Select the item with the highest `current_weight`
-/// 3. Subtract `total_weight` from the selected item's `current_weight`
-///
 /// # Example
 /// ```ignore
 /// let backends = vec!["server1", "server2", "server3"];
-/// let weights = vec![5, 1, 1]; // server1 has weight 5, server2 has weight 1, etc.
+/// let weights = vec![3, 1, 2]; // server1 has weight 3, etc.
 /// let selector = WeightedRoundRobin::new(backends, weights);
 ///
-/// // Selection sequence will be evenly distributed:
-/// // server1, server1, server2, server1, server3, server1, server1, ...
-/// // Instead of: server1, server1, server1, server1, server1, server2, server3
+/// // Selection sequence will be smoothly distributed:
+/// // server1, server3, server1, server2, server3, server1, ...
+/// // Instead of: server1, server1, server1, server2, server3, server3
 /// let selected = selector.select();
 /// ```
 pub struct WeightedRoundRobin<T> {
     /// Items to select from
-    items: Vec<T>,
-    /// Effective weights (configured weights)
-    effective_weights: Vec<i64>,
-    /// Total weight (sum of all weights)
-    total_weight: i64,
-    /// Current weights (mutable state, protected by mutex)
-    current_weights: Mutex<Vec<i64>>,
+    items: Box<[T]>,
+    /// Pre-computed smooth sequence (indices into items)
+    /// Uses u16 to save memory, supports up to 65535 items
+    sequence: Box<[u16]>,
+    /// Atomic counter for lock-free round-robin
+    counter: AtomicUsize,
 }
 
 impl<T> WeightedRoundRobin<T> {
@@ -54,20 +47,62 @@ impl<T> WeightedRoundRobin<T> {
     pub fn new(items: Vec<T>, weights: Vec<usize>) -> Self {
         assert!(!items.is_empty(), "items must not be empty");
         assert_eq!(items.len(), weights.len(), "items and weights must have same length");
+        assert!(
+            items.len() <= u16::MAX as usize,
+            "supports up to 65535 items"
+        );
 
-        let effective_weights: Vec<i64> = weights.iter().map(|&w| w as i64).collect();
-        let total_weight: i64 = effective_weights.iter().sum();
-
+        let total_weight: usize = weights.iter().sum();
         assert!(total_weight > 0, "total weight must be greater than 0");
 
-        let current_weights = vec![0i64; items.len()];
+        // Pre-compute smooth sequence using Smooth WRR algorithm
+        let sequence = Self::generate_smooth_sequence(&weights);
 
         Self {
-            items,
-            effective_weights,
-            total_weight,
-            current_weights: Mutex::new(current_weights),
+            items: items.into_boxed_slice(),
+            sequence: sequence.into_boxed_slice(),
+            counter: AtomicUsize::new(0),
         }
+    }
+
+    /// Generate smooth sequence using Smooth Weighted Round Robin algorithm.
+    ///
+    /// For weights [3, 1, 2], generates sequence like [0, 2, 0, 1, 2, 0]
+    /// instead of simple [0, 0, 0, 1, 2, 2].
+    fn generate_smooth_sequence(weights: &[usize]) -> Vec<u16> {
+        let total: usize = weights.iter().sum();
+        let total_weight = total as i64;
+
+        // Current weights for smooth selection
+        let mut current_weights: Vec<i64> = vec![0; weights.len()];
+        let effective_weights: Vec<i64> = weights.iter().map(|&w| w as i64).collect();
+
+        let mut sequence = Vec::with_capacity(total);
+
+        for _ in 0..total {
+            // Step 1: Add effective_weight to current_weight for all items
+            for (i, cw) in current_weights.iter_mut().enumerate() {
+                *cw += effective_weights[i];
+            }
+
+            // Step 2: Find the item with the highest current_weight
+            // When equal, prefer the first one (lower index)
+            let mut max_idx = 0;
+            let mut max_weight = current_weights[0];
+            for (i, &cw) in current_weights.iter().enumerate().skip(1) {
+                if cw > max_weight {
+                    max_weight = cw;
+                    max_idx = i;
+                }
+            }
+
+            sequence.push(max_idx as u16);
+
+            // Step 3: Subtract total_weight from the selected item's current_weight
+            current_weights[max_idx] -= total_weight;
+        }
+
+        sequence
     }
 
     /// Create a new WeightedRoundRobin selector with default weight of 1 for all items.
@@ -81,40 +116,28 @@ impl<T> WeightedRoundRobin<T> {
     }
 
     /// Select the next item based on smooth weighted round-robin.
+    /// This is a lock-free O(1) operation.
     ///
     /// # Returns
     /// A reference to the selected item.
+    #[inline]
     pub fn select(&self) -> &T {
-        let index = self.select_index();
-        &self.items[index]
+        let idx = self.counter.fetch_add(1, Ordering::Relaxed);
+        let seq_idx = idx % self.sequence.len();
+        let item_idx = self.sequence[seq_idx] as usize;
+        &self.items[item_idx]
     }
 
     /// Select the next item index based on smooth weighted round-robin.
+    /// This is a lock-free O(1) operation.
     ///
     /// # Returns
     /// The index of the selected item (0-based).
+    #[inline]
     pub fn select_index(&self) -> usize {
-        let mut current_weights = self.current_weights.lock();
-
-        // Step 1: Add effective_weight to current_weight for all items
-        for (i, cw) in current_weights.iter_mut().enumerate() {
-            *cw += self.effective_weights[i];
-        }
-
-        // Step 2: Find the item with the highest current_weight
-        let mut max_index = 0;
-        let mut max_weight = current_weights[0];
-        for (i, &cw) in current_weights.iter().enumerate().skip(1) {
-            if cw > max_weight {
-                max_weight = cw;
-                max_index = i;
-            }
-        }
-
-        // Step 3: Subtract total_weight from the selected item's current_weight
-        current_weights[max_index] -= self.total_weight;
-
-        max_index
+        let idx = self.counter.fetch_add(1, Ordering::Relaxed);
+        let seq_idx = idx % self.sequence.len();
+        self.sequence[seq_idx] as usize
     }
 
     /// Get the number of items.
@@ -130,6 +153,11 @@ impl<T> WeightedRoundRobin<T> {
     /// Get all items.
     pub fn items(&self) -> &[T] {
         &self.items
+    }
+
+    /// Get the pre-computed sequence length (equals total weight).
+    pub fn sequence_len(&self) -> usize {
+        self.sequence.len()
     }
 }
 
@@ -176,7 +204,6 @@ mod tests {
         assert_eq!(count_c, 1, "C should be selected 1 time");
 
         // Verify smooth distribution: A should NOT be the first 5 consecutive selections
-        // In smooth WRR, B and C should appear before all 5 A's are used
         let first_five = &sequence[0..5];
         let non_a_in_first_five = first_five.iter().filter(|&&x| x != "A").count();
         assert!(non_a_in_first_five > 0, "Smooth WRR should not have 5 consecutive A's");
@@ -229,6 +256,30 @@ mod tests {
     }
 
     #[test]
+    fn test_sequence_is_smooth() {
+        // Test that sequence for [3, 1, 2] is smooth (interleaved)
+        let items = vec!["A", "B", "C"];
+        let weights = vec![3, 1, 2];
+        let selector = WeightedRoundRobin::new(items, weights);
+
+        // Collect one full cycle
+        let mut sequence = Vec::new();
+        for _ in 0..6 {
+            sequence.push(*selector.select());
+        }
+
+        // Check no more than 2 consecutive same items
+        for i in 0..sequence.len() - 2 {
+            let same_count = if sequence[i] == sequence[i + 1] && sequence[i + 1] == sequence[i + 2] {
+                3
+            } else {
+                0
+            };
+            assert!(same_count < 3, "Should not have 3 consecutive same items: {:?}", sequence);
+        }
+    }
+
+    #[test]
     #[should_panic(expected = "items must not be empty")]
     fn test_empty_items() {
         WeightedRoundRobin::<i32>::new(vec![], vec![]);
@@ -273,5 +324,15 @@ mod tests {
         }
 
         // If we got here without panicking, the implementation is thread-safe
+    }
+
+    #[test]
+    fn test_sequence_len() {
+        let items = vec!["a", "b", "c"];
+        let weights = vec![3, 1, 2];
+        let selector = WeightedRoundRobin::new(items, weights);
+
+        // Sequence length should equal total weight
+        assert_eq!(selector.sequence_len(), 6);
     }
 }
