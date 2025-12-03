@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use crate::core::conf_sync::traits::ConfHandler;
-use super::{get_roundrobin_store, get_consistent_store, get_random_store};
+use super::{get_roundrobin_store, get_consistent_store, get_leastconn_store};
 use super::discovery_impl::EndpointSliceLoadBalancer;
 use crate::core::lb::lb_policy::{get_global_policy_store, LbPolicy};
 use crate::types::ResourceMeta;
@@ -51,11 +51,11 @@ impl EpSliceHandler {
         count
     }
     
-    /// Full set for Random store (for services with LeastConnection policy)
-    fn full_set_random(&self, data: &HashMap<String, EndpointSlice>) -> usize {
-        let random_store = get_random_store();
+    /// Full set for LeastConnection store (for services with LeastConnection policy)
+    fn full_set_leastconn(&self, data: &HashMap<String, EndpointSlice>) -> usize {
+        let leastconn_store = get_leastconn_store();
         let policy_store = get_global_policy_store();
-        let mut random_map = HashMap::new();
+        let mut leastconn_map = HashMap::new();
         
         for (key, ep_slice) in data {
             let service_key = ep_slice.key_name();
@@ -63,13 +63,13 @@ impl EpSliceHandler {
             
             if policies.contains(&LbPolicy::LeastConnection) {
                 let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                random_map.insert(key.clone(), lb);
-                tracing::debug!(key = %key, "Created Random LB");
+                leastconn_map.insert(key.clone(), lb);
+                tracing::debug!(key = %key, "Created LeastConnection LB");
             }
         }
         
-        let count = random_map.len();
-        random_store.replace_all(random_map);
+        let count = leastconn_map.len();
+        leastconn_store.replace_all(leastconn_map);
         count
     }
     
@@ -145,22 +145,22 @@ impl EpSliceHandler {
         }
     }
     
-    /// Partial update for Random store
-    fn partial_update_random(
+    /// Partial update for LeastConnection store
+    fn partial_update_leastconn(
         &self,
         add: &HashMap<String, EndpointSlice>,
         update: &HashMap<String, EndpointSlice>,
         remove: &HashSet<String>,
     ) {
-        let random_store = get_random_store();
+        let leastconn_store = get_leastconn_store();
         let policy_store = get_global_policy_store();
         
-        let mut random_add = HashMap::new();
-        let mut random_remove = HashSet::new();
+        let mut leastconn_add = HashMap::new();
+        let mut leastconn_remove = HashSet::new();
         
         // Handle removes
         for key in remove {
-            random_remove.insert(key.clone());
+            leastconn_remove.insert(key.clone());
         }
         
         // Handle adds and updates
@@ -169,21 +169,21 @@ impl EpSliceHandler {
             let policies = policy_store.get(&service_key);
             
             if policies.contains(&LbPolicy::LeastConnection) {
-                if !random_store.contains(key) {
+                if !leastconn_store.contains(key) {
                     let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                    random_add.insert(key.clone(), lb);
+                    leastconn_add.insert(key.clone(), lb);
                 } else if update.contains_key(key) {
-                    if let Err(e) = random_store.update_in_place_and_refresh_lb(key, ep_slice.clone()) {
-                        tracing::error!(key = %key, error = %e, "Failed to update Random LB");
+                    if let Err(e) = leastconn_store.update_in_place_and_refresh_lb(key, ep_slice.clone()) {
+                        tracing::error!(key = %key, error = %e, "Failed to update LeastConnection LB");
                     }
                 }
             } else {
-                random_remove.insert(key.clone());
+                leastconn_remove.insert(key.clone());
             }
         }
         
-        if !random_add.is_empty() || !random_remove.is_empty() {
-            random_store.update(random_add, &random_remove);
+        if !leastconn_add.is_empty() || !leastconn_remove.is_empty() {
+            leastconn_store.update(leastconn_add, &leastconn_remove);
         }
     }
 }
@@ -203,14 +203,14 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         // 2. Consistent for services with Consistent policy
         let consistent_count = self.full_set_consistent(data);
         
-        // 3. Random for services with LeastConnection policy
-        let random_count = self.full_set_random(data);
+        // 3. LeastConnection for services with LeastConnection policy
+        let leastconn_count = self.full_set_leastconn(data);
         
         tracing::info!(
             component = "ep_slice_handler",
             total = data.len(),
             consistent = consistent_count,
-            random = random_count,
+            leastconn = leastconn_count,
             "Full set completed"
         );
     }
@@ -226,8 +226,8 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         // 2. Consistent store
         self.partial_update_consistent(&add, &update, &remove);
         
-        // 3. Random store
-        self.partial_update_random(&add, &update, &remove);
+        // 3. LeastConnection store
+        self.partial_update_leastconn(&add, &update, &remove);
         
         tracing::info!(
             component = "ep_slice_handler",

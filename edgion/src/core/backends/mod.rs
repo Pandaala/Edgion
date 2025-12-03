@@ -2,7 +2,7 @@ pub mod services;
 pub mod endpoint_slice;
 
 pub use services::{ServiceStore, get_global_service_store, create_service_handler};
-pub use endpoint_slice::{EpSliceStore, get_roundrobin_store, get_consistent_store, get_random_store, create_ep_slice_handler};
+pub use endpoint_slice::{EpSliceStore, get_roundrobin_store, get_consistent_store, get_leastconn_store, create_ep_slice_handler};
 
 use pingora_core::protocols::l4::socket::SocketAddr;
 use crate::types::edgion_status::EdgionStatus;
