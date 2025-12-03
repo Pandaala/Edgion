@@ -2,27 +2,50 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
+use pingora_load_balancing::selection::{BackendSelection, Consistent, Random, RoundRobin};
 use super::discovery_impl::EndpointSliceLoadBalancer;
-use crate::types::ResourceMeta;
 
-static GLOBAL_EP_SLICE_STORE: Lazy<Arc<EpSliceStore>> =
+/// Store for RoundRobin LoadBalancers (primary, always present)
+static ROUNDROBIN_STORE: Lazy<Arc<EpSliceStore<RoundRobin>>> =
     Lazy::new(|| Arc::new(EpSliceStore::new()));
 
-pub fn get_global_ep_slice_store() -> Arc<EpSliceStore> {
-    GLOBAL_EP_SLICE_STORE.clone()
+/// Store for Consistent LoadBalancers (optional)
+static CONSISTENT_STORE: Lazy<Arc<EpSliceStore<Consistent>>> =
+    Lazy::new(|| Arc::new(EpSliceStore::new()));
+
+/// Store for Random LoadBalancers (optional, used for FnvHash and LeastConnection)
+static RANDOM_STORE: Lazy<Arc<EpSliceStore<Random>>> =
+    Lazy::new(|| Arc::new(EpSliceStore::new()));
+
+pub fn get_roundrobin_store() -> Arc<EpSliceStore<RoundRobin>> {
+    ROUNDROBIN_STORE.clone()
 }
 
-/// Type alias for the endpoint slice load balancer map
-type EpSliceMap = HashMap<String, Arc<EndpointSliceLoadBalancer>>;
-
-pub struct EpSliceStore {
-    ep_slices: ArcSwap<Arc<EpSliceMap>>,
+pub fn get_consistent_store() -> Arc<EpSliceStore<Consistent>> {
+    CONSISTENT_STORE.clone()
 }
 
-impl EpSliceStore {
+pub fn get_random_store() -> Arc<EpSliceStore<Random>> {
+    RANDOM_STORE.clone()
+}
+
+/// Generic store for endpoint slice load balancers
+pub struct EpSliceStore<S>
+where
+    S: BackendSelection + 'static,
+    S::Iter: pingora_load_balancing::selection::BackendIter,
+{
+    ep_slices: ArcSwap<HashMap<String, Arc<EndpointSliceLoadBalancer<S>>>>,
+}
+
+impl<S> EpSliceStore<S>
+where
+    S: BackendSelection + 'static,
+    S::Iter: pingora_load_balancing::selection::BackendIter,
+{
     pub fn new() -> Self {
         Self {
-            ep_slices: ArcSwap::from_pointee(Arc::new(HashMap::new())),
+            ep_slices: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -33,14 +56,14 @@ impl EpSliceStore {
     }
 
     /// Get an endpoint slice load balancer by key
-    pub fn get(&self, key: &str) -> Option<Arc<EndpointSliceLoadBalancer>> {
+    pub fn get(&self, key: &str) -> Option<Arc<EndpointSliceLoadBalancer<S>>> {
         let map = self.ep_slices.load();
         map.get(key).cloned()
     }
 
     /// Get endpoint slice load balancer by service key (namespace/service-name)
     /// This searches for endpoint slices that belong to the given service
-    pub fn get_by_service(&self, service_key: &str) -> Option<Arc<EndpointSliceLoadBalancer>> {
+    pub fn get_by_service(&self, service_key: &str) -> Option<Arc<EndpointSliceLoadBalancer<S>>> {
         let map = self.ep_slices.load();
         // EndpointSlice key format: "namespace/ep-slice-name"
         // Service key format: "namespace/service-name"
@@ -65,57 +88,41 @@ impl EpSliceStore {
     /// Execute a function with the endpoint slice load balancer reference
     pub fn with_ep_slice<F, R>(&self, key: &str, f: F) -> Option<R>
     where
-        F: FnOnce(&Arc<EndpointSliceLoadBalancer>) -> R,
+        F: FnOnce(&Arc<EndpointSliceLoadBalancer<S>>) -> R,
     {
         let map = self.ep_slices.load();
         map.get(key).map(f)
     }
 
     /// Replace all endpoint slices atomically
-    pub fn replace_all(&self, ep_slices: HashMap<String, Arc<EndpointSliceLoadBalancer>>) {
-        self.ep_slices.store(Arc::new(Arc::new(ep_slices)));
+    pub fn replace_all(&self, ep_slices: HashMap<String, Arc<EndpointSliceLoadBalancer<S>>>) {
+        self.ep_slices.store(Arc::new(ep_slices));
     }
 
     /// Update endpoint slices atomically (clone map + modify + swap)
-    pub fn update(&self, add_or_update: HashMap<String, Arc<EndpointSliceLoadBalancer>>, remove: &HashSet<String>) {
+    pub fn update(&self, add_or_update: HashMap<String, Arc<EndpointSliceLoadBalancer<S>>>, remove: &HashSet<String>) {
         let current = self.ep_slices.load();
-        let current_map: &EpSliceMap = &**current;
-        let mut new_map: EpSliceMap = current_map.clone();
+        let mut new_map = (**current).clone();
         
         for key in remove {
             new_map.remove(key);
         }
-        for (key, ep_slice_lb) in add_or_update {
-            new_map.insert(key, ep_slice_lb);
+        for (key, lb) in add_or_update {
+            new_map.insert(key, lb);
         }
         
-        self.ep_slices.store(Arc::new(Arc::new(new_map)));
+        self.ep_slices.store(Arc::new(new_map));
     }
-    
-    /// Apply modifications to the map atomically with a single ArcSwap operation
-    /// This is more efficient when you need to do multiple operations at once
-    pub fn apply_modifications<F>(&self, f: F)
+
+    /// Apply modifications to the map and swap atomically
+    pub fn apply_modifications<F>(&self, modify: F)
     where
-        F: FnOnce(&mut HashMap<String, Arc<EndpointSliceLoadBalancer>>),
+        F: FnOnce(&mut HashMap<String, Arc<EndpointSliceLoadBalancer<S>>>),
     {
         let current = self.ep_slices.load();
-        let current_map: &EpSliceMap = &**current;
-        let mut new_map: EpSliceMap = current_map.clone();
-        f(&mut new_map);
-        self.ep_slices.store(Arc::new(Arc::new(new_map)));
-    }
-    
-    /// Update an existing EndpointSlice in-place without rebuilding the map
-    /// Returns Ok(true) if updated, Ok(false) if key not found, Err on update failure
-    pub fn update_in_place(&self, key: &str, new_endpoint_slice: k8s_openapi::api::discovery::v1::EndpointSlice) -> Result<bool, String> {
-        let map = self.ep_slices.load();
-        if let Some(lb) = map.get(key) {
-            lb.update(new_endpoint_slice)?;
-            tracing::debug!(key = %key, "Updated EndpointSlice in-place");
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        let mut new_map = (**current).clone();
+        modify(&mut new_map);
+        self.ep_slices.store(Arc::new(new_map));
     }
     
     /// Update EndpointSlice in-place and refresh LoadBalancer
@@ -124,34 +131,22 @@ impl EpSliceStore {
     /// # Arguments
     /// * `key` - The EndpointSlice key
     /// * `new_endpoint_slice` - The new EndpointSlice data
-    /// * `policies` - Optional policies to check for LB rebuild. Empty slice means no rebuild check.
     /// 
     /// # Returns
-    /// * `Ok(true)` - Rebuild needed (should be added to rebuild list)
-    /// * `Ok(false)` - Updated in-place successfully, no rebuild needed
+    /// * `Ok(())` - Updated successfully
     /// * `Err(msg)` - Update failed or key not found
     pub fn update_in_place_and_refresh_lb(
         &self,
         key: &str,
         new_endpoint_slice: k8s_openapi::api::discovery::v1::EndpointSlice,
-        policies: &[crate::core::lb::optional_lb::LbPolicy],
-    ) -> Result<bool, String> {
+    ) -> Result<(), String> {
         let map = self.ep_slices.load();
         let lb = map.get(key).ok_or_else(|| {
             tracing::debug!(key = %key, "Key not found for in-place update");
             format!("Key not found: {}", key)
         })?;
         
-        // Check if rebuild is needed (only if policies are provided)
-        if !policies.is_empty() {
-            let service_key = new_endpoint_slice.key_name();
-            if lb.needs_rebuild_for_policies(&service_key, policies) {
-                // Need rebuild, return true
-                return Ok(true);
-            }
-        }
-        
-        // No rebuild needed, update in-place
+        // Update in-place
         if let Err(e) = lb.update(new_endpoint_slice) {
             tracing::error!(key = %key, error = %e, "Failed to update EndpointSlice data");
             return Err(e);
@@ -170,7 +165,6 @@ impl EpSliceStore {
                 tracing::error!(key = %key, "LoadBalancer update blocked unexpectedly");
             }
         }
-        Ok(false)
+        Ok(())
     }
 }
-

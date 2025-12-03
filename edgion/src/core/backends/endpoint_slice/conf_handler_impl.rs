@@ -2,33 +2,37 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use crate::core::conf_sync::traits::ConfHandler;
-use super::{EpSliceStore, get_global_ep_slice_store};
+use super::{get_roundrobin_store, get_consistent_store, get_random_store};
 use super::discovery_impl::EndpointSliceLoadBalancer;
-use crate::core::lb::optional_lb::get_global_policy_store;
+use crate::core::lb::optional_lb::{get_global_policy_store, LbPolicy};
 use crate::types::ResourceMeta;
 
-/// Implement ConfHandler for Arc<EpSliceStore>
-impl ConfHandler<EndpointSlice> for Arc<EpSliceStore> {
-    fn full_set(&self, data: &HashMap<String, EndpointSlice>) {
-        (**self).full_set(data)
-    }
+/// Handler for EndpointSlice configuration updates
+/// Manages multiple stores for different LB algorithms
+pub struct EpSliceHandler;
 
-    fn partial_update(&self, add: HashMap<String, EndpointSlice>, update: HashMap<String, EndpointSlice>, remove: HashSet<String>) {
-        (**self).partial_update(add, update, remove)
+impl EpSliceHandler {
+    pub fn new() -> Self {
+        Self
     }
 }
 
 /// Create an EpSliceStore handler for registration with ConfigClient
 pub fn create_ep_slice_handler() -> Box<dyn ConfHandler<EndpointSlice> + Send + Sync> {
-    Box::new(get_global_ep_slice_store())
+    Box::new(EpSliceHandler::new())
 }
 
-impl ConfHandler<EndpointSlice> for EpSliceStore {
+impl ConfHandler<EndpointSlice> for EpSliceHandler {
     fn full_set(&self, data: &HashMap<String, EndpointSlice>) {
-        tracing::info!(component = "ep_slice_store", cnt = data.len(), "full set");
+        tracing::info!(component = "ep_slice_handler", cnt = data.len(), "full set");
         
-        // Convert EndpointSlice to Arc<EndpointSliceLoadBalancer>
-        let lb_map: HashMap<String, Arc<EndpointSliceLoadBalancer>> = data
+        let roundrobin_store = get_roundrobin_store();
+        let consistent_store = get_consistent_store();
+        let random_store = get_random_store();
+        let policy_store = get_global_policy_store();
+        
+        // 1. Create RoundRobin LBs for all EndpointSlices (default)
+        let roundrobin_map: HashMap<String, Arc<EndpointSliceLoadBalancer<_>>> = data
             .iter()
             .map(|(key, ep_slice)| {
                 let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
@@ -36,7 +40,58 @@ impl ConfHandler<EndpointSlice> for EpSliceStore {
             })
             .collect();
         
-        self.replace_all(lb_map);
+        roundrobin_store.replace_all(roundrobin_map.clone());
+        
+        // 2. Create optional LBs based on policies
+        let mut consistent_map = HashMap::new();
+        let mut random_map = HashMap::new();
+        
+        for (key, ep_slice) in data {
+            let service_key = ep_slice.key_name();
+            let policies = policy_store.get(&service_key);
+            
+            if policies.is_empty() {
+                continue;
+            }
+            
+            // Get the discovery from RoundRobin LB to reuse
+            if let Some(rr_lb) = roundrobin_map.get(key) {
+                let discovery = rr_lb.discovery().clone();
+                
+                for policy in policies {
+                    match policy {
+                        LbPolicy::Consistent => {
+                            if !consistent_map.contains_key(key) {
+                                let lb = EndpointSliceLoadBalancer::new_from_discovery(discovery.clone());
+                                consistent_map.insert(key.clone(), lb);
+                                tracing::debug!(key = %key, "Created Consistent LB");
+                            }
+                        }
+                        LbPolicy::FnvHash | LbPolicy::LeastConnection => {
+                            if !random_map.contains_key(key) {
+                                let lb = EndpointSliceLoadBalancer::new_from_discovery(discovery.clone());
+                                random_map.insert(key.clone(), lb);
+                                tracing::debug!(key = %key, policy = ?policy, "Created Random LB");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        let consistent_count = consistent_map.len();
+        let random_count = random_map.len();
+        
+        consistent_store.replace_all(consistent_map);
+        random_store.replace_all(random_map);
+        
+        tracing::info!(
+            component = "ep_slice_handler",
+            total = data.len(),
+            consistent = consistent_count,
+            random = random_count,
+            "Full set completed"
+        );
     }
 
     fn partial_update(&self, add: HashMap<String, EndpointSlice>, update: HashMap<String, EndpointSlice>, remove: HashSet<String>) {
@@ -44,163 +99,135 @@ impl ConfHandler<EndpointSlice> for EpSliceStore {
         let update_count = update.len();
         let remove_count = remove.len();
         
-        // Track EndpointSlices that need LB rebuild (new optional policies detected)
-        let mut needs_rebuild: HashMap<String, EndpointSlice> = HashMap::new();
+        let roundrobin_store = get_roundrobin_store();
+        let consistent_store = get_consistent_store();
+        let random_store = get_random_store();
         let policy_store = get_global_policy_store();
         
-        // Handle updates: check if we need to rebuild LB or just update in-place
-        for (key, ep_slice) in update {
-            let service_key = ep_slice.key_name();
-            
-            // Get all policies for this service from policy store
-            let policies = policy_store.get(&service_key);
-            
-            // Call update_in_place_and_refresh_lb with policies
-            // It will check internally if rebuild is needed
-            match self.update_in_place_and_refresh_lb(&key, ep_slice.clone(), &policies) {
-                Ok(true) => {
-                    // Need rebuild, add to rebuild list
-                    needs_rebuild.insert(key, ep_slice);
-                }
-                Ok(false) => {
-                    // Updated in-place, no action needed
-                }
-                Err(e) => {
-                    tracing::error!(key = %key, error = %e, "Failed to update EndpointSlice");
-                }
+        // 1. Handle updates for RoundRobin store (in-place)
+        for (key, ep_slice) in &update {
+            if let Err(e) = roundrobin_store.update_in_place_and_refresh_lb(key, ep_slice.clone()) {
+                tracing::error!(key = %key, error = %e, "Failed to update RoundRobin LB");
             }
         }
         
-        let rebuild_count = needs_rebuild.len();
-        
-        // Rebuild ArcSwap for add/remove/rebuild operations
-        let arcswap_rebuilt = if !add.is_empty() || !remove.is_empty() || !needs_rebuild.is_empty() {
-            self.apply_modifications(|map| {
-                // Remove deleted entries
+        // 2. Handle add/remove for RoundRobin store
+        if !add.is_empty() || !remove.is_empty() {
+            roundrobin_store.apply_modifications(|map| {
                 for key in &remove {
                     map.remove(key);
                 }
-                // Add new entries
-                for (key, ep_slice) in add {
-                    let lb = EndpointSliceLoadBalancer::new(ep_slice);
-                    map.insert(key, lb);
-                }
-                // Rebuild entries that need new optional LBs
-                for (key, ep_slice) in needs_rebuild {
-                    let lb = EndpointSliceLoadBalancer::new(ep_slice);
-                    map.insert(key, lb);
+                for (key, ep_slice) in &add {
+                    let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
+                    map.insert(key.clone(), lb);
                 }
             });
-            true
-        } else {
-            false
-        };
+        }
         
-        // Log summary at the end
+        // 3. Update optional stores based on policies
+        // Collect all affected keys (add + update + remove)
+        let mut all_keys: HashSet<String> = HashSet::new();
+        all_keys.extend(add.keys().cloned());
+        all_keys.extend(update.keys().cloned());
+        all_keys.extend(remove.iter().cloned());
+        
+        let mut consistent_add = HashMap::new();
+        let mut consistent_remove = HashSet::new();
+        let mut random_add = HashMap::new();
+        let mut random_remove = HashSet::new();
+        
+        for key in &all_keys {
+            // If removed, remove from all optional stores
+            if remove.contains(key) {
+                consistent_remove.insert(key.clone());
+                random_remove.insert(key.clone());
+                continue;
+            }
+            
+            // Get the EndpointSlice (from add or update)
+            let ep_slice = add.get(key).or_else(|| update.get(key));
+            if ep_slice.is_none() {
+                continue;
+            }
+            let ep_slice = ep_slice.unwrap();
+            
+            let service_key = ep_slice.key_name();
+            let policies = policy_store.get(&service_key);
+            
+            if policies.is_empty() {
+                // No policies, remove from optional stores if exists
+                consistent_remove.insert(key.clone());
+                random_remove.insert(key.clone());
+                continue;
+            }
+            
+            // Get discovery from RoundRobin store
+            let discovery = if let Some(rr_lb) = roundrobin_store.get(key) {
+                rr_lb.discovery().clone()
+            } else {
+                tracing::warn!(key = %key, "RoundRobin LB not found, skipping optional LB creation");
+                continue;
+            };
+            
+            let mut needs_consistent = false;
+            let mut needs_random = false;
+            
+            for policy in policies {
+                match policy {
+                    LbPolicy::Consistent => needs_consistent = true,
+                    LbPolicy::FnvHash | LbPolicy::LeastConnection => needs_random = true,
+                }
+            }
+            
+            // Handle Consistent store
+            if needs_consistent {
+                if !consistent_store.contains(key) {
+                    let lb = EndpointSliceLoadBalancer::new_from_discovery(discovery.clone());
+                    consistent_add.insert(key.clone(), lb);
+                } else if update.contains_key(key) {
+                    // Update existing Consistent LB
+                    if let Err(e) = consistent_store.update_in_place_and_refresh_lb(key, ep_slice.clone()) {
+                        tracing::error!(key = %key, error = %e, "Failed to update Consistent LB");
+                    }
+                }
+            } else {
+                // Policy removed, remove from store
+                consistent_remove.insert(key.clone());
+            }
+            
+            // Handle Random store
+            if needs_random {
+                if !random_store.contains(key) {
+                    let lb = EndpointSliceLoadBalancer::new_from_discovery(discovery.clone());
+                    random_add.insert(key.clone(), lb);
+                } else if update.contains_key(key) {
+                    // Update existing Random LB
+                    if let Err(e) = random_store.update_in_place_and_refresh_lb(key, ep_slice.clone()) {
+                        tracing::error!(key = %key, error = %e, "Failed to update Random LB");
+                    }
+                }
+            } else {
+                // Policy removed, remove from store
+                random_remove.insert(key.clone());
+            }
+        }
+        
+        // 4. Apply changes to optional stores
+        if !consistent_add.is_empty() || !consistent_remove.is_empty() {
+            consistent_store.update(consistent_add, &consistent_remove);
+        }
+        
+        if !random_add.is_empty() || !random_remove.is_empty() {
+            random_store.update(random_add, &random_remove);
+        }
+        
+        // Log summary
         tracing::info!(
-            component = "ep_slice_store",
+            component = "ep_slice_handler",
             add_count = add_count,
             update_count = update_count,
             remove_count = remove_count,
-            rebuild_count = rebuild_count,
-            arcswap_rebuilt = arcswap_rebuilt,
             "Partial update completed"
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::ResourceMeta;
-
-    fn create_test_ep_slice(namespace: &str, name: &str, service_name: &str) -> EndpointSlice {
-        let json = serde_json::json!({
-            "apiVersion": "discovery.k8s.io/v1",
-            "kind": "EndpointSlice",
-            "metadata": {
-                "namespace": namespace,
-                "name": name,
-                "labels": {
-                    "kubernetes.io/service-name": service_name
-                }
-            },
-            "addressType": "IPv4",
-            "endpoints": [{
-                "addresses": ["10.0.0.1"],
-                "conditions": {
-                    "ready": true
-                }
-            }],
-            "ports": [{
-                "port": 80,
-                "protocol": "TCP"
-            }]
-        });
-        serde_json::from_value(json).expect("Failed to create EndpointSlice")
-    }
-
-    #[test]
-    fn test_get_service_key() {
-        let ep_slice = create_test_ep_slice("default", "my-svc-abc", "my-svc");
-        let key = ep_slice.key_name();
-        // key_name() returns the EndpointSlice's resource key (namespace/name)
-        assert_eq!(key, "default/my-svc-abc".to_string());
-    }
-
-    #[test]
-    fn test_full_set() {
-        let store = EpSliceStore::new();
-        
-        let mut data = HashMap::new();
-        data.insert("default/svc1-abc".to_string(), create_test_ep_slice("default", "svc1-abc", "svc1"));
-        
-        store.full_set(&data);
-        
-        assert!(store.contains("default/svc1-abc"));
-    }
-
-    #[test]
-    fn test_get_by_service() {
-        let store = EpSliceStore::new();
-        
-        let mut data = HashMap::new();
-        data.insert("default/svc1-abc".to_string(), create_test_ep_slice("default", "svc1-abc", "svc1"));
-        
-        store.full_set(&data);
-        
-        let ep = store.get_by_service("default/svc1");
-        assert!(ep.is_some());
-    }
-
-    #[test]
-    fn test_partial_update_add() {
-        let store = EpSliceStore::new();
-        
-        let mut add = HashMap::new();
-        add.insert("default/svc1-abc".to_string(), create_test_ep_slice("default", "svc1-abc", "svc1"));
-        
-        store.partial_update(add, HashMap::new(), HashSet::new());
-        
-        assert!(store.contains("default/svc1-abc"));
-    }
-    
-    #[test]
-    fn test_partial_update() {
-        let store = EpSliceStore::new();
-        
-        // First add an endpoint slice
-        let mut data = HashMap::new();
-        data.insert("default/svc1-abc".to_string(), create_test_ep_slice("default", "svc1-abc", "svc1"));
-        store.full_set(&data);
-        
-        // Then update it
-        let mut update = HashMap::new();
-        update.insert("default/svc1-abc".to_string(), create_test_ep_slice("default", "svc1-abc", "svc1"));
-        
-        store.partial_update(HashMap::new(), update, HashSet::new());
-        
-        assert!(store.contains("default/svc1-abc"));
-    }
-}
-

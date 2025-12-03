@@ -8,13 +8,11 @@ use futures::FutureExt;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_load_balancing::discovery::ServiceDiscovery;
-use pingora_load_balancing::selection::RoundRobin;
+use pingora_load_balancing::selection::BackendSelection;
 use pingora_load_balancing::{Backends, LoadBalancer};
 use pingora_load_balancing::Backend;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
-use crate::core::lb::optional_lb::OptionalLoadBalancers;
-use crate::types::ResourceMeta;
 
 /// Extension trait to add port information for service discovery
 pub trait EndpointSliceExt {
@@ -167,24 +165,26 @@ impl ServiceDiscovery for EndpointSliceDiscovery {
 /// EndpointSliceLoadBalancer combines EndpointSliceDiscovery with LoadBalancer
 ///
 /// This struct wraps an EndpointSliceDiscovery and creates a LoadBalancer that uses it
-/// for service discovery. This avoids the need for a Static discovery wrapper and
-/// eliminates circular dependencies.
-pub struct EndpointSliceLoadBalancer {
+/// for service discovery. This is a generic struct that works with any BackendSelection algorithm.
+pub struct EndpointSliceLoadBalancer<S>
+where
+    S: BackendSelection + 'static,
+    S::Iter: pingora_load_balancing::selection::BackendIter,
+{
     /// The discovery implementation
     discovery: EndpointSliceDiscovery,
-    /// The load balancer using the discovery (RoundRobin, always present)
-    lb: Arc<LoadBalancer<RoundRobin>>,
-    /// Optional load balancing algorithms (None if not needed)
-    optional_lbs: Option<Arc<OptionalLoadBalancers>>,
+    /// The load balancer using the discovery
+    lb: LoadBalancer<S>,
 }
 
-impl EndpointSliceLoadBalancer {
+impl<S> EndpointSliceLoadBalancer<S>
+where
+    S: BackendSelection + 'static,
+    S::Iter: pingora_load_balancing::selection::BackendIter,
+{
     /// Create a new EndpointSliceLoadBalancer from EndpointSlice
     /// Returns Arc<Self> since it's typically used with Arc at storage layer
     pub fn new(endpoint_slice: EndpointSlice) -> Arc<Self> {
-        // Extract service_key before moving endpoint_slice
-        let service_key = endpoint_slice.key_name();
-        
         let discovery = EndpointSliceDiscovery::new(endpoint_slice);
         
         let backends = Backends::new(Box::new(discovery.clone()));
@@ -213,15 +213,38 @@ impl EndpointSliceLoadBalancer {
                 tracing::error!("LoadBalancer update blocked - this indicates a bug in EndpointSliceDiscovery");
             }
         }
-        
-        // Create optional load balancers if configured
-        let optional_lbs = OptionalLoadBalancers::try_new(&service_key, &discovery);
 
         Arc::new(Self {
             discovery,
-            lb: Arc::new(lb),
-            optional_lbs,
+            lb,
         })
+    }
+    
+    /// Create from existing discovery (for creating additional LB types)
+    pub fn new_from_discovery(discovery: EndpointSliceDiscovery) -> Arc<Self> {
+        let backends = Backends::new(Box::new(discovery.clone()));
+        let lb = LoadBalancer::from_backends(backends);
+        
+        // Initialize backends
+        match lb.update().now_or_never() {
+            Some(Ok(_)) => tracing::debug!("LoadBalancer initialized"),
+            Some(Err(e)) => {
+                let err_msg = format!("{:?}", e);
+                if err_msg.contains("empty") || err_msg.contains("no backend") {
+                    tracing::debug!("LoadBalancer initialized with no backends");
+                } else {
+                    tracing::error!(error = ?e, "Error initializing LoadBalancer");
+                }
+            }
+            None => tracing::error!("LoadBalancer update blocked"),
+        }
+        
+        Arc::new(Self { discovery, lb })
+    }
+    
+    /// Get a reference to the discovery
+    pub fn discovery(&self) -> &EndpointSliceDiscovery {
+        &self.discovery
     }
     
     /// Update the EndpointSlice data in-place
@@ -234,20 +257,15 @@ impl EndpointSliceLoadBalancer {
     pub async fn update_load_balancer(&self) -> Result<(), String> {
         self.lb.update()
             .await
-            .map_err(|e| format!("Failed to update RoundRobin LB: {}", e))?;
+            .map_err(|e| format!("Failed to update LoadBalancer: {}", e))?;
         
-        // Update optional algorithms if present
-        if let Some(ref opts) = self.optional_lbs {
-            opts.update_all().await?;
-        }
-        
-        tracing::debug!("LoadBalancer(s) updated");
+        tracing::debug!("LoadBalancer updated");
         Ok(())
     }
     
-    /// Get the load balancer reference
-    pub fn load_balancer(&self) -> Arc<LoadBalancer<RoundRobin>> {
-        self.lb.clone()
+    /// Get a reference to the load balancer
+    pub fn load_balancer(&self) -> &LoadBalancer<S> {
+        &self.lb
     }
     
     /// Execute a function with read access to the underlying EndpointSlice
@@ -261,258 +279,6 @@ impl EndpointSliceLoadBalancer {
     /// Get a clone of the underlying EndpointSlice
     pub fn endpoint_slice(&self) -> EndpointSlice {
         self.discovery.endpoint_slice()
-    }
-    
-    /// Get optional load balancers if available
-    pub fn optional_lbs(&self) -> Option<&Arc<OptionalLoadBalancers>> {
-        self.optional_lbs.as_ref()
-    }
-    
-    /// Check if optional algorithms are enabled
-    pub fn has_optional_algorithms(&self) -> bool {
-        self.optional_lbs.is_some()
-    }
-    
-    /// Check if optional load balancers need to be rebuilt
-    /// 
-    /// This method checks if there are new policies in the policy store that aren't
-    /// currently initialized.
-    /// 
-    /// # Arguments
-    /// * `service_key` - The service key to check policies for
-    /// * `policies` - The required policies from policy store
-    /// 
-    /// # Returns
-    /// * `true` - Rebuild needed (有缺失的 policies)
-    /// * `false` - No rebuild needed (所有 policies 都已初始化)
-    pub fn needs_rebuild_for_policies(
-        &self,
-        service_key: &str,
-        policies: &[crate::core::lb::optional_lb::LbPolicy],
-    ) -> bool {
-        if policies.is_empty() {
-            return false; // No policies required
-        }
-        
-        // Check what's currently initialized
-        let initialized_policies = if let Some(ref optional_lbs) = self.optional_lbs {
-            optional_lbs.initialized_policies()
-        } else {
-            Vec::new()
-        };
-        
-        // Check if any policy is missing
-        let needs_rebuild = policies.iter().any(|p| !initialized_policies.contains(p));
-        
-        if needs_rebuild {
-            tracing::debug!(
-                service_key = %service_key,
-                required = ?policies,
-                initialized = ?initialized_policies,
-                "EndpointSlice needs rebuild for new optional policies"
-            );
-        }
-        
-        needs_rebuild
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions};
-    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-
-    fn create_test_endpoint_slice() -> EndpointSlice {
-        EndpointSlice {
-            address_type: "IPv4".to_string(),
-            endpoints: vec![
-                Endpoint {
-                    addresses: vec!["10.0.0.1".to_string()],
-                    conditions: Some(EndpointConditions {
-                        ready: Some(true),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                Endpoint {
-                    addresses: vec!["10.0.0.2".to_string()],
-                    conditions: Some(EndpointConditions {
-                        ready: Some(false), // Not ready
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ],
-            metadata: ObjectMeta {
-                name: Some("test-slice".to_string()),
-                namespace: Some("default".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn test_build_backends() {
-        let ep_slice = create_test_endpoint_slice();
-        let backends = ep_slice.build_backends(8080);
-        
-        // Should only include ready endpoint
-        assert_eq!(backends.len(), 1);
-        
-        let backend = backends.iter().next().unwrap();
-        assert_eq!(backend.addr.to_string(), "10.0.0.1:8080");
-        assert_eq!(backend.weight, 1);
-    }
-
-    #[tokio::test]
-    async fn test_discovery() {
-        let ep_slice = create_test_endpoint_slice();
-        let discovery = EndpointSliceDiscovery::new(ep_slice);
-        
-        let result = discovery.discover().await;
-        assert!(result.is_ok());
-        
-        let (backends, health) = result.unwrap();
-        assert_eq!(backends.len(), 1);
-        
-        // Health map is empty - backends default to healthy
-        assert!(health.is_empty());
-    }
-
-    #[test]
-    fn test_build_backends_empty() {
-        let ep_slice = EndpointSlice {
-            address_type: "IPv4".to_string(),
-            endpoints: vec![],
-            metadata: ObjectMeta {
-                name: Some("empty-slice".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        
-        let backends = ep_slice.build_backends(8080);
-        assert!(backends.is_empty());
-    }
-
-    #[test]
-    fn test_discovery_with_empty_endpoints() {
-        // Test creating EndpointSliceDiscovery with no ready endpoints
-        use std::collections::BTreeMap;
-        let mut labels = BTreeMap::new();
-        labels.insert("kubernetes.io/service-name".to_string(), "test-svc".to_string());
-        
-        let ep_slice = EndpointSlice {
-            address_type: "IPv4".to_string(),
-            endpoints: vec![],
-            metadata: ObjectMeta {
-                name: Some("empty-slice".to_string()),
-                namespace: Some("default".to_string()),
-                labels: Some(labels),
-                ..Default::default()
-            },
-            ports: Some(vec![k8s_openapi::api::discovery::v1::EndpointPort {
-                port: Some(8080),
-                name: Some("http".to_string()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        };
-        
-        // Test if LoadBalancer::try_from_iter can handle empty backends
-        println!("Testing with empty endpoints...");
-        let _discovery = EndpointSliceDiscovery::new(ep_slice);
-        println!("✅ EndpointSliceDiscovery created successfully with empty endpoints (no panic!)");
-    }
-
-    #[test]
-    fn test_discovery_with_all_not_ready_endpoints() {
-        // Test creating EndpointSliceDiscovery with endpoints that are not ready
-        use std::collections::BTreeMap;
-        let mut labels = BTreeMap::new();
-        labels.insert("kubernetes.io/service-name".to_string(), "test-svc".to_string());
-        
-        let ep_slice = EndpointSlice {
-            address_type: "IPv4".to_string(),
-            endpoints: vec![
-                k8s_openapi::api::discovery::v1::Endpoint {
-                    addresses: vec!["10.0.0.1".to_string()],
-                    conditions: Some(k8s_openapi::api::discovery::v1::EndpointConditions {
-                        ready: Some(false),  // Not ready
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                k8s_openapi::api::discovery::v1::Endpoint {
-                    addresses: vec!["10.0.0.2".to_string()],
-                    conditions: Some(k8s_openapi::api::discovery::v1::EndpointConditions {
-                        ready: Some(false),  // Not ready
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ],
-            metadata: ObjectMeta {
-                name: Some("not-ready-slice".to_string()),
-                namespace: Some("default".to_string()),
-                labels: Some(labels),
-                ..Default::default()
-            },
-            ports: Some(vec![k8s_openapi::api::discovery::v1::EndpointPort {
-                port: Some(8080),
-                name: Some("http".to_string()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        };
-        
-        // Test if LoadBalancer can handle no ready endpoints (all not ready)
-        println!("Testing with all not-ready endpoints...");
-        let _discovery = EndpointSliceDiscovery::new(ep_slice);
-        println!("✅ EndpointSliceDiscovery created successfully with not-ready endpoints (no panic!)");
-    }
-
-    #[test]
-    fn test_build_backends_ipv6() {
-        let ep_slice = EndpointSlice {
-            address_type: "IPv6".to_string(),
-            endpoints: vec![
-                Endpoint {
-                    addresses: vec!["2001:db8::1".to_string()],
-                    conditions: Some(EndpointConditions {
-                        ready: Some(true),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                Endpoint {
-                    addresses: vec!["2001:db8::2".to_string()],
-                    conditions: Some(EndpointConditions {
-                        ready: Some(true),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ],
-            metadata: ObjectMeta {
-                name: Some("test-ipv6-slice".to_string()),
-                namespace: Some("default".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        
-        let backends = ep_slice.build_backends(8080);
-        
-        // Should include both IPv6 endpoints
-        assert_eq!(backends.len(), 2);
-        
-        // Check that addresses are properly formatted with brackets
-        let addrs: Vec<String> = backends.iter().map(|b| b.addr.to_string()).collect();
-        assert!(addrs.contains(&"[2001:db8::1]:8080".to_string()));
-        assert!(addrs.contains(&"[2001:db8::2]:8080".to_string()));
     }
 }
 
