@@ -1,6 +1,6 @@
 use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
 use crate::core::gateway::gateway_base::GatewayBase;
-use crate::core::logging::init_logging;
+use crate::core::observe::init_logging;
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::path::PathBuf;

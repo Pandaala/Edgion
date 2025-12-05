@@ -308,8 +308,8 @@ impl EdgionOpConfig {
     }
 
     /// Convert to LogConfig
-    pub fn to_log_config(&self) -> crate::core::logging::LogConfig {
-        use crate::core::logging::LogConfig;
+    pub fn to_log_config(&self) -> crate::core::observe::LogConfig {
+        use crate::core::observe::LogConfig;
 
         LogConfig {
             log_dir: PathBuf::from(self.log_dir()),

@@ -1,7 +1,7 @@
 use crate::core::cli::config::EdgionOpConfig;
 use crate::core::conf_load::Loader;
 use crate::core::conf_sync::{ConfigServer, ConfigServerEventDispatcher, ConfigSyncServer};
-use crate::core::logging::init_logging;
+use crate::core::observe::init_logging;
 use crate::core::utils;
 use crate::types::{COMPONENT_EDGION_OPERATOR, VERSION};
 use anyhow::{anyhow, Result};

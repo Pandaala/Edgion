@@ -1,4 +1,4 @@
-use crate::core::logging::LogConfig;
+use crate::core::observe::LogConfig;
 use anyhow::Result;
 use std::path::PathBuf;
 
