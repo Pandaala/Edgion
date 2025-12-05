@@ -10,4 +10,5 @@ pub mod tls;
 pub mod utils;
 pub mod backends;
 pub mod misc;
+pub mod access_log;
 mod gateway;
