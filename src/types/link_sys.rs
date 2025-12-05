@@ -46,10 +46,14 @@ pub struct LocalFileWriterCfg {
     #[serde(default = "default_access_log_path")]
     pub path: String,
     
-    /// Buffer size for the write queue (optional)
+    /// Queue size for the write queue (optional)
     /// If not set, defaults to `cpu_cores * 10_000`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_size: Option<usize>,
+    
+    /// Rotation configuration (optional)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<RotationConfig>,
 }
 
 fn default_access_log_path() -> String {
@@ -61,6 +65,7 @@ impl Default for LocalFileWriterCfg {
         Self {
             path: default_access_log_path(),
             queue_size: None,
+            rotation: None,
         }
     }
 }
@@ -94,9 +99,11 @@ impl Default for StringOutput {
 pub struct LocalFileWriterConfig {
     /// Relative path for log file
     pub path: String,
-    /// Buffer size for the write queue (optional)
-    /// If None, will use default_queue_size() at runtime
+    /// Queue size for the write queue (optional)
+    /// If None, will use cpu_cores * 10_000 at runtime
     pub queue_size: Option<usize>,
+    /// Rotation configuration
+    pub rotation: RotationConfig,
 }
 
 impl LocalFileWriterConfig {
@@ -104,11 +111,17 @@ impl LocalFileWriterConfig {
         Self {
             path: path.into(),
             queue_size: None,
+            rotation: RotationConfig::default(),
         }
     }
     
     pub fn with_queue_size(mut self, size: usize) -> Self {
         self.queue_size = Some(size);
+        self
+    }
+    
+    pub fn with_rotation(mut self, rotation: RotationConfig) -> Self {
+        self.rotation = rotation;
         self
     }
 }
@@ -118,6 +131,7 @@ impl From<LocalFileWriterCfg> for LocalFileWriterConfig {
         Self {
             path: cfg.path,
             queue_size: cfg.queue_size,
+            rotation: cfg.rotation.unwrap_or_default(),
         }
     }
 }
