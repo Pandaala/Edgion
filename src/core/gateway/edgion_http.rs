@@ -3,7 +3,8 @@ use std::time::SystemTime;
 use crate::core::gateway::server_header::ServerHeaderOpts;
 use crate::core::routes::DomainRouteRules;
 use crate::types::Listener;
-use crate::core::misc::GatewayMetrics;
+use crate::core::observe::GatewayMetrics;
+use crate::core::observe::AccessLogger;
 
 pub struct EdgionHttp {
     pub gateway_class_name: Option<String>,
@@ -19,7 +20,10 @@ pub struct EdgionHttp {
     /// Gateway metrics (thread-safe, high-performance)
     pub metrics: GatewayMetrics,
     
-    // domain routes for this gateway (always exists, uses namespace/name or /name as key)
+    /// Domain routes for this gateway
     pub domain_routes: Arc<DomainRouteRules>,
+    
+    /// Access logger for writing access logs
+    pub access_logger: Option<Arc<AccessLogger>>,
 }
 

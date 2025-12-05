@@ -75,6 +75,7 @@ impl GatewayBase {
                         server_header_opts: Default::default(),
                         metrics: Default::default(),
                         domain_routes: domain_routes.clone(),
+                        access_logger: None, // TODO: Initialize from config
                     };
 
                     let mut http_service = http_proxy_service(&pingora_server.configuration, edgion_http);

@@ -9,6 +9,6 @@ pub mod routes;
 pub mod tls;
 pub mod utils;
 pub mod backends;
-pub mod misc;
-pub mod access_log;
+pub mod observe;
+pub mod link_sys;
 mod gateway;

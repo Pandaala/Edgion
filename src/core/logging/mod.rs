@@ -36,24 +36,6 @@ impl Default for LogConfig {
     }
 }
 
-/// Initialize the logging system using tracing-appender
-///
-/// This sets up a multi-layered logging system with:
-/// - Daily file rotation (automatic via tracing-appender)
-/// - Optional JSON formatting
-/// - Optional console output
-/// - Non-blocking async writes (automatic via tracing-appender's background thread)
-///
-/// Returns a WorkerGuard that must be kept alive for logging to work.
-/// The guard owns a background thread that performs actual file writes.
-/// Drop the guard when you want to shutdown logging gracefully.
-///
-/// # Compatibility
-/// This implementation works in ANY thread context:
-/// - ✅ Tokio runtime threads
-/// - ✅ Pingora runtime threads
-/// - ✅ Regular OS threads
-/// - ✅ No runtime dependency required!
 pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
     // Create log directory if it doesn't exist
     tokio::fs::create_dir_all(&config.log_dir).await?;

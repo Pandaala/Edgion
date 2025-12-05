@@ -1,3 +1,4 @@
+use std::time::Instant;
 use crate::types::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 
 #[derive(Clone)]
@@ -39,6 +40,9 @@ pub struct UpstreamInfo {
 }
 
 pub struct EdgionHttpContext {
+    /// Request start time for latency calculation
+    pub start_time: Instant,
+    
     pub x_trace_id: Option<String>,
     pub request_id: Option<String>,
 
@@ -63,6 +67,7 @@ pub struct EdgionHttpContext {
 impl EdgionHttpContext {
     pub fn new() -> Self {
         Self {
+            start_time: Instant::now(),
             x_trace_id: None,
             request_id: None,
             auto_gprc: false,

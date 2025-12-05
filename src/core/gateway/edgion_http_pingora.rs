@@ -11,6 +11,7 @@ use crate::core::gateway::{end_response_400, end_response_404, end_response_500}
 use crate::core::backends::get_peer;
 use crate::types::EdgionStatus;
 use crate::types::err::EdError;
+use crate::core::observe::AccessLogEntry;
 
 #[async_trait]
 impl ProxyHttp for EdgionHttp {
@@ -118,5 +119,24 @@ impl ProxyHttp for EdgionHttp {
         }
 
         Ok(())
+    }
+
+    async fn logging(&self, session: &mut Session, _e: Option<&PingoraError>, ctx: &mut Self::CTX)
+    where
+        Self::CTX: Send + Sync,
+    {
+        // Update response status from session
+        if let Some(resp_header) = session.response_written() {
+            ctx.request_info.status = resp_header.status.as_u16();
+        }
+
+        // Calculate latency
+        let latency_ms = ctx.start_time.elapsed().as_millis() as u64;
+
+        // Create access log entry and send
+        if let Some(logger) = &self.access_logger {
+            let entry = AccessLogEntry::from_context(ctx, latency_ms);
+            logger.send(&entry.to_json()).await;
+        }
     }
 } 
