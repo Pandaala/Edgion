@@ -11,11 +11,11 @@ pub struct FilterLog {
     pub name: String,
     
     /// Time cost in microseconds (us), None if not measured
-    pub timecost: Option<u64>,
+    pub time_cost: Option<u64>,
     
     /// Miscellaneous runtime logs, None if not needed
     /// Plugin decides the size when needed
-    pub misclog: Option<String>,
+    pub log: Option<String>,
 }
 
 impl FilterLog {
@@ -26,8 +26,8 @@ impl FilterLog {
         
         Self {
             name: n,
-            timecost: Some(timecost.as_micros() as u64),
-            misclog: None,
+            time_cost: Some(timecost.as_micros() as u64),
+            log: None,
         }
     }
     
@@ -38,8 +38,8 @@ impl FilterLog {
         
         Self {
             name: n,
-            timecost: Some(timecost.as_micros() as u64),
-            misclog: Some(misclog),
+            time_cost: Some(timecost.as_micros() as u64),
+            log: Some(misclog),
         }
     }
     
@@ -50,18 +50,18 @@ impl FilterLog {
         
         Self {
             name: n,
-            timecost: None,
-            misclog: None,
+            time_cost: None,
+            log: None,
         }
     }
     
     /// Set time cost.
     pub fn set_timecost(&mut self, duration: Duration) {
-        self.timecost = Some(duration.as_micros() as u64);
+        self.time_cost = Some(duration.as_micros() as u64);
     }
     
     /// Set misclog.
     pub fn set_misclog(&mut self, log: String) {
-        self.misclog = Some(log);
+        self.log = Some(log);
     }
 }
