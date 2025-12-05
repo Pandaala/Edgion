@@ -14,28 +14,45 @@ pub struct RotationConfig {
     /// Maximum number of rotated files to keep (0 = unlimited)
     #[serde(default)]
     pub max_files: usize,
+    
+    /// Interval in seconds to check for rotation (default: 30)
+    #[serde(default = "default_check_interval_secs")]
+    pub check_interval_secs: u64,
+}
+
+fn default_check_interval_secs() -> u64 {
+    30
 }
 
 impl Default for RotationConfig {
     fn default() -> Self {
         Self {
-            strategy: RotationStrategy::Daily,
-            max_files: 7,
+            strategy: RotationStrategy::default(), // Size(100MB)
+            max_files: 10,
+            check_interval_secs: default_check_interval_secs(),
         }
     }
 }
 
 /// Log rotation strategy
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RotationStrategy {
+    /// Rotate when file size exceeds limit (in bytes)
+    Size(u64),
     /// Rotate daily (at midnight)
-    #[default]
     Daily,
     /// Rotate hourly
     Hourly,
     /// Never rotate
     Never,
+}
+
+/// Default: 100MB per file
+impl Default for RotationStrategy {
+    fn default() -> Self {
+        Self::Size(100 * 1024 * 1024)
+    }
 }
 
 /// Local file writer configuration (for YAML/JSON config)

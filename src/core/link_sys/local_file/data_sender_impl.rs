@@ -4,8 +4,12 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::fs;
 use std::io::{BufWriter, Write};
+use std::time::{Duration, Instant};
 
-use super::rotation::{cleanup_old_files, get_rotated_path, get_rotation_key, open_log_file};
+use super::rotation::{
+    cleanup_old_files, find_next_size_index, get_rotated_path, get_rotation_key,
+    get_size_rotated_path, open_log_file,
+};
 use super::LocalFileWriter;
 use crate::core::link_sys::DataSender;
 use crate::core::observe::global_metrics;
@@ -28,10 +32,30 @@ impl DataSender<String> for LocalFileWriter {
         
         // Spawn background thread for file writes (avoids blocking tokio runtime)
         std::thread::spawn(move || {
-            let strategy = &rotation.strategy;
+            let strategy = rotation.strategy.clone();
             let max_files = rotation.max_files;
-            let mut current_key = get_rotation_key(strategy);
-            let mut current_path = get_rotated_path(&base_path, strategy);
+            
+            // For time-based rotation
+            let mut current_key = get_rotation_key(&strategy);
+            let rotation_check_interval = Duration::from_secs(rotation.check_interval_secs);
+            let mut last_rotation_check = Instant::now();
+            
+            // For size-based rotation
+            let mut current_size: u64 = 0;
+            let mut size_index: u32 = 0;
+            
+            // Determine initial file path
+            let mut current_path = match &strategy {
+                RotationStrategy::Size(_) => {
+                    // For size strategy, always start with base file (index 0)
+                    // Get existing file size if resuming
+                    if base_path.exists() {
+                        current_size = fs::metadata(&base_path).map(|m| m.len()).unwrap_or(0);
+                    }
+                    base_path.clone()
+                }
+                _ => get_rotated_path(&base_path, &strategy),
+            };
             
             // Open initial file with buffered writer for better performance
             let mut file = match open_log_file(&current_path) {
@@ -44,40 +68,79 @@ impl DataSender<String> for LocalFileWriter {
             
             tracing::info!(path = %current_path.display(), "Log file opened");
             
+            // Helper closure to rotate file for size strategy
+            let rotate_for_size = |file: &mut BufWriter<std::fs::File>,
+                                        current_path: &mut std::path::PathBuf,
+                                        current_size: &mut u64,
+                                        size_index: &mut u32| {
+                let _ = file.flush();
+                *size_index = find_next_size_index(&base_path);
+                *current_path = get_size_rotated_path(&base_path, *size_index);
+                
+                match open_log_file(current_path) {
+                    Ok(f) => {
+                        *file = BufWriter::new(f);
+                        *current_size = 0;
+                        tracing::info!(path = %current_path.display(), index = *size_index, "Log file rotated (size)");
+                        cleanup_old_files(&base_path, max_files);
+                        true
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, path = %current_path.display(), "Failed to rotate log file");
+                        false
+                    }
+                }
+            };
+            
             // Block on receiving first message, then batch process remaining
             while let Ok(first_line) = rx.recv() {
-                // Check if rotation needed before batch write (skip for Never strategy)
-                if *strategy != RotationStrategy::Never {
-                    let new_key = get_rotation_key(strategy);
-                    if new_key != current_key {
-                        // Flush before rotation to ensure data is written to old file
-                        let _ = file.flush();
-                        
-                        current_key = new_key;
-                        current_path = get_rotated_path(&base_path, strategy);
-                        
-                        match open_log_file(&current_path) {
-                            Ok(f) => {
-                                file = BufWriter::new(f);
-                                tracing::info!(path = %current_path.display(), "Log file rotated");
-                                
-                                // Cleanup old files after rotation
-                                cleanup_old_files(&base_path, max_files);
+                // Check rotation based on strategy
+                match &strategy {
+                    RotationStrategy::Never => {}
+                    RotationStrategy::Size(max_size) => {
+                        // Check size after flush (at configured interval)
+                        if last_rotation_check.elapsed() >= rotation_check_interval {
+                            last_rotation_check = Instant::now();
+                            if current_size >= *max_size {
+                                rotate_for_size(&mut file, &mut current_path, &mut current_size, &mut size_index);
                             }
-                            Err(e) => {
-                                tracing::error!(error = %e, path = %current_path.display(), "Failed to rotate log file");
-                                // Continue using old file
+                        }
+                    }
+                    RotationStrategy::Daily | RotationStrategy::Hourly => {
+                        // Time-based rotation check
+                        if last_rotation_check.elapsed() >= rotation_check_interval {
+                            last_rotation_check = Instant::now();
+                            let new_key = get_rotation_key(&strategy);
+                            if new_key != current_key {
+                                let _ = file.flush();
+                                current_key = new_key;
+                                current_path = get_rotated_path(&base_path, &strategy);
+                                
+                                match open_log_file(&current_path) {
+                                    Ok(f) => {
+                                        file = BufWriter::new(f);
+                                        tracing::info!(path = %current_path.display(), "Log file rotated");
+                                        cleanup_old_files(&base_path, max_files);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(error = %e, path = %current_path.display(), "Failed to rotate log file");
+                                    }
+                                }
                             }
                         }
                     }
                 }
                 
-                // Write first line
+                // Write first line and track size
+                let bytes_written = first_line.len() as u64 + 1; // +1 for newline
                 let _ = writeln!(file, "{}", first_line);
+                current_size += bytes_written;
                 
                 // Batch: drain all available messages without blocking
                 while let Ok(line) = rx.try_recv() {
+                    let bytes = line.len() as u64 + 1;
                     let _ = writeln!(file, "{}", line);
+                    current_size += bytes;
                 }
                 
                 // Flush once after batch write

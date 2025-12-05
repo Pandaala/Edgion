@@ -8,9 +8,10 @@ use crate::types::link_sys::RotationStrategy;
 
 /// Generate rotated file path based on strategy
 /// e.g., "logs/access.log" with Daily => "logs/access.2025-12-05.log"
+/// For Size strategy, use `get_size_rotated_path` instead
 pub fn get_rotated_path(base_path: &PathBuf, strategy: &RotationStrategy) -> PathBuf {
     match strategy {
-        RotationStrategy::Never => base_path.clone(),
+        RotationStrategy::Never | RotationStrategy::Size(_) => base_path.clone(),
         RotationStrategy::Daily => {
             let date_suffix = Local::now().format("%Y-%m-%d");
             append_suffix(base_path, &date_suffix.to_string())
@@ -20,6 +21,49 @@ pub fn get_rotated_path(base_path: &PathBuf, strategy: &RotationStrategy) -> Pat
             append_suffix(base_path, &datetime_suffix.to_string())
         }
     }
+}
+
+/// Generate rotated file path for Size strategy with index
+/// e.g., "logs/access.log" with index 1 => "logs/access.1.log"
+pub fn get_size_rotated_path(base_path: &PathBuf, index: u32) -> PathBuf {
+    if index == 0 {
+        base_path.clone()
+    } else {
+        append_suffix(base_path, &index.to_string())
+    }
+}
+
+/// Find the next available index for size-based rotation
+/// Scans existing files and returns the next index to use
+pub fn find_next_size_index(base_path: &PathBuf) -> u32 {
+    let parent = match base_path.parent() {
+        Some(p) => p,
+        None => return 0,
+    };
+    
+    let stem = base_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let ext = base_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    
+    let mut max_index: u32 = 0;
+    
+    if let Ok(entries) = fs::read_dir(parent) {
+        for entry in entries.flatten() {
+            if let Some(filename) = entry.path().file_name().and_then(|n| n.to_str()) {
+                // Match pattern: {stem}.{number}.{ext}
+                let prefix = format!("{}.", stem);
+                let suffix = format!(".{}", ext);
+                
+                if filename.starts_with(&prefix) && filename.ends_with(&suffix) {
+                    let middle = &filename[prefix.len()..filename.len() - suffix.len()];
+                    if let Ok(index) = middle.parse::<u32>() {
+                        max_index = max_index.max(index);
+                    }
+                }
+            }
+        }
+    }
+    
+    max_index + 1
 }
 
 /// Append suffix before file extension
@@ -32,9 +76,10 @@ fn append_suffix(path: &PathBuf, suffix: &str) -> PathBuf {
 }
 
 /// Get current rotation key for comparison (date or hour)
+/// For Size strategy, returns empty string (rotation is based on file size, not time)
 pub fn get_rotation_key(strategy: &RotationStrategy) -> String {
     match strategy {
-        RotationStrategy::Never => String::new(),
+        RotationStrategy::Never | RotationStrategy::Size(_) => String::new(),
         RotationStrategy::Daily => Local::now().format("%Y-%m-%d").to_string(),
         RotationStrategy::Hourly => Local::now().format("%Y-%m-%d-%H").to_string(),
     }
