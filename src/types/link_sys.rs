@@ -45,6 +45,11 @@ pub struct LocalFileWriterCfg {
     /// Relative path for log file (e.g. "logs/edgion_access.log")
     #[serde(default = "default_access_log_path")]
     pub path: String,
+    
+    /// Buffer size for the write queue (optional)
+    /// If not set, defaults to `cpu_cores * 10_000`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_size: Option<usize>,
 }
 
 fn default_access_log_path() -> String {
@@ -55,6 +60,7 @@ impl Default for LocalFileWriterCfg {
     fn default() -> Self {
         Self {
             path: default_access_log_path(),
+            queue_size: None,
         }
     }
 }
@@ -88,13 +94,22 @@ impl Default for StringOutput {
 pub struct LocalFileWriterConfig {
     /// Relative path for log file
     pub path: String,
+    /// Buffer size for the write queue (optional)
+    /// If None, will use default_queue_size() at runtime
+    pub queue_size: Option<usize>,
 }
 
 impl LocalFileWriterConfig {
     pub fn new(path: impl Into<String>) -> Self {
         Self {
             path: path.into(),
+            queue_size: None,
         }
+    }
+    
+    pub fn with_queue_size(mut self, size: usize) -> Self {
+        self.queue_size = Some(size);
+        self
     }
 }
 
@@ -102,6 +117,7 @@ impl From<LocalFileWriterCfg> for LocalFileWriterConfig {
     fn from(cfg: LocalFileWriterCfg) -> Self {
         Self {
             path: cfg.path,
+            queue_size: cfg.queue_size,
         }
     }
 }

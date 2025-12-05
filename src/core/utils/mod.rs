@@ -4,6 +4,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod net;
 pub use net::*;
 
+/// Get the number of available CPU cores on the system
+/// 
+/// Returns the number of logical CPU cores available to the current process.
+/// This can be used for sizing thread pools, buffers, etc.
+pub fn available_cpu_cores() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
 static LAST_VERSION: AtomicU64 = AtomicU64::new(0);
 
 /// Generate a unique `resource_version` as a monotonically increasing `u64`.

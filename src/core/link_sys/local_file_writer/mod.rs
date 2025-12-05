@@ -9,6 +9,7 @@ use std::sync::mpsc::SyncSender;
 
 use super::DataSender;
 use crate::core::observe::global_metrics;
+use crate::core::utils::available_cpu_cores;
 use crate::types::link_sys::LocalFileWriterConfig;
 use crate::types::prefix_dir;
 
@@ -18,6 +19,8 @@ use crate::types::prefix_dir;
 pub struct LocalFileWriter {
     /// Relative path (will be joined with prefix_dir)
     relative_path: String,
+    /// Buffer size for the write queue
+    queue_size: Option<usize>,
     sender: Option<SyncSender<String>>,
     healthy: bool,
 }
@@ -27,6 +30,7 @@ impl LocalFileWriter {
     pub fn new(config: LocalFileWriterConfig) -> Self {
         Self {
             relative_path: config.path,
+            queue_size: config.queue_size,
             sender: None,
             healthy: false,
         }
@@ -36,6 +40,7 @@ impl LocalFileWriter {
     pub fn with_path(path: impl Into<String>) -> Self {
         Self {
             relative_path: path.into(),
+            queue_size: None,
             sender: None,
             healthy: false,
         }
@@ -44,6 +49,11 @@ impl LocalFileWriter {
     /// Get full path by joining prefix_dir with relative path
     fn full_path(&self) -> PathBuf {
         prefix_dir().join(&self.relative_path)
+    }
+    
+    /// Get the buffer size, using default if not configured
+    fn get_queue_size(&self) -> usize {
+        self.queue_size.unwrap_or_else(|| available_cpu_cores() * 10_000)
     }
 }
 
@@ -58,7 +68,8 @@ impl DataSender for LocalFileWriter {
         }
         
         // Create bounded sync channel for writes
-        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(10_000);
+        let queue_size = self.get_queue_size();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(queue_size);
         
         // Spawn background thread for file writes (avoids blocking tokio runtime)
         let path_for_task = full_path.clone();
