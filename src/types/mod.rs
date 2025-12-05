@@ -8,6 +8,7 @@ pub mod resource_meta_traits;
 pub mod gateway_base_conf;
 pub mod ctx;
 pub mod link_sys;
+mod filter;
 
 pub use self::err::{EdError, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 pub use self::edgion_status::EdgionStatus;
