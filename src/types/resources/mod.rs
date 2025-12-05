@@ -6,6 +6,7 @@ pub mod edgion_gateway_config;
 pub mod edgion_tls;
 pub mod gateway;
 pub mod gateway_class;
+pub mod hidden_logic;
 pub mod http_route;
 
 // Re-export all resource types
@@ -13,5 +14,6 @@ pub use self::edgion_gateway_config::*;
 pub use self::edgion_tls::*;
 pub use self::gateway::*;
 pub use self::gateway_class::*;
+pub use self::hidden_logic::*;
 pub use self::http_route::*;
 

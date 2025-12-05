@@ -5,29 +5,20 @@
 
 use std::collections::{HashMap, HashSet};
 use crate::core::lb::lb_policy::{get_global_policy_store, LbPolicy};
-use crate::types::{HTTPRoute, HTTPRouteFilterType};
+use crate::types::{HTTPRoute, ParsedLBPolicy};
 
 /// Extract load balancing policies from HTTPRoute and update the global policy store
 /// 
-/// This function iterates through all rules and filters in the HTTPRoute,
-/// extracts LB policy configurations from extension_ref, and updates the global policy store.
+/// This function iterates through all rules and backend_refs in the HTTPRoute,
+/// extracts pre-parsed LB policy from extension_info, and updates the global policy store.
 /// 
-/// The extension_ref.name contains the algorithms in format:
-/// "algorithm1,algorithm2,..."
-/// For example: "consistent" or "consistent,fnvhash,leastconn"
+/// The extension_info.lb_policy is already parsed during pre_parse() stage,
+/// supporting formats:
+/// - kind: LBPolicyConsistentHash, name: header.xxx / cookie.xxx / arg.xxx
+/// - kind: LBPolicyLeastConn, name: default
 /// 
 /// # Arguments
 /// * `routes` - HashMap of HTTPRoute resources (key: resource_key, value: HTTPRoute)
-/// 
-/// # Example
-/// ```
-/// use std::collections::HashMap;
-/// use edgion::core::routes::lb_policy_sync::sync_lb_policies_for_routes;
-/// 
-/// let routes = HashMap::new();
-/// // ... populate routes ...
-/// sync_lb_policies_for_routes(&routes);
-/// ```
 pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
     let policy_store = get_global_policy_store();
     
@@ -49,60 +40,37 @@ pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
                 continue;
             };
             
-            // Get filters from rule
-            let Some(filters) = rule.filters.as_ref() else {
-                continue;
-            };
-            
-            for filter in filters {
-                // Only process ExtensionRef filters
-                if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
-                    continue;
-                }
-                
-                // Get extension_ref
-                let Some(ext_ref) = filter.extension_ref.as_ref() else {
-                    tracing::warn!(
-                        route = %route_key,
-                        "ExtensionRef filter missing extension_ref field"
-                    );
+            // Iterate through backend_refs and check pre-parsed extension_info
+            for backend_ref in backend_refs {
+                // Check if this backend_ref has LB policy configured
+                let Some(parsed_policy) = &backend_ref.extension_info.lb_policy else {
                     continue;
                 };
                 
-                // Parse algorithms from extension_ref.name
-                // Format: "algorithms" (applies to all backend_refs in this rule)
-                let policies = LbPolicy::parse_from_string(&ext_ref.name);
+                // Convert ParsedLBPolicy to LbPolicy
+                let lb_policy = match parsed_policy {
+                    ParsedLBPolicy::ConsistentHash(_) => LbPolicy::Consistent,
+                    ParsedLBPolicy::LeastConn => LbPolicy::LeastConnection,
+                };
                 
-                if policies.is_empty() {
-                    tracing::warn!(
-                        route = %route_key,
-                        policy_name = %ext_ref.name,
-                        "Failed to parse LB algorithms from extensionRef.name"
-                    );
-                    continue;
-                }
+                let service_namespace = backend_ref.namespace.as_deref()
+                    .unwrap_or(route_namespace);
+                let service_key = format!("{}/{}", service_namespace, backend_ref.name);
                 
-                // Apply policies to all backend services in this rule
-                for backend_ref in backend_refs {
-                    let service_namespace = backend_ref.namespace.as_deref()
-                        .unwrap_or(route_namespace);
-                    let service_key = format!("{}/{}", service_namespace, backend_ref.name);
-                    
-                    // Add to route_service_policies map
-                    route_service_policies
-                        .entry(route_key.clone())
-                        .or_insert_with(HashMap::new)
-                        .entry(service_key.clone())
-                        .or_insert_with(Vec::new)
-                        .extend(policies.clone());
-                    
-                    tracing::debug!(
-                        route = %route_key,
-                        service = %service_key,
-                        policies = ?policies,
-                        "Extracted LB policies from HTTPRoute"
-                    );
-                }
+                // Add to route_service_policies map
+                route_service_policies
+                    .entry(route_key.clone())
+                    .or_insert_with(HashMap::new)
+                    .entry(service_key.clone())
+                    .or_insert_with(Vec::new)
+                    .push(lb_policy);
+                
+                tracing::debug!(
+                    route = %route_key,
+                    service = %service_key,
+                    policy = ?parsed_policy,
+                    "Extracted LB policy from HTTPBackendRef.extension_info"
+                );
             }
         }
     }
@@ -153,14 +121,17 @@ pub fn cleanup_lb_policies_for_routes(removed_routes: &HashSet<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ResourceMeta;
     use std::collections::HashMap;
 
     /// Helper function to create a test HTTPRoute with LB policy
+    /// Uses new extensionRef format: kind=LBPolicyConsistentHash/LBPolicyLeastConn
     fn create_test_route_with_lb_policy(
         namespace: &str,
         name: &str,
         service: &str,
-        algorithm: &str,
+        kind: &str,
+        policy_name: &str,
     ) -> HTTPRoute {
         let json = serde_json::json!({
             "apiVersion": "gateway.networking.k8s.io/v1",
@@ -177,23 +148,27 @@ mod tests {
                 }],
                 "hostnames": ["test.example.com"],
                 "rules": [{
-                    "filters": [{
-                        "type": "ExtensionRef",
-                        "extensionRef": {
-                            "name": algorithm,
-                            "kind": "LBPolicy"
-                        }
-                    }],
                     "backendRefs": [{
                         "name": service,
                         "port": 8080,
-                        "kind": "Service"
+                        "kind": "Service",
+                        "filters": [{
+                            "type": "ExtensionRef",
+                            "extensionRef": {
+                                "group": "edgion.io",
+                                "kind": kind,
+                                "name": policy_name
+                            }
+                        }]
                     }]
                 }]
             }
         });
         
-        serde_json::from_value(json).expect("Failed to create test HTTPRoute")
+        let mut route: HTTPRoute = serde_json::from_value(json).expect("Failed to create test HTTPRoute");
+        // Call pre_parse to populate extension_info
+        route.pre_parse();
+        route
     }
 
     #[test]
@@ -202,7 +177,10 @@ mod tests {
         policy_store.clear();
         
         let mut routes = HashMap::new();
-        let route = create_test_route_with_lb_policy("default", "route1", "service1", "consistent");
+        let route = create_test_route_with_lb_policy(
+            "default", "route1", "service1", 
+            "LBPolicyConsistentHash", "header.x-user-id"
+        );
         routes.insert("default/route1".to_string(), route);
         
         sync_lb_policies_for_routes(&routes);
@@ -221,7 +199,10 @@ mod tests {
         
         // First add some policies
         let mut routes = HashMap::new();
-        let route = create_test_route_with_lb_policy("default", "route1", "service1", "consistent");
+        let route = create_test_route_with_lb_policy(
+            "default", "route1", "service1",
+            "LBPolicyConsistentHash", "cookie.session-id"
+        );
         routes.insert("default/route1".to_string(), route);
         sync_lb_policies_for_routes(&routes);
         
@@ -245,8 +226,14 @@ mod tests {
         policy_store.clear();
         
         let mut routes = HashMap::new();
-        let route1 = create_test_route_with_lb_policy("default", "route1", "service1", "ketama");
-        let route2 = create_test_route_with_lb_policy("default", "route2", "service2", "leastconn");
+        let route1 = create_test_route_with_lb_policy(
+            "default", "route1", "service1",
+            "LBPolicyConsistentHash", "header.x-tenant-id"
+        );
+        let route2 = create_test_route_with_lb_policy(
+            "default", "route2", "service2",
+            "LBPolicyLeastConn", "default"
+        );
         routes.insert("default/route1".to_string(), route1);
         routes.insert("default/route2".to_string(), route2);
         

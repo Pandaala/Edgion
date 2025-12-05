@@ -5,9 +5,9 @@ pub use services::{ServiceStore, get_global_service_store, create_service_handle
 pub use endpoint_slice::{EpSliceStore, get_roundrobin_store, get_consistent_store, get_leastconn_store, create_ep_slice_handler};
 
 use pingora_core::protocols::l4::socket::SocketAddr;
-use crate::core::lb::lb_policy::LbPolicy;
+use pingora_proxy::Session;
 use crate::types::edgion_status::EdgionStatus;
-use crate::types::{HTTPBackendRef, HTTPRouteFilterType, MatchInfo};
+use crate::types::{ConsistentHashOn, HTTPBackendRef, MatchInfo, ParsedLBPolicy};
 
 /// EdgionService defines the types of backend services
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,8 +55,76 @@ fn get_port_from_backend_ref_or_service(br: &HTTPBackendRef, service: &k8s_opena
     }
 }
 
+/// Extract hash key from request based on LB policy configuration
+/// 
+/// Returns the hash key bytes for consistent hashing, or empty bytes if not applicable
+fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Vec<u8> {
+    let Some(ParsedLBPolicy::ConsistentHash(hash_on)) = lb_policy else {
+        return Vec::new();
+    };
+    
+    let req_header = session.req_header();
+    
+    match hash_on {
+        ConsistentHashOn::Header(header_name) => {
+            // Extract value from request header
+            req_header.headers
+                .get(header_name.as_str())
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.as_bytes().to_vec())
+                .unwrap_or_default()
+        }
+        ConsistentHashOn::Cookie(cookie_name) => {
+            // Extract value from Cookie header
+            req_header.headers
+                .get("cookie")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|cookies| {
+                    // Parse cookies: "name1=value1; name2=value2"
+                    cookies.split(';')
+                        .map(|s| s.trim())
+                        .find_map(|cookie| {
+                            let mut parts = cookie.splitn(2, '=');
+                            let name = parts.next()?;
+                            let value = parts.next()?;
+                            if name == cookie_name {
+                                Some(value.as_bytes().to_vec())
+                            } else {
+                                None
+                            }
+                        })
+                })
+                .unwrap_or_default()
+        }
+        ConsistentHashOn::Arg(arg_name) => {
+            // Extract value from query string
+            req_header.uri.query()
+                .and_then(|query| {
+                    // Parse query string: "name1=value1&name2=value2"
+                    query.split('&')
+                        .find_map(|param| {
+                            let mut parts = param.splitn(2, '=');
+                            let name = parts.next()?;
+                            let value = parts.next()?;
+                            if name == arg_name {
+                                Some(value.as_bytes().to_vec())
+                            } else {
+                                None
+                            }
+                        })
+                })
+                .unwrap_or_default()
+        }
+    }
+}
+
 /// Get peer address from service and endpoint slice stores using load balancing
-pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef) -> Result<SocketAddr, EdgionStatus> {
+/// 
+/// # Arguments
+/// * `match_info` - Route match information
+/// * `br` - Backend reference with LB policy
+/// * `session` - HTTP session for extracting hash key from request
+pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef, session: &Session) -> Result<SocketAddr, EdgionStatus> {
     
     let service_type = EdgionService::from_kind(br.kind.as_ref());
     
@@ -67,25 +135,17 @@ pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef) -> Result<SocketAdd
     
     match service_type {
         EdgionService::Service => {
-            // Extract LB policy from BackendRef filters (ExtensionRef with kind=LBPolicy)
-            let lb_policy = br.filters.as_ref()
-                .and_then(|filters| {
-                    filters.iter()
-                        .find(|f| f.filter_type == HTTPRouteFilterType::ExtensionRef)
-                        .and_then(|f| f.extension_ref.as_ref())
-                        .filter(|ext_ref| ext_ref.kind == "LBPolicy")
-                        .and_then(|ext_ref| LbPolicy::parse_from_string(&ext_ref.name).into_iter().next())
-                });
-            
-            // Select backend based on LB policy
-            let backend = match lb_policy {
-                Some(LbPolicy::Consistent) => {
+            // Select backend based on pre-parsed LB policy from extension_info
+            let backend = match &br.extension_info.lb_policy {
+                Some(ParsedLBPolicy::ConsistentHash(_)) => {
+                    // Extract hash key only for consistent hashing
+                    let hash_key = extract_hash_key(session, &br.extension_info.lb_policy);
                     let ep_store = get_consistent_store();
                     let ep_lb = ep_store.get_by_service(&service_key)
                         .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByConsistent)?;
-                    ep_lb.load_balancer().select(b"", 256)
+                    ep_lb.load_balancer().select(&hash_key, 256)
                 }
-                Some(LbPolicy::LeastConnection) => {
+                Some(ParsedLBPolicy::LeastConn) => {
                     let ep_store = get_leastconn_store();
                     let ep_lb = ep_store.get_by_service(&service_key)
                         .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByLeastConn)?;

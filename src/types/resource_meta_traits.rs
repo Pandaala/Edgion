@@ -18,6 +18,7 @@ use super::resources::*;
 /// - Resource kind identification (for routing and dispatching)
 /// - Human-readable type names (for logging and debugging)
 /// - Unique identifier generation (namespace/name format)
+/// - Pre-parsing hook for runtime-only fields
 pub trait ResourceMeta: DeserializeOwned + Send + Sync + 'static {
     /// Get the resource version as u64
     fn get_version(&self) -> u64;
@@ -31,6 +32,16 @@ pub trait ResourceMeta: DeserializeOwned + Send + Sync + 'static {
     /// Get a unique key identifier for this resource (namespace/name format)
     /// Returns "namespace/name" for namespaced resources, or "name" for cluster-scoped resources
     fn key_name(&self) -> String;
+    
+    /// Pre-parse hook for populating runtime-only fields after deserialization
+    /// 
+    /// This method is called after a resource is deserialized from YAML/JSON
+    /// to populate any computed/runtime fields that are not part of the serialized data.
+    /// 
+    /// Default implementation does nothing. Override for resources that need pre-processing.
+    fn pre_parse(&mut self) {
+        // Default: no-op
+    }
 }
 
 
@@ -123,6 +134,11 @@ impl ResourceMeta for HTTPRoute {
         } else {
             self.metadata.name.as_deref().unwrap_or("").to_string()
         }
+    }
+    
+    fn pre_parse(&mut self) {
+        // Parse extension_ref in backend_refs to populate extension_info
+        self.parse_hidden_logic();
     }
 }
 

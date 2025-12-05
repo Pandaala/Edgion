@@ -36,7 +36,7 @@ impl ProxyHttp for EdgionHttp {
         tracing::info!("Selected backend: {:?}", backend_ref);
 
         let match_info = ctx.matched_info.as_ref().unwrap();
-        match get_peer(match_info, backend_ref) {
+        match get_peer(match_info, backend_ref, session) {
             Ok(addr) => {
                 let peer = Box::new(HttpPeer::new(addr, false, String::new()));
                 return Ok(peer)

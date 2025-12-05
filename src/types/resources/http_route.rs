@@ -8,6 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::lb::BackendSelector;
+use super::hidden_logic::BackendExtensionInfo;
 
 /// API group for HTTPRoute
 pub const HTTP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -200,6 +201,12 @@ pub struct HTTPBackendRef {
     /// Filters defined at this level should be executed if and only if the request is being forwarded to this backend
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<HTTPRouteFilter>>,
+    
+    /// Parsed extension info (runtime only, not serialized)
+    /// This is computed from filters[].extensionRef at runtime
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub extension_info: BackendExtensionInfo,
 }
 
 /// HTTPRouteFilter defines processing steps that must be completed during the request/response lifecycle
