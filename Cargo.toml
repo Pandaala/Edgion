@@ -1,18 +1,29 @@
-[workspace]
-resolver = "2"
-members = [
-    "edgion",
-    "test-server",
-    "radix_route_matcher",
-]
-
-[workspace.package]
+[package]
+name = "edgion"
 version = "0.1.0"
 edition = "2021"
 authors = ["pandalaa"]
 
-# Shared dependencies for the workspace
-[workspace.dependencies]
+[lib]
+name = "edgion"
+path = "src/lib.rs"
+
+[[bin]]
+name = "edgion-gw"
+path = "src/bin/edgion_gw.rs"
+
+[[bin]]
+name = "edgion-op"
+path = "src/bin/edgion_op.rs"
+
+[features]
+# Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
+legacy_route_tests = []
+
+# Default feature
+default = []
+
+[dependencies]
 # Core async runtime and error handling
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = "0.1"
@@ -35,10 +46,16 @@ schemars = { version = "1" }
 tonic = "0.12"
 tonic-reflection = "0.12"
 prost = "0.13"
-tonic-build = "0.12"
 
 # File system monitoring
 notify = "6.1"
+futures = "0.3.31"
+
+# HTTP conf_server
+axum = { version = "0.8.4", features = ["macros"] }
+
+# Route matching
+radix_route_matcher = "0.1"
 
 # Utilities
 bytes = "1.0"
@@ -54,22 +71,22 @@ rand = "0.8"
 
 # Pingora
 pingora-core = { version = "0.6", features = ["openssl_derived", "boringssl"] }
-pingora-http = { version = "0.6" }
-pingora-load-balancing = { version = "0.6" }
+pingora-http = "0.6"
+pingora-load-balancing = "0.6"
 pingora-proxy = { version = "0.6", features = ["openssl_derived", "boringssl"] }
+etcd-client = "0.11"
+
+# Metrics
+metrics = "0.24"
 
 # CLI
 clap = { version = "4.0", features = ["derive"] }
-tracing = { version = "0.1" }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 
-# Test conf_server
-axum = { version = "0.8.4", features = ["macros"] }
-futures = { version = "0.3.31" }
+[build-dependencies]
+tonic-build = "0.12"
 
-# Route matching
-radix_route_matcher = { path = "radix_route_matcher" }
-
-# Workspace packages
-edgion = { path = "edgion" }
+[dev-dependencies]
+tempfile = "3"
