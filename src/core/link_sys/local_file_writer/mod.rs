@@ -8,6 +8,7 @@ use std::io::Write;
 
 use super::DataSender;
 use crate::types::link_sys::{LocalFileWriterConfig, RotationStrategy};
+use crate::core::observe::global_metrics;
 
 /// Local file writer that implements DataSender
 /// 
@@ -84,10 +85,12 @@ impl DataSender for LocalFileWriter {
         self.healthy && self.sender.is_some()
     }
     
-    async fn send(&self, data: &str) -> Result<()> {
+    async fn send(&self, data: String) -> Result<()> {
         if let Some(sender) = &self.sender {
-            sender.send(data.to_string()).await
-                .map_err(|e| anyhow::anyhow!("Failed to send to file writer: {}", e))?;
+            // Non-blocking send, drop if channel is full
+            if sender.try_send(data).is_err() {
+                global_metrics().access_log_dropped();
+            }
         }
         Ok(())
     }

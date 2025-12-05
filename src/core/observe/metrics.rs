@@ -3,6 +3,7 @@
 //! Centralized metrics for monitoring gateway performance.
 //! Uses the `metrics` crate for thread-safe, high-performance counters.
 
+use std::sync::OnceLock;
 use metrics::{counter, gauge, Counter, Gauge};
 
 /// Metric names as constants for consistency
@@ -11,6 +12,15 @@ pub mod names {
     pub const CTX_ACTIVE: &str = "edgion_ctx_active";
     pub const REQUESTS_TOTAL: &str = "edgion_requests_total";
     pub const REQUESTS_FAILED: &str = "edgion_requests_failed_total";
+    pub const ACCESS_LOG_DROPPED: &str = "edgion_access_log_dropped_total";
+}
+
+/// Global metrics singleton
+static GLOBAL_METRICS: OnceLock<GatewayMetrics> = OnceLock::new();
+
+/// Get the global metrics instance
+pub fn global_metrics() -> &'static GatewayMetrics {
+    GLOBAL_METRICS.get_or_init(GatewayMetrics::new)
 }
 
 /// Gateway metrics collection
@@ -19,25 +29,26 @@ pub mod names {
 /// All metrics are automatically exported via the metrics facade.
 pub struct GatewayMetrics {
     /// Total contexts created (requests received)
-    pub ctx_created: Counter,
+    ctx_created: Counter,
     /// Currently active contexts
-    pub ctx_active: Gauge,
+    ctx_active: Gauge,
     /// Total requests processed
-    pub requests_total: Counter,
+    requests_total: Counter,
     /// Total failed requests
-    pub requests_failed: Counter,
+    requests_failed: Counter,
+    /// Total access logs dropped (channel full)
+    access_log_dropped: Counter,
 }
 
 impl GatewayMetrics {
     /// Create a new GatewayMetrics instance
-    /// 
-    /// Metrics are registered with the global metrics registry.
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             ctx_created: counter!(names::CTX_CREATED),
             ctx_active: gauge!(names::CTX_ACTIVE),
             requests_total: counter!(names::REQUESTS_TOTAL),
             requests_failed: counter!(names::REQUESTS_FAILED),
+            access_log_dropped: counter!(names::ACCESS_LOG_DROPPED),
         }
     }
 
@@ -66,11 +77,11 @@ impl GatewayMetrics {
         self.requests_total.increment(1);
         self.requests_failed.increment(1);
     }
-}
 
-impl Default for GatewayMetrics {
-    fn default() -> Self {
-        Self::new()
+    /// Record a dropped access log entry
+    #[inline]
+    pub fn access_log_dropped(&self) {
+        self.access_log_dropped.increment(1);
     }
 }
 

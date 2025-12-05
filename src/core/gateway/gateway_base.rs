@@ -73,7 +73,6 @@ impl GatewayBase {
                         listener,
                         server_start_time: SystemTime::now(),
                         server_header_opts: Default::default(),
-                        metrics: Default::default(),
                         domain_routes: domain_routes.clone(),
                         access_logger: None, // TODO: Initialize from config
                     };

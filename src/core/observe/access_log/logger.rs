@@ -25,24 +25,27 @@ impl AccessLogger {
         Ok(())
     }
 
-    /// Send log to all healthy senders
-    pub async fn send(&self, data: &str) {
-        for sender in &self.senders {
-            if sender.healthy() {
-                if let Err(e) = sender.send(data).await {
-                    tracing::warn!(sender = sender.name(), error = %e, "Failed to send access log");
-                }
+    /// Send log to all healthy senders (zero-copy for single sender)
+    pub async fn send(&self, data: String) {
+        let healthy_senders: Vec<_> = self.senders.iter()
+            .filter(|s| s.healthy())
+            .collect();
+        
+        if healthy_senders.is_empty() {
+            return;
+        }
+        
+        // For all but last, clone and send
+        for sender in &healthy_senders[..healthy_senders.len() - 1] {
+            if let Err(e) = sender.send(data.clone()).await {
+                tracing::warn!(sender = sender.name(), error = %e, "Failed to send access log");
             }
         }
-    }
-
-    /// Sync send (non-blocking, spawns tasks)
-    pub fn log(&self, data: String) {
-        for sender in &self.senders {
-            if sender.healthy() {
-                let data = data.clone();
-                // Fire and forget - each sender handles its own buffering
-                let _ = sender.send(&data);
+        
+        // Last sender gets ownership (zero-copy)
+        if let Some(last) = healthy_senders.last() {
+            if let Err(e) = last.send(data).await {
+                tracing::warn!(sender = last.name(), error = %e, "Failed to send access log");
             }
         }
     }

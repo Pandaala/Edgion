@@ -12,8 +12,8 @@ pub trait DataSender: Send + Sync {
     /// Check if the sender is healthy
     fn healthy(&self) -> bool;
     
-    /// Send data to the external system
-    async fn send(&self, data: &str) -> Result<()>;
+    /// Send data to the external system (takes ownership to avoid copy)
+    async fn send(&self, data: String) -> Result<()>;
     
     /// Get the name of this sender (for logging)
     fn name(&self) -> &str;
