@@ -10,7 +10,6 @@ use pingora_proxy::Session;
 use std::collections::HashMap;
 
 use crate::types::EdgionHttpContext;
-use crate::core::filters::basic_auth::BasicAuth;
 use crate::core::filters::session_adapter::PingoraSessionAdapter;
 use crate::core::filters::filter_log::FilterLog;
 use crate::types::filters::{FilterConf, FilterRunningStage};
@@ -129,7 +128,7 @@ impl FilterRuntime {
 
 fn get_filter_from_filter_conf(filter_conf: &FilterConf) -> Box<dyn Filter> {
     match filter_conf.name.as_str() {
-        "BasicAuth" => BasicAuth::new_filter(filter_conf),
+        // "BasicAuth" => BasicAuth::new_filter(filter_conf),
         &_ => todo!(),
     }
 }

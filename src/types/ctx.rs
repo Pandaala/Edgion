@@ -1,5 +1,7 @@
 use std::time::Instant;
 use crate::types::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
+use crate::types::filters::{FilterRunningResult};
+use crate::core::filters::filter_log::FilterLog;
 
 #[derive(Clone)]
 pub struct MatchInfo {
@@ -62,6 +64,12 @@ pub struct EdgionHttpContext {
     
     /// Upstream info after peer selection
     pub upstream_info: Option<UpstreamInfo>,
+    
+    /// Filter execution logs
+    pub filter_logs: Vec<FilterLog>,
+    
+    /// Filter running result
+    pub filter_running_result: FilterRunningResult,
 }
 
 impl EdgionHttpContext {
@@ -76,6 +84,8 @@ impl EdgionHttpContext {
             matched_info: None,
             selected_backend: None,
             upstream_info: None,
+            filter_logs: Vec::new(),
+            filter_running_result: FilterRunningResult::Nothing,
         }
     }
 
