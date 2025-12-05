@@ -2,19 +2,22 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::sync::mpsc::{self, Sender};
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::PathBuf;
+use tokio::sync::mpsc::{self, Sender};
 
 use super::DataSender;
-use crate::types::link_sys::{LocalFileWriterConfig, RotationStrategy};
 use crate::core::observe::global_metrics;
+use crate::types::link_sys::LocalFileWriterConfig;
+use crate::types::prefix_dir;
 
 /// Local file writer that implements DataSender
 /// 
 /// Uses a background task to write log entries asynchronously
 pub struct LocalFileWriter {
-    config: LocalFileWriterConfig,
+    /// Relative path (will be joined with prefix_dir)
+    relative_path: String,
     sender: Option<Sender<String>>,
     healthy: bool,
 }
@@ -23,46 +26,59 @@ impl LocalFileWriter {
     /// Create a new LocalFileWriter with the given configuration
     pub fn new(config: LocalFileWriterConfig) -> Self {
         Self {
-            config,
+            relative_path: config.path,
             sender: None,
             healthy: false,
         }
     }
     
-    /// Create with simple path and prefix
-    pub fn with_path(path: impl Into<std::path::PathBuf>, prefix: impl Into<String>) -> Self {
-        Self::new(LocalFileWriterConfig::new(path, prefix))
+    /// Create with simple relative path
+    pub fn with_path(path: impl Into<String>) -> Self {
+        Self {
+            relative_path: path.into(),
+            sender: None,
+            healthy: false,
+        }
+    }
+    
+    /// Get full path by joining prefix_dir with relative path
+    fn full_path(&self) -> PathBuf {
+        prefix_dir().join(&self.relative_path)
     }
 }
 
 #[async_trait]
 impl DataSender for LocalFileWriter {
     async fn init(&mut self) -> Result<()> {
-        // Create log directory if it doesn't exist
-        tokio::fs::create_dir_all(&self.config.path).await?;
+        let full_path = self.full_path();
         
-        // Convert rotation strategy to tracing_appender Rotation
-        let rotation = match &self.config.rotation.strategy {
-            RotationStrategy::Daily => Rotation::DAILY,
-            RotationStrategy::Hourly => Rotation::HOURLY,
-            RotationStrategy::Never => Rotation::NEVER,
-        };
-        
-        // Create rolling file appender
-        let file_appender = RollingFileAppender::new(
-            rotation,
-            &self.config.path,
-            &self.config.file_prefix,
-        );
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = full_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
         
         // Create channel for async writes
         let (tx, mut rx) = mpsc::channel::<String>(10_000);
         
         // Spawn background writer task
+        let path_for_task = full_path.clone();
         tokio::spawn(async move {
-            let mut appender = file_appender;
+            // Open file in append mode
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path_for_task);
+            
+            let mut file = match file {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::error!(error = %e, path = %path_for_task.display(), "Failed to open log file");
+                    return;
+                }
+            };
+            
             while let Some(line) = rx.recv().await {
-                if let Err(e) = writeln!(appender, "{}", line) {
+                if let Err(e) = writeln!(file, "{}", line) {
                     tracing::error!(error = %e, "Failed to write to log file");
                 }
             }
@@ -71,11 +87,7 @@ impl DataSender for LocalFileWriter {
         self.sender = Some(tx);
         self.healthy = true;
         
-        tracing::info!(
-            path = %self.config.path.display(),
-            prefix = %self.config.file_prefix,
-            "LocalFileWriter initialized"
-        );
+        tracing::info!(path = %full_path.display(), "LocalFileWriter initialized");
         
         Ok(())
     }

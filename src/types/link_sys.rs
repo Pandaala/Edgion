@@ -2,7 +2,6 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// Log file rotation configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -43,28 +42,19 @@ pub enum RotationStrategy {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalFileWriterCfg {
-    /// Directory path for log files
+    /// Relative path for log file (e.g. "logs/edgion_access.log")
+    #[serde(default = "default_access_log_path")]
     pub path: String,
-    
-    /// File name prefix
-    #[serde(default = "default_file_prefix")]
-    pub file_prefix: String,
-    
-    /// Rotation configuration
-    #[serde(default)]
-    pub rotation: RotationConfig,
 }
 
-fn default_file_prefix() -> String {
-    "access".to_string()
+fn default_access_log_path() -> String {
+    "logs/edgion_access.log".to_string()
 }
 
 impl Default for LocalFileWriterCfg {
     fn default() -> Self {
         Self {
-            path: "logs".to_string(),
-            file_prefix: default_file_prefix(),
-            rotation: RotationConfig::default(),
+            path: default_access_log_path(),
         }
     }
 }
@@ -96,37 +86,22 @@ impl Default for StringOutput {
 /// Runtime local file writer configuration (internal use)
 #[derive(Debug, Clone)]
 pub struct LocalFileWriterConfig {
-    /// File path or directory for log files
-    pub path: PathBuf,
-    
-    /// File name prefix (used with rotation)
-    pub file_prefix: String,
-    
-    /// Rotation configuration
-    pub rotation: RotationConfig,
+    /// Relative path for log file
+    pub path: String,
 }
 
 impl LocalFileWriterConfig {
-    pub fn new(path: impl Into<PathBuf>, file_prefix: impl Into<String>) -> Self {
+    pub fn new(path: impl Into<String>) -> Self {
         Self {
             path: path.into(),
-            file_prefix: file_prefix.into(),
-            rotation: RotationConfig::default(),
         }
-    }
-    
-    pub fn with_rotation(mut self, rotation: RotationConfig) -> Self {
-        self.rotation = rotation;
-        self
     }
 }
 
 impl From<LocalFileWriterCfg> for LocalFileWriterConfig {
     fn from(cfg: LocalFileWriterCfg) -> Self {
         Self {
-            path: PathBuf::from(cfg.path),
-            file_prefix: cfg.file_prefix,
-            rotation: cfg.rotation,
+            path: cfg.path,
         }
     }
 }

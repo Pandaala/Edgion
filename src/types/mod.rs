@@ -18,7 +18,7 @@ pub use self::schema::*;
 pub use self::resource_meta_traits::ResourceMeta;
 pub use self::gateway_base_conf::GatewayBaseConf;
 pub use self::ctx::{MatchInfo, RequestInfo, UpstreamInfo, EdgionHttpContext};
-pub use self::link_sys::{RotationConfig, RotationStrategy, LocalFileWriterConfig, LocalFileWriterCfg, StringOutput};
+pub use self::link_sys::{LocalFileWriterConfig, LocalFileWriterCfg, StringOutput};
 
 pub mod prelude_resources {
     // Re-export all resource types
