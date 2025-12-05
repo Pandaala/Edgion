@@ -46,7 +46,6 @@ impl DataSender for LocalFileWriter {
             RotationStrategy::Daily => Rotation::DAILY,
             RotationStrategy::Hourly => Rotation::HOURLY,
             RotationStrategy::Never => Rotation::NEVER,
-            RotationStrategy::Size(_) => Rotation::DAILY, // tracing_appender doesn't support size-based, fallback to daily
         };
         
         // Create rolling file appender

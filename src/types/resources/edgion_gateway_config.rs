@@ -162,59 +162,14 @@ fn default_healthy_threshold() -> u32 {
 // Access Log
 // ============================================
 
+use crate::types::link_sys::StringOutput;
+
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessLog {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Log format
-    #[serde(default = "default_log_format")]
-    pub format: LogFormat,
-
-    /// Path to log file
-    #[serde(default = "default_log_path")]
-    pub log_path: String,
-
-    /// Sampling rate (0.0-1.0)
-    #[serde(default = "default_sampling_rate")]
-    pub sampling_rate: f64,
-
-    /// Headers to include in logs
-    #[serde(default = "default_include_headers")]
-    pub include_headers: Vec<String>,
-
-    /// Paths to exclude from logging (e.g., health checks)
-    #[serde(default = "default_exclude_paths")]
-    pub exclude_paths: Vec<String>,
-}
-
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum LogFormat {
-    Json,
-    Text,
-    Custom,
-}
-
-fn default_log_format() -> LogFormat {
-    LogFormat::Json
-}
-
-fn default_log_path() -> String {
-    "/var/log/Edgion/access.log".to_string()
-}
-
-fn default_sampling_rate() -> f64 {
-    1.0
-}
-
-fn default_include_headers() -> Vec<String> {
-    vec!["User-Agent".to_string(), "Referer".to_string()]
-}
-
-fn default_exclude_paths() -> Vec<String> {
-    vec!["/health".to_string(), "/readiness".to_string()]
+    /// Output destination for access logs
+    #[serde(default)]
+    pub output: StringOutput,
 }
 
 // ============================================

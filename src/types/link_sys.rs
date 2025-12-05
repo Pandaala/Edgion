@@ -1,12 +1,15 @@
 //! Link system configuration types
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Log file rotation configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct RotationConfig {
     /// Rotation strategy
+    #[serde(default)]
     pub strategy: RotationStrategy,
     
     /// Maximum number of rotated files to keep (0 = unlimited)
@@ -24,20 +27,73 @@ impl Default for RotationConfig {
 }
 
 /// Log rotation strategy
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RotationStrategy {
     /// Rotate daily (at midnight)
+    #[default]
     Daily,
     /// Rotate hourly
     Hourly,
-    /// Rotate by file size (in bytes)
-    Size(u64),
     /// Never rotate
     Never,
 }
 
-/// Local file writer configuration
+/// Local file writer configuration (for YAML/JSON config)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalFileWriterCfg {
+    /// Directory path for log files
+    pub path: String,
+    
+    /// File name prefix
+    #[serde(default = "default_file_prefix")]
+    pub file_prefix: String,
+    
+    /// Rotation configuration
+    #[serde(default)]
+    pub rotation: RotationConfig,
+}
+
+fn default_file_prefix() -> String {
+    "access".to_string()
+}
+
+impl Default for LocalFileWriterCfg {
+    fn default() -> Self {
+        Self {
+            path: "logs".to_string(),
+            file_prefix: default_file_prefix(),
+            rotation: RotationConfig::default(),
+        }
+    }
+}
+
+/// String output destination configuration
+/// 
+/// Currently supports:
+/// - LocalFileWriter: write to local file with rotation
+/// 
+/// Future support:
+/// - Elasticsearch
+/// - Kafka
+/// - ClickHouse
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum StringOutput {
+    /// Write to local file
+    LocalFile(LocalFileWriterCfg),
+    // TODO: Es(EsConfig),
+    // TODO: Kafka(KafkaConfig),
+}
+
+impl Default for StringOutput {
+    fn default() -> Self {
+        Self::LocalFile(LocalFileWriterCfg::default())
+    }
+}
+
+/// Runtime local file writer configuration (internal use)
 #[derive(Debug, Clone)]
 pub struct LocalFileWriterConfig {
     /// File path or directory for log files
@@ -65,3 +121,12 @@ impl LocalFileWriterConfig {
     }
 }
 
+impl From<LocalFileWriterCfg> for LocalFileWriterConfig {
+    fn from(cfg: LocalFileWriterCfg) -> Self {
+        Self {
+            path: PathBuf::from(cfg.path),
+            file_prefix: cfg.file_prefix,
+            rotation: cfg.rotation,
+        }
+    }
+}
