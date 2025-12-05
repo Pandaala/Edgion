@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use tokio::sync::mpsc::{self, Sender};
+use std::sync::mpsc::SyncSender;
 
 use super::DataSender;
 use crate::core::observe::global_metrics;
@@ -14,11 +14,11 @@ use crate::types::prefix_dir;
 
 /// Local file writer that implements DataSender
 /// 
-/// Uses a background task to write log entries asynchronously
+/// Uses a background thread to write log entries (avoids blocking tokio runtime)
 pub struct LocalFileWriter {
     /// Relative path (will be joined with prefix_dir)
     relative_path: String,
-    sender: Option<Sender<String>>,
+    sender: Option<SyncSender<String>>,
     healthy: bool,
 }
 
@@ -54,22 +54,20 @@ impl DataSender for LocalFileWriter {
         
         // Create parent directory if it doesn't exist
         if let Some(parent) = full_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+            std::fs::create_dir_all(parent)?;
         }
         
-        // Create channel for async writes
-        let (tx, mut rx) = mpsc::channel::<String>(10_000);
+        // Create bounded sync channel for writes
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(10_000);
         
-        // Spawn background writer task
+        // Spawn background thread for file writes (avoids blocking tokio runtime)
         let path_for_task = full_path.clone();
-        tokio::spawn(async move {
+        std::thread::spawn(move || {
             // Open file in append mode
-            let file = OpenOptions::new()
+            let mut file = match OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(&path_for_task);
-            
-            let mut file = match file {
+                .open(&path_for_task) {
                 Ok(f) => f,
                 Err(e) => {
                     tracing::error!(error = %e, path = %path_for_task.display(), "Failed to open log file");
@@ -77,7 +75,8 @@ impl DataSender for LocalFileWriter {
                 }
             };
             
-            while let Some(line) = rx.recv().await {
+            // Block on receiving messages and write to file
+            while let Ok(line) = rx.recv() {
                 if let Err(e) = writeln!(file, "{}", line) {
                     tracing::error!(error = %e, "Failed to write to log file");
                 }
