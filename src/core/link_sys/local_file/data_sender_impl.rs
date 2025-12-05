@@ -12,7 +12,7 @@ use crate::core::observe::global_metrics;
 use crate::types::link_sys::RotationStrategy;
 
 #[async_trait]
-impl DataSender for LocalFileWriter {
+impl DataSender<String> for LocalFileWriter {
     async fn init(&mut self) -> Result<()> {
         let base_path = self.full_path();
         let rotation = self.rotation.clone();

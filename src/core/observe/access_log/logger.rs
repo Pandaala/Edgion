@@ -4,7 +4,7 @@ use crate::core::link_sys::DataSender;
 
 /// Access logger that dispatches log entries to registered senders
 pub struct AccessLogger {
-    senders: Vec<Box<dyn DataSender>>,
+    senders: Vec<Box<dyn DataSender<String>>>,
 }
 
 impl AccessLogger {
@@ -13,7 +13,7 @@ impl AccessLogger {
     }
 
     /// Register a data sender
-    pub fn register(&mut self, sender: Box<dyn DataSender>) {
+    pub fn register(&mut self, sender: Box<dyn DataSender<String>>) {
         self.senders.push(sender);
     }
 
