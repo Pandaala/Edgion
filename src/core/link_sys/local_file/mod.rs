@@ -117,7 +117,7 @@ impl DataSender for LocalFileWriter {
     }
     
     fn name(&self) -> &str {
-        "local_file_writer"
+        "local_file"
     }
 }
 
