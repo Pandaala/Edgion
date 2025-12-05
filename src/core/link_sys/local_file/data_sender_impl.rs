@@ -3,7 +3,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use std::fs;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 
 use super::rotation::{cleanup_old_files, get_rotated_path, get_rotation_key, open_log_file};
 use super::LocalFileWriter;
@@ -33,9 +33,9 @@ impl DataSender<String> for LocalFileWriter {
             let mut current_key = get_rotation_key(strategy);
             let mut current_path = get_rotated_path(&base_path, strategy);
             
-            // Open initial file
+            // Open initial file with buffered writer for better performance
             let mut file = match open_log_file(&current_path) {
-                Ok(f) => f,
+                Ok(f) => BufWriter::new(f),
                 Err(e) => {
                     tracing::error!(error = %e, path = %current_path.display(), "Failed to open log file");
                     return;
@@ -44,19 +44,21 @@ impl DataSender<String> for LocalFileWriter {
             
             tracing::info!(path = %current_path.display(), "Log file opened");
             
-            // Block on receiving messages and write to file
-            while let Ok(line) = rx.recv() {
-                // Check if rotation needed (skip check for Never strategy)
+            // Block on receiving first message, then batch process remaining
+            while let Ok(first_line) = rx.recv() {
+                // Check if rotation needed before batch write (skip for Never strategy)
                 if *strategy != RotationStrategy::Never {
                     let new_key = get_rotation_key(strategy);
                     if new_key != current_key {
-                        // Rotate: close old file and open new one
+                        // Flush before rotation to ensure data is written to old file
+                        let _ = file.flush();
+                        
                         current_key = new_key;
                         current_path = get_rotated_path(&base_path, strategy);
                         
                         match open_log_file(&current_path) {
                             Ok(f) => {
-                                file = f;
+                                file = BufWriter::new(f);
                                 tracing::info!(path = %current_path.display(), "Log file rotated");
                                 
                                 // Cleanup old files after rotation
@@ -70,8 +72,17 @@ impl DataSender<String> for LocalFileWriter {
                     }
                 }
                 
-                if let Err(e) = writeln!(file, "{}", line) {
-                    tracing::error!(error = %e, "Failed to write to log file");
+                // Write first line
+                let _ = writeln!(file, "{}", first_line);
+                
+                // Batch: drain all available messages without blocking
+                while let Ok(line) = rx.try_recv() {
+                    let _ = writeln!(file, "{}", line);
+                }
+                
+                // Flush once after batch write
+                if let Err(e) = file.flush() {
+                    tracing::error!(error = %e, "Failed to flush log file");
                 }
             }
         });
@@ -107,4 +118,3 @@ impl DataSender<String> for LocalFileWriter {
         "local_file"
     }
 }
-
