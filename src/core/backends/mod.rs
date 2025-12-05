@@ -5,8 +5,9 @@ pub use services::{ServiceStore, get_global_service_store, create_service_handle
 pub use endpoint_slice::{EpSliceStore, get_roundrobin_store, get_consistent_store, get_leastconn_store, create_ep_slice_handler};
 
 use pingora_core::protocols::l4::socket::SocketAddr;
+use crate::core::lb::lb_policy::LbPolicy;
 use crate::types::edgion_status::EdgionStatus;
-use crate::types::{HTTPBackendRef, MatchInfo};
+use crate::types::{HTTPBackendRef, HTTPRouteFilterType, MatchInfo};
 
 /// EdgionService defines the types of backend services
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,16 +67,38 @@ pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef) -> Result<SocketAdd
     
     match service_type {
         EdgionService::Service => {
-            // Use RoundRobin store by default
-            let ep_store = get_roundrobin_store();
-            let ep_lb = ep_store.get_by_service(&service_key)
-                .ok_or(EdgionStatus::BackendEndpointSliceNotFound)?;
-            let lb = ep_lb.load_balancer();
+            // Extract LB policy from BackendRef filters (ExtensionRef with kind=LBPolicy)
+            let lb_policy = br.filters.as_ref()
+                .and_then(|filters| {
+                    filters.iter()
+                        .find(|f| f.filter_type == HTTPRouteFilterType::ExtensionRef)
+                        .and_then(|f| f.extension_ref.as_ref())
+                        .filter(|ext_ref| ext_ref.kind == "LBPolicy")
+                        .and_then(|ext_ref| LbPolicy::parse_from_string(&ext_ref.name).into_iter().next())
+                });
             
-            // Use request_id or other key for consistent hashing if needed
-            // For now, use empty key for pure round-robin
-            let backend = lb.select(b"", 256)
-                .ok_or(EdgionStatus::BackendLoadBalancerSelectionFailed)?;
+            // Select backend based on LB policy
+            let backend = match lb_policy {
+                Some(LbPolicy::Consistent) => {
+                    let ep_store = get_consistent_store();
+                    let ep_lb = ep_store.get_by_service(&service_key)
+                        .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByConsistent)?;
+                    ep_lb.load_balancer().select(b"", 256)
+                }
+                Some(LbPolicy::LeastConnection) => {
+                    let ep_store = get_leastconn_store();
+                    let ep_lb = ep_store.get_by_service(&service_key)
+                        .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByLeastConn)?;
+                    ep_lb.load_balancer().select(b"", 256)
+                }
+                None => {
+                    // Default to RoundRobin when no LB policy is specified
+                    let ep_store = get_roundrobin_store();
+                    let ep_lb = ep_store.get_by_service(&service_key)
+                        .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin)?;
+                    ep_lb.load_balancer().select(b"", 256)
+                }
+            }.ok_or(EdgionStatus::BackendLoadBalancerSelectionFailed)?;
             
             // Override port if specified in BackendRef
             let mut addr = backend.addr;

@@ -20,8 +20,14 @@ pub enum EdgionStatus {
     /// Inconsistent weight configuration (some backends have weight, some don't)
     UpstreamInconsistentWeight = 500_03,
 
-    /// EndpointSlice not found for service
-    BackendEndpointSliceNotFound = 503_01,
+    /// EndpointSlice not found for service (Consistent hash store)
+    BackendEndpointSliceNotFoundByConsistent = 500_05,
+
+    /// EndpointSlice not found for service (LeastConnection store)
+    BackendEndpointSliceNotFoundByLeastConn = 500_06,
+
+    /// EndpointSlice not found for service (RoundRobin store)
+    BackendEndpointSliceNotFoundByRoundRobin = 500_07,
 
     /// Service not found in service store
     BackendServiceNotFound = 503_02,
@@ -43,6 +49,8 @@ pub enum EdgionStatus {
 
     /// ServiceImport not yet implemented
     BackendServiceImportNotImplemented = 503_08,
+
+
 
 }
 
