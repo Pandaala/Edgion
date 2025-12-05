@@ -136,10 +136,18 @@ fn try_get_peer(match_info: &MatchInfo, br: &HTTPBackendRef, session: &Session) 
             let backend = match &br.extension_info.lb_policy {
                 Some(ParsedLBPolicy::ConsistentHash(_)) => {
                     let hash_key = extract_hash_key(session, &br.extension_info.lb_policy);
-                    let ep_store = get_consistent_store();
-                    let ep_lb = ep_store.get_by_service(&service_key)
-                        .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByConsistent)?;
-                    ep_lb.load_balancer().select(&hash_key, 256)
+                    // Fallback to RoundRobin when hash_key is empty
+                    if hash_key.is_empty() {
+                        let ep_store = get_roundrobin_store();
+                        let ep_lb = ep_store.get_by_service(&service_key)
+                            .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin)?;
+                        ep_lb.load_balancer().select(b"", 256)
+                    } else {
+                        let ep_store = get_consistent_store();
+                        let ep_lb = ep_store.get_by_service(&service_key)
+                            .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByConsistent)?;
+                        ep_lb.load_balancer().select(&hash_key, 256)
+                    }
                 }
                 Some(ParsedLBPolicy::LeastConn) => {
                     let ep_store = get_leastconn_store();
