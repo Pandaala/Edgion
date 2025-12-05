@@ -2,11 +2,17 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use crate::types::DEFAULT_PREFIX_DIR;
 
 /// Edgion Operator configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
 #[serde(default)]
 pub struct EdgionOpConfig {
+    /// Prefix directory for Edgion (default: /usr/local/edgion)
+    #[arg(short = 'p', long, value_name = "DIR", default_value = DEFAULT_PREFIX_DIR)]
+    #[serde(default = "default_prefix_dir")]
+    pub prefix_dir: PathBuf,
+
     /// Configuration file path (TOML format)
     #[arg(short = 'c', long, value_name = "FILE")]
     #[serde(skip)]
@@ -27,6 +33,10 @@ pub struct EdgionOpConfig {
     #[command(flatten)]
     #[serde(default)]
     pub debug: DebugConfig,
+}
+
+fn default_prefix_dir() -> PathBuf {
+    PathBuf::from(DEFAULT_PREFIX_DIR)
 }
 
 /// Server configuration
@@ -184,6 +194,7 @@ impl Default for DebugConfig {
 impl Default for EdgionOpConfig {
     fn default() -> Self {
         Self {
+            prefix_dir: default_prefix_dir(),
             config_file: None,
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),

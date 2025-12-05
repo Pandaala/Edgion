@@ -1,6 +1,7 @@
 use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
 use crate::core::gateway::gateway_base::GatewayBase;
 use crate::core::observe::init_logging;
+use crate::types::{init_prefix_dir, DEFAULT_PREFIX_DIR};
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::path::PathBuf;
@@ -18,6 +19,10 @@ use log_config::GatewayLogConfig;
     long_about = None
 )]
 pub struct EdgionGwCli {
+    /// Prefix directory for Edgion (default: /usr/local/edgion)
+    #[arg(short = 'p', long, value_name = "DIR", default_value = DEFAULT_PREFIX_DIR)]
+    pub prefix_dir: PathBuf,
+
     /// Gateway class name
     #[arg(long, value_name = "CLASS")]
     pub gateway_class: String,
@@ -30,7 +35,7 @@ pub struct EdgionGwCli {
     #[arg(long, value_name = "ADDR")]
     pub admin_listen: Option<String>,
 
-    /// Log directory path (defaults to ./logs if not specified)
+    /// Log directory path (defaults to <prefix_dir>/logs if not specified)
     #[arg(long, value_name = "DIR")]
     pub log_dir: Option<PathBuf>,
 }
@@ -57,6 +62,10 @@ impl EdgionGwCli {
     /// Returns a tuple of (GatewayBase, WorkerGuard).
     /// The WorkerGuard MUST be kept alive for logging to work properly.
     async fn bootstrap(&self) -> Result<(Arc<GatewayBase>, tracing_appender::non_blocking::WorkerGuard)> {
+        // Initialize and create prefix directory
+        init_prefix_dir(&self.prefix_dir)
+            .map_err(|e| anyhow!("Failed to create prefix directory {:?}: {}", &self.prefix_dir, e))?;
+        
         // Initialize logging system with configuration
         let log_config = GatewayLogConfig::new(self.log_dir.clone());
         

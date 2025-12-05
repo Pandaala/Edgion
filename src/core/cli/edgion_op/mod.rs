@@ -3,7 +3,7 @@ use crate::core::conf_load::Loader;
 use crate::core::conf_sync::{ConfigServer, ConfigServerEventDispatcher, ConfigSyncServer};
 use crate::core::observe::init_logging;
 use crate::core::utils;
-use crate::types::{COMPONENT_EDGION_OPERATOR, VERSION};
+use crate::types::{init_prefix_dir, COMPONENT_EDGION_OPERATOR, VERSION};
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::sync::Arc;
@@ -40,6 +40,10 @@ impl EdgionOpCli {
     pub async fn run(&self) -> Result<()> {
         // Load and merge configuration
         let config = EdgionOpConfig::load(self.config.clone())?;
+
+        // Initialize and create prefix directory
+        init_prefix_dir(&config.prefix_dir)
+            .map_err(|e| anyhow!("Failed to create prefix directory {:?}: {}", &config.prefix_dir, e))?;
 
         // Initialize logging system
         let log_config = config.to_log_config();
