@@ -25,27 +25,12 @@ impl AccessLogger {
         Ok(())
     }
 
-    /// Send log to all healthy senders (zero-copy for single sender)
+    /// Send log to first healthy sender
     pub async fn send(&self, data: String) {
-        let healthy_senders: Vec<_> = self.senders.iter()
-            .filter(|s| s.healthy())
-            .collect();
-        
-        if healthy_senders.is_empty() {
-            return;
-        }
-        
-        // For all but last, clone and send
-        for sender in &healthy_senders[..healthy_senders.len() - 1] {
-            if let Err(e) = sender.send(data.clone()).await {
-                tracing::warn!(sender = sender.name(), error = %e, "Failed to send access log");
-            }
-        }
-        
-        // Last sender gets ownership (zero-copy)
-        if let Some(last) = healthy_senders.last() {
-            if let Err(e) = last.send(data).await {
-                tracing::warn!(sender = last.name(), error = %e, "Failed to send access log");
+        for sender in &self.senders {
+            if sender.healthy() {
+                let _ = sender.send(data).await;
+                return;
             }
         }
     }
