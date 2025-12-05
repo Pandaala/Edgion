@@ -3,6 +3,7 @@ use pingora_core::modules::http::grpc_web::{GrpcWeb, GrpcWebBridge};
 use pingora_core::modules::http::HttpModules;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error as PingoraError, ErrorType};
+
 use pingora_proxy::{ProxyHttp, Session};
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::types::EdgionHttpContext;
@@ -25,7 +26,7 @@ impl ProxyHttp for EdgionHttp {
         tracing::info!("upstream_peer");
 
         // Get selected backend from context (already selected in request_filter)
-        let backend_ref = match &ctx.selected_backend {
+        let backend_ref = match ctx.selected_backend.clone() {
             Some(backend) => backend,
             None => {
                 ctx.add_error(EdgionStatus::UpstreamNotRouteMatched);
@@ -35,18 +36,8 @@ impl ProxyHttp for EdgionHttp {
         };
         tracing::info!("Selected backend: {:?}", backend_ref);
 
-        let match_info = ctx.matched_info.as_ref().unwrap();
-        match get_peer(match_info, backend_ref, session) {
-            Ok(addr) => {
-                let peer = Box::new(HttpPeer::new(addr, false, String::new()));
-                return Ok(peer)
-            }
-            Err(err_status) => {
-                ctx.add_error(err_status);
-                end_response_500(session, ctx).await?;
-                Err(PingoraError::new(ErrorType::InternalError))
-            }
-        }
+        let match_info = ctx.matched_info.clone().unwrap();
+        get_peer(&match_info, &backend_ref, session, ctx).await
     }
 
 

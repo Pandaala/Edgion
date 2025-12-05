@@ -5,9 +5,12 @@ pub use services::{ServiceStore, get_global_service_store, create_service_handle
 pub use endpoint_slice::{EpSliceStore, get_roundrobin_store, get_consistent_store, get_leastconn_store, create_ep_slice_handler};
 
 use pingora_core::protocols::l4::socket::SocketAddr;
+use pingora_core::prelude::HttpPeer;
+use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
+use crate::core::gateway::end_response_503;
 use crate::types::edgion_status::EdgionStatus;
-use crate::types::{ConsistentHashOn, HTTPBackendRef, MatchInfo, ParsedLBPolicy};
+use crate::types::{ConsistentHashOn, EdgionHttpContext, HTTPBackendRef, MatchInfo, ParsedLBPolicy};
 
 /// EdgionService defines the types of backend services
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,14 +121,8 @@ fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Ve
     }
 }
 
-/// Get peer address from service and endpoint slice stores using load balancing
-/// 
-/// # Arguments
-/// * `match_info` - Route match information
-/// * `br` - Backend reference with LB policy
-/// * `session` - HTTP session for extracting hash key from request
-pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef, session: &Session) -> Result<SocketAddr, EdgionStatus> {
-    
+/// Internal: try to get peer, returns Result with EdgionStatus on error
+fn try_get_peer(match_info: &MatchInfo, br: &HTTPBackendRef, session: &Session) -> Result<Box<HttpPeer>, EdgionStatus> {
     let service_type = EdgionService::from_kind(br.kind.as_ref());
     
     let namespace = br.namespace.as_ref()
@@ -138,7 +135,6 @@ pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef, session: &Session) 
             // Select backend based on pre-parsed LB policy from extension_info
             let backend = match &br.extension_info.lb_policy {
                 Some(ParsedLBPolicy::ConsistentHash(_)) => {
-                    // Extract hash key only for consistent hashing
                     let hash_key = extract_hash_key(session, &br.extension_info.lb_policy);
                     let ep_store = get_consistent_store();
                     let ep_lb = ep_store.get_by_service(&service_key)
@@ -152,7 +148,6 @@ pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef, session: &Session) 
                     ep_lb.load_balancer().select(b"", 256)
                 }
                 None => {
-                    // Default to RoundRobin when no LB policy is specified
                     let ep_store = get_roundrobin_store();
                     let ep_lb = ep_store.get_by_service(&service_key)
                         .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin)?;
@@ -160,63 +155,66 @@ pub fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef, session: &Session) 
                 }
             }.ok_or(EdgionStatus::BackendLoadBalancerSelectionFailed)?;
             
-            // Override port if specified in BackendRef
             let mut addr = backend.addr;
             if let Some(port) = br.port {
                 addr.set_port(port as u16);
             }
-            
-            Ok(addr)
+            Ok(Box::new(HttpPeer::new(addr, false, String::new())))
         }
         
         EdgionService::ServiceClusterIp => {
-            // Use Service ClusterIP directly (no load balancing, cluster IP is virtual)
             let svc_store = get_global_service_store();
             let service = svc_store.get(&service_key)
                 .ok_or(EdgionStatus::BackendServiceNotFound)?;
             
-            // Get ClusterIP from Service spec
             let cluster_ip = service.spec.as_ref()
                 .and_then(|spec| spec.cluster_ip.as_ref())
                 .ok_or(EdgionStatus::BackendClusterIpNotFound)?;
             
-            // Get port from BackendRef or Service spec
             let port = get_port_from_backend_ref_or_service(br, &service)?;
             
-            // Parse ClusterIP:port as SocketAddr
             let addr_str = format!("{}:{}", cluster_ip, port);
-            addr_str.parse::<SocketAddr>()
-                .map_err(|_| EdgionStatus::BackendAddressParsingFailed)
+            let addr = addr_str.parse::<SocketAddr>()
+                .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
+            
+            Ok(Box::new(HttpPeer::new(addr, false, String::new())))
         }
         
         EdgionService::ServiceExternalName => {
-            // Use Service ExternalName (DNS name)
             let svc_store = get_global_service_store();
             let service = svc_store.get(&service_key)
                 .ok_or(EdgionStatus::BackendServiceNotFound)?;
             
-            // Get ExternalName from Service spec
             let external_name = service.spec.as_ref()
                 .and_then(|spec| spec.external_name.as_ref())
                 .ok_or(EdgionStatus::BackendExternalNameNotFound)?;
             
-            // Get port from BackendRef or Service spec
             let port = get_port_from_backend_ref_or_service(br, &service)?;
             
-            // Parse ExternalName:port as SocketAddr
-            // Note: ExternalName can be a DNS name, so parsing may fail
             let addr_str = format!("{}:{}", external_name, port);
-            addr_str.parse::<SocketAddr>()
-                .map_err(|_| EdgionStatus::BackendAddressParsingFailed)
+            let addr = addr_str.parse::<SocketAddr>()
+                .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
+            
+            Ok(Box::new(HttpPeer::new(addr, false, String::new())))
         }
         
         EdgionService::ServiceImport => {
-            // ServiceImport for multi-cluster not yet implemented
-            tracing::warn!(
-                service_key = %service_key,
-                "ServiceImport is not yet implemented"
-            );
+            tracing::warn!(service_key = %service_key, "ServiceImport is not yet implemented");
             Err(EdgionStatus::BackendServiceImportNotImplemented)
+        }
+    }
+}
+
+/// Get HTTP peer from service and endpoint slice stores using load balancing
+/// 
+/// On error, sets error status to ctx and sends 503 response
+pub async fn get_peer(match_info: &MatchInfo, br: &HTTPBackendRef, session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<Box<HttpPeer>> {
+    match try_get_peer(match_info, br, session) {
+        Ok(peer) => Ok(peer),
+        Err(status) => {
+            ctx.add_error(status);
+            let _ = end_response_503(session, ctx).await;
+            Err(PingoraError::new(ErrorType::InternalError))
         }
     }
 }
