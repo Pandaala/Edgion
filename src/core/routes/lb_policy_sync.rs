@@ -173,78 +173,79 @@ mod tests {
 
     #[test]
     fn test_sync_lb_policies_for_routes() {
+        // Use unique namespace to avoid parallel test conflicts
         let policy_store = get_global_policy_store();
-        policy_store.clear();
         
         let mut routes = HashMap::new();
         let route = create_test_route_with_lb_policy(
-            "default", "route1", "service1", 
+            "test-sync", "route1", "svc-sync", 
             "LBPolicyConsistentHash", "header.x-user-id"
         );
-        routes.insert("default/route1".to_string(), route);
+        routes.insert("test-sync/route1".to_string(), route);
         
         sync_lb_policies_for_routes(&routes);
         
-        let policies = policy_store.get("default/service1");
+        let policies = policy_store.get("test-sync/svc-sync");
         assert!(!policies.is_empty());
         assert!(policies.contains(&LbPolicy::Consistent));
         
-        policy_store.clear();
+        // Cleanup only our test data
+        policy_store.delete_lb_policies_by_resource_key("test-sync/route1");
     }
 
     #[test]
     fn test_cleanup_lb_policies_for_routes() {
+        // Use unique namespace to avoid parallel test conflicts
         let policy_store = get_global_policy_store();
-        policy_store.clear();
         
         // First add some policies
         let mut routes = HashMap::new();
         let route = create_test_route_with_lb_policy(
-            "default", "route1", "service1",
+            "test-cleanup", "route1", "svc-cleanup",
             "LBPolicyConsistentHash", "cookie.session-id"
         );
-        routes.insert("default/route1".to_string(), route);
+        routes.insert("test-cleanup/route1".to_string(), route);
         sync_lb_policies_for_routes(&routes);
         
         // Verify policies exist
-        assert!(!policy_store.get("default/service1").is_empty());
+        assert!(!policy_store.get("test-cleanup/svc-cleanup").is_empty());
         
         // Clean up
         let mut removed = HashSet::new();
-        removed.insert("default/route1".to_string());
+        removed.insert("test-cleanup/route1".to_string());
         cleanup_lb_policies_for_routes(&removed);
         
         // Verify policies are removed
-        assert!(policy_store.get("default/service1").is_empty());
-        
-        policy_store.clear();
+        assert!(policy_store.get("test-cleanup/svc-cleanup").is_empty());
     }
 
     #[test]
     fn test_sync_multiple_routes() {
+        // Use unique namespace to avoid parallel test conflicts
         let policy_store = get_global_policy_store();
-        policy_store.clear();
         
         let mut routes = HashMap::new();
         let route1 = create_test_route_with_lb_policy(
-            "default", "route1", "service1",
+            "test-multi", "route1", "svc-multi-1",
             "LBPolicyConsistentHash", "header.x-tenant-id"
         );
         let route2 = create_test_route_with_lb_policy(
-            "default", "route2", "service2",
+            "test-multi", "route2", "svc-multi-2",
             "LBPolicyLeastConn", "default"
         );
-        routes.insert("default/route1".to_string(), route1);
-        routes.insert("default/route2".to_string(), route2);
+        routes.insert("test-multi/route1".to_string(), route1);
+        routes.insert("test-multi/route2".to_string(), route2);
         
         sync_lb_policies_for_routes(&routes);
         
-        let policies1 = policy_store.get("default/service1");
-        let policies2 = policy_store.get("default/service2");
+        let policies1 = policy_store.get("test-multi/svc-multi-1");
+        let policies2 = policy_store.get("test-multi/svc-multi-2");
         assert!(policies1.contains(&LbPolicy::Consistent));
         assert!(policies2.contains(&LbPolicy::LeastConnection));
         
-        policy_store.clear();
+        // Cleanup only our test data
+        policy_store.delete_lb_policies_by_resource_key("test-multi/route1");
+        policy_store.delete_lb_policies_by_resource_key("test-multi/route2");
     }
 }
 
