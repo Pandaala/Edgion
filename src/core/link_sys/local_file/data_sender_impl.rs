@@ -94,22 +94,18 @@ impl DataSender<String> for LocalFileWriter {
             
             // Block on receiving first message, then batch process remaining
             while let Ok(first_line) = rx.recv() {
-                // Check rotation based on strategy
-                match &strategy {
-                    RotationStrategy::Never => {}
-                    RotationStrategy::Size(max_size) => {
-                        // Check size after flush (at configured interval)
-                        if last_rotation_check.elapsed() >= rotation_check_interval {
-                            last_rotation_check = Instant::now();
+                // Check rotation at configured interval (most cases skip this block)
+                if last_rotation_check.elapsed() >= rotation_check_interval {
+                    last_rotation_check = Instant::now();
+                    
+                    match &strategy {
+                        RotationStrategy::Never => {}
+                        RotationStrategy::Size(max_size) => {
                             if current_size >= *max_size {
                                 rotate_for_size(&mut file, &mut current_path, &mut current_size, &mut size_index);
                             }
                         }
-                    }
-                    RotationStrategy::Daily | RotationStrategy::Hourly => {
-                        // Time-based rotation check
-                        if last_rotation_check.elapsed() >= rotation_check_interval {
-                            last_rotation_check = Instant::now();
+                        RotationStrategy::Daily | RotationStrategy::Hourly => {
                             let new_key = get_rotation_key(&strategy);
                             if new_key != current_key {
                                 let _ = file.flush();
@@ -136,11 +132,16 @@ impl DataSender<String> for LocalFileWriter {
                 let _ = writeln!(file, "{}", first_line);
                 current_size += bytes_written;
                 
-                // Batch: drain all available messages without blocking
-                while let Ok(line) = rx.try_recv() {
-                    let bytes = line.len() as u64 + 1;
-                    let _ = writeln!(file, "{}", line);
-                    current_size += bytes;
+                // Batch: drain available messages (max 999, total 1000 with first_line)
+                for _ in 0..999 {
+                    match rx.try_recv() {
+                        Ok(line) => {
+                            let bytes = line.len() as u64 + 1;
+                            let _ = writeln!(file, "{}", line);
+                            current_size += bytes;
+                        }
+                        Err(_) => break,
+                    }
                 }
                 
                 // Flush once after batch write
