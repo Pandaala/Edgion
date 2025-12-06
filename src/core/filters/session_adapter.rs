@@ -12,12 +12,22 @@ use super::traits::{FilterSession, FilterSessionError, FilterSessionResult};
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
     ctx: &'a mut EdgionHttpContext,
+    response_header: Option<&'a mut ResponseHeader>,
 }
 
 impl<'a> PingoraSessionAdapter<'a> {
     #[inline]
     pub fn new(inner: &'a mut Session, ctx: &'a mut EdgionHttpContext) -> Self {
-        Self { inner, ctx }
+        Self { inner, ctx, response_header: None }
+    }
+
+    #[inline]
+    pub fn with_response_header(
+        inner: &'a mut Session,
+        ctx: &'a mut EdgionHttpContext,
+        response_header: &'a mut ResponseHeader,
+    ) -> Self {
+        Self { inner, ctx, response_header: Some(response_header) }
     }
 
     #[inline]
@@ -70,15 +80,19 @@ impl<'a> FilterSession for PingoraSessionAdapter<'a> {
         })
     }
 
-    fn set_response_header(&mut self, _name: &str, _value: &str) -> FilterSessionResult<()> {
-        // Response headers should be modified in upstream_response_filter stage
-        // via the ResponseHeader parameter, not through session
+    fn set_response_header(&mut self, name: &str, value: &str) -> FilterSessionResult<()> {
+        if let Some(resp) = &mut self.response_header {
+            resp.insert_header(name.to_string(), value.to_string())
+                .map_err(|e| Box::new(e) as FilterSessionError)?;
+        }
         Ok(())
     }
 
-    fn append_response_header(&mut self, _name: &str, _value: &str) -> FilterSessionResult<()> {
-        // Response headers should be modified in upstream_response_filter stage
-        // via the ResponseHeader parameter, not through session
+    fn append_response_header(&mut self, name: &str, value: &str) -> FilterSessionResult<()> {
+        if let Some(resp) = &mut self.response_header {
+            resp.append_header(name.to_string(), value.to_string())
+                .map_err(|e| Box::new(e) as FilterSessionError)?;
+        }
         Ok(())
     }
 

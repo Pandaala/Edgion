@@ -1,5 +1,6 @@
 //! Filter runtime - manages filter execution across different stages
 
+use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
 use crate::types::EdgionHttpContext;
@@ -9,7 +10,7 @@ use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType};
 
 use super::filter_log::FilterLog;
 use super::session_adapter::PingoraSessionAdapter;
-use super::standard::RequestHeaderModifierFilter;
+use super::standard::{RequestHeaderModifierFilter, ResponseHeaderModifierFilter};
 use super::traits::Filter;
 
 pub struct FilterRuntime {
@@ -58,6 +59,11 @@ impl FilterRuntime {
                     Box::new(RequestHeaderModifierFilter::new(config.clone())) as Box<dyn Filter>
                 })
             }
+            HTTPRouteFilterType::ResponseHeaderModifier => {
+                filter.response_header_modifier.as_ref().map(|config| {
+                    Box::new(ResponseHeaderModifierFilter::new(config.clone())) as Box<dyn Filter>
+                })
+            }
             // TODO: Add other filter types
             _ => None,
         }
@@ -78,6 +84,31 @@ impl FilterRuntime {
 
             let result = filter.run(
                 FilterRunningStage::Request,
+                &mut session_adapter,
+                &mut filter_log,
+            ).await;
+            session_adapter.push_filter_log(filter_log);
+
+            if ErrTerminateRequest == result {
+                session_adapter.set_terminate();
+                return;
+            }
+        }
+    }
+
+    pub async fn run_response_header_filters(
+        &self,
+        s: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        response_header: &mut ResponseHeader,
+    ) {
+        let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
+
+        for filter in &self.response_header_filters {
+            let mut filter_log = FilterLog::new(filter.name());
+
+            let result = filter.run(
+                FilterRunningStage::ResponseHeader,
                 &mut session_adapter,
                 &mut filter_log,
             ).await;
