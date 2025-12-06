@@ -1,6 +1,5 @@
 //! Filter system for request/response processing
 
-pub mod edgion_plugins;
 pub mod filter_log;
 pub mod runtime;
 pub mod session_adapter;
