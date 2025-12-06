@@ -31,9 +31,9 @@ pub const EDGION_PLUGINS_KIND: &str = "EdgionPlugins";
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionPluginsSpec {
-    /// ParentRefs references the resources that this plugin wants to be attached to
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_refs: Option<Vec<ParentReference>>,
+    // /// ParentRefs references the resources that this plugin wants to be attached to
+    // #[serde(default, skip_serializing_if = "Option::is_none")]
+    // pub parent_refs: Option<Vec<ParentReference>>,
 
     /// Plugin configurations
     #[serde(default, skip_serializing_if = "Option::is_none")]
