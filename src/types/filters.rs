@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 /// Filter configuration
 /// Each stage uses a fixed array order as priority
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct FilterConf {
+pub struct PluginConf {
     pub enable: bool,
     pub name: String,
     pub config: serde_json::Value,
@@ -40,7 +40,7 @@ pub enum PluginRunningResult {
 
 /// Filter tags for categorization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub enum FiltersTags {
+pub enum PluginTags {
     Auth,
     Security,
     Proxy,

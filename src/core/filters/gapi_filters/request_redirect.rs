@@ -7,7 +7,7 @@ use http::StatusCode;
 use pingora_http::ResponseHeader;
 
 use crate::types::resources::HTTPRequestRedirectFilter;
-use crate::types::filters::{FilterConf, PluginRunningResult, PluginRunningStage};
+use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
 use crate::core::filters::plugin_runtime::traits::{Plugin, PluginSession};
 use crate::core::filters::plugin_runtime::log::PluginLog;
 
@@ -91,6 +91,6 @@ impl Plugin for RequestRedirectFilter {
         vec![PluginRunningStage::Request]
     }
 
-    fn check_schema(&self, _conf: &FilterConf) {}
+    fn check_schema(&self, _conf: &PluginConf) {}
 }
 

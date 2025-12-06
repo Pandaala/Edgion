@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
 
-use crate::types::filters::{FilterConf, PluginRunningResult, PluginRunningStage};
+use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
 use super::log::PluginLog;
 
 pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;
@@ -90,6 +90,6 @@ pub trait Plugin: Send + Sync {
 
     fn get_stages(&self) -> Vec<PluginRunningStage>;
 
-    fn check_schema(&self, _conf: &FilterConf);
+    fn check_schema(&self, _conf: &PluginConf);
 }
 

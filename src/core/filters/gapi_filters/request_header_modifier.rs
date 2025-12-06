@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use crate::types::resources::HTTPHeaderFilter;
-use crate::types::filters::{FilterConf, PluginRunningResult, PluginRunningStage};
+use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
 use crate::core::filters::plugin_runtime::traits::{Plugin, PluginSession};
 use crate::core::filters::plugin_runtime::log::PluginLog;
 
@@ -51,7 +51,7 @@ impl Plugin for RequestHeaderModifierFilter {
         vec![PluginRunningStage::Request]
     }
 
-    fn check_schema(&self, _conf: &FilterConf) {}
+    fn check_schema(&self, _conf: &PluginConf) {}
 }
 
 impl RequestHeaderModifierFilter {
