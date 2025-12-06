@@ -9,8 +9,8 @@ use crate::types::filters::FilterRunningResult::ErrTerminateRequest;
 use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType};
 
 use super::filter_log::FilterLog;
+use crate::core::filters::gapi_filters::{RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
 use super::session_adapter::PingoraSessionAdapter;
-use super::gapi_filters::{RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
 use super::traits::Filter;
 
 pub struct FilterRuntime {
@@ -186,3 +186,4 @@ impl FilterRuntime {
         }
     }
 }
+

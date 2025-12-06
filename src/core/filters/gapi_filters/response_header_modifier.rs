@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use crate::types::resources::HTTPHeaderFilter;
 use crate::types::filters::{FilterConf, FilterRunningResult, FilterRunningStage};
-use crate::core::filters::traits::{Filter, FilterSession};
-use crate::core::filters::filter_log::FilterLog;
+use crate::core::filters::plugin_runtime::traits::{Filter, FilterSession};
+use crate::core::filters::plugin_runtime::filter_log::FilterLog;
 
 pub struct ResponseHeaderModifierFilter {
     config: HTTPHeaderFilter,

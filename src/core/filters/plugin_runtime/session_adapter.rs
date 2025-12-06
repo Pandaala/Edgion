@@ -156,3 +156,4 @@ impl<'a> FilterSession for PingoraSessionAdapter<'a> {
         self.inner.shutdown().await;
     }
 }
+

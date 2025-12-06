@@ -92,3 +92,4 @@ pub trait Filter: Send + Sync {
 
     fn check_schema(&self, _conf: &FilterConf);
 }
+

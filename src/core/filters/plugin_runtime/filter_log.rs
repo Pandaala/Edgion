@@ -35,3 +35,4 @@ impl FilterLog {
             .push_str(log);
     }
 }
+

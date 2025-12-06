@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use crate::types::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use crate::types::filters::{FilterRunningResult};
-use crate::core::filters::filter_log::FilterLog;
+use crate::core::filters::FilterLog;
 use crate::core::filters::FilterRuntime;
 
 #[derive(Clone)]
