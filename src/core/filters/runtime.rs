@@ -6,9 +6,11 @@ use std::collections::HashMap;
 use crate::types::EdgionHttpContext;
 use crate::types::filters::{FilterConf, FilterRunningStage};
 use crate::types::filters::FilterRunningResult::ErrTerminateRequest;
+use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType};
 
 use super::filter_log::FilterLog;
 use super::session_adapter::PingoraSessionAdapter;
+use super::standard::RequestHeaderModifierFilter;
 use super::traits::Filter;
 
 /// Runtime for executing filters at different stages
@@ -39,6 +41,34 @@ impl FilterRuntime {
         }
 
         runtime
+    }
+
+    /// Create FilterRuntime from HTTPRouteFilter list
+    pub fn new_from_httproute_filters(filters: &[HTTPRouteFilter]) -> Self {
+        let mut runtime = FilterRuntime {
+            request_filter: vec![],
+        };
+
+        for filter in filters {
+            if let Some(f) = Self::create_filter(filter) {
+                runtime.request_filter.push(f);
+            }
+        }
+
+        runtime
+    }
+
+    /// Create a Filter instance from HTTPRouteFilter
+    fn create_filter(filter: &HTTPRouteFilter) -> Option<Box<dyn Filter>> {
+        match filter.filter_type {
+            HTTPRouteFilterType::RequestHeaderModifier => {
+                filter.request_header_modifier.as_ref().map(|config| {
+                    Box::new(RequestHeaderModifierFilter::new(config.clone())) as Box<dyn Filter>
+                })
+            }
+            // TODO: Add other filter types
+            _ => None,
+        }
     }
 
     /// Get total filter count across all stages
