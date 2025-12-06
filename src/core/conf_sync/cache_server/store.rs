@@ -217,19 +217,19 @@ mod tests {
         type DynamicType = ();
         type Scope = kube::core::ClusterResourceScope;
 
-        fn kind(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+        fn kind(_: &Self::DynamicType) -> std::borrow::Cow<'static, str> {
             "TestResource".into()
         }
 
-        fn group(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+        fn group(_: &Self::DynamicType) -> std::borrow::Cow<'static, str> {
             "test.example.com".into()
         }
 
-        fn version(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+        fn version(_: &Self::DynamicType) -> std::borrow::Cow<'static, str> {
             "v1".into()
         }
 
-        fn plural(_: &Self::DynamicType) -> std::borrow::Cow<str> {
+        fn plural(_: &Self::DynamicType) -> std::borrow::Cow<'static, str> {
             "testresources".into()
         }
 

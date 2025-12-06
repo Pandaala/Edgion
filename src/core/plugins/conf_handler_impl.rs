@@ -53,7 +53,7 @@ mod tests {
     use crate::types::resources::http_route::HTTPHeaderFilter;
 
     fn create_test_plugin(namespace: &str, name: &str) -> EdgionPlugins {
-        EdgionPlugins {
+        let mut plugin = EdgionPlugins {
             metadata: kube::core::ObjectMeta {
                 namespace: Some(namespace.to_string()),
                 name: Some(name.to_string()),
@@ -67,9 +67,12 @@ mod tests {
                         remove: Some(vec!["X-Remove".to_string()]),
                     })),
                 ]),
+                plugin_runtime: Default::default(),
             },
             status: None,
-        }
+        };
+        plugin.init_plugin_runtime();
+        plugin
     }
 
     #[test]

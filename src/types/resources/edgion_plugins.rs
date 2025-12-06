@@ -276,13 +276,16 @@ mod tests {
     use crate::types::resources::http_route::HTTPHeader;
 
     fn create_edgion_plugins(plugins: Option<Vec<PluginEntry>>) -> EdgionPlugins {
-        EdgionPlugins {
+        let mut ep = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
                 plugins,
+                plugin_runtime: Default::default(),
             },
             status: None,
-        }
+        };
+        ep.init_plugin_runtime();
+        ep
     }
 
     fn make_header_modifier_plugin() -> EdgionPlugin {
