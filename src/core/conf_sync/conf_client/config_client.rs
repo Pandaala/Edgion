@@ -24,11 +24,15 @@ pub struct ConfigClient {
 
 impl ConfigClient {
     pub fn new(gateway_class_key: String, client_id: String, client_name: String) -> Self {
-        let routes_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
-        
         // Register RouteManager as the handler for HTTPRoute resources
+        let routes_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
         let route_handler = create_route_manager_handler();
         routes_cache.set_conf_processor(route_handler);
+
+        // Register PluginStore as the handler for EdgionPlugins resources
+        let plugins_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let plugin_handler = crate::core::plugins::create_plugin_handler();
+        plugins_cache.set_conf_processor(plugin_handler);
         
         Self {
             gateway_class_key: gateway_class_key.clone(),
@@ -37,7 +41,7 @@ impl ConfigClient {
             services: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             endpoint_slices: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
-            edgion_plugins: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            edgion_plugins: plugins_cache,
             secrets: ClientCache::new(gateway_class_key, client_id, client_name),
         }
     }
