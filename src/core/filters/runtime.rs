@@ -71,9 +71,10 @@ impl FilterRuntime {
     }
 
     pub async fn run_request_filters(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
+        let mut session_adapter = PingoraSessionAdapter::new(s);
+
         for filter in &self.request_filters {
             let mut filter_log = FilterLog::new(filter.name());
-            let mut session_adapter = PingoraSessionAdapter::new(s);
 
             let result = filter.run(
                 FilterRunningStage::Request,

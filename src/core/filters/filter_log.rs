@@ -17,7 +17,7 @@ pub struct FilterLog {
 }
 
 impl FilterLog {
-    /// Create a new filter log entry with name and time cost.
+    #[inline]
     pub fn new(name: &str) -> Self {
         let mut n = String::with_capacity(NAME_CAPACITY);
         n.push_str(name);
