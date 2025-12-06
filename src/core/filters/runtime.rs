@@ -12,7 +12,6 @@ use super::session_adapter::PingoraSessionAdapter;
 use super::standard::RequestHeaderModifierFilter;
 use super::traits::Filter;
 
-/// Runtime for executing filters at different stages
 pub struct FilterRuntime {
     request_filters: Vec<Box<dyn Filter>>,
     response_filters: Vec<Box<dyn Filter>>,
@@ -20,7 +19,6 @@ pub struct FilterRuntime {
 }
 
 impl FilterRuntime {
-    /// Create an empty FilterRuntime
     pub fn new() -> Self {
         Self {
             request_filters: vec![],
@@ -29,7 +27,6 @@ impl FilterRuntime {
         }
     }
 
-    /// Add filters from HTTPRouteFilter list
     pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter]) {
         for filter in filters {
             if let Some(f) = Self::create_filter(filter) {
@@ -38,9 +35,7 @@ impl FilterRuntime {
         }
     }
 
-    /// Add a single filter to the appropriate stage list
     fn add_filter(&mut self, filter: Box<dyn Filter>) {
-        // Get the first stage from filter and add to corresponding list
         if let Some(stage) = filter.get_stages().first() {
             match stage {
                 FilterRunningStage::Request | FilterRunningStage::EarlyRequest => {
@@ -56,7 +51,6 @@ impl FilterRuntime {
         }
     }
 
-    /// Create a Filter instance from HTTPRouteFilter
     fn create_filter(filter: &HTTPRouteFilter) -> Option<Box<dyn Filter>> {
         match filter.filter_type {
             HTTPRouteFilterType::RequestHeaderModifier => {
@@ -79,22 +73,19 @@ impl FilterRuntime {
     pub async fn run_request_filters(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
         for filter in &self.request_filters {
             let mut filter_log = FilterLog::new(filter.name());
+            let mut session_adapter = PingoraSessionAdapter::new(s);
 
-            let mut session_adapter = PingoraSessionAdapter::new(
-                s,
+            let result = filter.run(
                 FilterRunningStage::Request,
-            );
-
-            let result = filter.run(&mut session_adapter, &mut filter_log).await;
+                &mut session_adapter,
+                &mut filter_log,
+            ).await;
             ctx.filter_logs.push(filter_log);
 
             if ErrTerminateRequest == result {
                 ctx.filter_running_result = ErrTerminateRequest;
                 return;
             }
-
-            // Apply request header modifications after each filter
-            session_adapter.apply_request_header_modifications();
         }
     }
 }

@@ -26,7 +26,7 @@ impl Filter for RequestHeaderModifierFilter {
         "RequestHeaderModifier"
     }
 
-    async fn run(&self, session: &mut dyn FilterSession, _log: &mut FilterLog) -> FilterRunningResult {
+    async fn run(&self, _stage: FilterRunningStage, session: &mut dyn FilterSession, _log: &mut FilterLog) -> FilterRunningResult {
         // Set headers - overwrite existing
         if let Some(headers) = &self.config.set {
             for h in headers {

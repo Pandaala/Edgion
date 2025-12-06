@@ -58,8 +58,6 @@ pub trait FilterSession: Send {
     ) -> FilterSessionResult<()>;
 
     async fn shutdown(&mut self);
-
-    fn get_stage(&self) -> FilterRunningStage;
 }
 
 #[async_trait]
@@ -68,6 +66,7 @@ pub trait Filter: Send + Sync {
 
     async fn run(
         &self,
+        stage: FilterRunningStage,
         session: &mut dyn FilterSession,
         filter_log: &mut FilterLog,
     ) -> FilterRunningResult;
