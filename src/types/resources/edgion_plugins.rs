@@ -2,11 +2,13 @@
 //!
 //! EdgionPlugins defines reusable plugin configurations that can be referenced by HTTPRoutes
 
+use std::sync::Arc;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::core::filters::PluginRuntime;
 use super::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter,
     HTTPURLRewriteFilter, LocalObjectReference,
@@ -38,6 +40,12 @@ pub struct EdgionPluginsSpec {
     /// Plugin configurations
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<PluginEntry>>,
+
+    /// Plugin runtime (runtime only, not serialized)
+    /// This is computed from plugins at runtime
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub plugin_runtime: Arc<PluginRuntime>,
 }
 
 /// Status of EdgionPlugins
@@ -86,6 +94,14 @@ impl EdgionPlugins {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Initialize plugin runtime from plugins
+    /// This should be called after deserialization to populate the runtime field
+    pub fn init_plugin_runtime(&mut self) {
+        if let Some(plugins) = &self.spec.plugins {
+            self.spec.plugin_runtime = Arc::new(PluginRuntime::from_edgion_plugins(plugins));
+        }
     }
 }
 

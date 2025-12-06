@@ -25,5 +25,10 @@ impl ResourceMeta for EdgionPlugins {
             self.metadata.name.as_deref().unwrap_or("").to_string()
         }
     }
+
+    fn pre_parse(&mut self) {
+        // Initialize plugin runtime from plugins
+        self.init_plugin_runtime();
+    }
 }
 

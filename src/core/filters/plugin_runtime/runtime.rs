@@ -6,7 +6,7 @@ use pingora_proxy::Session;
 use crate::types::EdgionHttpContext;
 use crate::types::filters::PluginRunningStage;
 use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
-use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType};
+use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, EdgionPlugin, PluginEntry};
 
 use super::log::PluginLog;
 use crate::core::filters::gapi_filters::{RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
@@ -65,6 +65,41 @@ impl PluginRuntime {
             if let Some(p) = Self::create_plugin(filter) {
                 self.add_plugin(p);
             }
+        }
+    }
+
+    /// Create from EdgionPlugins plugin entries (only enabled plugins)
+    pub fn from_edgion_plugins(entries: &[PluginEntry]) -> Self {
+        let mut runtime = Self::new();
+        runtime.add_from_edgion_plugins(entries);
+        runtime
+    }
+
+    /// Add plugins from EdgionPlugins entries (only enabled plugins)
+    pub fn add_from_edgion_plugins(&mut self, entries: &[PluginEntry]) {
+        for entry in entries {
+            if entry.is_enabled() {
+                if let Some(p) = Self::create_plugin_from_edgion(&entry.plugin) {
+                    self.add_plugin(p);
+                }
+            }
+        }
+    }
+
+    /// Create a Plugin instance from EdgionPlugin enum
+    fn create_plugin_from_edgion(plugin: &EdgionPlugin) -> Option<Box<dyn Plugin>> {
+        match plugin {
+            EdgionPlugin::RequestHeaderModifier(config) => {
+                Some(Box::new(RequestHeaderModifierFilter::new(config.clone())) as Box<dyn Plugin>)
+            }
+            EdgionPlugin::ResponseHeaderModifier(config) => {
+                Some(Box::new(ResponseHeaderModifierFilter::new(config.clone())) as Box<dyn Plugin>)
+            }
+            EdgionPlugin::RequestRedirect(config) => {
+                Some(Box::new(RequestRedirectFilter::new(config.clone())) as Box<dyn Plugin>)
+            }
+            // TODO: Add other plugin types (UrlRewrite, RequestMirror, ExtensionRef)
+            _ => None,
         }
     }
 
