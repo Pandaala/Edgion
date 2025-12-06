@@ -1,10 +1,9 @@
 //! Filter runtime - manages filter execution across different stages
 
 use pingora_proxy::Session;
-use std::collections::HashMap;
 
 use crate::types::EdgionHttpContext;
-use crate::types::filters::{FilterConf, FilterRunningStage};
+use crate::types::filters::FilterRunningStage;
 use crate::types::filters::FilterRunningResult::ErrTerminateRequest;
 use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType};
 
@@ -15,47 +14,46 @@ use super::traits::Filter;
 
 /// Runtime for executing filters at different stages
 pub struct FilterRuntime {
-    request_filter: Vec<Box<dyn Filter>>,
+    request_filters: Vec<Box<dyn Filter>>,
+    response_filters: Vec<Box<dyn Filter>>,
+    response_header_filters: Vec<Box<dyn Filter>>,
 }
 
 impl FilterRuntime {
-    pub fn new(filter_conf_list: &Option<HashMap<FilterRunningStage, Vec<FilterConf>>>) -> Self {
-        let mut runtime = FilterRuntime {
-            request_filter: vec![],
-        };
+    /// Create an empty FilterRuntime
+    pub fn new() -> Self {
+        Self {
+            request_filters: vec![],
+            response_filters: vec![],
+            response_header_filters: vec![],
+        }
+    }
 
-        if let Some(filter_conf_list) = filter_conf_list {
-            for (stage, filter_list) in filter_conf_list {
-                match stage {
-                    FilterRunningStage::Request => {
-                        for filter_conf in filter_list {
-                            let filter = get_filter_from_filter_conf(filter_conf);
-                            runtime.request_filter.push(filter);
-                        }
-                    }
-                    _ => {
-                        // TODO: Implement other stage filters
-                    }
+    /// Add filters from HTTPRouteFilter list
+    pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter]) {
+        for filter in filters {
+            if let Some(f) = Self::create_filter(filter) {
+                self.add_filter(f);
+            }
+        }
+    }
+
+    /// Add a single filter to the appropriate stage list
+    fn add_filter(&mut self, filter: Box<dyn Filter>) {
+        // Get the first stage from filter and add to corresponding list
+        if let Some(stage) = filter.get_stages().first() {
+            match stage {
+                FilterRunningStage::Request | FilterRunningStage::EarlyRequest => {
+                    self.request_filters.push(filter);
+                }
+                FilterRunningStage::Response => {
+                    self.response_filters.push(filter);
+                }
+                FilterRunningStage::ResponseHeader => {
+                    self.response_header_filters.push(filter);
                 }
             }
         }
-
-        runtime
-    }
-
-    /// Create FilterRuntime from HTTPRouteFilter list
-    pub fn new_from_httproute_filters(filters: &[HTTPRouteFilter]) -> Self {
-        let mut runtime = FilterRuntime {
-            request_filter: vec![],
-        };
-
-        for filter in filters {
-            if let Some(f) = Self::create_filter(filter) {
-                runtime.request_filter.push(f);
-            }
-        }
-
-        runtime
     }
 
     /// Create a Filter instance from HTTPRouteFilter
@@ -73,11 +71,13 @@ impl FilterRuntime {
 
     /// Get total filter count across all stages
     pub fn total_filter_count(&self) -> usize {
-        self.request_filter.len()
+        self.request_filters.len() 
+            + self.response_filters.len() 
+            + self.response_header_filters.len()
     }
 
     pub async fn run_request_filters(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
-        for filter in &self.request_filter {
+        for filter in &self.request_filters {
             let mut filter_log = FilterLog::new(filter.name());
 
             let mut session_adapter = PingoraSessionAdapter::new(
@@ -96,12 +96,5 @@ impl FilterRuntime {
             // Apply request header modifications after each filter
             session_adapter.apply_request_header_modifications();
         }
-    }
-}
-
-fn get_filter_from_filter_conf(filter_conf: &FilterConf) -> Box<dyn Filter> {
-    match filter_conf.name.as_str() {
-        // "BasicAuth" => BasicAuth::new_filter(filter_conf),
-        _ => todo!(),
     }
 }
