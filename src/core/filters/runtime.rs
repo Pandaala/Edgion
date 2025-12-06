@@ -10,7 +10,7 @@ use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType};
 
 use super::filter_log::FilterLog;
 use super::session_adapter::PingoraSessionAdapter;
-use super::standard::{RequestHeaderModifierFilter, ResponseHeaderModifierFilter};
+use super::gapi_filters::{RequestHeaderModifierFilter, ResponseHeaderModifierFilter};
 use super::traits::Filter;
 
 pub struct FilterRuntime {
