@@ -50,7 +50,7 @@ impl BackendExtensionInfo {
     fn parse_lb_policy(ext_ref: &LocalObjectReference) -> Option<ParsedLBPolicy> {
         // Check group (empty string means core API group, otherwise should be edgion.io)
         if !ext_ref.group.is_empty() && ext_ref.group != "edgion.io" {
-            return None;
+                return None;
         }
         
         match ext_ref.kind.as_str() {

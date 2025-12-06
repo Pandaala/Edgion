@@ -1,0 +1,52 @@
+# EdgionPlugins - 可复用的插件集合
+# 多个 HTTPRoute 可以通过 ExtensionRef 引用同一个 EdgionPlugins
+apiVersion: edgion.io/v1alpha1
+kind: EdgionPlugins
+metadata:
+  name: common-plugins
+  namespace: test1
+spec:
+  plugins:
+    # 请求头修改 - 添加追踪头
+    - type: requestHeaderModifier
+      config:
+        set:
+          - name: X-Request-Id
+            value: "{{uuid}}"
+          - name: X-Forwarded-By
+            value: "edgion-gateway"
+        add:
+          - name: X-Custom-Header
+            value: "custom-value"
+
+    # 响应头修改 - 添加安全相关头
+    - type: responseHeaderModifier
+      config:
+        set:
+          - name: X-Content-Type-Options
+            value: "nosniff"
+          - name: X-Frame-Options
+            value: "DENY"
+        add:
+          - name: X-Powered-By
+            value: "Edgion"
+        remove:
+          - Server
+
+    # 禁用的插件示例
+    - enable: false
+      type: requestRedirect
+      config:
+        scheme: https
+        hostname: backup.example.com
+        statusCode: 302
+
+    # 带条件的插件示例 - 在指定时间前生效
+    - conditionEnable:
+        timeBefore: "2025-12-31T23:59:59Z"
+      type: requestHeaderModifier
+      config:
+        add:
+          - name: X-Promo-Header
+            value: "year-end-sale"
+

@@ -13,6 +13,7 @@ spec:
     - "aaa.example.com"
     - "bbb.example.com"
   rules:
+    # 规则1: 使用 ExtensionRef 引用 EdgionPlugins (规则级别)
     - matches:
         - path:
             type: PathPrefix
@@ -20,10 +21,17 @@ spec:
         - path:
             type: PathPrefix
             value: /aaa/exact
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: common-plugins
       backendRefs:
         - name: aaa-service
           port: 30001
 
+    # 规则2: 使用 ExtensionRef 引用 EdgionPlugins (后端级别)
     - matches:
         - path:
             type: PathPrefix
@@ -35,10 +43,17 @@ spec:
         - name: aaa-service
           port: 30002
           weight: 1
+          filters:
+            - type: ExtensionRef
+              extensionRef:
+                group: edgion.io
+                kind: EdgionPlugins
+                name: common-plugins
         - name: bbb-service
           port: 30003
           weight: 3
 
+    # 规则3: 同时使用规则级别 filter 和 ExtensionRef
     - matches:
         - path:
             type: PathPrefix
@@ -46,6 +61,19 @@ spec:
         - path:
             type: Exact
             value: /ccc/{id1}/{id2}/ddd
+      filters:
+        # 规则级别的直接 filter
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            add:
+              - name: X-Rule-Level
+                value: "true"
+        # 引用 EdgionPlugins
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: common-plugins
       backendRefs:
         - name: aaa-service
           port: 30002
