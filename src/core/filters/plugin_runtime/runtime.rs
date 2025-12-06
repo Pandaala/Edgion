@@ -1,4 +1,4 @@
-//! Filter runtime - manages filter execution across different stages
+//! Plugin runtime - manages plugin execution across different stages
 
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
@@ -14,27 +14,27 @@ use super::session_adapter::PingoraSessionAdapter;
 use super::traits::Plugin;
 
 pub struct PluginRuntime {
-    /// Filters for request_filter stage (async)
+    /// Plugins for request stage (async)
     request_plugins: Vec<Box<dyn Plugin>>,
-    /// Filters for upstream_response_filter stage (sync)
+    /// Plugins for upstream_response_filter stage (sync)
     upstream_response_plugins: Vec<Box<dyn Plugin>>,
-    /// Filters for response_filter stage (async)
+    /// Plugins for response_filter stage (async)
     upstream_response_async_plugins: Vec<Box<dyn Plugin>>,
 }
 
 impl Clone for PluginRuntime {
     fn clone(&self) -> Self {
-        // FilterRuntime is rebuilt from filters during pre_parse, so clone creates empty
+        // PluginRuntime is rebuilt from plugins during pre_parse, so clone creates empty
         Self::new()
     }
 }
 
 impl std::fmt::Debug for PluginRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FilterRuntime")
-            .field("request_filters_count", &self.request_plugins.len())
-            .field("upstream_response_filters_count", &self.upstream_response_plugins.len())
-            .field("upstream_response_async_filters_count", &self.upstream_response_async_plugins.len())
+        f.debug_struct("PluginRuntime")
+            .field("request_plugins_count", &self.request_plugins.len())
+            .field("upstream_response_plugins_count", &self.upstream_response_plugins.len())
+            .field("upstream_response_async_plugins_count", &self.upstream_response_async_plugins.len())
             .finish()
     }
 }
@@ -62,29 +62,29 @@ impl PluginRuntime {
 
     pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter]) {
         for filter in filters {
-            if let Some(f) = Self::create_filter(filter) {
-                self.add_filter(f);
+            if let Some(p) = Self::create_plugin(filter) {
+                self.add_plugin(p);
             }
         }
     }
 
-    fn add_filter(&mut self, filter: Box<dyn Plugin>) {
-        if let Some(stage) = filter.get_stages().first() {
+    fn add_plugin(&mut self, plugin: Box<dyn Plugin>) {
+        if let Some(stage) = plugin.get_stages().first() {
             match stage {
                 PluginRunningStage::Request => {
-                    self.request_plugins.push(filter);
+                    self.request_plugins.push(plugin);
                 }
                 PluginRunningStage::UpstreamResponseFilter => {
-                    self.upstream_response_plugins.push(filter);
+                    self.upstream_response_plugins.push(plugin);
                 }
                 PluginRunningStage::UpstreamResponse => {
-                    self.upstream_response_async_plugins.push(filter);
+                    self.upstream_response_async_plugins.push(plugin);
                 }
             }
         }
     }
 
-    fn create_filter(filter: &HTTPRouteFilter) -> Option<Box<dyn Plugin>> {
+    fn create_plugin(filter: &HTTPRouteFilter) -> Option<Box<dyn Plugin>> {
         match filter.filter_type {
             HTTPRouteFilterType::RequestHeaderModifier => {
                 filter.request_header_modifier.as_ref().map(|config| {
@@ -101,31 +101,31 @@ impl PluginRuntime {
                     Box::new(RequestRedirectFilter::new(config.clone())) as Box<dyn Plugin>
                 })
             }
-            // TODO: Add other filter types
+            // TODO: Add other plugin types
             _ => None,
         }
     }
 
-    /// Get total filter count across all stages
-    pub fn total_filter_count(&self) -> usize {
+    /// Get total plugin count across all stages
+    pub fn total_plugin_count(&self) -> usize {
         self.request_plugins.len()
             + self.upstream_response_plugins.len()
             + self.upstream_response_async_plugins.len()
     }
 
-    /// Run request_filter stage filters (async)
-    pub async fn run_request_filters(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
+    /// Run request stage plugins (async)
+    pub async fn run_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
-        for filter in &self.request_plugins {
-            let mut filter_log = PluginLog::new(filter.name());
+        for plugin in &self.request_plugins {
+            let mut plugin_log = PluginLog::new(plugin.name());
 
-            let result = filter.run_async(
+            let result = plugin.run_async(
                 PluginRunningStage::Request,
                 &mut session_adapter,
-                &mut filter_log,
+                &mut plugin_log,
             ).await;
-            session_adapter.push_filter_log(filter_log);
+            session_adapter.push_plugin_log(plugin_log);
 
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
@@ -134,8 +134,8 @@ impl PluginRuntime {
         }
     }
 
-    /// Run upstream_response_filter stage filters (sync)
-    pub fn run_upstream_response_filters_sync(
+    /// Run upstream_response_filter stage plugins (sync)
+    pub fn run_upstream_response_plugins_sync(
         &self,
         s: &mut Session,
         ctx: &mut EdgionHttpContext,
@@ -143,15 +143,15 @@ impl PluginRuntime {
     ) {
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
-        for filter in &self.upstream_response_plugins {
-            let mut filter_log = PluginLog::new(filter.name());
+        for plugin in &self.upstream_response_plugins {
+            let mut plugin_log = PluginLog::new(plugin.name());
 
-            let result = filter.run_sync(
+            let result = plugin.run_sync(
                 PluginRunningStage::UpstreamResponseFilter,
                 &mut session_adapter,
-                &mut filter_log,
+                &mut plugin_log,
             );
-            session_adapter.push_filter_log(filter_log);
+            session_adapter.push_plugin_log(plugin_log);
 
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
@@ -160,8 +160,8 @@ impl PluginRuntime {
         }
     }
 
-    /// Run response_filter stage filters (async)
-    pub async fn run_upstream_response_filters_async(
+    /// Run response_filter stage plugins (async)
+    pub async fn run_upstream_response_plugins_async(
         &self,
         s: &mut Session,
         ctx: &mut EdgionHttpContext,
@@ -169,15 +169,15 @@ impl PluginRuntime {
     ) {
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
-        for filter in &self.upstream_response_async_plugins {
-            let mut filter_log = PluginLog::new(filter.name());
+        for plugin in &self.upstream_response_async_plugins {
+            let mut plugin_log = PluginLog::new(plugin.name());
 
-            let result = filter.run_async(
+            let result = plugin.run_async(
                 PluginRunningStage::UpstreamResponse,
                 &mut session_adapter,
-                &mut filter_log,
+                &mut plugin_log,
             ).await;
-            session_adapter.push_filter_log(filter_log);
+            session_adapter.push_plugin_log(plugin_log);
 
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
@@ -186,4 +186,3 @@ impl PluginRuntime {
         }
     }
 }
-

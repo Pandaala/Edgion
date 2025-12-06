@@ -31,13 +31,13 @@ impl<'a> PingoraSessionAdapter<'a> {
     }
 
     #[inline]
-    pub fn push_filter_log(&mut self, log: PluginLog) {
-        self.ctx.filter_logs.push(log);
+    pub fn push_plugin_log(&mut self, log: PluginLog) {
+        self.ctx.plugin_logs.push(log);
     }
 
     #[inline]
     pub fn set_terminate(&mut self) {
-        self.ctx.filter_running_result = PluginRunningResult::ErrTerminateRequest;
+        self.ctx.plugin_running_result = PluginRunningResult::ErrTerminateRequest;
     }
 }
 
@@ -156,4 +156,3 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.inner.shutdown().await;
     }
 }
-

@@ -13,13 +13,13 @@ pub struct MatchInfo {
     pub rn: String,
     /// match item
     pub m: HTTPRouteMatch,
-    /// Rule-level filter runtime
-    pub rule_filter_runtime: Arc<PluginRuntime>,
+    /// Rule-level plugin runtime
+    pub rule_plugin_runtime: Arc<PluginRuntime>,
 }
 
 impl MatchInfo {
-    pub fn new(rns: String, rn: String, m: HTTPRouteMatch, rule_filter_runtime: Arc<PluginRuntime>) -> Self {
-        Self { rns, rn, m, rule_filter_runtime }
+    pub fn new(rns: String, rn: String, m: HTTPRouteMatch, rule_plugin_runtime: Arc<PluginRuntime>) -> Self {
+        Self { rns, rn, m, rule_plugin_runtime }
     }
 }
 
@@ -69,11 +69,11 @@ pub struct EdgionHttpContext {
     /// Upstream info after peer selection
     pub upstream_info: Option<UpstreamInfo>,
     
-    /// Filter execution logs
-    pub filter_logs: Vec<PluginLog>,
+    /// Plugin execution logs
+    pub plugin_logs: Vec<PluginLog>,
     
-    /// Filter running result
-    pub filter_running_result: PluginRunningResult,
+    /// Plugin running result
+    pub plugin_running_result: PluginRunningResult,
 }
 
 impl EdgionHttpContext {
@@ -88,8 +88,8 @@ impl EdgionHttpContext {
             matched_info: None,
             selected_backend: None,
             upstream_info: None,
-            filter_logs: Vec::with_capacity(10),
-            filter_running_result: PluginRunningResult::Nothing,
+            plugin_logs: Vec::with_capacity(10),
+            plugin_running_result: PluginRunningResult::Nothing,
         }
     }
 

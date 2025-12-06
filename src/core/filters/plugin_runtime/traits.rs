@@ -80,10 +80,10 @@ pub trait Plugin: Send + Sync {
         &self,
         stage: PluginRunningStage,
         session: &mut dyn PluginSession,
-        filter_log: &mut PluginLog,
+        plugin_log: &mut PluginLog,
     ) -> PluginRunningResult;
 
-    /// Whether this filter supports sync execution
+    /// Whether this plugin supports sync execution
     fn supports_sync(&self) -> bool {
         false
     }
@@ -92,4 +92,3 @@ pub trait Plugin: Send + Sync {
 
     fn check_schema(&self, _conf: &PluginConf);
 }
-

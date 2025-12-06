@@ -72,15 +72,15 @@ impl ProxyHttp for EdgionHttp {
             Ok((match_info, selected_backend)) => {
                 tracing::info!("selected_backend: {:?}", selected_backend);
 
-                // Run rule-level request filters first
-                match_info.rule_filter_runtime.run_request_filters(session, ctx).await;
-                if ctx.filter_running_result == PluginRunningResult::ErrTerminateRequest {
+                // Run rule-level request plugins first
+                match_info.rule_plugin_runtime.run_request_plugins(session, ctx).await;
+                if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
                     return Ok(true);
                 }
 
-                // Then run backend-level request filters
-                selected_backend.filter_runtime.run_request_filters(session, ctx).await;
-                if ctx.filter_running_result == PluginRunningResult::ErrTerminateRequest {
+                // Then run backend-level request plugins
+                selected_backend.plugin_runtime.run_request_plugins(session, ctx).await;
+                if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
                     return Ok(true);
                 }
 
@@ -121,14 +121,14 @@ impl ProxyHttp for EdgionHttp {
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> pingora_core::Result<()> {
-        // Run rule-level upstream_response_filter (sync)
+        // Run rule-level upstream_response plugins (sync)
         if let Some(match_info) = ctx.matched_info.clone() {
-            match_info.rule_filter_runtime.run_upstream_response_filters_sync(session, ctx, upstream_response);
+            match_info.rule_plugin_runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
         }
 
-        // Run backend-level upstream_response_filter (sync)
+        // Run backend-level upstream_response plugins (sync)
         if let Some(backend) = ctx.selected_backend.clone() {
-            backend.filter_runtime.run_upstream_response_filters_sync(session, ctx, upstream_response);
+            backend.plugin_runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
         }
 
         Ok(())
@@ -144,14 +144,14 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
-        // Run rule-level response filters (async)
+        // Run rule-level response plugins (async)
         if let Some(match_info) = ctx.matched_info.clone() {
-            match_info.rule_filter_runtime.run_upstream_response_filters_async(session, ctx, upstream_response).await;
+            match_info.rule_plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
         }
 
-        // Run backend-level response filters (async)
+        // Run backend-level response plugins (async)
         if let Some(backend) = ctx.selected_backend.clone() {
-            backend.filter_runtime.run_upstream_response_filters_async(session, ctx, upstream_response).await;
+            backend.plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
         }
 
         Ok(())

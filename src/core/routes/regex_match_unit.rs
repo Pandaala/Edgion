@@ -26,10 +26,10 @@ impl HttpRouteRuleRegexUnit {
         rule: Arc<HTTPRouteRule>,
         path_regex: Regex,
     ) -> HttpRouteRuleRegexUnit {
-        let rule_filter_runtime = rule.filter_runtime.clone();
+        let rule_plugin_runtime = rule.plugin_runtime.clone();
         Self {
             resource_key,
-            matched_info: Arc::new(MatchInfo::new(namespace, name, match_item, rule_filter_runtime)),
+            matched_info: Arc::new(MatchInfo::new(namespace, name, match_item, rule_plugin_runtime)),
             rule,
             path_regex,
         }

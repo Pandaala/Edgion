@@ -96,9 +96,9 @@ impl HTTPRoute {
         };
         
         for rule in rules.iter_mut() {
-            // Initialize rule-level filter_runtime from rule.filters
+            // Initialize rule-level plugin_runtime from rule.filters
             if let Some(filters) = &rule.filters {
-                rule.filter_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters));
+                rule.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters));
             }
 
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
@@ -118,9 +118,9 @@ impl HTTPRoute {
                 
                 backend_ref.extension_info = extension_info;
 
-                // Initialize filter_runtime from filters
+                // Initialize plugin_runtime from filters
                 if let Some(filters) = &backend_ref.filters {
-                    backend_ref.filter_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters));
+                    backend_ref.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters));
                 }
             }
         }

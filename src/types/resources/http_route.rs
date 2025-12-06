@@ -108,7 +108,7 @@ pub struct HTTPRouteRule {
     /// This is computed from filters at runtime
     #[serde(skip)]
     #[schemars(skip)]
-    pub filter_runtime: Arc<PluginRuntime>,
+    pub plugin_runtime: Arc<PluginRuntime>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -123,7 +123,7 @@ impl Clone for HTTPRouteRule {
             // Create a new uninitialized selector for cloned instance
             // The selector will be initialized lazily when needed
             backend_finder: BackendSelector::new(),
-            filter_runtime: self.filter_runtime.clone(),
+            plugin_runtime: self.plugin_runtime.clone(),
         }
     }
 }
@@ -138,7 +138,7 @@ impl fmt::Debug for HTTPRouteRule {
             .field("retry", &self.retry)
             .field("session_persistence", &self.session_persistence)
             .field("lb", &"<skipped>")
-            .field("filter_runtime", &self.filter_runtime)
+            .field("plugin_runtime", &self.plugin_runtime)
             .finish()
     }
 }
@@ -243,7 +243,7 @@ pub struct HTTPBackendRef {
     /// This is computed from filters at runtime
     #[serde(skip)]
     #[schemars(skip)]
-    pub filter_runtime: Arc<PluginRuntime>,
+    pub plugin_runtime: Arc<PluginRuntime>,
 }
 
 /// HTTPRouteFilter defines processing steps that must be completed during the request/response lifecycle

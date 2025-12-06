@@ -1,11 +1,11 @@
-/// Default capacity for filter name string.
+/// Default capacity for plugin name string.
 pub const NAME_CAPACITY: usize = 36;
 
-/// Filter log entry
-/// Fixed structure for filter execution logging
+/// Plugin log entry
+/// Fixed structure for plugin execution logging
 #[derive(Debug, Clone)]
 pub struct PluginLog {
-    /// Filter name (pre-allocated with capacity 36)
+    /// Plugin name (pre-allocated with capacity 36)
     pub name: String,
     
     /// Time cost in microseconds (us), None if not measured
@@ -35,4 +35,3 @@ impl PluginLog {
             .push_str(log);
     }
 }
-
