@@ -94,11 +94,14 @@ impl HTTPRoute {
         let Some(rules) = self.spec.rules.as_mut() else {
             return;
         };
+
+        // Get namespace for ExtensionRef lookups
+        let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
         
         for rule in rules.iter_mut() {
             // Initialize rule-level plugin_runtime from rule.filters
             if let Some(filters) = &rule.filters {
-                rule.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters));
+                rule.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters, namespace));
             }
 
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
@@ -120,7 +123,7 @@ impl HTTPRoute {
 
                 // Initialize plugin_runtime from filters
                 if let Some(filters) = &backend_ref.filters {
-                    backend_ref.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters));
+                    backend_ref.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters, namespace));
                 }
             }
         }

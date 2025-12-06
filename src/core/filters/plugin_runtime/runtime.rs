@@ -9,7 +9,7 @@ use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
 use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, EdgionPlugin, PluginEntry};
 
 use super::log::PluginLog;
-use crate::core::filters::gapi_filters::{RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
+use crate::core::filters::gapi_filters::{ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
 use super::session_adapter::PingoraSessionAdapter;
 use super::traits::Plugin;
 
@@ -54,15 +54,15 @@ impl PluginRuntime {
         }
     }
 
-    pub fn from_httproute_filters(filters: &[HTTPRouteFilter]) -> Self {
+    pub fn from_httproute_filters(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
         let mut runtime = Self::new();
-        runtime.add_from_httproute_filters(filters);
+        runtime.add_from_httproute_filters(filters, namespace);
         runtime
     }
 
-    pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter]) {
+    pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter], namespace: &str) {
         for filter in filters {
-            if let Some(p) = Self::create_plugin(filter) {
+            if let Some(p) = Self::create_plugin(filter, namespace) {
                 self.add_plugin(p);
             }
         }
@@ -119,7 +119,7 @@ impl PluginRuntime {
         }
     }
 
-    fn create_plugin(filter: &HTTPRouteFilter) -> Option<Box<dyn Plugin>> {
+    fn create_plugin(filter: &HTTPRouteFilter, namespace: &str) -> Option<Box<dyn Plugin>> {
         match filter.filter_type {
             HTTPRouteFilterType::RequestHeaderModifier => {
                 filter.request_header_modifier.as_ref().map(|config| {
@@ -136,7 +136,12 @@ impl PluginRuntime {
                     Box::new(RequestRedirectFilter::new(config.clone())) as Box<dyn Plugin>
                 })
             }
-            // TODO: Add other plugin types
+            HTTPRouteFilterType::ExtensionRef => {
+                filter.extension_ref.as_ref().map(|ext_ref| {
+                    Box::new(ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone())) as Box<dyn Plugin>
+                })
+            }
+            // TODO: Add other plugin types (UrlRewrite, RequestMirror)
             _ => None,
         }
     }
@@ -146,6 +151,21 @@ impl PluginRuntime {
         self.request_plugins.len()
             + self.upstream_response_plugins.len()
             + self.upstream_response_async_plugins.len()
+    }
+
+    /// Iterate over request stage plugins
+    pub fn request_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn Plugin>> {
+        self.request_plugins.iter()
+    }
+
+    /// Iterate over upstream_response_filter stage plugins (sync)
+    pub fn upstream_response_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn Plugin>> {
+        self.upstream_response_plugins.iter()
+    }
+
+    /// Iterate over response_filter stage plugins (async)
+    pub fn upstream_response_async_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn Plugin>> {
+        self.upstream_response_async_plugins.iter()
     }
 
     /// Run request stage plugins (async)
