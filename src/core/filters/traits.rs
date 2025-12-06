@@ -64,12 +64,29 @@ pub trait FilterSession: Send {
 pub trait Filter: Send + Sync {
     fn name(&self) -> &str;
 
-    async fn run(
+    /// Sync run - for sync hooks (e.g., upstream_response_filter)
+    /// Default implementation passes through
+    fn run_sync(
+        &self,
+        _stage: FilterRunningStage,
+        _session: &mut dyn FilterSession,
+        _log: &mut FilterLog,
+    ) -> FilterRunningResult {
+        FilterRunningResult::GoodNext
+    }
+
+    /// Async run - for async hooks (e.g., request_filter, response_filter)
+    async fn run_async(
         &self,
         stage: FilterRunningStage,
         session: &mut dyn FilterSession,
         filter_log: &mut FilterLog,
     ) -> FilterRunningResult;
+
+    /// Whether this filter supports sync execution
+    fn supports_sync(&self) -> bool {
+        false
+    }
 
     fn get_stages(&self) -> Vec<FilterRunningStage>;
 

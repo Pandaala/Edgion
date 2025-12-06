@@ -75,4 +75,18 @@ Logging / Tracing 插件
 这和你现在做的情况很像：
 每个网关都是自己设计一套 Filter 框架。
 
-路由match后，如何取出filter，可以优化一下，同时兼容之copy 引用的plugin的namespace/name，和复杂配置下的插件
+路由match后，如何取出filter，可以优化一下，同时兼容之copy 引用的plugin的namespace/name，和复杂配置下的插件.
+gateway上配置80转443.
+
+
+
+实现Pingora Cache：
+如果你的系统需要：
+CDN 边缘缓存
+API Gateway 加速
+反向代理缓存
+小型 CDN/Local Cache 节点（像 Cloudflare Workers 一样）
+HTTP GET 的减负（同类请求 collapse）
+短期静态资源缓存
+业务服务降压
+那么 Pingora 的内置缓存可以直接使用。

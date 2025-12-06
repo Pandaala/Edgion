@@ -13,10 +13,12 @@ pub struct FilterConf {
 /// Filter running stage
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum FilterRunningStage {
-    EarlyRequest,
+    /// request_filter (async)
     Request,
-    Response,
-    ResponseHeader,
+    /// upstream_response_filter (sync)
+    UpstreamResponseFilter,
+    /// response_filter (async)
+    UpstreamResponse,
 }
 
 /// Filter running result

@@ -14,9 +14,12 @@ use super::gapi_filters::{RequestHeaderModifierFilter, RequestRedirectFilter, Re
 use super::traits::Filter;
 
 pub struct FilterRuntime {
+    /// Filters for request_filter stage (async)
     request_filters: Vec<Box<dyn Filter>>,
-    response_filters: Vec<Box<dyn Filter>>,
-    response_header_filters: Vec<Box<dyn Filter>>,
+    /// Filters for upstream_response_filter stage (sync)
+    upstream_response_filters: Vec<Box<dyn Filter>>,
+    /// Filters for response_filter stage (async)
+    upstream_response_async_filters: Vec<Box<dyn Filter>>,
 }
 
 impl Clone for FilterRuntime {
@@ -30,8 +33,8 @@ impl std::fmt::Debug for FilterRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FilterRuntime")
             .field("request_filters_count", &self.request_filters.len())
-            .field("response_filters_count", &self.response_filters.len())
-            .field("response_header_filters_count", &self.response_header_filters.len())
+            .field("upstream_response_filters_count", &self.upstream_response_filters.len())
+            .field("upstream_response_async_filters_count", &self.upstream_response_async_filters.len())
             .finish()
     }
 }
@@ -46,8 +49,8 @@ impl FilterRuntime {
     pub fn new() -> Self {
         Self {
             request_filters: vec![],
-            response_filters: vec![],
-            response_header_filters: vec![],
+            upstream_response_filters: vec![],
+            upstream_response_async_filters: vec![],
         }
     }
 
@@ -68,14 +71,14 @@ impl FilterRuntime {
     fn add_filter(&mut self, filter: Box<dyn Filter>) {
         if let Some(stage) = filter.get_stages().first() {
             match stage {
-                FilterRunningStage::Request | FilterRunningStage::EarlyRequest => {
+                FilterRunningStage::Request => {
                     self.request_filters.push(filter);
                 }
-                FilterRunningStage::Response => {
-                    self.response_filters.push(filter);
+                FilterRunningStage::UpstreamResponseFilter => {
+                    self.upstream_response_filters.push(filter);
                 }
-                FilterRunningStage::ResponseHeader => {
-                    self.response_header_filters.push(filter);
+                FilterRunningStage::UpstreamResponse => {
+                    self.upstream_response_async_filters.push(filter);
                 }
             }
         }
@@ -106,17 +109,18 @@ impl FilterRuntime {
     /// Get total filter count across all stages
     pub fn total_filter_count(&self) -> usize {
         self.request_filters.len() 
-            + self.response_filters.len() 
-            + self.response_header_filters.len()
+            + self.upstream_response_filters.len() 
+            + self.upstream_response_async_filters.len()
     }
 
+    /// Run request_filter stage filters (async)
     pub async fn run_request_filters(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.request_filters {
             let mut filter_log = FilterLog::new(filter.name());
 
-            let result = filter.run(
+            let result = filter.run_async(
                 FilterRunningStage::Request,
                 &mut session_adapter,
                 &mut filter_log,
@@ -130,7 +134,8 @@ impl FilterRuntime {
         }
     }
 
-    pub async fn run_response_header_filters(
+    /// Run upstream_response_filter stage filters (sync)
+    pub fn run_upstream_response_filters_sync(
         &self,
         s: &mut Session,
         ctx: &mut EdgionHttpContext,
@@ -138,11 +143,37 @@ impl FilterRuntime {
     ) {
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
-        for filter in &self.response_header_filters {
+        for filter in &self.upstream_response_filters {
             let mut filter_log = FilterLog::new(filter.name());
 
-            let result = filter.run(
-                FilterRunningStage::ResponseHeader,
+            let result = filter.run_sync(
+                FilterRunningStage::UpstreamResponseFilter,
+                &mut session_adapter,
+                &mut filter_log,
+            );
+            session_adapter.push_filter_log(filter_log);
+
+            if ErrTerminateRequest == result {
+                session_adapter.set_terminate();
+                return;
+            }
+        }
+    }
+
+    /// Run response_filter stage filters (async)
+    pub async fn run_upstream_response_filters_async(
+        &self,
+        s: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        response_header: &mut ResponseHeader,
+    ) {
+        let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
+
+        for filter in &self.upstream_response_async_filters {
+            let mut filter_log = FilterLog::new(filter.name());
+
+            let result = filter.run_async(
+                FilterRunningStage::UpstreamResponse,
                 &mut session_adapter,
                 &mut filter_log,
             ).await;

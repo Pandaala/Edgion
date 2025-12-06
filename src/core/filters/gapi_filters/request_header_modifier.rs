@@ -21,12 +21,41 @@ impl RequestHeaderModifierFilter {
 
 #[async_trait]
 impl Filter for RequestHeaderModifierFilter {
-
     fn name(&self) -> &str {
         "RequestHeaderModifier"
     }
 
-    async fn run(&self, _stage: FilterRunningStage, session: &mut dyn FilterSession, _log: &mut FilterLog) -> FilterRunningResult {
+    fn run_sync(
+        &self,
+        _stage: FilterRunningStage,
+        session: &mut dyn FilterSession,
+        _log: &mut FilterLog,
+    ) -> FilterRunningResult {
+        self.modify_headers(session)
+    }
+
+    async fn run_async(
+        &self,
+        _stage: FilterRunningStage,
+        session: &mut dyn FilterSession,
+        _log: &mut FilterLog,
+    ) -> FilterRunningResult {
+        self.modify_headers(session)
+    }
+
+    fn supports_sync(&self) -> bool {
+        true
+    }
+
+    fn get_stages(&self) -> Vec<FilterRunningStage> {
+        vec![FilterRunningStage::Request]
+    }
+
+    fn check_schema(&self, _conf: &FilterConf) {}
+}
+
+impl RequestHeaderModifierFilter {
+    fn modify_headers(&self, session: &mut dyn FilterSession) -> FilterRunningResult {
         // Set headers - overwrite existing
         if let Some(headers) = &self.config.set {
             for h in headers {
@@ -47,11 +76,5 @@ impl Filter for RequestHeaderModifierFilter {
         }
         FilterRunningResult::GoodNext
     }
-
-    fn get_stages(&self) -> Vec<FilterRunningStage> {
-        vec![FilterRunningStage::Request]
-    }
-
-    fn check_schema(&self, _conf: &FilterConf) {}
 }
 

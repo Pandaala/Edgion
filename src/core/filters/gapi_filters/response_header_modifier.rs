@@ -22,7 +22,37 @@ impl Filter for ResponseHeaderModifierFilter {
         "ResponseHeaderModifier"
     }
 
-    async fn run(&self, _stage: FilterRunningStage, session: &mut dyn FilterSession, _log: &mut FilterLog) -> FilterRunningResult {
+    fn run_sync(
+        &self,
+        _stage: FilterRunningStage,
+        session: &mut dyn FilterSession,
+        _log: &mut FilterLog,
+    ) -> FilterRunningResult {
+        self.modify_headers(session)
+    }
+
+    async fn run_async(
+        &self,
+        _stage: FilterRunningStage,
+        session: &mut dyn FilterSession,
+        _log: &mut FilterLog,
+    ) -> FilterRunningResult {
+        self.modify_headers(session)
+    }
+
+    fn supports_sync(&self) -> bool {
+        true
+    }
+
+    fn get_stages(&self) -> Vec<FilterRunningStage> {
+        vec![FilterRunningStage::UpstreamResponseFilter]
+    }
+
+    fn check_schema(&self, _conf: &FilterConf) {}
+}
+
+impl ResponseHeaderModifierFilter {
+    fn modify_headers(&self, session: &mut dyn FilterSession) -> FilterRunningResult {
         // Set headers
         if let Some(headers) = &self.config.set {
             for h in headers {
@@ -38,11 +68,5 @@ impl Filter for ResponseHeaderModifierFilter {
         // Remove headers - TODO: need remove_response_header in FilterSession
         FilterRunningResult::GoodNext
     }
-
-    fn get_stages(&self) -> Vec<FilterRunningStage> {
-        vec![FilterRunningStage::ResponseHeader]
-    }
-
-    fn check_schema(&self, _conf: &FilterConf) {}
 }
 

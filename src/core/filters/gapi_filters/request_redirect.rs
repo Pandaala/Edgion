@@ -55,7 +55,7 @@ impl Filter for RequestRedirectFilter {
         "RequestRedirect"
     }
 
-    async fn run(
+    async fn run_async(
         &self,
         _stage: FilterRunningStage,
         session: &mut dyn FilterSession,

@@ -4,6 +4,7 @@ use pingora_core::modules::http::HttpModules;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error as PingoraError, ErrorType};
 
+use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::types::EdgionHttpContext;
@@ -111,6 +112,49 @@ impl ProxyHttp for EdgionHttp {
                 Ok(true)
             }
         }
+    }
+
+    /// upstream_response_filter - sync hook
+    fn upstream_response_filter(
+        &self,
+        session: &mut Session,
+        upstream_response: &mut ResponseHeader,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()> {
+        // Run rule-level upstream_response_filter (sync)
+        if let Some(match_info) = ctx.matched_info.clone() {
+            match_info.rule_filter_runtime.run_upstream_response_filters_sync(session, ctx, upstream_response);
+        }
+
+        // Run backend-level upstream_response_filter (sync)
+        if let Some(backend) = ctx.selected_backend.clone() {
+            backend.filter_runtime.run_upstream_response_filters_sync(session, ctx, upstream_response);
+        }
+
+        Ok(())
+    }
+
+    /// response_filter - async hook
+    async fn response_filter(
+        &self,
+        session: &mut Session,
+        upstream_response: &mut ResponseHeader,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        // Run rule-level response filters (async)
+        if let Some(match_info) = ctx.matched_info.clone() {
+            match_info.rule_filter_runtime.run_upstream_response_filters_async(session, ctx, upstream_response).await;
+        }
+
+        // Run backend-level response filters (async)
+        if let Some(backend) = ctx.selected_backend.clone() {
+            backend.filter_runtime.run_upstream_response_filters_async(session, ctx, upstream_response).await;
+        }
+
+        Ok(())
     }
 
     async fn early_request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<()>
