@@ -2,15 +2,15 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
 
-use crate::types::filters::{FilterConf, FilterRunningResult, FilterRunningStage};
-use super::filter_log::FilterLog;
+use crate::types::filters::{FilterConf, PluginRunningResult, PluginRunningStage};
+use super::log::PluginLog;
 
-pub type FilterSessionError = Box<dyn std::error::Error + Send + Sync>;
-pub type FilterSessionResult<T> = Result<T, FilterSessionError>;
+pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;
+pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub trait FilterSession: Send {
+pub trait PluginSession: Send {
     fn header_value(&mut self, name: &str) -> Option<String>;
 
     fn method(&self) -> String;
@@ -19,76 +19,76 @@ pub trait FilterSession: Send {
         &mut self,
         resp: Box<ResponseHeader>,
         end_of_stream: bool,
-    ) -> FilterSessionResult<()>;
+    ) -> PluginSessionResult<()>;
 
     fn write_response_header_boxed<'a>(
         &'a mut self,
         resp: Box<ResponseHeader>,
         end_of_stream: bool,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = FilterSessionResult<()>> + Send + 'a>>;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginSessionResult<()>> + Send + 'a>>;
 
     /// Set a response header (will be added when write_response_header is called)
-    fn set_response_header(&mut self, name: &str, value: &str) -> FilterSessionResult<()>;
+    fn set_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 
     /// Append a value to an existing response header (e.g., Vary: Origin)
-    fn append_response_header(&mut self, name: &str, value: &str) -> FilterSessionResult<()>;
+    fn append_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 
     /// Set a request header (for upstream)
-    fn set_request_header(&mut self, name: &str, value: &str) -> FilterSessionResult<()>;
+    fn set_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 
     /// Append a value to an existing request header (e.g., X-Forwarded-For)
-    fn append_request_header(&mut self, name: &str, value: &str) -> FilterSessionResult<()>;
+    fn append_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 
     /// Remove a request header (e.g., hide credentials)
-    fn remove_request_header(&mut self, name: &str) -> FilterSessionResult<()>;
+    fn remove_request_header(&mut self, name: &str) -> PluginSessionResult<()>;
 
     /// Set the upstream URI (for proxy rewrite)
-    fn set_upstream_uri(&mut self, uri: &str) -> FilterSessionResult<()>;
+    fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()>;
 
     /// Set the upstream host (for proxy rewrite)
-    fn set_upstream_host(&mut self, host: &str) -> FilterSessionResult<()>;
+    fn set_upstream_host(&mut self, host: &str) -> PluginSessionResult<()>;
 
     /// Set the upstream HTTP method (for proxy rewrite)
-    fn set_upstream_method(&mut self, method: &str) -> FilterSessionResult<()>;
+    fn set_upstream_method(&mut self, method: &str) -> PluginSessionResult<()>;
 
     async fn write_response_body(
         &mut self,
         body: Option<Bytes>,
         end_of_stream: bool,
-    ) -> FilterSessionResult<()>;
+    ) -> PluginSessionResult<()>;
 
     async fn shutdown(&mut self);
 }
 
 #[async_trait]
-pub trait Filter: Send + Sync {
+pub trait Plugin: Send + Sync {
     fn name(&self) -> &str;
 
     /// Sync run - for sync hooks (e.g., upstream_response_filter)
     /// Default implementation passes through
     fn run_sync(
         &self,
-        _stage: FilterRunningStage,
-        _session: &mut dyn FilterSession,
-        _log: &mut FilterLog,
-    ) -> FilterRunningResult {
-        FilterRunningResult::GoodNext
+        _stage: PluginRunningStage,
+        _session: &mut dyn PluginSession,
+        _log: &mut PluginLog,
+    ) -> PluginRunningResult {
+        PluginRunningResult::GoodNext
     }
 
     /// Async run - for async hooks (e.g., request_filter, response_filter)
     async fn run_async(
         &self,
-        stage: FilterRunningStage,
-        session: &mut dyn FilterSession,
-        filter_log: &mut FilterLog,
-    ) -> FilterRunningResult;
+        stage: PluginRunningStage,
+        session: &mut dyn PluginSession,
+        filter_log: &mut PluginLog,
+    ) -> PluginRunningResult;
 
     /// Whether this filter supports sync execution
     fn supports_sync(&self) -> bool {
         false
     }
 
-    fn get_stages(&self) -> Vec<FilterRunningStage>;
+    fn get_stages(&self) -> Vec<PluginRunningStage>;
 
     fn check_schema(&self, _conf: &FilterConf);
 }

@@ -8,7 +8,7 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::types::EdgionHttpContext;
-use crate::types::filters::FilterRunningResult;
+use crate::types::filters::PluginRunningResult;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
 use crate::core::backends::get_peer;
 use crate::types::EdgionStatus;
@@ -74,13 +74,13 @@ impl ProxyHttp for EdgionHttp {
 
                 // Run rule-level request filters first
                 match_info.rule_filter_runtime.run_request_filters(session, ctx).await;
-                if ctx.filter_running_result == FilterRunningResult::ErrTerminateRequest {
+                if ctx.filter_running_result == PluginRunningResult::ErrTerminateRequest {
                     return Ok(true);
                 }
 
                 // Then run backend-level request filters
                 selected_backend.filter_runtime.run_request_filters(session, ctx).await;
-                if ctx.filter_running_result == FilterRunningResult::ErrTerminateRequest {
+                if ctx.filter_running_result == PluginRunningResult::ErrTerminateRequest {
                     return Ok(true);
                 }
 

@@ -4,9 +4,9 @@
 
 use async_trait::async_trait;
 use crate::types::resources::HTTPHeaderFilter;
-use crate::types::filters::{FilterConf, FilterRunningResult, FilterRunningStage};
-use crate::core::filters::plugin_runtime::traits::{Filter, FilterSession};
-use crate::core::filters::plugin_runtime::filter_log::FilterLog;
+use crate::types::filters::{FilterConf, PluginRunningResult, PluginRunningStage};
+use crate::core::filters::plugin_runtime::traits::{Plugin, PluginSession};
+use crate::core::filters::plugin_runtime::log::PluginLog;
 
 /// Filter that modifies request headers
 pub struct RequestHeaderModifierFilter {
@@ -20,26 +20,26 @@ impl RequestHeaderModifierFilter {
 }
 
 #[async_trait]
-impl Filter for RequestHeaderModifierFilter {
+impl Plugin for RequestHeaderModifierFilter {
     fn name(&self) -> &str {
         "RequestHeaderModifier"
     }
 
     fn run_sync(
         &self,
-        _stage: FilterRunningStage,
-        session: &mut dyn FilterSession,
-        _log: &mut FilterLog,
-    ) -> FilterRunningResult {
+        _stage: PluginRunningStage,
+        session: &mut dyn PluginSession,
+        _log: &mut PluginLog,
+    ) -> PluginRunningResult {
         self.modify_headers(session)
     }
 
     async fn run_async(
         &self,
-        _stage: FilterRunningStage,
-        session: &mut dyn FilterSession,
-        _log: &mut FilterLog,
-    ) -> FilterRunningResult {
+        _stage: PluginRunningStage,
+        session: &mut dyn PluginSession,
+        _log: &mut PluginLog,
+    ) -> PluginRunningResult {
         self.modify_headers(session)
     }
 
@@ -47,15 +47,15 @@ impl Filter for RequestHeaderModifierFilter {
         true
     }
 
-    fn get_stages(&self) -> Vec<FilterRunningStage> {
-        vec![FilterRunningStage::Request]
+    fn get_stages(&self) -> Vec<PluginRunningStage> {
+        vec![PluginRunningStage::Request]
     }
 
     fn check_schema(&self, _conf: &FilterConf) {}
 }
 
 impl RequestHeaderModifierFilter {
-    fn modify_headers(&self, session: &mut dyn FilterSession) -> FilterRunningResult {
+    fn modify_headers(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
         // Set headers - overwrite existing
         if let Some(headers) = &self.config.set {
             for h in headers {
@@ -74,7 +74,7 @@ impl RequestHeaderModifierFilter {
                 let _ = session.remove_request_header(name);
             }
         }
-        FilterRunningResult::GoodNext
+        PluginRunningResult::GoodNext
     }
 }
 

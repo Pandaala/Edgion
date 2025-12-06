@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::lb::BackendSelector;
-use crate::core::filters::FilterRuntime;
+use crate::core::filters::PluginRuntime;
 use super::hidden_logic::BackendExtensionInfo;
 
 /// API group for HTTPRoute
@@ -108,7 +108,7 @@ pub struct HTTPRouteRule {
     /// This is computed from filters at runtime
     #[serde(skip)]
     #[schemars(skip)]
-    pub filter_runtime: Arc<FilterRuntime>,
+    pub filter_runtime: Arc<PluginRuntime>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -243,7 +243,7 @@ pub struct HTTPBackendRef {
     /// This is computed from filters at runtime
     #[serde(skip)]
     #[schemars(skip)]
-    pub filter_runtime: Arc<FilterRuntime>,
+    pub filter_runtime: Arc<PluginRuntime>,
 }
 
 /// HTTPRouteFilter defines processing steps that must be completed during the request/response lifecycle

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 use crate::types::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
-use crate::types::filters::{FilterRunningResult};
-use crate::core::filters::FilterLog;
-use crate::core::filters::FilterRuntime;
+use crate::types::filters::{PluginRunningResult};
+use crate::core::filters::PluginLog;
+use crate::core::filters::PluginRuntime;
 
 #[derive(Clone)]
 pub struct MatchInfo {
@@ -14,11 +14,11 @@ pub struct MatchInfo {
     /// match item
     pub m: HTTPRouteMatch,
     /// Rule-level filter runtime
-    pub rule_filter_runtime: Arc<FilterRuntime>,
+    pub rule_filter_runtime: Arc<PluginRuntime>,
 }
 
 impl MatchInfo {
-    pub fn new(rns: String, rn: String, m: HTTPRouteMatch, rule_filter_runtime: Arc<FilterRuntime>) -> Self {
+    pub fn new(rns: String, rn: String, m: HTTPRouteMatch, rule_filter_runtime: Arc<PluginRuntime>) -> Self {
         Self { rns, rn, m, rule_filter_runtime }
     }
 }
@@ -70,10 +70,10 @@ pub struct EdgionHttpContext {
     pub upstream_info: Option<UpstreamInfo>,
     
     /// Filter execution logs
-    pub filter_logs: Vec<FilterLog>,
+    pub filter_logs: Vec<PluginLog>,
     
     /// Filter running result
-    pub filter_running_result: FilterRunningResult,
+    pub filter_running_result: PluginRunningResult,
 }
 
 impl EdgionHttpContext {
@@ -89,7 +89,7 @@ impl EdgionHttpContext {
             selected_backend: None,
             upstream_info: None,
             filter_logs: Vec::with_capacity(10),
-            filter_running_result: FilterRunningResult::Nothing,
+            filter_running_result: PluginRunningResult::Nothing,
         }
     }
 

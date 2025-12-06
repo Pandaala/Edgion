@@ -5,9 +5,9 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
 use crate::types::EdgionHttpContext;
-use crate::types::filters::FilterRunningResult;
-use super::filter_log::FilterLog;
-use super::traits::{FilterSession, FilterSessionError, FilterSessionResult};
+use crate::types::filters::PluginRunningResult;
+use super::log::PluginLog;
+use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
@@ -31,18 +31,18 @@ impl<'a> PingoraSessionAdapter<'a> {
     }
 
     #[inline]
-    pub fn push_filter_log(&mut self, log: FilterLog) {
+    pub fn push_filter_log(&mut self, log: PluginLog) {
         self.ctx.filter_logs.push(log);
     }
 
     #[inline]
     pub fn set_terminate(&mut self) {
-        self.ctx.filter_running_result = FilterRunningResult::ErrTerminateRequest;
+        self.ctx.filter_running_result = PluginRunningResult::ErrTerminateRequest;
     }
 }
 
 #[async_trait]
-impl<'a> FilterSession for PingoraSessionAdapter<'a> {
+impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn header_value(&mut self, name: &str) -> Option<String> {
         self.inner
             .req_header()
@@ -60,51 +60,51 @@ impl<'a> FilterSession for PingoraSessionAdapter<'a> {
         &mut self,
         resp: Box<ResponseHeader>,
         end_of_stream: bool,
-    ) -> FilterSessionResult<()> {
+    ) -> PluginSessionResult<()> {
         self.inner
             .write_response_header(resp, end_of_stream)
             .await
-            .map_err(|e| Box::new(e) as FilterSessionError)
+            .map_err(|e| Box::new(e) as PluginSessionError)
     }
 
     fn write_response_header_boxed<'b>(
         &'b mut self,
         resp: Box<ResponseHeader>,
         end_of_stream: bool,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = FilterSessionResult<()>> + Send + 'b>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginSessionResult<()>> + Send + 'b>> {
         Box::pin(async move {
             self.inner
                 .write_response_header(resp, end_of_stream)
                 .await
-                .map_err(|e| Box::new(e) as FilterSessionError)
+                .map_err(|e| Box::new(e) as PluginSessionError)
         })
     }
 
-    fn set_response_header(&mut self, name: &str, value: &str) -> FilterSessionResult<()> {
+    fn set_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
         if let Some(resp) = &mut self.response_header {
             resp.insert_header(name.to_string(), value.to_string())
-                .map_err(|e| Box::new(e) as FilterSessionError)?;
+                .map_err(|e| Box::new(e) as PluginSessionError)?;
         }
         Ok(())
     }
 
-    fn append_response_header(&mut self, name: &str, value: &str) -> FilterSessionResult<()> {
+    fn append_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
         if let Some(resp) = &mut self.response_header {
             resp.append_header(name.to_string(), value.to_string())
-                .map_err(|e| Box::new(e) as FilterSessionError)?;
+                .map_err(|e| Box::new(e) as PluginSessionError)?;
         }
         Ok(())
     }
 
-    fn set_request_header(&mut self, name: &str, value: &str) -> FilterSessionResult<()> {
+    fn set_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
         self.inner
             .req_header_mut()
             .insert_header(name.to_string(), value.to_string())
-            .map_err(|e| Box::new(e) as FilterSessionError)?;
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
         Ok(())
     }
 
-    fn append_request_header(&mut self, name: &str, value: &str) -> FilterSessionResult<()> {
+    fn append_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
         let existing = self.header_value(name);
         let new_value = if let Some(ref current) = existing {
             format!("{}, {}", current, value)
@@ -114,29 +114,29 @@ impl<'a> FilterSession for PingoraSessionAdapter<'a> {
         self.set_request_header(name, &new_value)
     }
 
-    fn remove_request_header(&mut self, name: &str) -> FilterSessionResult<()> {
+    fn remove_request_header(&mut self, name: &str) -> PluginSessionResult<()> {
         self.inner.req_header_mut().remove_header(name);
         Ok(())
     }
 
-    fn set_upstream_uri(&mut self, uri: &str) -> FilterSessionResult<()> {
+    fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()> {
         let parsed_uri = uri.parse::<Uri>()
-            .map_err(|e| Box::new(e) as FilterSessionError)?;
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
         self.inner.req_header_mut().set_uri(parsed_uri);
         Ok(())
     }
 
-    fn set_upstream_host(&mut self, host: &str) -> FilterSessionResult<()> {
+    fn set_upstream_host(&mut self, host: &str) -> PluginSessionResult<()> {
         self.inner
             .req_header_mut()
             .insert_header("Host".to_string(), host.to_string())
-            .map_err(|e| Box::new(e) as FilterSessionError)?;
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
         Ok(())
     }
 
-    fn set_upstream_method(&mut self, method: &str) -> FilterSessionResult<()> {
+    fn set_upstream_method(&mut self, method: &str) -> PluginSessionResult<()> {
         let parsed_method = method.parse::<http::Method>()
-            .map_err(|e| Box::new(e) as FilterSessionError)?;
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
         self.inner.req_header_mut().set_method(parsed_method);
         Ok(())
     }
@@ -145,11 +145,11 @@ impl<'a> FilterSession for PingoraSessionAdapter<'a> {
         &mut self,
         body: Option<Bytes>,
         end_of_stream: bool,
-    ) -> FilterSessionResult<()> {
+    ) -> PluginSessionResult<()> {
         self.inner
             .write_response_body(body, end_of_stream)
             .await
-            .map_err(|e| Box::new(e) as FilterSessionError)
+            .map_err(|e| Box::new(e) as PluginSessionError)
     }
 
     async fn shutdown(&mut self) {

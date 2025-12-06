@@ -2,7 +2,7 @@
 //! These structures are not serialized, only used for runtime analysis
 
 use std::sync::Arc;
-use crate::core::filters::FilterRuntime;
+use crate::core::filters::PluginRuntime;
 use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
 
 /// Hash source type for consistent hash LB policy
@@ -98,7 +98,7 @@ impl HTTPRoute {
         for rule in rules.iter_mut() {
             // Initialize rule-level filter_runtime from rule.filters
             if let Some(filters) = &rule.filters {
-                rule.filter_runtime = Arc::new(FilterRuntime::from_httproute_filters(filters));
+                rule.filter_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters));
             }
 
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
@@ -120,7 +120,7 @@ impl HTTPRoute {
 
                 // Initialize filter_runtime from filters
                 if let Some(filters) = &backend_ref.filters {
-                    backend_ref.filter_runtime = Arc::new(FilterRuntime::from_httproute_filters(filters));
+                    backend_ref.filter_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters));
                 }
             }
         }

@@ -3,8 +3,6 @@
 pub mod gapi_filters;
 pub mod plugin_runtime;
 
-pub use plugin_runtime::{FilterLog, FilterRuntime, Filter, FilterSession, FilterSessionError, FilterSessionResult};
+pub use plugin_runtime::{PluginLog, PluginRuntime, Plugin, PluginSession, PluginSessionError, PluginSessionResult};
 pub use gapi_filters::RequestHeaderModifierFilter;
 
-#[cfg(test)]
-pub use plugin_runtime::traits::MockFilterSession;

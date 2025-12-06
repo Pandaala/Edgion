@@ -4,7 +4,7 @@ pub const NAME_CAPACITY: usize = 36;
 /// Filter log entry
 /// Fixed structure for filter execution logging
 #[derive(Debug, Clone)]
-pub struct FilterLog {
+pub struct PluginLog {
     /// Filter name (pre-allocated with capacity 36)
     pub name: String,
     
@@ -16,7 +16,7 @@ pub struct FilterLog {
     pub log: Option<String>,
 }
 
-impl FilterLog {
+impl PluginLog {
     #[inline]
     pub fn new(name: &str) -> Self {
         let mut n = String::with_capacity(NAME_CAPACITY);

@@ -7,9 +7,9 @@ use http::StatusCode;
 use pingora_http::ResponseHeader;
 
 use crate::types::resources::HTTPRequestRedirectFilter;
-use crate::types::filters::{FilterConf, FilterRunningResult, FilterRunningStage};
-use crate::core::filters::plugin_runtime::traits::{Filter, FilterSession};
-use crate::core::filters::plugin_runtime::filter_log::FilterLog;
+use crate::types::filters::{FilterConf, PluginRunningResult, PluginRunningStage};
+use crate::core::filters::plugin_runtime::traits::{Plugin, PluginSession};
+use crate::core::filters::plugin_runtime::log::PluginLog;
 
 pub struct RequestRedirectFilter {
     config: HTTPRequestRedirectFilter,
@@ -50,17 +50,17 @@ impl RequestRedirectFilter {
 }
 
 #[async_trait]
-impl Filter for RequestRedirectFilter {
+impl Plugin for RequestRedirectFilter {
     fn name(&self) -> &str {
         "RequestRedirect"
     }
 
     async fn run_async(
         &self,
-        _stage: FilterRunningStage,
-        session: &mut dyn FilterSession,
-        _log: &mut FilterLog,
-    ) -> FilterRunningResult {
+        _stage: PluginRunningStage,
+        session: &mut dyn PluginSession,
+        _log: &mut PluginLog,
+    ) -> PluginRunningResult {
         // Get original request info for building Location
         let original_host = session.header_value("host");
         let original_path = session.header_value(":path").unwrap_or_else(|| "/".to_string());
@@ -75,7 +75,7 @@ impl Filter for RequestRedirectFilter {
         // Build redirect response
         let mut resp = match ResponseHeader::build(status, None) {
             Ok(r) => r,
-            Err(_) => return FilterRunningResult::ErrTerminateRequest,
+            Err(_) => return PluginRunningResult::ErrTerminateRequest,
         };
         
         let _ = resp.insert_header("Location", &location);
@@ -84,11 +84,11 @@ impl Filter for RequestRedirectFilter {
         // Send response and terminate request
         let _ = session.write_response_header(Box::new(resp), true).await;
         
-        FilterRunningResult::ErrTerminateRequest
+        PluginRunningResult::ErrTerminateRequest
     }
 
-    fn get_stages(&self) -> Vec<FilterRunningStage> {
-        vec![FilterRunningStage::Request]
+    fn get_stages(&self) -> Vec<PluginRunningStage> {
+        vec![PluginRunningStage::Request]
     }
 
     fn check_schema(&self, _conf: &FilterConf) {}

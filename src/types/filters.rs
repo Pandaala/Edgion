@@ -12,7 +12,7 @@ pub struct FilterConf {
 
 /// Filter running stage
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub enum FilterRunningStage {
+pub enum PluginRunningStage {
     /// request_filter (async)
     Request,
     /// upstream_response_filter (sync)
@@ -23,7 +23,7 @@ pub enum FilterRunningStage {
 
 /// Filter running result
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum FilterRunningResult {
+pub enum PluginRunningResult {
     /// Just nothing, continue to run other filters
     Nothing,
     /// Filter running good, and should continue to run other filters
