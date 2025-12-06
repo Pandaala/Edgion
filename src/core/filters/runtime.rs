@@ -10,7 +10,7 @@ use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType};
 
 use super::filter_log::FilterLog;
 use super::session_adapter::PingoraSessionAdapter;
-use super::gapi_filters::{RequestHeaderModifierFilter, ResponseHeaderModifierFilter};
+use super::gapi_filters::{RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
 use super::traits::Filter;
 
 pub struct FilterRuntime {
@@ -51,6 +51,12 @@ impl FilterRuntime {
         }
     }
 
+    pub fn from_httproute_filters(filters: &[HTTPRouteFilter]) -> Self {
+        let mut runtime = Self::new();
+        runtime.add_from_httproute_filters(filters);
+        runtime
+    }
+
     pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter]) {
         for filter in filters {
             if let Some(f) = Self::create_filter(filter) {
@@ -85,6 +91,11 @@ impl FilterRuntime {
             HTTPRouteFilterType::ResponseHeaderModifier => {
                 filter.response_header_modifier.as_ref().map(|config| {
                     Box::new(ResponseHeaderModifierFilter::new(config.clone())) as Box<dyn Filter>
+                })
+            }
+            HTTPRouteFilterType::RequestRedirect => {
+                filter.request_redirect.as_ref().map(|config| {
+                    Box::new(RequestRedirectFilter::new(config.clone())) as Box<dyn Filter>
                 })
             }
             // TODO: Add other filter types

@@ -98,9 +98,7 @@ impl HTTPRoute {
         for rule in rules.iter_mut() {
             // Initialize rule-level filter_runtime from rule.filters
             if let Some(filters) = &rule.filters {
-                let mut runtime = FilterRuntime::new();
-                runtime.add_from_httproute_filters(filters);
-                rule.filter_runtime = Arc::new(runtime);
+                rule.filter_runtime = Arc::new(FilterRuntime::from_httproute_filters(filters));
             }
 
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
@@ -122,9 +120,7 @@ impl HTTPRoute {
 
                 // Initialize filter_runtime from filters
                 if let Some(filters) = &backend_ref.filters {
-                    let mut runtime = FilterRuntime::new();
-                    runtime.add_from_httproute_filters(filters);
-                    backend_ref.filter_runtime = Arc::new(runtime);
+                    backend_ref.filter_runtime = Arc::new(FilterRuntime::from_httproute_filters(filters));
                 }
             }
         }
