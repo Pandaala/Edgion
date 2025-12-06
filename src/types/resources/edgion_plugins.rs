@@ -58,12 +58,12 @@ impl EdgionPlugins {
         self.metadata.name.as_deref().unwrap_or("")
     }
 
-    /// Check if this plugin has any plugins defined
+    /// Check if this plugin has any filters defined
     pub fn has_plugins(&self) -> bool {
         self.spec.plugins.as_ref().map_or(false, |p| !p.is_empty())
     }
 
-    /// Get the total number of plugins
+    /// Get the total number of filters
     pub fn plugin_count(&self) -> usize {
         self.spec.plugins.as_ref().map_or(0, |p| p.len())
     }
@@ -73,7 +73,7 @@ impl EdgionPlugins {
         self.spec.plugins.as_deref().unwrap_or(&[])
     }
 
-    /// Get only enabled plugins
+    /// Get only enabled filters
     pub fn enabled_plugins(&self) -> Vec<&EdgionPlugin> {
         self.spec
             .plugins
@@ -130,7 +130,7 @@ impl ConditionEnable {
 /// 
 /// YAML format:
 /// ```yaml
-/// plugins:
+/// filters:
 ///   - enable: true                    # optional, defaults to true
 ///     type: requestHeaderModifier
 ///     config:
@@ -219,7 +219,7 @@ impl PluginEntry {
 /// 
 /// Naming convention:
 /// - Gateway API standard filters: keep original names (RequestHeaderModifier, etc.)
-/// - Custom Edgion plugins: use EdgionXxx naming (EdgionRateLimit, etc.)
+/// - Custom Edgion filters: use EdgionXxx naming (EdgionRateLimit, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "config", rename_all = "camelCase")]
 pub enum EdgionPlugin {
@@ -231,8 +231,8 @@ pub enum EdgionPlugin {
     RequestMirror(HTTPRequestMirrorFilter),
     ExtensionRef(LocalObjectReference),
 
-    // ========== Custom Edgion plugins ==========
-    // TODO: Add custom Edgion plugins here
+    // ========== Custom Edgion filters ==========
+    // TODO: Add custom Edgion filters here
     // EdgionRateLimit(RateLimitConfig),
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionAuth(AuthConfig),
