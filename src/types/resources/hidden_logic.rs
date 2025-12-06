@@ -1,6 +1,8 @@
 //! Hidden logic structures for internal processing
 //! These structures are not serialized, only used for runtime analysis
 
+use std::sync::Arc;
+use crate::core::filters::FilterRuntime;
 use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
 
 /// Hash source type for consistent hash LB policy
@@ -110,6 +112,13 @@ impl HTTPRoute {
                     .unwrap_or_default();
                 
                 backend_ref.extension_info = extension_info;
+
+                // Initialize filter_runtime from filters
+                if let Some(filters) = &backend_ref.filters {
+                    let mut runtime = FilterRuntime::new();
+                    runtime.add_from_httproute_filters(filters);
+                    backend_ref.filter_runtime = Arc::new(runtime);
+                }
             }
         }
     }

@@ -19,6 +19,29 @@ pub struct FilterRuntime {
     response_header_filters: Vec<Box<dyn Filter>>,
 }
 
+impl Clone for FilterRuntime {
+    fn clone(&self) -> Self {
+        // FilterRuntime is rebuilt from filters during pre_parse, so clone creates empty
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for FilterRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilterRuntime")
+            .field("request_filters_count", &self.request_filters.len())
+            .field("response_filters_count", &self.response_filters.len())
+            .field("response_header_filters_count", &self.response_header_filters.len())
+            .finish()
+    }
+}
+
+impl Default for FilterRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FilterRuntime {
     pub fn new() -> Self {
         Self {

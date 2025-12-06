@@ -3,11 +3,13 @@
 //! HTTPRoute defines HTTP rules for mapping requests to backends
 
 use std::fmt;
+use std::sync::Arc;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::lb::BackendSelector;
+use crate::core::filters::FilterRuntime;
 use super::hidden_logic::BackendExtensionInfo;
 
 /// API group for HTTPRoute
@@ -228,6 +230,12 @@ pub struct HTTPBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub extension_info: BackendExtensionInfo,
+
+    /// Filter runtime (runtime only, not serialized)
+    /// This is computed from filters at runtime
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub filter_runtime: Arc<FilterRuntime>,
 }
 
 /// HTTPRouteFilter defines processing steps that must be completed during the request/response lifecycle
