@@ -4,15 +4,30 @@ use http::Uri;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
+use crate::types::EdgionHttpContext;
+use crate::types::filters::FilterRunningResult;
+use super::filter_log::FilterLog;
 use super::traits::{FilterSession, FilterSessionError, FilterSessionResult};
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
+    ctx: &'a mut EdgionHttpContext,
 }
 
 impl<'a> PingoraSessionAdapter<'a> {
-    pub fn new(inner: &'a mut Session) -> Self {
-        Self { inner }
+    #[inline]
+    pub fn new(inner: &'a mut Session, ctx: &'a mut EdgionHttpContext) -> Self {
+        Self { inner, ctx }
+    }
+
+    #[inline]
+    pub fn push_filter_log(&mut self, log: FilterLog) {
+        self.ctx.filter_logs.push(log);
+    }
+
+    #[inline]
+    pub fn set_terminate(&mut self) {
+        self.ctx.filter_running_result = FilterRunningResult::ErrTerminateRequest;
     }
 }
 

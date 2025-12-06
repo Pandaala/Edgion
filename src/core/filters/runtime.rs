@@ -71,7 +71,7 @@ impl FilterRuntime {
     }
 
     pub async fn run_request_filters(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
-        let mut session_adapter = PingoraSessionAdapter::new(s);
+        let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.request_filters {
             let mut filter_log = FilterLog::new(filter.name());
@@ -81,10 +81,10 @@ impl FilterRuntime {
                 &mut session_adapter,
                 &mut filter_log,
             ).await;
-            ctx.filter_logs.push(filter_log);
+            session_adapter.push_filter_log(filter_log);
 
             if ErrTerminateRequest == result {
-                ctx.filter_running_result = ErrTerminateRequest;
+                session_adapter.set_terminate();
                 return;
             }
         }
