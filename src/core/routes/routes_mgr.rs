@@ -71,11 +71,11 @@ impl RouteRules {
 
     /// Match a route using the match_engine engine
     /// Try match in order: exact → regex → prefix
-    /// Returns (MatchInfo, HTTPBackendRef) on success
+    /// Returns (Arc<MatchInfo>, HTTPBackendRef) on success
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-    ) -> Result<(MatchInfo, HTTPBackendRef), EdError> {
+    ) -> Result<(Arc<MatchInfo>, HTTPBackendRef), EdError> {
         // Step 1: Try exact match first (highest priority) - only if match_engine exists
         if let Some(ref match_engine) = self.match_engine {
             if let Some(route_entry) = match_engine.exact_match(session)? {
@@ -85,7 +85,7 @@ impl RouteRules {
                 let route_rules = self.route_rules_list.read().unwrap();
                 if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.matched_info.rns, u.matched_info.rn) == route_entry_id) {
                     let backend = Self::select_backend(&unit.rule)?;
-                    return Ok(((*unit.matched_info).clone(), backend));
+                    return Ok((unit.matched_info.clone(), backend));
                 }
             }
         }
@@ -108,7 +108,7 @@ impl RouteRules {
             let route_rules = self.route_rules_list.read().unwrap();
             if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.matched_info.rns, u.matched_info.rn) == route_entry_id) {
                 let backend = Self::select_backend(&unit.rule)?;
-                return Ok(((*unit.matched_info).clone(), backend));
+                return Ok((unit.matched_info.clone(), backend));
             }
         }
         
@@ -123,12 +123,12 @@ pub struct DomainRouteRules {
 
 impl DomainRouteRules {
     /// Match a route for the given hostname and session
-    /// Returns (MatchInfo, HTTPBackendRef) if found, or an error if no route matches
+    /// Returns (Arc<MatchInfo>, HTTPBackendRef) if found, or an error if no route matches
     pub fn match_route(
         &self,
         hostname: &str,
         session: &mut pingora_proxy::Session,
-    ) -> Result<(MatchInfo, HTTPBackendRef), EdError> {
+    ) -> Result<(Arc<MatchInfo>, HTTPBackendRef), EdError> {
         let domain_routes_map = self.domain_routes_map.load();
         
         // Try to find RouteRules for the hostname (exact match only)

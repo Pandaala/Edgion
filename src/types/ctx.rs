@@ -1,7 +1,9 @@
+use std::sync::Arc;
 use std::time::Instant;
 use crate::types::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use crate::types::filters::{FilterRunningResult};
 use crate::core::filters::filter_log::FilterLog;
+use crate::core::filters::FilterRuntime;
 
 #[derive(Clone)]
 pub struct MatchInfo {
@@ -11,11 +13,13 @@ pub struct MatchInfo {
     pub rn: String,
     /// match item
     pub m: HTTPRouteMatch,
+    /// Rule-level filter runtime
+    pub rule_filter_runtime: Arc<FilterRuntime>,
 }
 
 impl MatchInfo {
-    pub fn new(rns: String, rn: String, m: HTTPRouteMatch) -> Self {
-        Self { rns, rn, m }
+    pub fn new(rns: String, rn: String, m: HTTPRouteMatch, rule_filter_runtime: Arc<FilterRuntime>) -> Self {
+        Self { rns, rn, m, rule_filter_runtime }
     }
 }
 
@@ -57,7 +61,7 @@ pub struct EdgionHttpContext {
     pub error_codes: Vec<EdgionStatus>,
 
     /// Matched route info (namespace, name, match item)
-    pub matched_info: Option<MatchInfo>,
+    pub matched_info: Option<Arc<MatchInfo>>,
     
     /// Selected backend from load balancing
     pub selected_backend: Option<HTTPBackendRef>,

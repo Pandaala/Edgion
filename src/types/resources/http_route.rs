@@ -103,6 +103,12 @@ pub struct HTTPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub backend_finder: BackendSelector<HTTPBackendRef>,
+
+    /// Filter runtime (runtime only, not serialized)
+    /// This is computed from filters at runtime
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub filter_runtime: Arc<FilterRuntime>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -117,6 +123,7 @@ impl Clone for HTTPRouteRule {
             // Create a new uninitialized selector for cloned instance
             // The selector will be initialized lazily when needed
             backend_finder: BackendSelector::new(),
+            filter_runtime: self.filter_runtime.clone(),
         }
     }
 }
@@ -131,6 +138,7 @@ impl fmt::Debug for HTTPRouteRule {
             .field("retry", &self.retry)
             .field("session_persistence", &self.session_persistence)
             .field("lb", &"<skipped>")
+            .field("filter_runtime", &self.filter_runtime)
             .finish()
     }
 }

@@ -73,12 +73,12 @@ impl RegexRoutesEngine {
     }
 
     /// Match a route against the request path
-    /// Returns the first matching (MatchInfo, HTTPBackendRef), or None if no route matches
+    /// Returns the first matching (Arc<MatchInfo>, HTTPBackendRef), or None if no route matches
     /// Routes are checked in order of pattern length (longest first)
     pub fn match_route(
         &self,
         session: &mut Session,
-    ) -> Result<Option<(MatchInfo, HTTPBackendRef)>, EdError> {
+    ) -> Result<Option<(Arc<MatchInfo>, HTTPBackendRef)>, EdError> {
         let path = session.req_header().uri.path();
 
         // Try each regex route in order (already sorted by length, longest first)
@@ -92,7 +92,7 @@ impl RegexRoutesEngine {
                         "Regex match succeeded"
                     );
                     let backend = Self::select_backend(&regex_route.rule)?;
-                    return Ok(Some(((*regex_route.matched_info).clone(), backend)));
+                    return Ok(Some((regex_route.matched_info.clone(), backend)));
                 }
             }
         }

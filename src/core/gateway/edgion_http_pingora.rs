@@ -70,15 +70,19 @@ impl ProxyHttp for EdgionHttp {
         match self.domain_routes.match_route(&ctx.request_info.hostname, session) {
             Ok((match_info, selected_backend)) => {
                 tracing::info!("selected_backend: {:?}", selected_backend);
-                
-                // Run request filters from HTTPBackendRef
-                selected_backend.filter_runtime.run_request_filters(session, ctx).await;
-                
-                // Check if filter requested termination
+
+                // Run rule-level request filters first
+                match_info.rule_filter_runtime.run_request_filters(session, ctx).await;
                 if ctx.filter_running_result == FilterRunningResult::ErrTerminateRequest {
                     return Ok(true);
                 }
-                
+
+                // Then run backend-level request filters
+                selected_backend.filter_runtime.run_request_filters(session, ctx).await;
+                if ctx.filter_running_result == FilterRunningResult::ErrTerminateRequest {
+                    return Ok(true);
+                }
+
                 ctx.matched_info = Some(match_info);
                 ctx.selected_backend = Some(selected_backend);
                 Ok(false)

@@ -74,3 +74,5 @@ Logging / Tracing 插件
 
 这和你现在做的情况很像：
 每个网关都是自己设计一套 Filter 框架。
+
+路由match后，如何取出filter，可以优化一下，同时兼容之copy 引用的plugin的namespace/name，和复杂配置下的插件
