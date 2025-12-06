@@ -90,3 +90,6 @@ HTTP GET 的减负（同类请求 collapse）
 短期静态资源缓存
 业务服务降压
 那么 Pingora 的内置缓存可以直接使用。
+
+
+扩展wasm的动态filters
