@@ -178,6 +178,9 @@ impl ConfigSyncClient {
             EdgionTls => {
                 self.config_client.edgion_tls().start_watch().await?;
             }
+            EdgionPlugins => {
+                self.config_client.edgion_plugins().start_watch().await?;
+            }
             Secret => {
                 self.config_client.secrets().start_watch().await?;
             }
@@ -197,6 +200,7 @@ impl ConfigSyncClient {
             Service,
             EndpointSlice,
             EdgionTls,
+            EdgionPlugins,
             Secret,
         ];
         

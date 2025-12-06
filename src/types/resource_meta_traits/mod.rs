@@ -12,6 +12,7 @@ mod service;
 mod endpoint_slice;
 mod secret;
 mod edgion_tls;
+mod edgion_plugins;
 
 pub use traits::ResourceMeta;
 

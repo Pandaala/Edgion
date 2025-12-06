@@ -21,6 +21,7 @@ pub enum ResourceItem {
     Service(Service),
     EndpointSlice(EndpointSlice),
     EdgionTls(EdgionTls),
+    EdgionPlugins(EdgionPlugins),
     Secret(Secret),
 }
 
@@ -33,6 +34,7 @@ pub struct ConfigServer {
     pub services: ServerCache<Service>,
     pub endpoint_slices: ServerCache<EndpointSlice>,
     pub edgion_tls: ServerCache<EdgionTls>,
+    pub edgion_plugins: ServerCache<EdgionPlugins>,
     pub secrets: ServerCache<Secret>,
 }
 
@@ -59,6 +61,7 @@ impl ConfigServer {
             services: ServerCache::new(200),
             endpoint_slices: ServerCache::new(200),
             edgion_tls: ServerCache::new(200),
+            edgion_plugins: ServerCache::new(200),
             secrets: ServerCache::new(200),
         }
     }
@@ -122,6 +125,12 @@ impl ConfigServer {
                 let list_data = self.list_edgion_tls();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EdgionTls data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::EdgionPlugins => {
+                let list_data = self.list_edgion_plugins();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize EdgionPlugins data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::Secret => {
@@ -271,6 +280,34 @@ impl ConfigServer {
                     }
                 });
             }
+            ResourceKind::EdgionPlugins => {
+                let mut receiver = self.watch_edgion_plugins(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize EdgionPlugins events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
             ResourceKind::Secret => {
                 let mut receiver = self.watch_secrets(client_id, client_name, from_version);
                 tokio::spawn(async move {
@@ -324,6 +361,11 @@ impl ConfigServer {
         self.edgion_tls.list_owned()
     }
 
+    /// List Edgion Plugins
+    pub fn list_edgion_plugins(&self) -> ListData<EdgionPlugins> {
+        self.edgion_plugins.list_owned()
+    }
+
     /// List secrets
     pub fn list_secrets(&self) -> ListData<Secret> {
         self.secrets.list_owned()
@@ -367,6 +409,16 @@ impl ConfigServer {
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<EdgionTls>> {
         self.edgion_tls.watch(client_id, client_name, from_version)
+    }
+
+    /// Watch Edgion Plugins
+    pub fn watch_edgion_plugins(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<EdgionPlugins>> {
+        self.edgion_plugins.watch(client_id, client_name, from_version)
     }
 
     /// Watch secrets
@@ -446,6 +498,17 @@ impl ConfigServer {
         );
         for (idx, tls) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(tls));
+        }
+
+        // Edgion Plugins
+        let list_data = self.list_edgion_plugins();
+        println!(
+            "EdgionPlugins (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, plugin) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(plugin));
         }
 
         // Secrets

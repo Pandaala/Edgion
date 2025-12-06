@@ -11,6 +11,7 @@ pub enum ResourceKind {
     EndpointSlice = 6,
     EdgionTls = 7,
     Secret = 8,
+    EdgionPlugins = 9,
 }
 
 impl ResourceKind {
@@ -44,6 +45,7 @@ impl ResourceKind {
             "EndpointSlice" => Some(ResourceKind::EndpointSlice),
             "EdgionTls" => Some(ResourceKind::EdgionTls),
             "Secret" => Some(ResourceKind::Secret),
+            "EdgionPlugins" => Some(ResourceKind::EdgionPlugins),
             _ => None,
         }
     }

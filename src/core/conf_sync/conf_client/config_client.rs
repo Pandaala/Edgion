@@ -18,6 +18,7 @@ pub struct ConfigClient {
     services: ClientCache<Service>,
     endpoint_slices: ClientCache<EndpointSlice>,
     edgion_tls: ClientCache<EdgionTls>,
+    edgion_plugins: ClientCache<EdgionPlugins>,
     secrets: ClientCache<Secret>,
 }
 
@@ -36,6 +37,7 @@ impl ConfigClient {
             services: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             endpoint_slices: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            edgion_plugins: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             secrets: ClientCache::new(gateway_class_key, client_id, client_name),
         }
     }
@@ -58,6 +60,11 @@ impl ConfigClient {
     /// Get edgion_tls cache for direct access
     pub fn edgion_tls(&self) -> &ClientCache<EdgionTls> {
         &self.edgion_tls
+    }
+
+    /// Get edgion_plugins cache for direct access
+    pub fn edgion_plugins(&self) -> &ClientCache<EdgionPlugins> {
+        &self.edgion_plugins
     }
 
     /// Get secrets cache for direct access
@@ -85,6 +92,9 @@ impl ConfigClient {
         }
         if !self.edgion_tls.is_ready() {
             not_ready.push("edgion_tls");
+        }
+        if !self.edgion_plugins.is_ready() {
+            not_ready.push("edgion_plugins");
         }
         if !self.secrets.is_ready() {
             not_ready.push("secrets");
@@ -188,6 +198,12 @@ impl ConfigClient {
                     .map_err(|e| format!("Failed to serialize EdgionTls data: {}", e))?;
                 (json, list_data.resource_version)
             }
+            ResourceKind::EdgionPlugins => {
+                let list_data = self.edgion_plugins.list();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize EdgionPlugins data: {}", e))?;
+                (json, list_data.resource_version)
+            }
             ResourceKind::Secret => {
                 let list_data = self.secrets.list();
                 let json = serde_json::to_string(&list_data.data)
@@ -220,6 +236,11 @@ impl ConfigClient {
     /// List Edgion TLS
     pub fn list_edgion_tls(&self) -> ListData<EdgionTls> {
         self.edgion_tls.list_owned()
+    }
+
+    /// List Edgion Plugins
+    pub fn list_edgion_plugins(&self) -> ListData<EdgionPlugins> {
+        self.edgion_plugins.list_owned()
     }
 
     /// List secrets
@@ -305,6 +326,17 @@ impl ConfigClient {
             println!("  [{}] {}", idx, format_resource_info(tls));
         }
 
+        // Edgion Plugins
+        let list_data = self.list_edgion_plugins();
+        println!(
+            "EdgionPlugins (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, plugin) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(plugin));
+        }
+
         // Secrets
         let list_data = self.list_secrets();
         println!(
@@ -384,6 +416,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     Self::apply_change_to_cache(&self.edgion_tls, change, resource);
                 }
                 Err(e) => log_error("EdgionTls", &e),
+            },
+            ResourceKind::EdgionPlugins => match serde_yaml::from_str::<EdgionPlugins>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.edgion_plugins, change, resource);
+                }
+                Err(e) => log_error("EdgionPlugins", &e),
             },
             ResourceKind::Secret => match serde_yaml::from_str::<Secret>(&data) {
                 Ok(resource) => {

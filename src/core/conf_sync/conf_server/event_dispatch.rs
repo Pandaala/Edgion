@@ -190,6 +190,16 @@ impl ConfigServer {
                     Self::execute_change_on_cache::<EdgionTls>(change, &self.edgion_tls, resource);
                 }
             }
+            ResourceKind::EdgionPlugins => {
+                if let Ok(resource) = serde_yaml::from_str::<EdgionPlugins>(&data) {
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "EdgionPlugins",
+                        "Applying EdgionPlugins resource change"
+                    );
+                    Self::execute_change_on_cache::<EdgionPlugins>(change, &self.edgion_plugins, resource);
+                }
+            }
             ResourceKind::Secret => {
                 if let Ok(resource) = serde_yaml::from_str::<Secret>(&data) {
                     tracing::info!(
@@ -219,6 +229,7 @@ impl ConfigServerEventDispatcher for ConfigServer {
         self.services.enable_version_fix_mode();
         self.endpoint_slices.enable_version_fix_mode();
         self.edgion_tls.enable_version_fix_mode();
+        self.edgion_plugins.enable_version_fix_mode();
         self.secrets.enable_version_fix_mode();
     }
 
@@ -227,6 +238,7 @@ impl ConfigServerEventDispatcher for ConfigServer {
         self.services.set_ready();
         self.endpoint_slices.set_ready();
         self.edgion_tls.set_ready();
+        self.edgion_plugins.set_ready();
         self.secrets.set_ready();
     }
 }

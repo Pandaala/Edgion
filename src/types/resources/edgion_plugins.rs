@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter,
-    HTTPURLRewriteFilter, LocalObjectReference, ParentReference,
+    HTTPURLRewriteFilter, LocalObjectReference,
 };
 
 /// API group for EdgionPlugins
@@ -263,7 +263,6 @@ mod tests {
         EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
-                parent_refs: None,
                 plugins,
             },
             status: None,
