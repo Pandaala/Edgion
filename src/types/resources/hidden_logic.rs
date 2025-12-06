@@ -46,11 +46,9 @@ impl BackendExtensionInfo {
     /// - group: edgion.io, kind: LBPolicyConsistentHash, name: arg.user-id
     /// - group: edgion.io, kind: LBPolicyLeastConn, name: default
     fn parse_lb_policy(ext_ref: &LocalObjectReference) -> Option<ParsedLBPolicy> {
-        // Check group (optional, but if present should be edgion.io)
-        if let Some(group) = &ext_ref.group {
-            if group != "edgion.io" {
-                return None;
-            }
+        // Check group (empty string means core API group, otherwise should be edgion.io)
+        if !ext_ref.group.is_empty() && ext_ref.group != "edgion.io" {
+            return None;
         }
         
         match ext_ref.kind.as_str() {
@@ -124,7 +122,7 @@ mod tests {
     #[test]
     fn test_parse_consistent_hash_header() {
         let ext_ref = LocalObjectReference {
-            group: Some("edgion.io".to_string()),
+            group: "edgion.io".to_string(),
             kind: "LBPolicyConsistentHash".to_string(),
             name: "header.x-user-id".to_string(),
         };
@@ -139,7 +137,7 @@ mod tests {
     #[test]
     fn test_parse_consistent_hash_cookie() {
         let ext_ref = LocalObjectReference {
-            group: Some("edgion.io".to_string()),
+            group: "edgion.io".to_string(),
             kind: "LBPolicyConsistentHash".to_string(),
             name: "cookie.session-id".to_string(),
         };
@@ -154,7 +152,7 @@ mod tests {
     #[test]
     fn test_parse_consistent_hash_arg() {
         let ext_ref = LocalObjectReference {
-            group: Some("edgion.io".to_string()),
+            group: "edgion.io".to_string(),
             kind: "LBPolicyConsistentHash".to_string(),
             name: "arg.user-id".to_string(),
         };
@@ -169,7 +167,7 @@ mod tests {
     #[test]
     fn test_parse_least_conn() {
         let ext_ref = LocalObjectReference {
-            group: Some("edgion.io".to_string()),
+            group: "edgion.io".to_string(),
             kind: "LBPolicyLeastConn".to_string(),
             name: "default".to_string(),
         };
@@ -181,7 +179,7 @@ mod tests {
     #[test]
     fn test_parse_unknown_kind() {
         let ext_ref = LocalObjectReference {
-            group: Some("edgion.io".to_string()),
+            group: "edgion.io".to_string(),
             kind: "UnknownPolicy".to_string(),
             name: "default".to_string(),
         };
@@ -193,7 +191,7 @@ mod tests {
     #[test]
     fn test_parse_wrong_group() {
         let ext_ref = LocalObjectReference {
-            group: Some("other.io".to_string()),
+            group: "other.io".to_string(),
             kind: "LBPolicyConsistentHash".to_string(),
             name: "header.x-user-id".to_string(),
         };
@@ -203,10 +201,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_no_group() {
-        // Without group, should still work
+    fn test_parse_empty_group() {
+        // Empty group (core API group), should still work
         let ext_ref = LocalObjectReference {
-            group: None,
+            group: String::new(),
             kind: "LBPolicyConsistentHash".to_string(),
             name: "header.x-user-id".to_string(),
         };

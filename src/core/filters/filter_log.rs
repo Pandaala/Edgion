@@ -19,7 +19,7 @@ pub struct FilterLog {
 }
 
 impl FilterLog {
-    /// Create a new filter log entry.
+    /// Create a new filter log entry with name and time cost.
     pub fn new(name: &str, timecost: Duration) -> Self {
         let mut n = String::with_capacity(NAME_CAPACITY);
         n.push_str(name);
@@ -30,16 +30,22 @@ impl FilterLog {
             log: None,
         }
     }
+
+    pub fn add_plugin_log(&mut self, log: &str) {
+        self.log
+            .get_or_insert_with(|| String::with_capacity(128))
+            .push_str(log);
+    }
     
     /// Create a filter log with name and misclog.
-    pub fn with_misclog(name: &str, timecost: Duration, misclog: String) -> Self {
-        let mut n = String::with_capacity(NAME_CAPACITY);
+    pub fn log(name: &str, timecost: Duration, log: String) -> Self {
+        let mut n = String::with_capacity(128);
         n.push_str(name);
         
         Self {
             name: n,
             time_cost: Some(timecost.as_micros() as u64),
-            log: Some(misclog),
+            log: Some(log),
         }
     }
     

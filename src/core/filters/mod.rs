@@ -80,7 +80,7 @@ impl FilterRuntime {
             let log = if misc_logs.is_empty() {
                 FilterLog::new(filter_name, timecost)
             } else {
-                FilterLog::with_misclog(filter_name, timecost, misc_logs.join("; "))
+                FilterLog::log(filter_name, timecost, misc_logs.join("; "))
             };
             ctx.filter_logs.push(log);
 
@@ -111,7 +111,7 @@ impl FilterRuntime {
             let log = if misc_logs.is_empty() {
                 FilterLog::new(filter_name, timecost)
             } else {
-                FilterLog::with_misclog(filter_name, timecost, misc_logs.join("; "))
+                FilterLog::log(filter_name, timecost, misc_logs.join("; "))
             };
             ctx.filter_logs.push(log);
 

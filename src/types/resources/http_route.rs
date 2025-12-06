@@ -82,6 +82,21 @@ pub struct HTTPRouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_refs: Option<Vec<HTTPBackendRef>>,
 
+    /// Timeouts defines timeouts for requests matching this rule
+    /// Support: Extended
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeouts: Option<HTTPRouteTimeouts>,
+
+    /// Retry defines the retry policy for requests matching this rule
+    /// Support: Extended (Experimental)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<HTTPRouteRetry>,
+
+    /// SessionPersistence defines the session persistence configuration
+    /// Support: Extended (Experimental)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_persistence: Option<SessionPersistence>,
+
     /// Backend finder for load balancing (not serialized/deserialized)
     #[serde(skip)]
     #[schemars(skip)]
@@ -94,6 +109,9 @@ impl Clone for HTTPRouteRule {
             matches: self.matches.clone(),
             filters: self.filters.clone(),
             backend_refs: self.backend_refs.clone(),
+            timeouts: self.timeouts.clone(),
+            retry: self.retry.clone(),
+            session_persistence: self.session_persistence.clone(),
             // Create a new uninitialized selector for cloned instance
             // The selector will be initialized lazily when needed
             backend_finder: BackendSelector::new(),
@@ -107,6 +125,9 @@ impl fmt::Debug for HTTPRouteRule {
             .field("matches", &self.matches)
             .field("filters", &self.filters)
             .field("backend_refs", &self.backend_refs)
+            .field("timeouts", &self.timeouts)
+            .field("retry", &self.retry)
+            .field("session_persistence", &self.session_persistence)
             .field("lb", &"<skipped>")
             .finish()
     }
@@ -354,21 +375,171 @@ pub enum HTTPPathModifierType {
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRequestMirrorFilter {
     /// BackendRef references a resource where mirrored requests are sent
-    pub backend_ref: HTTPBackendRef,
+    pub backend_ref: BackendObjectReference,
+
+    /// Fraction represents the fraction of requests that should be mirrored to BackendRef
+    /// Support: Extended
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fraction: Option<Fraction>,
+}
+
+/// BackendObjectReference identifies an API object within the namespace of the referrer
+/// Used specifically for mirror backend references (without weight/filters)
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendObjectReference {
+    /// Group is the group of the referent
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
+
+    /// Kind is kind of the referent (defaults to "Service")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+
+    /// Name is the name of the referent
+    pub name: String,
+
+    /// Namespace is the namespace of the backend
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+
+    /// Port specifies the destination port number to use for this resource
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<i32>,
+}
+
+/// Fraction represents a fraction of requests to mirror
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Fraction {
+    /// Numerator specifies the numerator of the fraction
+    pub numerator: i32,
+
+    /// Denominator specifies the denominator of the fraction (defaults to 100)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denominator: Option<i32>,
 }
 
 /// LocalObjectReference identifies an API object within the namespace of the referrer
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalObjectReference {
-    /// Group is the group of the referent
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
+    /// Group is the group of the referent (defaults to empty string for core API group)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
 
     /// Kind is kind of the referent
     pub kind: String,
 
     /// Name is the name of the referent
     pub name: String,
+}
+
+/// HTTPRouteTimeouts defines timeouts that can be configured for an HTTPRoute
+/// Support: Extended
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HTTPRouteTimeouts {
+    /// Request specifies the maximum duration for a gateway to respond to an HTTP request
+    /// This timeout is intended to cover as close to the whole request-response transaction
+    /// as possible although an implementation MAY choose to start the timeout after
+    /// the entire request stream has been received instead of immediately after the
+    /// transaction is initiated by the client.
+    /// Format: Duration (e.g., "10s", "1m", "500ms")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
+
+    /// BackendRequest specifies a timeout for an individual request from the gateway
+    /// to a backend. This covers the time from when the request first starts being
+    /// sent from the gateway to when the full response has been received from the backend.
+    /// Format: Duration (e.g., "10s", "1m", "500ms")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_request: Option<String>,
+}
+
+/// HTTPRouteRetry defines retry policy for an HTTPRoute
+/// Support: Extended (Experimental)
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HTTPRouteRetry {
+    /// Attempts specifies the maximum number of times an individual request
+    /// from the gateway to a backend should be retried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<i32>,
+
+    /// Backoff specifies the minimum duration a Gateway should wait between
+    /// retry attempts and is represented in Gateway API Duration formatting.
+    /// Format: Duration (e.g., "10ms", "1s")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backoff: Option<String>,
+
+    /// Codes specifies the HTTP response status codes that a Gateway should
+    /// retry for. When not specified, retries will be triggered only
+    /// on connection errors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codes: Option<Vec<i32>>,
+}
+
+/// SessionPersistence defines the desired state of SessionPersistence
+/// Support: Extended (Experimental)
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPersistence {
+    /// SessionName defines the name of the persistent session token
+    /// which may be reflected in the cookie or the header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
+
+    /// AbsoluteTimeout defines the absolute timeout of the persistent
+    /// session, regardless of activity.
+    /// Format: Duration (e.g., "1h", "24h")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absolute_timeout: Option<String>,
+
+    /// IdleTimeout defines the idle timeout of the persistent session.
+    /// Once the session has been idle for more than the specified
+    /// IdleTimeout, the session becomes invalid.
+    /// Format: Duration (e.g., "30m", "1h")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_timeout: Option<String>,
+
+    /// Type defines the type of session persistence such as through
+    /// the use a header or cookie.
+    /// Defaults to cookie based session persistence.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub persistence_type: Option<SessionPersistenceType>,
+
+    /// CookieConfig provides configuration settings that are specific
+    /// to cookie-based session persistence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cookie_config: Option<CookieConfig>,
+}
+
+/// SessionPersistenceType specifies the type of session persistence
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+pub enum SessionPersistenceType {
+    /// Cookie uses a cookie for session persistence
+    Cookie,
+    /// Header uses a header for session persistence
+    Header,
+}
+
+/// CookieConfig defines configuration for cookie-based session persistence
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CookieConfig {
+    /// LifetimeType specifies whether the cookie has a permanent or
+    /// session-based lifetime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime_type: Option<CookieLifetimeType>,
+}
+
+/// CookieLifetimeType specifies the type of cookie lifetime
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+pub enum CookieLifetimeType {
+    /// Permanent cookies persist until deleted by the client
+    Permanent,
+    /// Session cookies are deleted when the client session ends
+    Session,
 }
 
