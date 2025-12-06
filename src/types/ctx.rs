@@ -84,7 +84,7 @@ impl EdgionHttpContext {
             matched_info: None,
             selected_backend: None,
             upstream_info: None,
-            filter_logs: Vec::new(),
+            filter_logs: Vec::with_capacity(10),
             filter_running_result: FilterRunningResult::Nothing,
         }
     }

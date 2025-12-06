@@ -12,7 +12,6 @@ use crate::types::filters::FilterRunningStage;
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
     stage: FilterRunningStage,
-    misc_logs: Vec<String>, // Accumulated misc logs for this filter
     response_headers: Arc<Mutex<Vec<(String, String, bool)>>>, // (name, value, is_append)
     request_headers_to_set: Arc<Mutex<Vec<(String, String)>>>,
     request_headers_to_remove: Arc<Mutex<Vec<String>>>,
@@ -26,7 +25,6 @@ impl<'a> PingoraSessionAdapter<'a> {
         Self {
             inner,
             stage,
-            misc_logs: Vec::new(),
             response_headers: Arc::new(Mutex::new(Vec::new())),
             request_headers_to_set: Arc::new(Mutex::new(Vec::new())),
             request_headers_to_remove: Arc::new(Mutex::new(Vec::new())),
@@ -34,11 +32,6 @@ impl<'a> PingoraSessionAdapter<'a> {
             upstream_host: Arc::new(Mutex::new(None)),
             upstream_method: Arc::new(Mutex::new(None)),
         }
-    }
-
-    /// Get accumulated misc logs and clear them
-    pub fn take_misc_logs(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.misc_logs)
     }
 
     /// Apply pending request header modifications
@@ -235,10 +228,5 @@ impl<'a> FilterSession for PingoraSessionAdapter<'a> {
 
     fn get_stage(&self) -> FilterRunningStage {
         self.stage
-    }
-
-    fn add_misc_log(&mut self, log: String) -> FilterSessionResult<()> {
-        self.misc_logs.push(log);
-        Ok(())
     }
 }

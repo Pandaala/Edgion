@@ -3,6 +3,7 @@ use bytes::Bytes;
 use pingora_http::ResponseHeader;
 
 use crate::types::filters::{FilterConf, FilterRunningResult, FilterRunningStage};
+use super::filter_log::FilterLog;
 
 pub type FilterSessionError = Box<dyn std::error::Error + Send + Sync>;
 pub type FilterSessionResult<T> = Result<T, FilterSessionError>;
@@ -59,10 +60,6 @@ pub trait FilterSession: Send {
     async fn shutdown(&mut self);
 
     fn get_stage(&self) -> FilterRunningStage;
-
-    /// Add a miscellaneous log message
-    /// Filters can use this to record runtime logs
-    fn add_misc_log(&mut self, log: String) -> FilterSessionResult<()>;
 }
 
 #[async_trait]
@@ -72,6 +69,7 @@ pub trait Filter: Send + Sync {
     async fn run(
         &self,
         session: &mut dyn FilterSession,
+        filter_log: &mut FilterLog,
     ) -> FilterRunningResult;
 
     fn get_stages(&self) -> Vec<FilterRunningStage>;
