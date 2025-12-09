@@ -11,12 +11,13 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 脚本所在目录作为工作目录
+# 脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+# 项目根目录 (脚本在 tests 目录下)
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# 日志目录
-LOG_DIR="./logs"
+# 日志目录 (在 tests 目录下)
+LOG_DIR="${SCRIPT_DIR}/logs"
 mkdir -p "$LOG_DIR"
 
 # 日志文件
@@ -95,10 +96,14 @@ start_edgion_gw() {
         return
     fi
     
+    # 打印启动命令
+    echo_info "执行命令:"
+    echo "  EDGION_ACCESS_LOG=$ACCESS_LOG RUST_LOG=info cargo run -p edgion --bin edgion-gw -- --gateway-class my-gateway-class --server-addr http://127.0.0.1:50061"
+    
     # 设置环境变量让网关输出访问日志到指定文件
     EDGION_ACCESS_LOG="$ACCESS_LOG" \
     RUST_LOG=info \
-    cargo run --bin edgion-gw -- \
+    cargo run -p edgion --bin edgion-gw -- \
         --gateway-class my-gateway-class \
         --server-addr http://127.0.0.1:50061 \
         > "$EDGION_GW_LOG" 2>&1 &
@@ -123,15 +128,19 @@ start_edgion_op() {
         return
     fi
     
+    # 打印启动命令
+    echo_info "执行命令:"
+    echo "  RUST_LOG=info cargo run -p edgion --bin edgion-op -- --gateway-class my-gateway-class --grpc-listen 127.0.0.1:50061 --loader-type local_path --loader-dir ${PROJECT_DIR}/config/examples"
+    
     RUST_LOG=info \
-    cargo run --bin edgion-op -- \
+    cargo run -p edgion --bin edgion-op -- \
         --gateway-class my-gateway-class \
         --grpc-listen 127.0.0.1:50061 \
         --loader-type local_path \
-        --loader-dir config/examples \
+        --loader-dir "${PROJECT_DIR}/config/examples" \
         > "$EDGION_OP_LOG" 2>&1 &
     echo $! > "${PID_DIR}/edgion_op.pid"
-    sleep 1
+    sleep 3
     
     if kill -0 $(cat "${PID_DIR}/edgion_op.pid") 2>/dev/null; then
         echo_success "edgion-op 已启动 (PID: $(cat ${PID_DIR}/edgion_op.pid))"
