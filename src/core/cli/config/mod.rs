@@ -227,6 +227,9 @@ impl EdgionOpConfig {
 
     /// Merge CLI config into file config (CLI takes precedence)
     fn merge(base: &mut Self, cli: &Self) {
+        // Prefix directory (always use CLI value, which has default if not specified)
+        base.prefix_dir = cli.prefix_dir.clone();
+        
         // Server config
         if cli.server.grpc_listen.is_some() {
             base.server.grpc_listen = cli.server.grpc_listen.clone();

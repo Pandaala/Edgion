@@ -15,10 +15,16 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 项目根目录 (脚本在 tests 目录下)
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# 切换到项目根目录，让 cargo 能找到 Cargo.toml
+cd "$PROJECT_DIR"
 
 # 日志目录 (在 tests 目录下)
 LOG_DIR="${SCRIPT_DIR}/logs"
 mkdir -p "$LOG_DIR"
+
+# 运行时目录 (用于存放 prefix 数据)
+RUNTIME_DIR="${SCRIPT_DIR}/runtime"
+mkdir -p "$RUNTIME_DIR"
 
 # 日志文件
 EDGION_GW_LOG="${LOG_DIR}/edgion_gw.log"
@@ -97,14 +103,15 @@ start_edgion_gw() {
     fi
     
     # 打印启动命令
-    echo_info "执行命令:"
-    echo "  EDGION_ACCESS_LOG=$ACCESS_LOG RUST_LOG=info cargo run -p edgion --bin edgion-gw -- --gateway-class my-gateway-class --server-addr http://127.0.0.1:50061"
+    echo_info "执行命令 (工作目录: $PROJECT_DIR):"
+    echo "  EDGION_ACCESS_LOG=$ACCESS_LOG RUST_LOG=info cargo run -p edgion --bin edgion-gw -- -p $RUNTIME_DIR --gateway-class public-gateway --server-addr http://127.0.0.1:50061"
     
     # 设置环境变量让网关输出访问日志到指定文件
     EDGION_ACCESS_LOG="$ACCESS_LOG" \
     RUST_LOG=info \
     cargo run -p edgion --bin edgion-gw -- \
-        --gateway-class my-gateway-class \
+        -p "$RUNTIME_DIR" \
+        --gateway-class public-gateway \
         --server-addr http://127.0.0.1:50061 \
         > "$EDGION_GW_LOG" 2>&1 &
     echo $! > "${PID_DIR}/edgion_gw.pid"
@@ -129,12 +136,13 @@ start_edgion_op() {
     fi
     
     # 打印启动命令
-    echo_info "执行命令:"
-    echo "  RUST_LOG=info cargo run -p edgion --bin edgion-op -- --gateway-class my-gateway-class --grpc-listen 127.0.0.1:50061 --loader-type local_path --loader-dir ${PROJECT_DIR}/config/examples"
+    echo_info "执行命令 (工作目录: $PROJECT_DIR):"
+    echo "  RUST_LOG=info cargo run -p edgion --bin edgion-op -- -p $RUNTIME_DIR --gateway-class public-gateway --grpc-listen 127.0.0.1:50061 --loader-type local_path --loader-dir ${PROJECT_DIR}/config/examples"
     
     RUST_LOG=info \
     cargo run -p edgion --bin edgion-op -- \
-        --gateway-class my-gateway-class \
+        -p "$RUNTIME_DIR" \
+        --gateway-class public-gateway \
         --grpc-listen 127.0.0.1:50061 \
         --loader-type local_path \
         --loader-dir "${PROJECT_DIR}/config/examples" \
