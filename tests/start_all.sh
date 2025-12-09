@@ -104,11 +104,11 @@ start_edgion_gw() {
     
     # 打印启动命令
     echo_info "执行命令 (工作目录: $PROJECT_DIR):"
-    echo "  EDGION_ACCESS_LOG=$ACCESS_LOG RUST_LOG=info cargo run -p edgion --bin edgion-gw -- -p $RUNTIME_DIR --gateway-class public-gateway --server-addr http://127.0.0.1:50061"
+    echo "  EDGION_ACCESS_LOG=$ACCESS_LOG RUST_LOG=debug cargo run -p edgion --bin edgion-gw -- -p $RUNTIME_DIR --gateway-class public-gateway --server-addr http://127.0.0.1:50061"
     
     # 设置环境变量让网关输出访问日志到指定文件
     EDGION_ACCESS_LOG="$ACCESS_LOG" \
-    RUST_LOG=info \
+    RUST_LOG=debug \
     cargo run -p edgion --bin edgion-gw -- \
         -p "$RUNTIME_DIR" \
         --gateway-class public-gateway \
@@ -137,9 +137,9 @@ start_edgion_op() {
     
     # 打印启动命令
     echo_info "执行命令 (工作目录: $PROJECT_DIR):"
-    echo "  RUST_LOG=info cargo run -p edgion --bin edgion-op -- -p $RUNTIME_DIR --gateway-class public-gateway --grpc-listen 127.0.0.1:50061 --loader-type local_path --loader-dir ${PROJECT_DIR}/config/examples"
+    echo "  RUST_LOG=debug cargo run -p edgion --bin edgion-op -- -p $RUNTIME_DIR --gateway-class public-gateway --grpc-listen 127.0.0.1:50061 --loader-type local_path --loader-dir ${PROJECT_DIR}/config/examples"
     
-    RUST_LOG=info \
+    RUST_LOG=debug \
     cargo run -p edgion --bin edgion-op -- \
         -p "$RUNTIME_DIR" \
         --gateway-class public-gateway \
