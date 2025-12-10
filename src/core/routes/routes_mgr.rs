@@ -19,14 +19,16 @@ pub struct RouteRules {
     pub(crate) resource_keys: RwLock<HashSet<String>>,
     
     /// Exact and prefix match routes (handled by radix tree)
-    pub(crate) route_rules_list: RwLock<Vec<HttpRouteRuleUnit>>,
+    /// Stored as Arc to avoid cloning when returning from match_route
+    pub(crate) route_rules_list: RwLock<Vec<Arc<HttpRouteRuleUnit>>>,
     /// Match engine for exact/prefix routes. None if there are no normal routes (only regex routes)
     pub(crate) match_engine: Option<Arc<RadixRouteMatchEngine>>,
     
     /// Regex match routes (handled separately)
     /// Uses HttpRouteRuleUnit with path_regex field set
+    /// Stored as Arc to avoid cloning when returning from match_route
     /// Kept for backward compatibility and debugging, but matching uses regex_routes_engine
-    pub(crate) regex_routes: RwLock<Vec<HttpRouteRuleUnit>>,
+    pub(crate) regex_routes: RwLock<Vec<Arc<HttpRouteRuleUnit>>>,
     /// Regex routes engine for lock-free matching. None if there are no regex routes
     pub(crate) regex_routes_engine: Option<Arc<RegexRoutesEngine>>,
 }
@@ -45,7 +47,7 @@ impl Clone for RouteRules {
 
 impl RouteRules {
     /// Select backend from the matched route rule
-    fn select_backend(rule: &Arc<HTTPRouteRule>) -> Result<HTTPBackendRef, EdError> {
+    pub fn select_backend(rule: &Arc<HTTPRouteRule>) -> Result<HTTPBackendRef, EdError> {
         // Initialize selector if not yet initialized
         if !rule.backend_finder.is_initialized() {
             let (items, weights) = match &rule.backend_refs {
@@ -72,11 +74,11 @@ impl RouteRules {
 
     /// Match a route using the match_engine engine
     /// Try match in order: exact → regex → prefix
-    /// Returns (Arc<MatchInfo>, HTTPBackendRef) on success
+    /// Returns Arc<HttpRouteRuleUnit> on success
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-    ) -> Result<(Arc<MatchInfo>, HTTPBackendRef), EdError> {
+    ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
         // Step 1: Try exact match first (highest priority) - only if match_engine exists
         if let Some(ref match_engine) = self.match_engine {
             if let Some(route_entry) = match_engine.exact_match(session)? {
@@ -84,9 +86,8 @@ impl RouteRules {
                 // Convert RouteEntry back to HttpRouteRuleUnit
                 let route_entry_id = route_entry.identifier();
                 let route_rules = self.route_rules_list.read().unwrap();
-                if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.matched_info.rns, u.matched_info.rn) == route_entry_id) {
-                    let backend = Self::select_backend(&unit.rule)?;
-                    return Ok((unit.matched_info.clone(), backend));
+                if let Some(unit) = route_rules.iter().find(|u| u.identifier() == route_entry_id) {
+                    return Ok(unit.clone());
                 }
             }
         }
@@ -107,9 +108,8 @@ impl RouteRules {
             // Convert RouteEntry back to HttpRouteRuleUnit
             let route_entry_id = route_entry.identifier();
             let route_rules = self.route_rules_list.read().unwrap();
-            if let Some(unit) = route_rules.iter().find(|u| format!("{}/{}", u.matched_info.rns, u.matched_info.rn) == route_entry_id) {
-                let backend = Self::select_backend(&unit.rule)?;
-                return Ok((unit.matched_info.clone(), backend));
+            if let Some(unit) = route_rules.iter().find(|u| u.identifier() == route_entry_id) {
+                return Ok(unit.clone());
             }
         }
         
@@ -124,12 +124,12 @@ pub struct DomainRouteRules {
 
 impl DomainRouteRules {
     /// Match a route for the given hostname and session
-    /// Returns (Arc<MatchInfo>, HTTPBackendRef) if found, or an error if no route matches
+    /// Returns Arc<HttpRouteRuleUnit> if found, or an error if no route matches
     pub fn match_route(
         &self,
         hostname: &str,
         session: &mut pingora_proxy::Session,
-    ) -> Result<(Arc<MatchInfo>, HTTPBackendRef), EdError> {
+    ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
         let domain_routes_map = self.domain_routes_map.load();
         
         // Try to find RouteRules for the hostname (exact match only)

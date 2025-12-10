@@ -228,8 +228,8 @@ impl RouteManager {
         
         // Step 3: Rebuild route_rules_list and match_engine from resource_keys
         // Rebuild from http_routes storage
-        let mut route_rules_list = Vec::new();
-        let mut regex_routes_list = Vec::new();
+        let mut route_rules_list: Vec<Arc<HttpRouteRuleUnit>> = Vec::new();
+        let mut regex_routes_list: Vec<Arc<HttpRouteRuleUnit>> = Vec::new();
         
         let http_routes = self.http_routes.lock().unwrap();
         for resource_key in resource_keys.iter() {
@@ -256,7 +256,7 @@ impl RouteManager {
                                         match_item,
                                         rule_arc.clone(),
                                     ) {
-                                        regex_routes_list.push(regex_unit);
+                                        regex_routes_list.push(Arc::new(regex_unit));
                                     }
                                 } else {
                                     // Create normal route (exact/prefix)
@@ -270,7 +270,7 @@ impl RouteManager {
                                         rule_arc.clone(),
                                         None,
                                     );
-                                    route_rules_list.push(rule_unit);
+                                    route_rules_list.push(Arc::new(rule_unit));
                                 }
                             }
                         } else {
@@ -299,7 +299,7 @@ impl RouteManager {
         } else {
             let route_entries: Vec<Arc<dyn RouteEntry>> = route_rules_list
                 .iter()
-                .map(|unit| Arc::new(unit.clone()) as Arc<dyn RouteEntry>)
+                .map(|unit| unit.clone() as Arc<dyn RouteEntry>)
                 .collect();
             
             match RadixRouteMatchEngine::build(route_entries.clone()) {
@@ -340,12 +340,12 @@ impl RouteManager {
 }
 
 /// Parse all HTTPRoutes and collect rules into gateway->domain->rules structure
-/// Returns HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleUnit>)>>
-/// The tuple contains (normal_routes, regex_routes), both using HttpRouteRuleUnit
+/// Returns HashMap<GatewayKey, HashMap<DomainStr, (Vec<Arc<HttpRouteRuleUnit>>, Vec<Arc<HttpRouteRuleUnit>>)>>
+/// The tuple contains (normal_routes, regex_routes), both using Arc<HttpRouteRuleUnit>
 fn parse_http_routes_to_gateway_domain_rules(
     data: &HashMap<String, HTTPRoute>
-) -> HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleUnit>)>> {
-    let mut gateway_domain_rules: HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleUnit>)>> = HashMap::new();
+) -> HashMap<GatewayKey, HashMap<DomainStr, (Vec<Arc<HttpRouteRuleUnit>>, Vec<Arc<HttpRouteRuleUnit>>)>> {
+    let mut gateway_domain_rules: HashMap<GatewayKey, HashMap<DomainStr, (Vec<Arc<HttpRouteRuleUnit>>, Vec<Arc<HttpRouteRuleUnit>>)>> = HashMap::new();
 
     let mut processed_routes = 0;
     let mut skipped_routes = 0;
@@ -400,7 +400,7 @@ fn parse_http_routes_to_gateway_domain_rules(
                                     rule_arc.clone(),
                                 ) {
                                     Ok(regex_unit) => {
-                                        split.1.push(regex_unit);
+                                        split.1.push(Arc::new(regex_unit));
                                     }
                                     Err(e) => {
                                         tracing::warn!(route=%route.key_name(),err=%e,"failed to create regex route");
@@ -418,7 +418,7 @@ fn parse_http_routes_to_gateway_domain_rules(
                                     rule_arc.clone(),
                                     None,
                                 );
-                                split.0.push(rule_unit);
+                                split.0.push(Arc::new(rule_unit));
                             }
                         }
                     } else {
@@ -537,10 +537,10 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                     // Only regex routes, no need for match_engine
                     None
                 } else {
-                    // Convert Vec<HttpRouteRuleUnit> to Vec<Arc<dyn RouteEntry>>
+                    // Convert Vec<Arc<HttpRouteRuleUnit>> to Vec<Arc<dyn RouteEntry>>
                     let route_entries: Vec<Arc<dyn RouteEntry>> = split.0
                         .iter()
-                        .map(|unit| Arc::new(unit.clone()) as Arc<dyn RouteEntry>)
+                        .map(|unit| unit.clone() as Arc<dyn RouteEntry>)
                         .collect();
 
                     // Build RadixRouteMatchEngine for normal routes

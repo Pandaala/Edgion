@@ -14,6 +14,7 @@ use crate::core::backends::get_peer;
 use crate::types::EdgionStatus;
 use crate::types::err::EdError;
 use crate::core::observe::{AccessLogEntry, global_metrics};
+use crate::core::routes::routes_mgr::RouteRules;
 
 #[async_trait]
 impl ProxyHttp for EdgionHttp {
@@ -69,12 +70,37 @@ impl ProxyHttp for EdgionHttp {
 
         // Match route and select backend
         match self.domain_routes.match_route(&ctx.request_info.hostname, session) {
-            Ok((match_info, selected_backend)) => {
+            Ok(route_unit) => {
+                // Select backend from the route unit
+                let selected_backend = match RouteRules::select_backend(&route_unit.rule) {
+                    Ok(backend) => backend,
+                    Err(e) => {
+                        tracing::error!("Failed to select backend: {:?}", e);
+                        match e {
+                            EdError::BackendNotFound() => {
+                                ctx.add_error(EdgionStatus::UpstreamNotBackendRefs);
+                                end_response_500(session, ctx).await?;
+                            }
+                            EdError::InconsistentWeight() => {
+                                ctx.add_error(EdgionStatus::UpstreamInconsistentWeight);
+                                end_response_500(session, ctx).await?;
+                            }
+                            _ => {
+                                ctx.add_error(EdgionStatus::Unknown);
+                                end_response_500(session, ctx).await?;
+                            }
+                        }
+                        ctx.matched_info = None;
+                        ctx.selected_backend = None;
+                        return Ok(true);
+                    }
+                };
+                
                 tracing::info!("selected_backend: {:?}", selected_backend);
 
                 // Run rule-level request plugins first
                 // todo 修改了位置，应该在rule阶段来run
-                // match_info.rule_plugin_runtime.run_request_plugins(session, ctx).await;
+                // route_unit.matched_info.rule_plugin_runtime.run_request_plugins(session, ctx).await;
                 // if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
                 //     return Ok(true);
                 // }
@@ -85,7 +111,7 @@ impl ProxyHttp for EdgionHttp {
                     return Ok(true);
                 }
 
-                ctx.matched_info = Some(match_info);
+                ctx.matched_info = Some(route_unit.matched_info.clone());
                 ctx.selected_backend = Some(selected_backend);
                 Ok(false)
             }
@@ -94,14 +120,6 @@ impl ProxyHttp for EdgionHttp {
                     EdError::RouteNotFound() => {
                         ctx.add_error(EdgionStatus::RouteNotFound);
                         end_response_404(session, ctx).await?;
-                    }
-                    EdError::BackendNotFound() => {
-                        ctx.add_error(EdgionStatus::UpstreamNotBackendRefs);
-                        end_response_500(session, ctx).await?;
-                    }
-                    EdError::InconsistentWeight() => {
-                        ctx.add_error(EdgionStatus::UpstreamInconsistentWeight);
-                        end_response_500(session, ctx).await?;
                     }
                     _ => {
                         ctx.add_error(EdgionStatus::Unknown);
