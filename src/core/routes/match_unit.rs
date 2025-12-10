@@ -13,6 +13,8 @@ pub struct HttpRouteRuleUnit {
     pub matched_info: Arc<MatchInfo>,
     /// Reference to the original rule (for backend_refs, filters, etc.)
     pub rule: Arc<HTTPRouteRule>,
+    /// Compiled regex for path matching (only for RegularExpression path type)
+    pub path_regex: Option<Regex>,
 }
 
 impl HttpRouteRuleUnit {
@@ -24,12 +26,40 @@ impl HttpRouteRuleUnit {
         resource_key: String,
         match_item: HTTPRouteMatch,
         rule: Arc<HTTPRouteRule>,
+        path_regex: Option<Regex>,
     ) -> HttpRouteRuleUnit {
         Self {
             resource_key,
             matched_info: Arc::new(MatchInfo::new(namespace, name, rule_id, match_id, match_item)),
             rule,
+            path_regex,
         }
+    }
+    
+    /// Check if this is a regex route
+    pub fn is_regex_route(&self) -> bool {
+        self.path_regex.is_some()
+    }
+    
+    /// Try to match the request path against the regex pattern (if this is a regex route)
+    pub fn matches_path(&self, path: &str) -> bool {
+        if let Some(ref regex) = self.path_regex {
+            regex.is_match(path)
+        } else {
+            false
+        }
+    }
+    
+    /// Perform deep match (headers, query params, method)
+    /// For use with regex routes or when called directly
+    pub fn deep_match(&self, session: &Session) -> Result<bool, EdError> {
+        let req_header = session.req_header();
+        Self::deep_match_common(&self.matched_info.m, req_header, &self.identifier())
+    }
+    
+    /// Get route identifier
+    pub fn identifier(&self) -> String {
+        format!("{}/{}", self.matched_info.rns, self.matched_info.rn)
     }
     
     /// Parse query string (already extracted by Pingora)

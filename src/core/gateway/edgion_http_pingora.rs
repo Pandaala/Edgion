@@ -73,10 +73,11 @@ impl ProxyHttp for EdgionHttp {
                 tracing::info!("selected_backend: {:?}", selected_backend);
 
                 // Run rule-level request plugins first
-                match_info.rule_plugin_runtime.run_request_plugins(session, ctx).await;
-                if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-                    return Ok(true);
-                }
+                // todo 修改了位置，应该在rule阶段来run
+                // match_info.rule_plugin_runtime.run_request_plugins(session, ctx).await;
+                // if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+                //     return Ok(true);
+                // }
 
                 // Then run backend-level request plugins
                 selected_backend.plugin_runtime.run_request_plugins(session, ctx).await;
@@ -121,10 +122,11 @@ impl ProxyHttp for EdgionHttp {
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> pingora_core::Result<()> {
-        // Run rule-level upstream_response plugins (sync)
-        if let Some(match_info) = ctx.matched_info.clone() {
-            match_info.rule_plugin_runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
-        }
+        // // Run rule-level upstream_response plugins (sync)
+        // todo 修改了位置，应该在rule阶段来run
+        // if let Some(match_info) = ctx.matched_info.clone() {
+        //     match_info.rule_plugin_runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
+        // }
 
         // Run backend-level upstream_response plugins (sync)
         if let Some(backend) = ctx.selected_backend.clone() {
@@ -145,9 +147,10 @@ impl ProxyHttp for EdgionHttp {
         Self::CTX: Send + Sync,
     {
         // Run rule-level response plugins (async)
-        if let Some(match_info) = ctx.matched_info.clone() {
-            match_info.rule_plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
-        }
+        // todo 修改了位置，应该在rule阶段来run
+        // if let Some(match_info) = ctx.matched_info.clone() {
+        //     match_info.rule_plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
+        // }
 
         // Run backend-level response plugins (async)
         if let Some(backend) = ctx.selected_backend.clone() {

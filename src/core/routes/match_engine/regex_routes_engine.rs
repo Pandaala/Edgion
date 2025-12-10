@@ -1,4 +1,4 @@
-use crate::core::routes::regex_match_unit::HttpRouteRuleRegexUnit;
+use crate::core::routes::match_unit::HttpRouteRuleUnit;
 use crate::core::lb::{ERR_NO_BACKEND_REFS, ERR_INCONSISTENT_WEIGHT};
 use crate::types::err::EdError;
 use crate::types::{HTTPRouteRule, MatchInfo, HTTPBackendRef};
@@ -13,21 +13,22 @@ use std::sync::Arc;
 pub struct RegexRoutesEngine {
     /// Regex routes sorted by pattern length (longest first)
     /// This ensures more specific patterns are matched before general ones
-    routes: Vec<Arc<HttpRouteRuleRegexUnit>>,
+    /// Uses HttpRouteRuleUnit with path_regex field set
+    routes: Vec<Arc<HttpRouteRuleUnit>>,
 }
 
 impl RegexRoutesEngine {
     /// Build a new RegexRoutesEngine with the given regex routes
-    pub fn build(mut routes: Vec<HttpRouteRuleRegexUnit>) -> Self {
+    pub fn build(mut routes: Vec<HttpRouteRuleUnit>) -> Self {
         // Sort routes by pattern length (longest first) for priority matching
         // Longer patterns are typically more specific and should be matched first
         routes.sort_by(|a, b| {
-            let len_a = a.path_regex.as_str().len();
-            let len_b = b.path_regex.as_str().len();
+            let len_a = a.path_regex.as_ref().map(|r| r.as_str().len()).unwrap_or(0);
+            let len_b = b.path_regex.as_ref().map(|r| r.as_str().len()).unwrap_or(0);
             len_b.cmp(&len_a) // Descending order (longest first)
         });
 
-        let routes: Vec<Arc<HttpRouteRuleRegexUnit>> = routes
+        let routes: Vec<Arc<HttpRouteRuleUnit>> = routes
             .into_iter()
             .map(|r| Arc::new(r))
             .collect();
@@ -88,7 +89,7 @@ impl RegexRoutesEngine {
                 if regex_route.deep_match(session)? {
                     tracing::debug!(
                         path = %path,
-                        regex = %regex_route.path_regex.as_str(),
+                        regex = %regex_route.path_regex.as_ref().map(|r| r.as_str()).unwrap_or(""),
                         "Regex match succeeded"
                     );
                     let backend = Self::select_backend(&regex_route.rule)?;

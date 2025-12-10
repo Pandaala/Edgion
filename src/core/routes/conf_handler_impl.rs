@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use crate::core::conf_sync::traits::ConfHandler;
-use crate::core::routes::{RouteManager, HttpRouteRuleUnit, HttpRouteRuleRegexUnit, get_global_route_manager};
+use crate::core::routes::{RouteManager, HttpRouteRuleUnit, get_global_route_manager};
 use crate::core::routes::routes_mgr::RouteRules;
 use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::routes::match_engine::regex_routes_engine::RegexRoutesEngine;
@@ -66,7 +66,7 @@ impl RouteManager {
         resource_key: &str,
         match_item: &HTTPRouteMatch,
         rule: Arc<HTTPRouteRule>,
-    ) -> Result<HttpRouteRuleRegexUnit, String> {
+    ) -> Result<HttpRouteRuleUnit, String> {
         let path_value = match_item.path.as_ref()
             .and_then(|p| p.value.as_deref())
             .ok_or_else(|| "Regex path must have value".to_string())?;
@@ -74,7 +74,7 @@ impl RouteManager {
         let regex = Regex::new(path_value)
             .map_err(|e| format!("Invalid regex '{}': {}", path_value, e))?;
         
-        Ok(HttpRouteRuleRegexUnit::new(
+        Ok(HttpRouteRuleUnit::new(
             namespace.to_string(),
             name.to_string(),
             rule_id,
@@ -82,7 +82,7 @@ impl RouteManager {
             resource_key.to_string(),
             match_item.clone(),
             rule,
-            regex,
+            Some(regex),
         ))
     }
 }
@@ -268,6 +268,7 @@ impl RouteManager {
                                         resource_key.clone(),
                                         match_item.clone(),
                                         rule_arc.clone(),
+                                        None,
                                     );
                                     route_rules_list.push(rule_unit);
                                 }
@@ -339,11 +340,12 @@ impl RouteManager {
 }
 
 /// Parse all HTTPRoutes and collect rules into gateway->domain->rules structure
-/// Returns HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleRegexUnit>)>>
+/// Returns HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleUnit>)>>
+/// The tuple contains (normal_routes, regex_routes), both using HttpRouteRuleUnit
 fn parse_http_routes_to_gateway_domain_rules(
     data: &HashMap<String, HTTPRoute>
-) -> HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleRegexUnit>)>> {
-    let mut gateway_domain_rules: HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleRegexUnit>)>> = HashMap::new();
+) -> HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleUnit>)>> {
+    let mut gateway_domain_rules: HashMap<GatewayKey, HashMap<DomainStr, (Vec<HttpRouteRuleUnit>, Vec<HttpRouteRuleUnit>)>> = HashMap::new();
 
     let mut processed_routes = 0;
     let mut skipped_routes = 0;
@@ -414,6 +416,7 @@ fn parse_http_routes_to_gateway_domain_rules(
                                     route.key_name(),
                                     match_item.clone(),
                                     rule_arc.clone(),
+                                    None,
                                 );
                                 split.0.push(rule_unit);
                             }
