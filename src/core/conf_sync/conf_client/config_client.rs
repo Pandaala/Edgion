@@ -4,6 +4,7 @@ use crate::core::conf_sync::types::ListData;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::utils::format_resource_info;
 use crate::core::routes::create_route_manager_handler;
+use crate::core::backends::{create_service_handler, create_ep_slice_handler};
 use crate::types::prelude_resources::*;
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Secret, Service};
@@ -29,6 +30,16 @@ impl ConfigClient {
         let route_handler = create_route_manager_handler();
         routes_cache.set_conf_processor(route_handler);
 
+        // Register ServiceStore as the handler for Service resources
+        let services_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let service_handler = create_service_handler();
+        services_cache.set_conf_processor(service_handler);
+
+        // Register EpSliceHandler as the handler for EndpointSlice resources
+        let endpoint_slices_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let ep_slice_handler = create_ep_slice_handler();
+        endpoint_slices_cache.set_conf_processor(ep_slice_handler);
+
         // Register PluginStore as the handler for EdgionPlugins resources
         let plugins_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
         let plugin_handler = crate::core::plugins::create_plugin_handler();
@@ -38,8 +49,8 @@ impl ConfigClient {
             gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(None),
             routes: routes_cache,
-            services: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
-            endpoint_slices: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            services: services_cache,
+            endpoint_slices: endpoint_slices_cache,
             edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             edgion_plugins: plugins_cache,
             secrets: ClientCache::new(gateway_class_key, client_id, client_name),
