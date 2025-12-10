@@ -3,6 +3,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use pingora_load_balancing::selection::{BackendSelection, Consistent, RoundRobin};
+use pingora_load_balancing::Backend;
 use crate::core::lb::leastconn::LeastConnection;
 use super::discovery_impl::EndpointSliceLoadBalancer;
 
@@ -65,6 +66,22 @@ where
     /// Get endpoint slice load balancer by service key (namespace/service-name)
     pub fn get_by_service(&self, service_key: &str) -> Option<Arc<EndpointSliceLoadBalancer<S>>> {
         self.get(service_key)
+    }
+
+    /// Select a backend peer from the load balancer
+    /// 
+    /// # Arguments
+    /// * `service_key` - The service key (namespace/service-name)
+    /// * `hash_key` - Hash key for consistent hashing (use empty slice for round-robin)
+    /// * `max_sample` - Maximum number of backends to sample
+    /// 
+    /// # Returns
+    /// * `Some(Backend)` - Selected backend
+    /// * `None` - No backend available or service not found
+    pub fn select_peer(&self, service_key: &str, hash_key: &[u8], max_sample: usize) -> Option<Backend> {
+        let map = self.ep_slices.load();
+        let ep_lb = map.get(service_key)?;
+        ep_lb.load_balancer().select(hash_key, max_sample)
     }
 
     /// Execute a function with the endpoint slice load balancer reference
