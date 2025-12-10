@@ -1,0 +1,17 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: bbb-service-slice1
+  namespace: test3
+  labels:
+    kubernetes.io/service-name: bbb-service
+addressType: IPv4
+ports:
+  - name: http-30003
+    port: 30003
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
