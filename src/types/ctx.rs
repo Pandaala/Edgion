@@ -19,9 +19,6 @@ pub struct MatchInfo {
 
     /// match item
     pub m: HTTPRouteMatch,
-    
-    /// Rule-level plugin runtime
-    pub rule_plugin_runtime: Arc<PluginRuntime>,
 }
 
 impl MatchInfo {
@@ -29,9 +26,8 @@ impl MatchInfo {
                rn: String,
                rule_id: usize,
                match_id: usize,
-               m: HTTPRouteMatch,
-               rule_plugin_runtime: Arc<PluginRuntime>) -> Self {
-        Self { rns, rn, m, rule_id, match_id, rule_plugin_runtime }
+               m: HTTPRouteMatch) -> Self {
+        Self { rns, rn, m, rule_id, match_id }
     }
 }
 

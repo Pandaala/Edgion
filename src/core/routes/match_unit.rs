@@ -25,10 +25,9 @@ impl HttpRouteRuleUnit {
         match_item: HTTPRouteMatch,
         rule: Arc<HTTPRouteRule>,
     ) -> HttpRouteRuleUnit {
-        let rule_plugin_runtime = rule.plugin_runtime.clone();
         Self {
             resource_key,
-            matched_info: Arc::new(MatchInfo::new(namespace, name, rule_id, match_id, match_item, rule_plugin_runtime)),
+            matched_info: Arc::new(MatchInfo::new(namespace, name, rule_id, match_id, match_item)),
             rule,
         }
     }
