@@ -166,8 +166,8 @@ fn try_get_peer(upstream_info: &mut UpstreamInfo, br: &HTTPBackendRef, session: 
             
             // Update upstream_info with ip and port
             if let Some(std_addr) = addr.as_inet() {
-                upstream_info.ip = std_addr.ip().to_string();
-                upstream_info.port = std_addr.port();
+                upstream_info.ip = Some(std_addr.ip().to_string());
+                upstream_info.port = Some(std_addr.port());
             }
             
             Ok(Box::new(HttpPeer::new(addr, false, String::new())))
@@ -190,8 +190,8 @@ fn try_get_peer(upstream_info: &mut UpstreamInfo, br: &HTTPBackendRef, session: 
             
             // Update upstream_info with ip and port
             if let Some(std_addr) = addr.as_inet() {
-                upstream_info.ip = std_addr.ip().to_string();
-                upstream_info.port = std_addr.port();
+                upstream_info.ip = Some(std_addr.ip().to_string());
+                upstream_info.port = Some(std_addr.port());
             }
             
             Ok(Box::new(HttpPeer::new(addr, false, String::new())))
@@ -214,8 +214,8 @@ fn try_get_peer(upstream_info: &mut UpstreamInfo, br: &HTTPBackendRef, session: 
             
             // Update upstream_info with ip and port
             if let Some(std_addr) = addr.as_inet() {
-                upstream_info.ip = std_addr.ip().to_string();
-                upstream_info.port = std_addr.port();
+                upstream_info.ip = Some(std_addr.ip().to_string());
+                upstream_info.port = Some(std_addr.port());
             }
             
             Ok(Box::new(HttpPeer::new(addr, false, String::new())))
@@ -232,10 +232,10 @@ fn try_get_peer(upstream_info: &mut UpstreamInfo, br: &HTTPBackendRef, session: 
 /// 
 /// On error, sets error status to ctx and sends 503 response
 pub async fn get_peer(br: &HTTPBackendRef, session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<Box<HttpPeer>> {
-    // Get mutable reference to the last upstream_info
-    let upstream_info = ctx.upstream_info.last_mut()
+    // Get mutable reference to the current upstream_info
+    let upstream_info = ctx.get_current_upstream_info_mut()
         .ok_or_else(|| {
-            tracing::error!("No upstream_info available");
+            tracing::error!("No current upstream_info available");
             PingoraError::new(ErrorType::InternalError)
         })?;
     

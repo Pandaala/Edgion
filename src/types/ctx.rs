@@ -55,19 +55,20 @@ pub struct RequestInfo {
 }
 
 /// Upstream backend information
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct UpstreamInfo {
-    /// Unique ID for this upstream info entry
-    pub id: usize,
     /// Backend service name
     pub name: String,
     /// Backend service namespace
     pub namespace: String,
     /// Peer IP address
-    pub ip: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
     /// Peer port
-    pub port: u16,
-
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// HTTP status code for this upstream
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
 }
 
@@ -94,6 +95,9 @@ pub struct EdgionHttpContext {
     /// Upstream info history (can be modified during request processing)
     pub upstream_info: Vec<UpstreamInfo>,
     
+    /// Current upstream_id (index in upstream_info Vec) for status setting
+    pub current_upstream_id: Option<usize>,
+    
     /// Plugin execution logs
     pub plugin_logs: Vec<PluginLog>,
     
@@ -112,6 +116,7 @@ impl EdgionHttpContext {
             route_unit: None,
             selected_backend: None,
             upstream_info: Vec::with_capacity(5),
+            current_upstream_id: None,
             plugin_logs: Vec::with_capacity(10),
             plugin_running_result: PluginRunningResult::Nothing,
         }
@@ -120,5 +125,24 @@ impl EdgionHttpContext {
     /// Add an error code to the context
     pub fn add_error(&mut self, err_code: EdgionStatus) {
         self.error_codes.push(err_code);
+    }
+
+    /// Push a new upstream_info and set it as current
+    pub fn push_upstream_info(&mut self, upstream_info: UpstreamInfo) {
+        self.upstream_info.push(upstream_info);
+        let upstream_id = self.upstream_info.len() - 1;
+        self.current_upstream_id = Some(upstream_id);
+    }
+
+    /// Get mutable reference to the current upstream_info
+    pub fn get_current_upstream_info_mut(&mut self) -> Option<&mut UpstreamInfo> {
+        let id = self.current_upstream_id?;
+        self.upstream_info.get_mut(id)
+    }
+
+    /// Get reference to the current upstream_info
+    pub fn get_current_upstream_info(&self) -> Option<&UpstreamInfo> {
+        let id = self.current_upstream_id?;
+        self.upstream_info.get(id)
     }
 }

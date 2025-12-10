@@ -59,19 +59,16 @@ impl ProxyHttp for EdgionHttp {
             (backend_ref, route_unit.matched_info.clone())
         };
         
-        // Create initial upstream_info entry
-        let upstream_id = ctx.upstream_info.len();
-        let namespace = backend_ref.namespace.clone()
-            .unwrap_or_else(|| match_info.rns.clone());
-        ctx.upstream_info.push(UpstreamInfo {
-            id: upstream_id,
-            name: backend_ref.name.clone(),
-            namespace,
-            ip: String::new(), // Will be filled after peer selection
-            port: 0,           // Will be filled after peer selection
-        });
-        
         tracing::info!("Selected backend: {:?}", backend_ref);
+        
+        // Create initial upstream_info entry
+        ctx.push_upstream_info(UpstreamInfo {
+            name: backend_ref.name.clone(),
+            namespace: backend_ref.namespace.clone().unwrap_or_else(|| match_info.rns.clone()),
+            ip: None,
+            port: None,
+            status: None,
+        });
         
         // Run backend-level request plugins
         backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
@@ -233,11 +230,8 @@ impl ProxyHttp for EdgionHttp {
             ctx.request_info.status = resp_header.status.as_u16();
         }
 
-        // Calculate latency
-        let latency_ms = ctx.start_time.elapsed().as_millis() as u64;
-
         // Create access log entry
-        let entry = AccessLogEntry::from_context(ctx, latency_ms);
+        let entry = AccessLogEntry::from_context(ctx);
         
         // In DEBUG mode, print access log to terminal
         if tracing::level_filters::LevelFilter::current() >= tracing::level_filters::LevelFilter::DEBUG {
