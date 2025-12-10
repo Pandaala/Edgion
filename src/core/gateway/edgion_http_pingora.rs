@@ -7,7 +7,7 @@ use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
 use crate::core::gateway::edgion_http::EdgionHttp;
-use crate::types::EdgionHttpContext;
+use crate::types::{EdgionHttpContext, UpstreamInfo};
 use crate::types::filters::PluginRunningResult;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
 use crate::core::backends::get_peer;
@@ -59,6 +59,18 @@ impl ProxyHttp for EdgionHttp {
             (backend_ref, route_unit.matched_info.clone())
         };
         
+        // Create initial upstream_info entry
+        let upstream_id = ctx.upstream_info.len();
+        let namespace = backend_ref.namespace.clone()
+            .unwrap_or_else(|| match_info.rns.clone());
+        ctx.upstream_info.push(UpstreamInfo {
+            id: upstream_id,
+            name: backend_ref.name.clone(),
+            namespace,
+            ip: String::new(), // Will be filled after peer selection
+            port: 0,           // Will be filled after peer selection
+        });
+        
         tracing::info!("Selected backend: {:?}", backend_ref);
         
         // Run backend-level request plugins
@@ -72,8 +84,8 @@ impl ProxyHttp for EdgionHttp {
         // Store selected backend in context
         ctx.selected_backend = Some(backend_ref.clone());
         
-        // Get peer from backend
-        get_peer(&match_info, &backend_ref, session, ctx).await
+        // Get peer from backend (will update upstream_info with ip and port)
+        get_peer(&backend_ref, session, ctx).await
     }
 
 

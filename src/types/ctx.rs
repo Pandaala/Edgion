@@ -57,12 +57,18 @@ pub struct RequestInfo {
 /// Upstream backend information
 #[derive(Debug, Clone, Default)]
 pub struct UpstreamInfo {
+    /// Unique ID for this upstream info entry
+    pub id: usize,
     /// Backend service name
     pub name: String,
     /// Backend service namespace
     pub namespace: String,
-    /// Actual peer address (ip:port)
-    pub peer: String,
+    /// Peer IP address
+    pub ip: String,
+    /// Peer port
+    pub port: u16,
+
+    pub status: Option<u16>,
 }
 
 pub struct EdgionHttpContext {
@@ -85,8 +91,8 @@ pub struct EdgionHttpContext {
     /// Selected backend from load balancing
     pub selected_backend: Option<HTTPBackendRef>,
     
-    /// Upstream info after peer selection
-    pub upstream_info: Option<UpstreamInfo>,
+    /// Upstream info history (can be modified during request processing)
+    pub upstream_info: Vec<UpstreamInfo>,
     
     /// Plugin execution logs
     pub plugin_logs: Vec<PluginLog>,
@@ -105,7 +111,7 @@ impl EdgionHttpContext {
             error_codes: Vec::with_capacity(5),
             route_unit: None,
             selected_backend: None,
-            upstream_info: None,
+            upstream_info: Vec::with_capacity(5),
             plugin_logs: Vec::with_capacity(10),
             plugin_running_result: PluginRunningResult::Nothing,
         }

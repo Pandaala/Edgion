@@ -22,8 +22,9 @@ pub struct AccessLogEntry<'a> {
 
 impl<'a> AccessLogEntry<'a> {
     pub fn from_context(ctx: &'a EdgionHttpContext, latency_ms: u64) -> Self {
-        let upstream = ctx.upstream_info.as_ref()
-            .map(|u| format!("{}/{}/{}", u.namespace, u.name, u.peer))
+        // Use the last upstream_info as the final upstream
+        let upstream = ctx.upstream_info.last()
+            .map(|u| format!("{}/{}/{}:{}", u.namespace, u.name, u.ip, u.port))
             .unwrap_or_else(|| "-/-/-".to_string());
         
         Self {
@@ -32,7 +33,7 @@ impl<'a> AccessLogEntry<'a> {
             errors: &ctx.error_codes,
             upstream,
             latency_ms,
-            upstream_info: ctx.upstream_info.as_ref(),
+            upstream_info: ctx.upstream_info.last(),
         }
     }
 
@@ -45,8 +46,8 @@ impl<'a> AccessLogEntry<'a> {
 
     pub fn to_combined(&self) -> String {
         let upstream_peer = self.upstream_info
-            .map(|u| u.peer.as_str())
-            .unwrap_or("-");
+            .map(|u| format!("{}:{}", u.ip, u.port))
+            .unwrap_or_else(|| "-".to_string());
             
         format!(
             r#"{} - - [{}] "{} {}" {} {} "{}""#,
