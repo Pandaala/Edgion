@@ -61,6 +61,8 @@ impl RouteManager {
     fn create_regex_route_unit(
         namespace: &str,
         name: &str,
+        rule_id: usize,
+        match_id: usize,
         resource_key: &str,
         match_item: &HTTPRouteMatch,
         rule: Arc<HTTPRouteRule>,
@@ -75,6 +77,8 @@ impl RouteManager {
         Ok(HttpRouteRuleRegexUnit::new(
             namespace.to_string(),
             name.to_string(),
+            rule_id,
+            match_id,
             resource_key.to_string(),
             match_item.clone(),
             rule,
@@ -234,18 +238,20 @@ impl RouteManager {
                 let route_name = route.metadata.name.as_deref().unwrap_or("");
                 
                 if let Some(rules) = &route.spec.rules {
-                    for rule in rules {
+                    for (rule_id, rule) in rules.iter().enumerate() {
                         let rule_arc = Arc::new(rule.clone());
                         
                         // Each rule may have multiple matches
                         if let Some(matches) = &rule.matches {
-                            for match_item in matches {
+                            for (match_id, match_item) in matches.iter().enumerate() {
                                 // Check if this is a regex path
                                 if Self::is_regex_path(&match_item) {
                                     // Create regex route
                                     if let Ok(regex_unit) = Self::create_regex_route_unit(
                                         route_namespace,
                                         route_name,
+                                        rule_id,
+                                        match_id,
                                         resource_key,
                                         match_item,
                                         rule_arc.clone(),
@@ -257,6 +263,8 @@ impl RouteManager {
                                     let rule_unit = HttpRouteRuleUnit::new(
                                         route_namespace.to_string(),
                                         route_name.to_string(),
+                                        rule_id,
+                                        match_id,
                                         resource_key.clone(),
                                         match_item.clone(),
                                         rule_arc.clone(),
@@ -265,21 +273,7 @@ impl RouteManager {
                                 }
                             }
                         } else {
-                            // If no matches, create a default match (match all)
-                            let default_match = crate::types::HTTPRouteMatch {
-                                path: None,
-                                headers: None,
-                                query_params: None,
-                                method: None,
-                            };
-                            let rule_unit = HttpRouteRuleUnit::new(
-                                route_namespace.to_string(),
-                                route_name.to_string(),
-                                resource_key.clone(),
-                                default_match,
-                                rule_arc,
-                            );
-                            route_rules_list.push(rule_unit);
+                            tracing::warn!(route_name=%route_name, route_namespace=%route_namespace, "route missing match");
                         }
                     }
                 }
@@ -381,12 +375,12 @@ fn parse_http_routes_to_gateway_domain_rules(
 
             // Process each hostname and rule combination
             for hostname in hostnames {
-                for rule in rules {
+                for (rule_id, rule) in rules.iter().enumerate() {
                     let rule_arc = Arc::new(rule.clone());
                     
                     // Each rule may have multiple matches
                     if let Some(matches) = &rule.matches {
-                        for match_item in matches {
+                        for (match_id, match_item) in matches.iter().enumerate() {
                             let split = domain_map
                                 .entry(hostname.clone())
                                 .or_insert_with(|| (Vec::new(), Vec::new()));
@@ -397,6 +391,8 @@ fn parse_http_routes_to_gateway_domain_rules(
                                 match RouteManager::create_regex_route_unit(
                                     &route_namespace,
                                     &route_name,
+                                    rule_id,
+                                    match_id,
                                     &route.key_name(),
                                     match_item,
                                     rule_arc.clone(),
@@ -413,6 +409,8 @@ fn parse_http_routes_to_gateway_domain_rules(
                                 let rule_unit = HttpRouteRuleUnit::new(
                                     route_namespace.clone(),
                                     route_name.clone(),
+                                    rule_id,
+                                    match_id,
                                     route.key_name(),
                                     match_item.clone(),
                                     rule_arc.clone(),
@@ -421,26 +419,7 @@ fn parse_http_routes_to_gateway_domain_rules(
                             }
                         }
                     } else {
-                        // If no matches, create a default match (match all)
-                        let default_match = crate::types::HTTPRouteMatch {
-                            path: None,
-                            headers: None,
-                            query_params: None,
-                            method: None,
-                        };
-                        let rule_unit = HttpRouteRuleUnit::new(
-                            route_namespace.clone(),
-                            route_name.clone(),
-                            route.key_name(),
-                            default_match,
-                            rule_arc,
-                        );
-                        
-                        domain_map
-                            .entry(hostname.clone())
-                            .or_insert_with(|| (Vec::new(), Vec::new()))
-                            .0
-                            .push(rule_unit);
+                        tracing::warn!(route_name=%route_name, route_namespace=%route_namespace, "route missing match");
                     }
                 }
             }

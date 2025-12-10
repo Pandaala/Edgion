@@ -29,6 +29,7 @@ mkdir -p "$RUNTIME_DIR"
 # 日志文件
 EDGION_GW_LOG="${LOG_DIR}/edgion_gw.log"
 EDGION_OP_LOG="${LOG_DIR}/edgion_op.log"
+TEST_SERVER_LOG="${LOG_DIR}/test_server.log"
 ACCESS_LOG="${LOG_DIR}/access.log"
 
 # PID 文件
@@ -67,6 +68,11 @@ cleanup() {
         rm -f "${PID_DIR}/edgion_op.pid"
     fi
     
+    if [ -f "${PID_DIR}/test_server.pid" ]; then
+        kill $(cat "${PID_DIR}/test_server.pid") 2>/dev/null && echo_success "test_server 已停止" || true
+        rm -f "${PID_DIR}/test_server.pid"
+    fi
+    
     echo_success "清理完成"
     exit 0
 }
@@ -87,10 +93,38 @@ show_help() {
     echo "  clean     清理日志文件"
     echo "  help      显示此帮助"
     echo ""
-    echo "日志位置: ${LOG_DIR}"
-    echo "  - edgion_op.log    Operator日志"
-    echo "  - edgion_gw.log    网关日志"
-    echo "  - access.log       访问日志"
+echo "日志位置: ${LOG_DIR}"
+echo "  - edgion_op.log    Operator日志"
+echo "  - edgion_gw.log    网关日志"
+echo "  - test_server.log  测试服务器日志"
+echo "  - access.log       访问日志"
+}
+
+# 启动 test_server
+start_test_server() {
+    echo_info "启动 test_server..."
+    
+    if [ -f "${PID_DIR}/test_server.pid" ] && kill -0 $(cat "${PID_DIR}/test_server.pid") 2>/dev/null; then
+        echo_warn "test_server 已在运行 (PID: $(cat ${PID_DIR}/test_server.pid))"
+        return
+    fi
+    
+    # 打印启动命令
+    echo_info "执行命令 (工作目录: $PROJECT_DIR):"
+    echo "  cargo run -p edgion --example test_server"
+    
+    cargo run -p edgion --example test_server \
+        > "$TEST_SERVER_LOG" 2>&1 &
+    echo $! > "${PID_DIR}/test_server.pid"
+    sleep 2
+    
+    if kill -0 $(cat "${PID_DIR}/test_server.pid") 2>/dev/null; then
+        echo_success "test_server 已启动 (PID: $(cat ${PID_DIR}/test_server.pid))"
+        echo "         日志: $TEST_SERVER_LOG"
+        echo "         监听端口: 30001, 30002, 30003, 30004"
+    else
+        echo_error "test_server 启动失败，请查看日志: $TEST_SERVER_LOG"
+    fi
 }
 
 # 启动 edgion-gw
@@ -169,8 +203,10 @@ start_all() {
     # 清空旧日志
     > "$EDGION_OP_LOG"
     > "$EDGION_GW_LOG"
+    > "$TEST_SERVER_LOG"
     > "$ACCESS_LOG"
     
+    start_test_server
     start_edgion_op
     start_edgion_gw
     
@@ -180,6 +216,7 @@ start_all() {
     echo "=========================================="
     echo ""
     echo "日志目录: ${LOG_DIR}"
+    echo "  tail -f ${LOG_DIR}/test_server.log"
     echo "  tail -f ${LOG_DIR}/edgion_op.log"
     echo "  tail -f ${LOG_DIR}/edgion_gw.log"
     echo "  tail -f ${LOG_DIR}/access.log"
@@ -197,6 +234,12 @@ start_all() {
 # 停止所有服务
 stop_all() {
     echo_info "停止所有服务..."
+    
+    if [ -f "${PID_DIR}/test_server.pid" ]; then
+        kill $(cat "${PID_DIR}/test_server.pid") 2>/dev/null && echo_success "test_server 已停止" || true
+        rm -f "${PID_DIR}/test_server.pid"
+    fi
+    
     cleanup
 }
 
@@ -205,6 +248,12 @@ show_status() {
     echo ""
     echo "服务状态:"
     echo "---------"
+    
+    if [ -f "${PID_DIR}/test_server.pid" ] && kill -0 $(cat "${PID_DIR}/test_server.pid") 2>/dev/null; then
+        echo_success "test_server  运行中 (PID: $(cat ${PID_DIR}/test_server.pid))"
+    else
+        echo_warn "test_server  未运行"
+    fi
     
     if [ -f "${PID_DIR}/edgion_op.pid" ] && kill -0 $(cat "${PID_DIR}/edgion_op.pid") 2>/dev/null; then
         echo_success "edgion-op    运行中 (PID: $(cat ${PID_DIR}/edgion_op.pid))"
@@ -223,7 +272,7 @@ show_status() {
 # 实时查看日志
 show_logs() {
     echo_info "实时查看所有日志 (Ctrl+C 退出)..."
-    tail -f "$EDGION_OP_LOG" "$EDGION_GW_LOG" "$ACCESS_LOG" 2>/dev/null
+    tail -f "$TEST_SERVER_LOG" "$EDGION_OP_LOG" "$EDGION_GW_LOG" "$ACCESS_LOG" 2>/dev/null
 }
 
 # 清理日志

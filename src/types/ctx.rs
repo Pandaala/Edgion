@@ -11,15 +11,27 @@ pub struct MatchInfo {
     pub rns: String,
     /// route name
     pub rn: String,
+
+    /// Rule id in HTTPROUTE
+    pub rule_id: usize,
+    /// Match id at rule id,
+    pub match_id: usize,
+
     /// match item
     pub m: HTTPRouteMatch,
+    
     /// Rule-level plugin runtime
     pub rule_plugin_runtime: Arc<PluginRuntime>,
 }
 
 impl MatchInfo {
-    pub fn new(rns: String, rn: String, m: HTTPRouteMatch, rule_plugin_runtime: Arc<PluginRuntime>) -> Self {
-        Self { rns, rn, m, rule_plugin_runtime }
+    pub fn new(rns: String,
+               rn: String,
+               rule_id: usize,
+               match_id: usize,
+               m: HTTPRouteMatch,
+               rule_plugin_runtime: Arc<PluginRuntime>) -> Self {
+        Self { rns, rn, m, rule_id, match_id, rule_plugin_runtime }
     }
 }
 

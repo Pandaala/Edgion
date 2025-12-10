@@ -21,6 +21,8 @@ impl HttpRouteRuleRegexUnit {
     pub fn new(
         namespace: String,
         name: String,
+        rule_id: usize,
+        match_id: usize,
         resource_key: String,
         match_item: HTTPRouteMatch,
         rule: Arc<HTTPRouteRule>,
@@ -29,7 +31,7 @@ impl HttpRouteRuleRegexUnit {
         let rule_plugin_runtime = rule.plugin_runtime.clone();
         Self {
             resource_key,
-            matched_info: Arc::new(MatchInfo::new(namespace, name, match_item, rule_plugin_runtime)),
+            matched_info: Arc::new(MatchInfo::new(namespace, name, rule_id, match_id, match_item, rule_plugin_runtime)),
             rule,
             path_regex,
         }

@@ -172,14 +172,9 @@ impl RadixRouteMatchEngine {
         for (i, path_idx) in matched_paths.iter().enumerate() {
             let radix_path = &self.radix_paths[*path_idx];
             tracing::trace!(
-                "[{}] Trying: original='{}', priority={}, route_idx={}",
-                i + 1,
-                radix_path.original,
-                radix_path.priority_weight,
-                radix_path.route_idx
-            );
+                "[{}] Trying: original='{}', priority={}, route_idx={}", i + 1,radix_path.original, radix_path.priority_weight, radix_path.route_idx);
             if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session)? {
-                tracing::debug!("Prefix match succeeded");
+                tracing::debug!("Prefix match succeeded,original='{}', priority={}, route_idx={}", radix_path.original,radix_path.priority_weight, radix_path.route_idx);
                 return Ok(runtime);
             }
         }
