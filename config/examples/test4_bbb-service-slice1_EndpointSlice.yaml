@@ -3,8 +3,6 @@ kind: EndpointSlice
 metadata:
   name: bbb-service-slice1
   namespace: test4
-  labels:
-    kubernetes.io/service-name: bbb-service
 addressType: IPv4
 ports:
   - name: http-30003

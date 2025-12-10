@@ -3,8 +3,6 @@ kind: EndpointSlice
 metadata:
   name: aaa-service-slice1
   namespace: test3
-  labels:
-    kubernetes.io/service-name: aaa-service
 addressType: IPv4
 ports:
   - name: http-30001

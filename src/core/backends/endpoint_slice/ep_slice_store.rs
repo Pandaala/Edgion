@@ -63,27 +63,8 @@ where
     }
 
     /// Get endpoint slice load balancer by service key (namespace/service-name)
-    /// This searches for endpoint slices that belong to the given service
     pub fn get_by_service(&self, service_key: &str) -> Option<Arc<EndpointSliceLoadBalancer<S>>> {
-        let map = self.ep_slices.load();
-        // EndpointSlice key format: "namespace/ep-slice-name"
-        // Service key format: "namespace/service-name"
-        // We need to find ep_slice with matching service label
-        const SERVICE_NAME_LABEL: &str = "kubernetes.io/service-name";
-        for (_, ep_slice_lb) in map.iter() {
-            let matches = ep_slice_lb.with_endpoint_slice(|ep_slice| {
-                let metadata = &ep_slice.metadata;
-                let namespace = metadata.namespace.as_deref()?;
-                let labels = metadata.labels.as_ref()?;
-                let service_name = labels.get(SERVICE_NAME_LABEL)?;
-                let key = format!("{}/{}", namespace, service_name);
-                Some(key == service_key)
-            });
-            if matches == Some(true) {
-                return Some(Arc::clone(ep_slice_lb));
-            }
-        }
-        None
+        self.get(service_key)
     }
 
     /// Execute a function with the endpoint slice load balancer reference
