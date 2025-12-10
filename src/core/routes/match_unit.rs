@@ -10,7 +10,7 @@ use std::sync::Arc;
 pub struct HttpRouteRuleUnit {
     pub resource_key: String,
     /// Match info containing namespace, name and match item
-    pub matched_info: Arc<MatchInfo>,
+    pub matched_info: MatchInfo,
     /// Reference to the original rule (for backend_refs, filters, etc.)
     pub rule: Arc<HTTPRouteRule>,
     /// Compiled regex for path matching (only for RegularExpression path type)
@@ -30,7 +30,7 @@ impl HttpRouteRuleUnit {
     ) -> HttpRouteRuleUnit {
         Self {
             resource_key,
-            matched_info: Arc::new(MatchInfo::new(namespace, name, rule_id, match_id, match_item)),
+            matched_info: MatchInfo::new(namespace, name, rule_id, match_id, match_item),
             rule,
             path_regex,
         }

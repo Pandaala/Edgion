@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Instant;
+use std::fmt;
 use crate::types::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use crate::types::filters::{PluginRunningResult};
 use crate::core::filters::PluginLog;
@@ -28,6 +29,12 @@ impl MatchInfo {
                match_id: usize,
                m: HTTPRouteMatch) -> Self {
         Self { rns, rn, m, rule_id, match_id }
+    }
+}
+
+impl fmt::Display for MatchInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{} (rule:{}, match:{})", self.rns, self.rn, self.rule_id, self.match_id)
     }
 }
 
@@ -67,9 +74,6 @@ pub struct EdgionHttpContext {
     
     /// Error codes collected during request processing
     pub error_codes: Vec<EdgionStatus>,
-
-    /// Matched route info (namespace, name, match item)
-    pub matched_info: Option<Arc<MatchInfo>>,
     
     /// Matched route unit containing full route information
     pub route_unit: Option<Arc<HttpRouteRuleUnit>>,
@@ -96,7 +100,6 @@ impl EdgionHttpContext {
             auto_gprc: false,
             request_info: RequestInfo::default(),
             error_codes: Vec::with_capacity(5),
-            matched_info: None,
             route_unit: None,
             selected_backend: None,
             upstream_info: None,

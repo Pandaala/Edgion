@@ -29,29 +29,34 @@ impl ProxyHttp for EdgionHttp {
     async fn upstream_peer(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
         tracing::info!("upstream_peer");
 
-        // Get route unit from context
-        let route_unit = match ctx.route_unit.as_ref() {
-            Some(unit) => unit,
-            None => {
-                ctx.add_error(EdgionStatus::UpstreamNotRouteMatched);
-                end_response_500(session, ctx).await?;
-                return Err(PingoraError::new(ErrorType::InternalError));
-            }
-        };
+        // Get route unit from context and extract needed data
+        let (backend_ref, match_info) = {
+            let route_unit = match ctx.route_unit.as_ref() {
+                Some(unit) => unit,
+                None => {
+                    ctx.add_error(EdgionStatus::UpstreamNotRouteMatched);
+                    end_response_500(session, ctx).await?;
+                    return Err(PingoraError::new(ErrorType::InternalError));
+                }
+            };
 
-        // Select backend from the route unit
-        let backend_ref = match RouteRules::select_backend(&route_unit.rule) {
-            Ok(backend) => backend,
-            Err(e) => {
-                tracing::error!("Failed to select backend: {:?}", e);
-                ctx.add_error(match e {
-                    EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
-                    EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-                    _ => EdgionStatus::Unknown,
-                });
-                end_response_500(session, ctx).await?;
-                return Err(PingoraError::new(ErrorType::InternalError));
-            }
+            // Select backend from the route unit
+            let backend_ref = match RouteRules::select_backend(&route_unit.rule) {
+                Ok(backend) => backend,
+                Err(e) => {
+                    tracing::error!("Failed to select backend: {:?}", e);
+                    ctx.add_error(match e {
+                        EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
+                        EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
+                        _ => EdgionStatus::Unknown,
+                    });
+                    end_response_500(session, ctx).await?;
+                    return Err(PingoraError::new(ErrorType::InternalError));
+                }
+            };
+            
+            // Clone match_info to avoid holding reference to ctx
+            (backend_ref, route_unit.matched_info.clone())
         };
         
         tracing::info!("Selected backend: {:?}", backend_ref);
@@ -66,9 +71,6 @@ impl ProxyHttp for EdgionHttp {
         
         // Store selected backend in context
         ctx.selected_backend = Some(backend_ref.clone());
-        
-        // Get match info (clone to avoid borrow conflict)
-        let match_info = ctx.matched_info.clone().unwrap();
         
         // Get peer from backend
         get_peer(&match_info, &backend_ref, session, ctx).await
@@ -103,10 +105,9 @@ impl ProxyHttp for EdgionHttp {
             Ok(route_unit) => {
                 // Store route unit in context
                 ctx.route_unit = Some(route_unit.clone());
-                ctx.matched_info = Some(route_unit.matched_info.clone());
                 
                 tracing::debug!(
-                    route = %format!("{}/{}", route_unit.matched_info.rns, route_unit.matched_info.rn),
+                    matched_info = %route_unit.matched_info,
                     "Route matched"
                 );
                 
@@ -204,9 +205,19 @@ impl ProxyHttp for EdgionHttp {
         // Calculate latency
         let latency_ms = ctx.start_time.elapsed().as_millis() as u64;
 
-        // Create access log entry and send
+        // Create access log entry
+        let entry = AccessLogEntry::from_context(ctx, latency_ms);
+        
+        // In DEBUG mode, print access log to terminal
+        if tracing::level_filters::LevelFilter::current() >= tracing::level_filters::LevelFilter::DEBUG {
+            tracing::debug!(
+                access_log = %entry.to_json(),
+                "Access log"
+            );
+        }
+        
+        // Send to access logger if configured
         if let Some(logger) = &self.access_logger {
-            let entry = AccessLogEntry::from_context(ctx, latency_ms);
             logger.send(entry.to_json()).await;
         }
     }
