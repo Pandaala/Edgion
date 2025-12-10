@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 use std::fmt;
+use serde::Serialize;
 use crate::types::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use crate::types::filters::{PluginRunningResult};
 use crate::core::filters::PluginLog;
@@ -39,9 +40,13 @@ impl fmt::Display for MatchInfo {
 }
 
 /// Request information extracted from the incoming request
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {
+    /// Trace ID from x-trace-id header
+    #[serde(rename = "x-trace-id")]
+    pub x_trace_id: Option<String>,
     /// Hostname from the Host header
+    #[serde(rename = "host")]
     pub hostname: String,
     /// Request path from URI
     pub path: String,
@@ -64,12 +69,11 @@ pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
     
-    pub x_trace_id: Option<String>,
     pub request_id: Option<String>,
 
     pub auto_gprc: bool,
     
-    /// Request information (hostname, path)
+    /// Request information (hostname, path, x-trace-id)
     pub request_info: RequestInfo,
     
     /// Error codes collected during request processing
@@ -95,7 +99,6 @@ impl EdgionHttpContext {
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),
-            x_trace_id: None,
             request_id: None,
             auto_gprc: false,
             request_info: RequestInfo::default(),

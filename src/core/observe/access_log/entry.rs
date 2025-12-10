@@ -9,18 +9,12 @@ pub struct AccessLogEntry<'a> {
     #[serde(rename = "ts")]
     pub timestamp: i64,
     
-    #[serde(rename = "x-trace-id")]
-    pub x_trace_id: Option<&'a str>,
+    #[serde(flatten)]
+    pub request_info: &'a RequestInfo,
     
-    pub host: &'a str,
-    pub path: &'a str,
-    pub status: u16,
     pub errors: &'a [EdgionStatus],
     pub upstream: String,
     pub latency_ms: u64,
-    
-    #[serde(skip)]
-    pub request_info: &'a RequestInfo,
     
     #[serde(skip)]
     pub upstream_info: Option<&'a UpstreamInfo>,
@@ -34,14 +28,10 @@ impl<'a> AccessLogEntry<'a> {
         
         Self {
             timestamp: chrono::Utc::now().timestamp_millis(),
-            x_trace_id: ctx.x_trace_id.as_deref(),
-            host: &ctx.request_info.hostname,
-            path: &ctx.request_info.path,
-            status: ctx.request_info.status,
+            request_info: &ctx.request_info,
             errors: &ctx.error_codes,
             upstream,
             latency_ms,
-            request_info: &ctx.request_info,
             upstream_info: ctx.upstream_info.as_ref(),
         }
     }
@@ -68,7 +58,7 @@ impl<'a> AccessLogEntry<'a> {
             self.request_info.path,
             self.request_info.status,
             self.latency_ms,
-            self.x_trace_id.unwrap_or("-"),
+            self.request_info.x_trace_id.as_deref().unwrap_or("-"),
         )
     }
 }

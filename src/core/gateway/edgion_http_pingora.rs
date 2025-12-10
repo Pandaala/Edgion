@@ -179,7 +179,7 @@ impl ProxyHttp for EdgionHttp {
         let req_header = session.req_header();
         
         // Try to get X-Trace-Id from request headers, generate if not present
-        ctx.x_trace_id = req_header
+        ctx.request_info.x_trace_id = req_header
             .headers
             .get("x-trace-id")
             .and_then(|h| h.to_str().ok())
