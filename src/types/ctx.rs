@@ -3,7 +3,7 @@ use std::time::Instant;
 use crate::types::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use crate::types::filters::{PluginRunningResult};
 use crate::core::filters::PluginLog;
-use crate::core::filters::PluginRuntime;
+use crate::core::routes::HttpRouteRuleUnit;
 
 #[derive(Clone)]
 pub struct MatchInfo {
@@ -71,6 +71,9 @@ pub struct EdgionHttpContext {
     /// Matched route info (namespace, name, match item)
     pub matched_info: Option<Arc<MatchInfo>>,
     
+    /// Matched route unit containing full route information
+    pub route_unit: Option<Arc<HttpRouteRuleUnit>>,
+    
     /// Selected backend from load balancing
     pub selected_backend: Option<HTTPBackendRef>,
     
@@ -94,6 +97,7 @@ impl EdgionHttpContext {
             request_info: RequestInfo::default(),
             error_codes: Vec::with_capacity(5),
             matched_info: None,
+            route_unit: None,
             selected_backend: None,
             upstream_info: None,
             plugin_logs: Vec::with_capacity(10),

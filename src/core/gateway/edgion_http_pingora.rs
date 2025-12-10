@@ -29,18 +29,48 @@ impl ProxyHttp for EdgionHttp {
     async fn upstream_peer(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
         tracing::info!("upstream_peer");
 
-        // Get selected backend from context (already selected in request_filter)
-        let backend_ref = match ctx.selected_backend.clone() {
-            Some(backend) => backend,
+        // Get route unit from context
+        let route_unit = match ctx.route_unit.as_ref() {
+            Some(unit) => unit,
             None => {
                 ctx.add_error(EdgionStatus::UpstreamNotRouteMatched);
                 end_response_500(session, ctx).await?;
                 return Err(PingoraError::new(ErrorType::InternalError));
             }
         };
-        tracing::info!("Selected backend: {:?}", backend_ref);
 
+        // Select backend from the route unit
+        let backend_ref = match RouteRules::select_backend(&route_unit.rule) {
+            Ok(backend) => backend,
+            Err(e) => {
+                tracing::error!("Failed to select backend: {:?}", e);
+                ctx.add_error(match e {
+                    EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
+                    EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
+                    _ => EdgionStatus::Unknown,
+                });
+                end_response_500(session, ctx).await?;
+                return Err(PingoraError::new(ErrorType::InternalError));
+            }
+        };
+        
+        tracing::info!("Selected backend: {:?}", backend_ref);
+        
+        // Run backend-level request plugins
+        backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
+        if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+            ctx.add_error(EdgionStatus::Unknown);
+            end_response_500(session, ctx).await?;
+            return Err(PingoraError::new(ErrorType::InternalError));
+        }
+        
+        // Store selected backend in context
+        ctx.selected_backend = Some(backend_ref.clone());
+        
+        // Get match info (clone to avoid borrow conflict)
         let match_info = ctx.matched_info.clone().unwrap();
+        
+        // Get peer from backend
         get_peer(&match_info, &backend_ref, session, ctx).await
     }
 
@@ -68,66 +98,30 @@ impl ProxyHttp for EdgionHttp {
         }
         ctx.request_info.path = req_header.uri.path().to_string();
 
-        // Match route and select backend
+        // Match route
         match self.domain_routes.match_route(&ctx.request_info.hostname, session) {
             Ok(route_unit) => {
-                // Select backend from the route unit
-                let selected_backend = match RouteRules::select_backend(&route_unit.rule) {
-                    Ok(backend) => backend,
-                    Err(e) => {
-                        tracing::error!("Failed to select backend: {:?}", e);
-                        match e {
-                            EdError::BackendNotFound() => {
-                                ctx.add_error(EdgionStatus::UpstreamNotBackendRefs);
-                                end_response_500(session, ctx).await?;
-                            }
-                            EdError::InconsistentWeight() => {
-                                ctx.add_error(EdgionStatus::UpstreamInconsistentWeight);
-                                end_response_500(session, ctx).await?;
-                            }
-                            _ => {
-                                ctx.add_error(EdgionStatus::Unknown);
-                                end_response_500(session, ctx).await?;
-                            }
-                        }
-                        ctx.matched_info = None;
-                        ctx.selected_backend = None;
-                        return Ok(true);
-                    }
-                };
+                // Store route unit in context
+                ctx.route_unit = Some(route_unit.clone());
+                ctx.matched_info = Some(route_unit.matched_info.clone());
                 
-                tracing::info!("selected_backend: {:?}", selected_backend);
-
-                // Run rule-level request plugins first
-                // todo 修改了位置，应该在rule阶段来run
-                // route_unit.matched_info.rule_plugin_runtime.run_request_plugins(session, ctx).await;
-                // if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-                //     return Ok(true);
-                // }
-
-                // Then run backend-level request plugins
-                selected_backend.plugin_runtime.run_request_plugins(session, ctx).await;
+                tracing::debug!(
+                    route = %format!("{}/{}", route_unit.matched_info.rns, route_unit.matched_info.rn),
+                    "Route matched"
+                );
+                
+                // Run rule-level request plugins
+                route_unit.rule.plugin_runtime.run_request_plugins(session, ctx).await;
                 if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
                     return Ok(true);
                 }
-
-                ctx.matched_info = Some(route_unit.matched_info.clone());
-                ctx.selected_backend = Some(selected_backend);
+                
                 Ok(false)
             }
-            Err(e) => {
-                match e {
-                    EdError::RouteNotFound() => {
-                        ctx.add_error(EdgionStatus::RouteNotFound);
-                        end_response_404(session, ctx).await?;
-                    }
-                    _ => {
-                        ctx.add_error(EdgionStatus::Unknown);
-                        end_response_500(session, ctx).await?;
-                    }
-                }
-                ctx.matched_info = None;
-                ctx.selected_backend = None;
+            Err(_e) => {
+                // Route not found, return 404
+                ctx.add_error(EdgionStatus::RouteNotFound);
+                end_response_404(session, ctx).await?;
                 Ok(true)
             }
         }
@@ -140,11 +134,10 @@ impl ProxyHttp for EdgionHttp {
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> pingora_core::Result<()> {
-        // // Run rule-level upstream_response plugins (sync)
-        // todo 修改了位置，应该在rule阶段来run
-        // if let Some(match_info) = ctx.matched_info.clone() {
-        //     match_info.rule_plugin_runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
-        // }
+        // Run rule-level upstream_response plugins (sync)
+        if let Some(route_unit) = ctx.route_unit.clone() {
+            route_unit.rule.plugin_runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
+        }
 
         // Run backend-level upstream_response plugins (sync)
         if let Some(backend) = ctx.selected_backend.clone() {
@@ -165,10 +158,9 @@ impl ProxyHttp for EdgionHttp {
         Self::CTX: Send + Sync,
     {
         // Run rule-level response plugins (async)
-        // todo 修改了位置，应该在rule阶段来run
-        // if let Some(match_info) = ctx.matched_info.clone() {
-        //     match_info.rule_plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
-        // }
+        if let Some(route_unit) = ctx.route_unit.clone() {
+            route_unit.rule.plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
+        }
 
         // Run backend-level response plugins (async)
         if let Some(backend) = ctx.selected_backend.clone() {
