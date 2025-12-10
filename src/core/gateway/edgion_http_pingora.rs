@@ -175,9 +175,28 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
+        // Extract or generate trace_id and request_id
+        let req_header = session.req_header();
+        
+        // Try to get X-Trace-Id from request headers, generate if not present
+        ctx.x_trace_id = req_header
+            .headers
+            .get("x-trace-id")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                // Generate new trace_id if not present
+                Some(uuid::Uuid::new_v4().to_string())
+            });
+        
+        // Try to get X-Request-Id from request headers
+        ctx.request_id = req_header
+            .headers
+            .get("x-request-id")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
 
         // process gprc
-        let req_header = session.req_header();
 
         if let Some(content_type) = req_header.headers.get("content-type") {
             if let Ok(ct_str) = content_type.to_str() {

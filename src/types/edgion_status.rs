@@ -1,6 +1,6 @@
 /// Error code for Edgion gateway
 /// Each error code has a fixed numeric code (0Xxx format) and a message string
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum EdgionStatus {
 
     Unknown = 999,
