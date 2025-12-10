@@ -157,7 +157,7 @@ fn try_get_peer(match_info: &MatchInfo, br: &HTTPBackendRef, session: &Session) 
                     ep_store.select_peer(&service_key, b"", 256)
                         .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault)?
                 }
-            }.ok_or(EdgionStatus::BackendLoadBalancerSelectionFailed)?;
+            };
             
             let mut addr = backend.addr;
             if let Some(port) = br.port {

@@ -16,3 +16,7 @@ endpoints:
       - "127.0.0.1"
     conditions:
       ready: true
+  - addresses:
+      - "1.0.0.1"
+    conditions:
+      ready: true      
