@@ -1,6 +1,7 @@
 //! Access log entry definition
 
-use crate::types::{EdgionHttpContext, EdgionStatus, RequestInfo, UpstreamInfo};
+use crate::types::{EdgionHttpContext, EdgionStatus, MatchInfo, RequestInfo, UpstreamInfo};
+use crate::core::filters::PluginLog;
 use serde::Serialize;
 
 /// Helper function to check if a slice is empty
@@ -16,19 +17,29 @@ pub struct AccessLogEntry<'a> {
     
     pub request_info: &'a RequestInfo,
     
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_info: Option<&'a MatchInfo>,
+    
     #[serde(skip_serializing_if = "is_empty")]
     pub errors: &'a [EdgionStatus],
     
     pub upstream_info: &'a [UpstreamInfo],
+    
+    #[serde(skip_serializing_if = "is_empty")]
+    pub plugin_logs: &'a [PluginLog],
 }
 
 impl<'a> AccessLogEntry<'a> {
     pub fn from_context(ctx: &'a EdgionHttpContext) -> Self {
+        let match_info = ctx.route_unit.as_ref().map(|ru| &ru.matched_info);
+        
         Self {
             timestamp: chrono::Utc::now().timestamp_millis(),
             request_info: &ctx.request_info,
+            match_info,
             errors: &ctx.error_codes,
             upstream_info: &ctx.upstream_info,
+            plugin_logs: &ctx.plugin_logs,
         }
     }
 

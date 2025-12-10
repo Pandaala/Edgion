@@ -7,7 +7,7 @@ use crate::types::filters::{PluginRunningResult};
 use crate::core::filters::PluginLog;
 use crate::core::routes::HttpRouteRuleUnit;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct MatchInfo {
     /// route namespace
     pub rns: String,
@@ -20,6 +20,7 @@ pub struct MatchInfo {
     pub match_id: usize,
 
     /// match item
+    #[serde(skip)]
     pub m: HTTPRouteMatch,
 }
 
