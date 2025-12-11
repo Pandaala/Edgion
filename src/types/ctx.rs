@@ -76,32 +76,32 @@ pub struct UpstreamInfo {
 pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
-    
+
     pub request_id: Option<String>,
 
     pub auto_gprc: bool,
-    
+
     /// Request information (hostname, path, x-trace-id)
     pub request_info: RequestInfo,
-    
+
     /// Error codes collected during request processing
     pub error_codes: Vec<EdgionStatus>,
-    
+
     /// Matched route unit containing full route information
     pub route_unit: Option<Arc<HttpRouteRuleUnit>>,
-    
+
     /// Selected backend from load balancing
     pub selected_backend: Option<HTTPBackendRef>,
-    
+
     /// Upstream info history (can be modified during request processing)
     pub upstream_info: Vec<UpstreamInfo>,
-    
+
     /// Current upstream_id (index in upstream_info Vec) for status setting
     pub current_upstream_id: Option<usize>,
-    
+
     /// Plugin execution logs
     pub plugin_logs: Vec<PluginLog>,
-    
+
     /// Plugin running result
     pub plugin_running_result: PluginRunningResult,
 }

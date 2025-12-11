@@ -47,6 +47,10 @@ pub struct EdgionGatewayConfigSpec {
     /// Server configuration for Pingora
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<ServerConfig>,
+
+    /// HTTP timeout configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_timeout: Option<HttpTimeout>,
 }
 
 // ============================================
@@ -461,6 +465,118 @@ pub struct ServerConfig {
 
 fn default_work_stealing() -> bool {
     true
+}
+
+// ============================================
+// HTTP Timeout Configuration
+// ============================================
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpTimeout {
+    /// Client-side timeout settings
+    #[serde(default)]
+    pub client: ClientTimeout,
+
+    /// Backend-side timeout settings
+    #[serde(default)]
+    pub backend: BackendTimeout,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientTimeout {
+    /// Timeout for reading request from client (in seconds)
+    #[serde(default = "default_client_read_timeout")]
+    pub read_timeout: u64,
+
+    /// Timeout for writing response to client (in seconds)
+    #[serde(default = "default_client_write_timeout")]
+    pub write_timeout: u64,
+
+    /// HTTP keepalive timeout (in seconds)
+    #[serde(default = "default_client_keepalive_timeout")]
+    pub keepalive_timeout: u64,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendTimeout {
+    /// Timeout for connecting to upstream backend (in seconds)
+    #[serde(default = "default_backend_connect_timeout")]
+    pub default_connect_timeout: u64,
+
+    /// Total request timeout including retries (in seconds)
+    #[serde(default = "default_backend_request_timeout")]
+    pub default_request_timeout: u64,
+
+    /// Maximum timeout for a single try (in seconds)
+    #[serde(default = "default_backend_per_try_timeout")]
+    pub default_per_try_timeout: u64,
+
+    /// Idle timeout for backend connection pool (in seconds)
+    #[serde(default = "default_backend_idle_timeout")]
+    pub default_idle_timeout: u64,
+
+    /// Maximum number of retries
+    #[serde(default = "default_backend_max_retries")]
+    pub default_max_retries: u32,
+}
+
+// ClientTimeout defaults
+fn default_client_read_timeout() -> u64 {
+    60
+}
+
+fn default_client_write_timeout() -> u64 {
+    60
+}
+
+fn default_client_keepalive_timeout() -> u64 {
+    75
+}
+
+// BackendTimeout defaults
+fn default_backend_connect_timeout() -> u64 {
+    5
+}
+
+fn default_backend_request_timeout() -> u64 {
+    60
+}
+
+fn default_backend_per_try_timeout() -> u64 {
+    30
+}
+
+fn default_backend_idle_timeout() -> u64 {
+    300
+}
+
+fn default_backend_max_retries() -> u32 {
+    3
+}
+
+impl Default for ClientTimeout {
+    fn default() -> Self {
+        Self {
+            read_timeout: default_client_read_timeout(),
+            write_timeout: default_client_write_timeout(),
+            keepalive_timeout: default_client_keepalive_timeout(),
+        }
+    }
+}
+
+impl Default for BackendTimeout {
+    fn default() -> Self {
+        Self {
+            default_connect_timeout: default_backend_connect_timeout(),
+            default_request_timeout: default_backend_request_timeout(),
+            default_per_try_timeout: default_backend_per_try_timeout(),
+            default_idle_timeout: default_backend_idle_timeout(),
+            default_max_retries: default_backend_max_retries(),
+        }
+    }
 }
 
 // ============================================
