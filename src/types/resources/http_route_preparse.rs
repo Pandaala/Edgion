@@ -90,7 +90,7 @@ impl HTTPRoute {
     /// let mut route: HTTPRoute = serde_yaml::from_str(yaml_str)?;
     /// route.parse_hidden_logic();
     /// ```
-    pub fn parse_hidden_logic(&mut self) {
+    pub fn preparse(&mut self) {
         let Some(rules) = self.spec.rules.as_mut() else {
             return;
         };

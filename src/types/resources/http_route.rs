@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::lb::BackendSelector;
 use crate::core::filters::PluginRuntime;
-use super::hidden_logic::BackendExtensionInfo;
+use super::http_route_preparse::BackendExtensionInfo;
 
 /// API group for HTTPRoute
 pub const HTTP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
