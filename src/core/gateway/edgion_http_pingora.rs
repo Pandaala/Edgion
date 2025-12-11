@@ -82,7 +82,26 @@ impl ProxyHttp for EdgionHttp {
         ctx.selected_backend = Some(backend_ref.clone());
         
         // Get peer from backend (will update upstream_info with ip and port)
-        get_peer(&backend_ref, session, ctx).await
+        let mut peer = get_peer(&backend_ref, session, ctx).await?;
+        
+        // Set backend timeouts from gateway config
+        if let Some(http_timeout) = &self.edgion_gateway_config.spec.http_timeout {
+            let backend_timeout = &http_timeout.backend;
+            
+            // Set connection timeout
+            peer.options.connection_timeout = Some(std::time::Duration::from_secs(backend_timeout.default_connect_timeout));
+            
+            // Set read timeout
+            peer.options.read_timeout = Some(std::time::Duration::from_secs(backend_timeout.default_per_try_timeout));
+            
+            // Set write timeout
+            peer.options.write_timeout = Some(std::time::Duration::from_secs(backend_timeout.default_per_try_timeout));
+            
+            // Set idle timeout
+            peer.options.idle_timeout = Some(std::time::Duration::from_secs(backend_timeout.default_idle_timeout));
+        }
+        
+        Ok(peer)
     }
 
 
