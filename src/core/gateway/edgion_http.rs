@@ -1,10 +1,114 @@
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{SystemTime, Duration};
 use crate::core::gateway::server_header::ServerHeaderOpts;
 use crate::core::routes::DomainRouteRules;
 use crate::types::Listener;
 use crate::types::EdgionGatewayConfig;
+use crate::types::resources::edgion_gateway_config::{ClientTimeout, BackendTimeout};
 use crate::core::observe::AccessLogger;
+
+/// Pre-parsed timeout configurations for runtime use
+#[derive(Debug, Clone)]
+pub struct ParsedTimeouts {
+    pub client: ParsedClientTimeout,
+    pub backend: ParsedBackendTimeout,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedClientTimeout {
+    pub read_timeout: Duration,
+    pub write_timeout: Duration,
+    pub keepalive_timeout: u64,  // keepalive takes seconds as u64
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedBackendTimeout {
+    pub connect_timeout: Duration,
+    pub request_timeout: Duration,
+    pub per_try_timeout: Duration,
+    pub idle_timeout: Duration,
+}
+
+impl ParsedTimeouts {
+    /// Parse timeout configurations from EdgionGatewayConfig
+    /// Returns None if http_timeout is not configured
+    pub fn from_config(config: &EdgionGatewayConfig) -> Option<Self> {
+        let http_timeout = config.spec.http_timeout.as_ref()?;
+        
+        Some(Self {
+            client: ParsedClientTimeout::from_config(&http_timeout.client),
+            backend: ParsedBackendTimeout::from_config(&http_timeout.backend),
+        })
+    }
+}
+
+impl ParsedClientTimeout {
+    fn from_config(config: &ClientTimeout) -> Self {
+        use crate::core::utils::parse_duration;
+        
+        let read_timeout = parse_duration(&config.read_timeout)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Invalid read_timeout '{}': {}, using default 60s", config.read_timeout, e);
+                Duration::from_secs(60)
+            });
+        
+        let write_timeout = parse_duration(&config.write_timeout)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Invalid write_timeout '{}': {}, using default 60s", config.write_timeout, e);
+                Duration::from_secs(60)
+            });
+        
+        let keepalive_timeout = parse_duration(&config.keepalive_timeout)
+            .map(|d| d.as_secs())
+            .unwrap_or_else(|e| {
+                tracing::warn!("Invalid keepalive_timeout '{}': {}, using default 75s", config.keepalive_timeout, e);
+                75
+            });
+        
+        Self {
+            read_timeout,
+            write_timeout,
+            keepalive_timeout,
+        }
+    }
+}
+
+impl ParsedBackendTimeout {
+    fn from_config(config: &BackendTimeout) -> Self {
+        use crate::core::utils::parse_duration;
+        
+        let connect_timeout = parse_duration(&config.default_connect_timeout)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Invalid default_connect_timeout '{}': {}, using default 5s", config.default_connect_timeout, e);
+                Duration::from_secs(5)
+            });
+        
+        let request_timeout = parse_duration(&config.default_request_timeout)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Invalid default_request_timeout '{}': {}, using default 60s", config.default_request_timeout, e);
+                Duration::from_secs(60)
+            });
+        
+        let per_try_timeout = parse_duration(&config.default_per_try_timeout)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Invalid default_per_try_timeout '{}': {}, using default 30s", config.default_per_try_timeout, e);
+                Duration::from_secs(30)
+            });
+        
+        let idle_timeout = parse_duration(&config.default_idle_timeout)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Invalid default_idle_timeout '{}': {}, using default 300s", config.default_idle_timeout, e);
+                Duration::from_secs(300)
+            });
+        
+        Self {
+            connect_timeout,
+            request_timeout,
+            per_try_timeout,
+            idle_timeout,
+        }
+    }
+}
 
 pub struct EdgionHttp {
     pub gateway_class_name: Option<String>,
@@ -25,5 +129,8 @@ pub struct EdgionHttp {
     
     /// Global gateway configuration
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
+    
+    /// Pre-parsed timeout configurations (parsed once at initialization)
+    pub parsed_timeouts: Option<ParsedTimeouts>,
 }
 

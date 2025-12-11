@@ -68,6 +68,9 @@ impl GatewayBase {
 
                     let edgion_gateway_config = Arc::new(self.base_conf.edgion_gateway_config().clone());
                     
+                    // Pre-parse timeout configurations once at initialization
+                    let parsed_timeouts = crate::core::gateway::edgion_http::ParsedTimeouts::from_config(&edgion_gateway_config);
+                    
                     let edgion_http = EdgionHttp {
                         gateway_class_name: gateway_class_name.clone(),
                         gateway_namespace: gateway_namespace.clone(),
@@ -78,6 +81,7 @@ impl GatewayBase {
                         domain_routes: domain_routes.clone(),
                         access_logger: None, // TODO: Initialize from config
                         edgion_gateway_config,
+                        parsed_timeouts,
                     };
 
                     let mut http_service = http_proxy_service(&pingora_server.configuration, edgion_http);

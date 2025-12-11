@@ -84,21 +84,15 @@ impl ProxyHttp for EdgionHttp {
         // Get peer from backend (will update upstream_info with ip and port)
         let mut peer = get_peer(&backend_ref, session, ctx).await?;
         
-        // Set backend timeouts from gateway config
-        if let Some(http_timeout) = &self.edgion_gateway_config.spec.http_timeout {
-            let backend_timeout = &http_timeout.backend;
+        // Set backend timeouts from pre-parsed config (no runtime overhead)
+        if let Some(parsed_timeouts) = &self.parsed_timeouts {
+            let backend_timeout = &parsed_timeouts.backend;
             
-            // Set connection timeout
-            peer.options.connection_timeout = Some(std::time::Duration::from_secs(backend_timeout.default_connect_timeout));
-            
-            // Set read timeout
-            peer.options.read_timeout = Some(std::time::Duration::from_secs(backend_timeout.default_per_try_timeout));
-            
-            // Set write timeout
-            peer.options.write_timeout = Some(std::time::Duration::from_secs(backend_timeout.default_per_try_timeout));
-            
-            // Set idle timeout
-            peer.options.idle_timeout = Some(std::time::Duration::from_secs(backend_timeout.default_idle_timeout));
+            // All timeouts are pre-parsed, no runtime overhead
+            peer.options.connection_timeout = Some(backend_timeout.connect_timeout);
+            peer.options.read_timeout = Some(backend_timeout.per_try_timeout);
+            peer.options.write_timeout = Some(backend_timeout.per_try_timeout);
+            peer.options.idle_timeout = Some(backend_timeout.idle_timeout);
         }
         
         Ok(peer)
@@ -160,17 +154,17 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
-        // Set client timeouts from gateway config
-        if let Some(http_timeout) = &self.edgion_gateway_config.spec.http_timeout {
-            let client_timeout = &http_timeout.client;
+        // Set client timeouts from pre-parsed config (no runtime overhead)
+        if let Some(parsed_timeouts) = &self.parsed_timeouts {
+            let client_timeout = &parsed_timeouts.client;
             
-            // Set read timeout
-            session.set_read_timeout(Some(std::time::Duration::from_secs(client_timeout.read_timeout)));
+            // Set read timeout (pre-parsed, no runtime overhead)
+            session.set_read_timeout(Some(client_timeout.read_timeout));
             
-            // Set write timeout
-            session.set_write_timeout(Some(std::time::Duration::from_secs(client_timeout.write_timeout)));
+            // Set write timeout (pre-parsed, no runtime overhead)
+            session.set_write_timeout(Some(client_timeout.write_timeout));
             
-            // Set keepalive timeout (takes seconds as u64)
+            // Set keepalive timeout (pre-parsed, no runtime overhead)
             session.set_keepalive(Some(client_timeout.keepalive_timeout));
         }
         

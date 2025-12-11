@@ -486,37 +486,51 @@ pub struct HttpTimeout {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientTimeout {
-    /// Timeout for reading request from client (in seconds)
+    /// Timeout for reading request from client
+    /// Format: Duration string (e.g., "60s", "1m", "500ms")
+    /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_client_read_timeout")]
-    pub read_timeout: u64,
+    pub read_timeout: String,
 
-    /// Timeout for writing response to client (in seconds)
+    /// Timeout for writing response to client
+    /// Format: Duration string (e.g., "60s", "1m", "500ms")
+    /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_client_write_timeout")]
-    pub write_timeout: u64,
+    pub write_timeout: String,
 
-    /// HTTP keepalive timeout (in seconds)
+    /// HTTP keepalive timeout
+    /// Format: Duration string (e.g., "75s", "1m", "500ms")
+    /// Without unit defaults to seconds (e.g., "75" = "75s")
     #[serde(default = "default_client_keepalive_timeout")]
-    pub keepalive_timeout: u64,
+    pub keepalive_timeout: String,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendTimeout {
-    /// Timeout for connecting to upstream backend (in seconds)
+    /// Timeout for connecting to upstream backend
+    /// Format: Duration string (e.g., "5s", "1m", "500ms")
+    /// Without unit defaults to seconds (e.g., "5" = "5s")
     #[serde(default = "default_backend_connect_timeout")]
-    pub default_connect_timeout: u64,
+    pub default_connect_timeout: String,
 
-    /// Total request timeout including retries (in seconds)
+    /// Total request timeout including retries
+    /// Format: Duration string (e.g., "60s", "1m", "500ms")
+    /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_backend_request_timeout")]
-    pub default_request_timeout: u64,
+    pub default_request_timeout: String,
 
-    /// Maximum timeout for a single try (in seconds)
+    /// Maximum timeout for a single try
+    /// Format: Duration string (e.g., "30s", "1m", "500ms")
+    /// Without unit defaults to seconds (e.g., "30" = "30s")
     #[serde(default = "default_backend_per_try_timeout")]
-    pub default_per_try_timeout: u64,
+    pub default_per_try_timeout: String,
 
-    /// Idle timeout for backend connection pool (in seconds)
+    /// Idle timeout for backend connection pool
+    /// Format: Duration string (e.g., "300s", "5m", "500ms")
+    /// Without unit defaults to seconds (e.g., "300" = "300s")
     #[serde(default = "default_backend_idle_timeout")]
-    pub default_idle_timeout: u64,
+    pub default_idle_timeout: String,
 
     /// Maximum number of retries
     #[serde(default = "default_backend_max_retries")]
@@ -524,33 +538,33 @@ pub struct BackendTimeout {
 }
 
 // ClientTimeout defaults
-fn default_client_read_timeout() -> u64 {
-    60
+fn default_client_read_timeout() -> String {
+    "60s".to_string()
 }
 
-fn default_client_write_timeout() -> u64 {
-    60
+fn default_client_write_timeout() -> String {
+    "60s".to_string()
 }
 
-fn default_client_keepalive_timeout() -> u64 {
-    75
+fn default_client_keepalive_timeout() -> String {
+    "75s".to_string()
 }
 
 // BackendTimeout defaults
-fn default_backend_connect_timeout() -> u64 {
-    5
+fn default_backend_connect_timeout() -> String {
+    "5s".to_string()
 }
 
-fn default_backend_request_timeout() -> u64 {
-    60
+fn default_backend_request_timeout() -> String {
+    "60s".to_string()
 }
 
-fn default_backend_per_try_timeout() -> u64 {
-    30
+fn default_backend_per_try_timeout() -> String {
+    "30s".to_string()
 }
 
-fn default_backend_idle_timeout() -> u64 {
-    300
+fn default_backend_idle_timeout() -> String {
+    "300s".to_string()
 }
 
 fn default_backend_max_retries() -> u32 {

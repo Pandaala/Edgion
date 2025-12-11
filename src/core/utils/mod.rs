@@ -4,6 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod net;
 pub use net::*;
 
+pub mod duration;
+pub use duration::parse_duration;
+
 /// Get the number of available CPU cores on the system
 /// 
 /// Returns the number of logical CPU cores available to the current process.
