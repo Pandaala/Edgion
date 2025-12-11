@@ -137,6 +137,47 @@ impl ProxyHttp for EdgionHttp {
         }
     }
 
+    async fn early_request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        // Extract or generate trace_id and request_id
+        let req_header = session.req_header();
+
+        // Try to get X-Trace-Id from request headers, generate if not present
+        ctx.request_info.x_trace_id = req_header
+            .headers
+            .get("x-trace-id")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                // Generate new trace_id if not present
+                Some(uuid::Uuid::new_v4().to_string())
+            });
+
+        // Try to get X-Request-Id from request headers
+        ctx.request_id = req_header
+            .headers
+            .get("x-request-id")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+
+        // process gprc
+
+        if let Some(content_type) = req_header.headers.get("content-type") {
+            if let Ok(ct_str) = content_type.to_str() {
+                if ct_str.len() >= 21 && ct_str[..21].eq_ignore_ascii_case("application/grpc-web") {
+                    if let Some(grpc) = session.downstream_modules_ctx.get_mut::<GrpcWebBridge>() {
+                        grpc.init();
+                        ctx.auto_gprc = true;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// upstream_response_filter - sync hook
     fn upstream_response_filter(
         &self,
@@ -175,47 +216,6 @@ impl ProxyHttp for EdgionHttp {
         // Run backend-level response plugins (async)
         if let Some(backend) = ctx.selected_backend.clone() {
             backend.plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
-        }
-
-        Ok(())
-    }
-
-    async fn early_request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<()>
-    where
-        Self::CTX: Send + Sync,
-    {
-        // Extract or generate trace_id and request_id
-        let req_header = session.req_header();
-        
-        // Try to get X-Trace-Id from request headers, generate if not present
-        ctx.request_info.x_trace_id = req_header
-            .headers
-            .get("x-trace-id")
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                // Generate new trace_id if not present
-                Some(uuid::Uuid::new_v4().to_string())
-            });
-        
-        // Try to get X-Request-Id from request headers
-        ctx.request_id = req_header
-            .headers
-            .get("x-request-id")
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.to_string());
-
-        // process gprc
-
-        if let Some(content_type) = req_header.headers.get("content-type") {
-            if let Ok(ct_str) = content_type.to_str() {
-                if ct_str.len() >= 21 && ct_str[..21].eq_ignore_ascii_case("application/grpc-web") {
-                    if let Some(grpc) = session.downstream_modules_ctx.get_mut::<GrpcWebBridge>() {
-                        grpc.init();
-                        ctx.auto_gprc = true;
-                    }
-                }
-            }
         }
 
         Ok(())
