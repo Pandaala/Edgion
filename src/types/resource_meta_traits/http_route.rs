@@ -29,6 +29,9 @@ impl ResourceMeta for HTTPRoute {
     fn pre_parse(&mut self) {
         // Parse extension_ref in backend_refs to populate extension_info
         self.parse_hidden_logic();
+        
+        // Parse timeouts to populate parsed_timeouts in rules
+        self.parse_timeouts();
     }
 }
 

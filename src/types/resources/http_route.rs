@@ -109,6 +109,12 @@ pub struct HTTPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
+    
+    /// Pre-parsed route-level timeout configurations (not serialized)
+    /// Parsed once when route is loaded, used at runtime
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub parsed_timeouts: Option<ParsedRouteTimeouts>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -124,6 +130,7 @@ impl Clone for HTTPRouteRule {
             // The selector will be initialized lazily when needed
             backend_finder: BackendSelector::new(),
             plugin_runtime: self.plugin_runtime.clone(),
+            parsed_timeouts: self.parsed_timeouts.clone(),
         }
     }
 }
@@ -463,6 +470,7 @@ pub struct HTTPRouteTimeouts {
     /// as possible although an implementation MAY choose to start the timeout after
     /// the entire request stream has been received instead of immediately after the
     /// transaction is initiated by the client.
+    /// NOTE: Not implemented yet
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<String>,
@@ -473,6 +481,16 @@ pub struct HTTPRouteTimeouts {
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_request: Option<String>,
+    
+    /// IdleTimeout specifies the maximum duration of inactivity on a connection
+    /// Format: Duration (e.g., "5m", "300s")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_timeout: Option<String>,
+    
+    /// PerTryTimeout specifies the timeout for a single attempt to the backend
+    /// Format: Duration (e.g., "2s", "500ms")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_try_timeout: Option<String>,
 }
 
 /// HTTPRouteRetry defines retry policy for an HTTPRoute
@@ -559,5 +577,74 @@ pub enum CookieLifetimeType {
     Permanent,
     /// Session cookies are deleted when the client session ends
     Session,
+}
+
+// ============================================
+// Pre-parsed Route Timeouts
+// ============================================
+
+use std::time::Duration;
+
+/// Pre-parsed route-level timeout configurations
+/// These are parsed once when the route is loaded and used at runtime
+#[derive(Debug, Clone)]
+pub struct ParsedRouteTimeouts {
+    /// Parsed backend request timeout
+    pub backend_request_timeout: Option<Duration>,
+    
+    /// Parsed idle timeout
+    pub idle_timeout: Option<Duration>,
+    
+    /// Parsed per-try timeout
+    pub per_try_timeout: Option<Duration>,
+}
+
+impl ParsedRouteTimeouts {
+    /// Parse route timeouts from HTTPRouteTimeouts
+    /// Returns None if no timeouts are configured
+    pub fn from_config(config: &HTTPRouteTimeouts) -> Option<Self> {
+        use crate::core::utils::parse_duration;
+        
+        let backend_request_timeout = config.backend_request.as_ref()
+            .and_then(|s| {
+                parse_duration(s)
+                    .map_err(|e| {
+                        tracing::warn!("Invalid backend_request timeout '{}': {}", s, e);
+                        e
+                    })
+                    .ok()
+            });
+        
+        let idle_timeout = config.idle_timeout.as_ref()
+            .and_then(|s| {
+                parse_duration(s)
+                    .map_err(|e| {
+                        tracing::warn!("Invalid idle_timeout '{}': {}", s, e);
+                        e
+                    })
+                    .ok()
+            });
+        
+        let per_try_timeout = config.per_try_timeout.as_ref()
+            .and_then(|s| {
+                parse_duration(s)
+                    .map_err(|e| {
+                        tracing::warn!("Invalid per_try_timeout '{}': {}", s, e);
+                        e
+                    })
+                    .ok()
+            });
+        
+        // Only create if at least one timeout is configured
+        if backend_request_timeout.is_some() || idle_timeout.is_some() || per_try_timeout.is_some() {
+            Some(Self {
+                backend_request_timeout,
+                idle_timeout,
+                per_try_timeout,
+            })
+        } else {
+            None
+        }
+    }
 }
 

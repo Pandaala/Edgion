@@ -88,11 +88,27 @@ impl ProxyHttp for EdgionHttp {
         if let Some(parsed_timeouts) = &self.parsed_timeouts {
             let backend_timeout = &parsed_timeouts.backend;
             
-            // All timeouts are pre-parsed, no runtime overhead
+            // Check for route-level timeout overrides
+            let route_timeouts = ctx.route_unit.as_ref()
+                .and_then(|unit| unit.rule.parsed_timeouts.as_ref());
+            
+            // Connection timeout (only from global config)
             peer.options.connection_timeout = Some(backend_timeout.connect_timeout);
-            peer.options.read_timeout = Some(backend_timeout.per_try_timeout);
-            peer.options.write_timeout = Some(backend_timeout.per_try_timeout);
-            peer.options.idle_timeout = Some(backend_timeout.idle_timeout);
+            
+            // Read/Write timeout: route-level per_try_timeout overrides global
+            let effective_per_try_timeout = route_timeouts
+                .and_then(|rt| rt.per_try_timeout)
+                .unwrap_or(backend_timeout.per_try_timeout);
+            
+            peer.options.read_timeout = Some(effective_per_try_timeout);
+            peer.options.write_timeout = Some(effective_per_try_timeout);
+            
+            // Idle timeout: route-level overrides global
+            peer.options.idle_timeout = Some(
+                route_timeouts
+                    .and_then(|rt| rt.idle_timeout)
+                    .unwrap_or(backend_timeout.idle_timeout)
+            );
         }
         
         Ok(peer)

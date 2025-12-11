@@ -128,6 +128,29 @@ impl HTTPRoute {
             }
         }
     }
+    
+    /// Parse and pre-process timeout configurations for all rules
+    /// 
+    /// This method is called during route loading (in pre_parse) to avoid runtime parsing overhead.
+    /// It parses timeout strings into Duration objects and stores them in rule.parsed_timeouts.
+    pub fn parse_timeouts(&mut self) {
+        let Some(rules) = self.spec.rules.as_mut() else {
+            return;
+        };
+        
+        for rule in rules.iter_mut() {
+            // Parse timeouts for each rule
+            if let Some(timeouts) = &rule.timeouts {
+                rule.parsed_timeouts = crate::types::resources::http_route::ParsedRouteTimeouts::from_config(timeouts);
+                
+                if rule.parsed_timeouts.is_some() {
+                    tracing::debug!(
+                        "Parsed route-level timeouts for HTTPRoute rule"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
