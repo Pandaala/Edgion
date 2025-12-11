@@ -66,6 +66,8 @@ impl GatewayBase {
 
                     let enable_tls = listener.tls.is_some() || listener.port == 443 || listener.port == 8443;
 
+                    let edgion_gateway_config = Arc::new(self.base_conf.edgion_gateway_config().clone());
+                    
                     let edgion_http = EdgionHttp {
                         gateway_class_name: gateway_class_name.clone(),
                         gateway_namespace: gateway_namespace.clone(),
@@ -75,6 +77,7 @@ impl GatewayBase {
                         server_header_opts: Default::default(),
                         domain_routes: domain_routes.clone(),
                         access_logger: None, // TODO: Initialize from config
+                        edgion_gateway_config,
                     };
 
                     let mut http_service = http_proxy_service(&pingora_server.configuration, edgion_http);

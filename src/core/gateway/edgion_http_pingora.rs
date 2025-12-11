@@ -141,6 +141,20 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
+        // Set client timeouts from gateway config
+        if let Some(http_timeout) = &self.edgion_gateway_config.spec.http_timeout {
+            let client_timeout = &http_timeout.client;
+            
+            // Set read timeout
+            session.set_read_timeout(Some(std::time::Duration::from_secs(client_timeout.read_timeout)));
+            
+            // Set write timeout
+            session.set_write_timeout(Some(std::time::Duration::from_secs(client_timeout.write_timeout)));
+            
+            // Set keepalive timeout (takes seconds as u64)
+            session.set_keepalive(Some(client_timeout.keepalive_timeout));
+        }
+        
         // Extract or generate trace_id and request_id
         let req_header = session.req_header();
 

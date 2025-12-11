@@ -3,6 +3,7 @@ use std::time::SystemTime;
 use crate::core::gateway::server_header::ServerHeaderOpts;
 use crate::core::routes::DomainRouteRules;
 use crate::types::Listener;
+use crate::types::EdgionGatewayConfig;
 use crate::core::observe::AccessLogger;
 
 pub struct EdgionHttp {
@@ -21,5 +22,8 @@ pub struct EdgionHttp {
     
     /// Access logger for writing access logs
     pub access_logger: Option<Arc<AccessLogger>>,
+    
+    /// Global gateway configuration
+    pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
 }
 
