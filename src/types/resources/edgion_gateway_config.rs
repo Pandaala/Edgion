@@ -51,6 +51,10 @@ pub struct EdgionGatewayConfigSpec {
     /// HTTP timeout configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_timeout: Option<HttpTimeout>,
+
+    /// Maximum number of retries for upstream connections (default: 3)
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
 }
 
 // ============================================
@@ -568,6 +572,11 @@ fn default_backend_idle_timeout() -> String {
 }
 
 fn default_backend_max_retries() -> u32 {
+    3
+}
+
+// Global configuration defaults
+fn default_max_retries() -> u32 {
     3
 }
 

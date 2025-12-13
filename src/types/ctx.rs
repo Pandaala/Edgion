@@ -76,9 +76,15 @@ pub struct UpstreamInfo {
     /// Body time in milliseconds (from start_time to receiving first body chunk)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bt: Option<u64>,
+    /// Elapsed time in milliseconds (total time for this upstream attempt)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub et: Option<u64>,
     /// Start time - when this upstream attempt started (for calculating ct, ht, and bt)
     #[serde(skip)]
     pub start_time: Instant,
+    /// Error messages collected during upstream attempts
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub err: Vec<String>,
 }
 
 /// Backend context containing service info and upstream attempt history
@@ -175,7 +181,9 @@ impl EdgionHttpContext {
                 ct: None,
                 ht: None,
                 bt: None,
+                et: None,
                 start_time: std::time::Instant::now(),
+                err: Vec::new(),
             });
             bc.current_upstream_id = Some(bc.upstreams.len() - 1);
         }

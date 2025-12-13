@@ -301,6 +301,30 @@ impl ProxyHttp for EdgionHttp {
         Ok(())
     }
 
+    /// fail_to_connect - called when connection to upstream fails
+    fn fail_to_connect(
+        &self,
+        _session: &mut Session,
+        _peer: &HttpPeer,
+        ctx: &mut Self::CTX,
+        mut e: Box<pingora_core::Error>,
+    ) -> Box<pingora_core::Error> {
+        // Set status=503 for current upstream
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.status = Some(503);
+            upstream.err.push(e.to_string());
+            upstream.et = Some(upstream.start_time.elapsed().as_millis() as u64);
+        }
+        
+        ctx.try_cnt += 1;
+        let max_retries = self.edgion_gateway_config.spec.max_retries;
+        if ctx.try_cnt < max_retries {
+            e.set_retry(true);
+        }
+        
+        e
+    }
+
     async fn logging(&self, session: &mut Session, _e: Option<&PingoraError>, ctx: &mut Self::CTX)
     where
         Self::CTX: Send + Sync,
