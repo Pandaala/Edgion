@@ -2,12 +2,14 @@ use async_trait::async_trait;
 use pingora_core::modules::http::grpc_web::{GrpcWeb, GrpcWebBridge};
 use pingora_core::modules::http::HttpModules;
 use pingora_core::prelude::HttpPeer;
+use pingora_core::protocols::Digest;
+use pingora_core::upstreams::peer::Peer;
 use pingora_core::{Error as PingoraError, ErrorType};
 
 use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
 use crate::core::gateway::edgion_http::EdgionHttp;
-use crate::types::{EdgionHttpContext, UpstreamInfo};
+use crate::types::EdgionHttpContext;
 use crate::types::filters::PluginRunningResult;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
 use crate::core::backends::get_peer;
@@ -29,8 +31,9 @@ impl ProxyHttp for EdgionHttp {
     async fn upstream_peer(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
         tracing::info!("upstream_peer");
 
-        // Get route unit from context and extract needed data
-        let (backend_ref, match_info) = {
+        // Select backend_ref if not already selected (only once)
+        if ctx.selected_backend.is_none() {
+            // First time, select backend from route
             let route_unit = match ctx.route_unit.as_ref() {
                 Some(unit) => unit,
                 None => {
@@ -55,34 +58,33 @@ impl ProxyHttp for EdgionHttp {
                 }
             };
             
-            // Clone match_info to avoid holding reference to ctx
-            (backend_ref, route_unit.matched_info.clone())
-        };
-        
-        tracing::info!("Selected backend: {:?}", backend_ref);
-        
-        // Create initial upstream_info entry
-        ctx.push_upstream_info(UpstreamInfo {
-            name: backend_ref.name.clone(),
-            namespace: backend_ref.namespace.clone().unwrap_or_else(|| match_info.rns.clone()),
-            ip: None,
-            port: None,
-            status: None,
-        });
-        
-        // Run backend-level request plugins
-        backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
-        if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-            ctx.add_error(EdgionStatus::Unknown);
-            end_response_500(session, ctx).await?;
-            return Err(PingoraError::new(ErrorType::InternalError));
+            tracing::info!("Selected backend: {:?}", backend_ref);
+            
+            // Run backend-level request plugins (only on first selection)
+            backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
+            if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+                ctx.add_error(EdgionStatus::Unknown);
+                end_response_500(session, ctx).await?;
+                return Err(PingoraError::new(ErrorType::InternalError));
+            }
+            
+            // Store selected backend in context (only once)
+            ctx.selected_backend = Some(backend_ref);
         }
         
-        // Store selected backend in context
-        ctx.selected_backend = Some(backend_ref.clone());
+        // Initialize backend context on first call (only once)
+        if ctx.backend_context.is_none() {
+            let backend_ref = ctx.selected_backend.as_ref().unwrap();
+            let namespace = backend_ref.namespace.clone().unwrap_or_else(|| {
+                ctx.route_unit.as_ref()
+                    .map(|unit| unit.matched_info.rns.clone())
+                    .unwrap_or_default()
+            });
+            ctx.init_backend_context(backend_ref.name.clone(), namespace);
+        }
         
-        // Get peer from backend (will update upstream_info with ip and port)
-        let mut peer = get_peer(&backend_ref, session, ctx).await?;
+        // Get peer from backend (will update upstream info with ip and port)
+        let mut peer = get_peer(session, ctx).await?;
         
         // Set backend timeouts from pre-parsed config (no runtime overhead)
         if let Some(parsed_timeouts) = &self.parsed_timeouts {
@@ -109,6 +111,20 @@ impl ProxyHttp for EdgionHttp {
                     .and_then(|rt| rt.idle_timeout)
                     .unwrap_or(backend_timeout.idle_timeout)
             );
+        }
+        
+        // Increment try count
+        ctx.try_cnt += 1;
+        
+        // Extract peer address info and push upstream connection attempt
+        let (ip, port) = peer.address().as_inet()
+            .map(|addr| (Some(addr.ip().to_string()), Some(addr.port())))
+            .unwrap_or((None, None));
+        ctx.push_upstream(ip, port);
+        
+        // Set upstream start time on first try
+        if ctx.upstream_start_time.is_none() {
+            ctx.upstream_start_time = Some(std::time::Instant::now());
         }
         
         Ok(peer)
@@ -288,5 +304,26 @@ impl ProxyHttp for EdgionHttp {
         if let Some(logger) = &self.access_logger {
             logger.send(entry.to_json()).await;
         }
+    }
+    
+    async fn connected_to_upstream(
+        &self,
+        _session: &mut Session,
+        _reused: bool,
+        _peer: &HttpPeer,
+        #[cfg(unix)] _fd: std::os::unix::io::RawFd,
+        #[cfg(windows)] _sock: std::os::windows::io::RawSocket,
+        _digest: Option<&Digest>,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        // Record connection time in current upstream
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.ct = Some(std::time::Instant::now());
+        }
+        
+        Ok(())
     }
 } 

@@ -1,6 +1,6 @@
 //! Access log entry definition
 
-use crate::types::{EdgionHttpContext, EdgionStatus, MatchInfo, RequestInfo, UpstreamInfo};
+use crate::types::{BackendContext, EdgionHttpContext, EdgionStatus, MatchInfo, RequestInfo};
 use crate::core::filters::PluginLog;
 use serde::Serialize;
 
@@ -23,7 +23,7 @@ pub struct AccessLogEntry<'a> {
     #[serde(skip_serializing_if = "is_empty")]
     pub errors: &'a [EdgionStatus],
     
-    pub upstream_info: &'a [UpstreamInfo],
+    pub backend_context: Option<&'a BackendContext>,
     
     #[serde(skip_serializing_if = "is_empty")]
     pub plugin_logs: &'a [PluginLog],
@@ -38,7 +38,7 @@ impl<'a> AccessLogEntry<'a> {
             request_info: &ctx.request_info,
             match_info,
             errors: &ctx.error_codes,
-            upstream_info: &ctx.upstream_info,
+            backend_context: ctx.backend_context.as_ref(),
             plugin_logs: &ctx.plugin_logs,
         }
     }
@@ -51,11 +51,12 @@ impl<'a> AccessLogEntry<'a> {
     }
 
     pub fn to_combined(&self, latency_ms: u64) -> String {
-        // Use the last upstream_info for the combined log format
-        let upstream_peer = self.upstream_info.last()
-            .map(|u| {
-                let ip = u.ip.as_deref().unwrap_or("-");
-                let port = u.port.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string());
+        // Use the last upstream from backend_context for the combined log format
+        let upstream_peer = self.backend_context
+            .and_then(|bc| bc.upstreams.last())
+            .map(|upstream| {
+                let ip = upstream.ip.as_deref().unwrap_or("-");
+                let port = upstream.port.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string());
                 format!("{}:{}", ip, port)
             })
             .unwrap_or_else(|| "-".to_string());

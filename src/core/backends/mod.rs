@@ -10,7 +10,7 @@ use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 use crate::core::gateway::end_response_503;
 use crate::types::edgion_status::EdgionStatus;
-use crate::types::{ConsistentHashOn, EdgionHttpContext, HTTPBackendRef, ParsedLBPolicy, UpstreamInfo};
+use crate::types::{ConsistentHashOn, EdgionHttpContext, HTTPBackendRef, ParsedLBPolicy};
 
 /// EdgionService defines the types of backend services
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,17 +122,28 @@ fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Ve
 }
 
 /// Internal: try to get peer, returns Result with EdgionStatus on error
-fn try_get_peer(upstream_info: &mut UpstreamInfo, br: &HTTPBackendRef, session: &Session) -> Result<Box<HttpPeer>, EdgionStatus> {
-    let service_type = EdgionService::from_kind(br.kind.as_ref());
+fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session) -> Result<Box<HttpPeer>, EdgionStatus> {
+    // Extract needed fields from backend_ref to avoid clone and borrow checker issues
+    let br = ctx.selected_backend.as_ref()
+        .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
     
-    // Use namespace from upstream_info (already resolved during upstream_info creation)
-    let service_key = format!("{}/{}", upstream_info.namespace, br.name);
+    let service_type = EdgionService::from_kind(br.kind.as_ref());
+    let br_name = &br.name;
+    let br_port = br.port;
+    let lb_policy = &br.extension_info.lb_policy;
+    
+    // Get backend info for service key
+    let namespace = ctx.backend_context.as_ref()
+        .map(|bc| bc.namespace.as_str())
+        .ok_or(EdgionStatus::Unknown)?;
+    
+    let service_key = format!("{}/{}", namespace, br_name);
     
     match service_type {
         EdgionService::Service => {
             // Select backend based on pre-parsed LB policy from extension_info
             // None branch first for better branch prediction (most common case)
-            let backend = match &br.extension_info.lb_policy {
+            let backend = match lb_policy {
                 None => {
                     // Default: RoundRobin (most common case)
                     let ep_store = get_roundrobin_store();
@@ -140,7 +151,7 @@ fn try_get_peer(upstream_info: &mut UpstreamInfo, br: &HTTPBackendRef, session: 
                         .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault)?
                 }
                 Some(ParsedLBPolicy::ConsistentHash(_)) => {
-                    let hash_key = extract_hash_key(session, &br.extension_info.lb_policy);
+                    let hash_key = extract_hash_key(session, lb_policy);
                     // Fallback to RoundRobin when hash_key is empty
                     if hash_key.is_empty() {
                         let ep_store = get_roundrobin_store();
@@ -160,14 +171,8 @@ fn try_get_peer(upstream_info: &mut UpstreamInfo, br: &HTTPBackendRef, session: 
             };
             
             let mut addr = backend.addr;
-            if let Some(port) = br.port {
+            if let Some(port) = br_port {
                 addr.set_port(port as u16);
-            }
-            
-            // Update upstream_info with ip and port
-            if let Some(std_addr) = addr.as_inet() {
-                upstream_info.ip = Some(std_addr.ip().to_string());
-                upstream_info.port = Some(std_addr.port());
             }
             
             Ok(Box::new(HttpPeer::new(addr, false, String::new())))
@@ -182,17 +187,21 @@ fn try_get_peer(upstream_info: &mut UpstreamInfo, br: &HTTPBackendRef, session: 
                 .and_then(|spec| spec.cluster_ip.as_ref())
                 .ok_or(EdgionStatus::BackendClusterIpNotFound)?;
             
-            let port = get_port_from_backend_ref_or_service(br, &service)?;
+            // Get port from br_port or service
+            let port = match br_port {
+                Some(p) => p as u16,
+                None => {
+                    service.spec.as_ref()
+                        .and_then(|spec| spec.ports.as_ref())
+                        .and_then(|ports| ports.first())
+                        .map(|p| p.port as u16)
+                        .ok_or(EdgionStatus::BackendPortResolutionFailed)?
+                }
+            };
             
             let addr_str = format!("{}:{}", cluster_ip, port);
             let addr = addr_str.parse::<SocketAddr>()
                 .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
-            
-            // Update upstream_info with ip and port
-            if let Some(std_addr) = addr.as_inet() {
-                upstream_info.ip = Some(std_addr.ip().to_string());
-                upstream_info.port = Some(std_addr.port());
-            }
             
             Ok(Box::new(HttpPeer::new(addr, false, String::new())))
         }
@@ -206,17 +215,21 @@ fn try_get_peer(upstream_info: &mut UpstreamInfo, br: &HTTPBackendRef, session: 
                 .and_then(|spec| spec.external_name.as_ref())
                 .ok_or(EdgionStatus::BackendExternalNameNotFound)?;
             
-            let port = get_port_from_backend_ref_or_service(br, &service)?;
+            // Get port from br_port or service
+            let port = match br_port {
+                Some(p) => p as u16,
+                None => {
+                    service.spec.as_ref()
+                        .and_then(|spec| spec.ports.as_ref())
+                        .and_then(|ports| ports.first())
+                        .map(|p| p.port as u16)
+                        .ok_or(EdgionStatus::BackendPortResolutionFailed)?
+                }
+            };
             
             let addr_str = format!("{}:{}", external_name, port);
             let addr = addr_str.parse::<SocketAddr>()
                 .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
-            
-            // Update upstream_info with ip and port
-            if let Some(std_addr) = addr.as_inet() {
-                upstream_info.ip = Some(std_addr.ip().to_string());
-                upstream_info.port = Some(std_addr.port());
-            }
             
             Ok(Box::new(HttpPeer::new(addr, false, String::new())))
         }
@@ -231,15 +244,8 @@ fn try_get_peer(upstream_info: &mut UpstreamInfo, br: &HTTPBackendRef, session: 
 /// Get HTTP peer from service and endpoint slice stores using load balancing
 /// 
 /// On error, sets error status to ctx and sends 503 response
-pub async fn get_peer(br: &HTTPBackendRef, session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<Box<HttpPeer>> {
-    // Get mutable reference to the current upstream_info
-    let upstream_info = ctx.get_current_upstream_info_mut()
-        .ok_or_else(|| {
-            tracing::error!("No current upstream_info available");
-            PingoraError::new(ErrorType::InternalError)
-        })?;
-    
-    match try_get_peer(upstream_info, br, session) {
+pub async fn get_peer(session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<Box<HttpPeer>> {
+    match try_get_peer(ctx, session) {
         Ok(peer) => Ok(peer),
         Err(status) => {
             ctx.add_error(status);

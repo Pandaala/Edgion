@@ -55,22 +55,35 @@ pub struct RequestInfo {
     pub status: u16,
 }
 
-/// Upstream backend information
+/// Upstream connection information for a single connection attempt
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct UpstreamInfo {
-    /// Backend service name
-    pub name: String,
-    /// Backend service namespace
-    pub namespace: String,
-    /// Peer IP address
+    /// Upstream IP address
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ip: Option<String>,
-    /// Peer port
+    /// Upstream port
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     /// HTTP status code for this upstream
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
+    /// Connect time - when connection to upstream was established
+    #[serde(skip)]
+    pub ct: Option<Instant>,
+}
+
+/// Backend context containing service info and upstream attempt history
+#[derive(Debug, Clone, Serialize)]
+pub struct BackendContext {
+    /// Backend service name
+    pub name: String,
+    /// Backend service namespace
+    pub namespace: String,
+    /// List of upstream connection attempts (for retry tracking and access log)
+    pub upstreams: Vec<UpstreamInfo>,
+    /// Current upstream index (for status updates)
+    #[serde(skip)]
+    pub current_upstream_id: Option<usize>,
 }
 
 pub struct EdgionHttpContext {
@@ -93,17 +106,21 @@ pub struct EdgionHttpContext {
     /// Selected backend from load balancing
     pub selected_backend: Option<HTTPBackendRef>,
 
-    /// Upstream info history (can be modified during request processing)
-    pub upstream_info: Vec<UpstreamInfo>,
-
-    /// Current upstream_id (index in upstream_info Vec) for status setting
-    pub current_upstream_id: Option<usize>,
+    /// Backend context containing service info and upstream attempts
+    pub backend_context: Option<BackendContext>,
 
     /// Plugin execution logs
     pub plugin_logs: Vec<PluginLog>,
 
     /// Plugin running result
     pub plugin_running_result: PluginRunningResult,
+    
+    /// Number of connection attempts to backends
+    pub try_cnt: u32,
+    
+    /// Time when first upstream connection was initiated
+    /// Set only once on first connection attempt
+    pub upstream_start_time: Option<Instant>,
 }
 
 impl EdgionHttpContext {
@@ -116,10 +133,11 @@ impl EdgionHttpContext {
             error_codes: Vec::with_capacity(5),
             route_unit: None,
             selected_backend: None,
-            upstream_info: Vec::with_capacity(5),
-            current_upstream_id: None,
+            backend_context: None,
             plugin_logs: Vec::with_capacity(10),
             plugin_running_result: PluginRunningResult::Nothing,
+            try_cnt: 0,
+            upstream_start_time: None,
         }
     }
 
@@ -128,22 +146,38 @@ impl EdgionHttpContext {
         self.error_codes.push(err_code);
     }
 
-    /// Push a new upstream_info and set it as current
-    pub fn push_upstream_info(&mut self, upstream_info: UpstreamInfo) {
-        self.upstream_info.push(upstream_info);
-        let upstream_id = self.upstream_info.len() - 1;
-        self.current_upstream_id = Some(upstream_id);
+    /// Initialize backend context with name and namespace (call once)
+    pub fn init_backend_context(&mut self, name: String, namespace: String) {
+        self.backend_context = Some(BackendContext {
+            name,
+            namespace,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+        });
     }
 
-    /// Get mutable reference to the current upstream_info
-    pub fn get_current_upstream_info_mut(&mut self) -> Option<&mut UpstreamInfo> {
-        let id = self.current_upstream_id?;
-        self.upstream_info.get_mut(id)
+    /// Push a new upstream connection attempt with address info
+    pub fn push_upstream(&mut self, ip: Option<String>, port: Option<u16>) {
+        if let Some(ref mut bc) = self.backend_context {
+            bc.upstreams.push(UpstreamInfo {
+                ip,
+                port,
+                status: None,
+                ct: None,
+            });
+            bc.current_upstream_id = Some(bc.upstreams.len() - 1);
+        }
     }
 
-    /// Get reference to the current upstream_info
-    pub fn get_current_upstream_info(&self) -> Option<&UpstreamInfo> {
-        let id = self.current_upstream_id?;
-        self.upstream_info.get(id)
+    /// Get mutable reference to current upstream
+    pub fn get_current_upstream_mut(&mut self) -> Option<&mut UpstreamInfo> {
+        self.backend_context.as_mut()
+            .and_then(|bc| bc.current_upstream_id.and_then(|id| bc.upstreams.get_mut(id)))
+    }
+
+    /// Get reference to current upstream
+    pub fn get_current_upstream(&self) -> Option<&UpstreamInfo> {
+        self.backend_context.as_ref()
+            .and_then(|bc| bc.current_upstream_id.and_then(|id| bc.upstreams.get(id)))
     }
 }
