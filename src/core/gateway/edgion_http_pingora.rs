@@ -366,9 +366,10 @@ impl ProxyHttp for EdgionHttp {
                 ctx.request_info.status = code as u16;
             }
             
-            // Always update current upstream status
+            // Always update current upstream status and error message
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(code as u16);
+                upstream.err.push(e.reason_str());
             }
         }
         
