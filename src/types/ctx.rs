@@ -56,7 +56,7 @@ pub struct RequestInfo {
 }
 
 /// Upstream connection information for a single connection attempt
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct UpstreamInfo {
     /// Upstream IP address
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,9 +67,18 @@ pub struct UpstreamInfo {
     /// HTTP status code for this upstream
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
-    /// Connect time - when connection to upstream was established
+    /// Connect time in milliseconds (from start_time to connection established)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ct: Option<u64>,
+    /// Header time in milliseconds (from start_time to receiving response header)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ht: Option<u64>,
+    /// Body time in milliseconds (from start_time to receiving first body chunk)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bt: Option<u64>,
+    /// Start time - when this upstream attempt started (for calculating ct, ht, and bt)
     #[serde(skip)]
-    pub ct: Option<Instant>,
+    pub start_time: Instant,
 }
 
 /// Backend context containing service info and upstream attempt history
@@ -164,6 +173,9 @@ impl EdgionHttpContext {
                 port,
                 status: None,
                 ct: None,
+                ht: None,
+                bt: None,
+                start_time: std::time::Instant::now(),
             });
             bc.current_upstream_id = Some(bc.upstreams.len() - 1);
         }

@@ -240,6 +240,12 @@ impl ProxyHttp for EdgionHttp {
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> pingora_core::Result<()> {
+        // Record header time (time from this upstream's start_time to receiving response header)
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            let ht = upstream.start_time.elapsed().as_millis() as u64;
+            upstream.ht = Some(ht);
+        }
+        
         // Run rule-level upstream_response plugins (sync)
         if let Some(route_unit) = ctx.route_unit.clone() {
             route_unit.rule.plugin_runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
@@ -273,6 +279,25 @@ impl ProxyHttp for EdgionHttp {
             backend.plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
         }
 
+        Ok(())
+    }
+
+    /// upstream_response_body_filter - called when receiving body chunks from upstream
+    fn upstream_response_body_filter(
+        &self,
+        _session: &mut Session,
+        _body: &mut Option<bytes::Bytes>,
+        _end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()> {
+        // Record body time (time from start_time to receiving first body chunk)
+        // Only set once when bt is None (first chunk)
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            if upstream.bt.is_none() {
+                let bt = upstream.start_time.elapsed().as_millis() as u64;
+                upstream.bt = Some(bt);
+            }
+        }
         Ok(())
     }
 
@@ -315,9 +340,10 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
-        // Record connection time in current upstream
+        // Record connection time (time from start_time to connection established)
         if let Some(upstream) = ctx.get_current_upstream_mut() {
-            upstream.ct = Some(std::time::Instant::now());
+            let ct = upstream.start_time.elapsed().as_millis() as u64;
+            upstream.ct = Some(ct);
         }
         
         Ok(())

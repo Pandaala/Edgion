@@ -35,8 +35,8 @@ impl ParsedTimeouts {
     pub fn from_config(config: &EdgionGatewayConfig) -> Self {
         match config.spec.http_timeout.as_ref() {
             Some(http_timeout) => Self {
-                client: ParsedClientTimeout::from_config(&http_timeout.client),
-                backend: ParsedBackendTimeout::from_config(&http_timeout.backend),
+            client: ParsedClientTimeout::from_config(&http_timeout.client),
+            backend: ParsedBackendTimeout::from_config(&http_timeout.backend),
             },
             None => Self::default(),
         }
