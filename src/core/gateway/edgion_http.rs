@@ -31,14 +31,24 @@ pub struct ParsedBackendTimeout {
 
 impl ParsedTimeouts {
     /// Parse timeout configurations from EdgionGatewayConfig
-    /// Returns None if http_timeout is not configured
-    pub fn from_config(config: &EdgionGatewayConfig) -> Option<Self> {
-        let http_timeout = config.spec.http_timeout.as_ref()?;
-        
-        Some(Self {
-            client: ParsedClientTimeout::from_config(&http_timeout.client),
-            backend: ParsedBackendTimeout::from_config(&http_timeout.backend),
-        })
+    /// Returns default values if http_timeout is not configured
+    pub fn from_config(config: &EdgionGatewayConfig) -> Self {
+        match config.spec.http_timeout.as_ref() {
+            Some(http_timeout) => Self {
+                client: ParsedClientTimeout::from_config(&http_timeout.client),
+                backend: ParsedBackendTimeout::from_config(&http_timeout.backend),
+            },
+            None => Self::default(),
+        }
+    }
+}
+
+impl Default for ParsedTimeouts {
+    fn default() -> Self {
+        Self {
+            client: ParsedClientTimeout::default(),
+            backend: ParsedBackendTimeout::default(),
+        }
     }
 }
 
@@ -69,6 +79,16 @@ impl ParsedClientTimeout {
             read_timeout,
             write_timeout,
             keepalive_timeout,
+        }
+    }
+}
+
+impl Default for ParsedClientTimeout {
+    fn default() -> Self {
+        Self {
+            read_timeout: Duration::from_secs(60),
+            write_timeout: Duration::from_secs(60),
+            keepalive_timeout: 75,
         }
     }
 }
@@ -110,6 +130,17 @@ impl ParsedBackendTimeout {
     }
 }
 
+impl Default for ParsedBackendTimeout {
+    fn default() -> Self {
+        Self {
+            connect_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(60),
+            per_try_timeout: Duration::from_secs(30),
+            idle_timeout: Duration::from_secs(300),
+        }
+    }
+}
+
 pub struct EdgionHttp {
     pub gateway_class_name: Option<String>,
     pub gateway_namespace: Option<String>,
@@ -130,7 +161,7 @@ pub struct EdgionHttp {
     /// Global gateway configuration
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     
-    /// Pre-parsed timeout configurations (parsed once at initialization)
-    pub parsed_timeouts: Option<ParsedTimeouts>,
+    /// Pre-parsed timeout configurations (always has default values if not configured)
+    pub parsed_timeouts: ParsedTimeouts,
 }
 
