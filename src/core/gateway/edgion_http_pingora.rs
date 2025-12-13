@@ -4,10 +4,11 @@ use pingora_core::modules::http::HttpModules;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::Digest;
 use pingora_core::upstreams::peer::Peer;
-use pingora_core::{Error as PingoraError, ErrorType};
+use pingora_core::{ConnectionClosed, Error as PingoraError, Error, ErrorSource, ErrorType, HTTPStatus, ReadError, WriteError};
 
 use pingora_http::ResponseHeader;
-use pingora_proxy::{ProxyHttp, Session};
+use pingora_proxy::{FailToProxy, ProxyHttp, Session};
+use tracing::log::error;
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::types::EdgionHttpContext;
 use crate::types::filters::PluginRunningResult;
@@ -324,6 +325,47 @@ impl ProxyHttp for EdgionHttp {
         
         e
     }
+
+    async fn fail_to_proxy(
+        &self,
+        session: &mut Session,
+        e: &Error,
+        _ctx: &mut Self::CTX,
+    ) -> FailToProxy
+    where
+        Self::CTX: Send + Sync,
+    {
+        let code = match e.etype() {
+            HTTPStatus(code) => *code,
+            _ => {
+                match e.esource() {
+                    ErrorSource::Upstream => 502,
+                    ErrorSource::Downstream => {
+                        match e.etype() {
+                            WriteError | ReadError | ConnectionClosed => {
+                                /* conn already dead */
+                                0
+                            }
+                            _ => 400,
+                        }
+                    }
+                    ErrorSource::Internal | ErrorSource::Unset => 500,
+                }
+            }
+        };
+        if code > 0 {
+            session.respond_error(code).await.unwrap_or_else(|e| {
+                error!("failed to send error response to downstream: {e}");
+            });
+        }
+
+        FailToProxy {
+            error_code: code,
+            // default to no reuse, which is safest
+            can_reuse_downstream: false,
+        }
+    }
+    
 
     async fn logging(&self, session: &mut Session, _e: Option<&PingoraError>, ctx: &mut Self::CTX)
     where
