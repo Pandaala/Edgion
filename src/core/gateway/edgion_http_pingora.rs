@@ -241,10 +241,15 @@ impl ProxyHttp for EdgionHttp {
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> pingora_core::Result<()> {
+        // Record status code
+        let status_code = upstream_response.status.as_u16();
+        ctx.request_info.status = status_code;
+        
         // Record header time (time from this upstream's start_time to receiving response header)
         if let Some(upstream) = ctx.get_current_upstream_mut() {
             let ht = upstream.start_time.elapsed().as_millis() as u64;
             upstream.ht = Some(ht);
+            upstream.status = Some(status_code);
         }
         
         // Run rule-level upstream_response plugins (sync)
@@ -330,7 +335,7 @@ impl ProxyHttp for EdgionHttp {
         &self,
         session: &mut Session,
         e: &Error,
-        _ctx: &mut Self::CTX,
+        ctx: &mut Self::CTX,
     ) -> FailToProxy
     where
         Self::CTX: Send + Sync,
@@ -353,6 +358,20 @@ impl ProxyHttp for EdgionHttp {
                 }
             }
         };
+        
+        // Record error status code
+        if code > 0 {
+            // Only update request_info.status if not already set (default is 0)
+            if ctx.request_info.status == 0 {
+                ctx.request_info.status = code as u16;
+            }
+            
+            // Always update current upstream status
+            if let Some(upstream) = ctx.get_current_upstream_mut() {
+                upstream.status = Some(code as u16);
+            }
+        }
+        
         if code > 0 {
             session.respond_error(code).await.unwrap_or_else(|e| {
                 error!("failed to send error response to downstream: {e}");
