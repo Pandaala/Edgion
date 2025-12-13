@@ -369,7 +369,7 @@ impl ProxyHttp for EdgionHttp {
             // Always update current upstream status and error message
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(code as u16);
-                upstream.err.push(e.reason_str());
+                upstream.err.push(e.to_string());
             }
         }
         
@@ -412,7 +412,25 @@ impl ProxyHttp for EdgionHttp {
             logger.send(entry.to_json()).await;
         }
     }
-    
+
+
+    fn error_while_proxy(
+        &self,
+        peer: &HttpPeer,
+        session: &mut Session,
+        e: Box<Error>,
+        _ctx: &mut Self::CTX,
+        client_reused: bool,
+    ) -> Box<Error> {
+        let mut e = e.more_context(format!("Peer: {}", peer));
+        // only reused client connections where retry buffer is not truncated
+        e.retry
+            .decide_reuse(client_reused && !session.as_ref().retry_buffer_truncated());
+        // todo need add retry logic?
+        e
+    }
+
+
     async fn connected_to_upstream(
         &self,
         _session: &mut Session,
