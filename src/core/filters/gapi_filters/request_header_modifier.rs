@@ -3,7 +3,7 @@
 //! This filter modifies request headers based on HTTPHeaderFilter configuration.
 
 use async_trait::async_trait;
-use crate::types::resources::HTTPHeaderFilter;
+use crate::types::resources::{HTTPHeaderFilter, GRPCHeaderFilter};
 use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
 use crate::core::filters::plugin_runtime::traits::{Plugin, PluginSession};
 use crate::core::filters::plugin_runtime::log::PluginLog;
@@ -16,6 +16,19 @@ pub struct RequestHeaderModifierFilter {
 impl RequestHeaderModifierFilter {
     pub fn new(config: HTTPHeaderFilter) -> Self {
         Self { config }
+    }
+
+    /// Create from GRPCHeaderFilter (which has the same structure as HTTPHeaderFilter)
+    pub fn new_from_grpc(config: GRPCHeaderFilter) -> Self {
+        // GRPCHeaderFilter and HTTPHeaderFilter have identical structure
+        // Both use HTTPHeader for set/add and Vec<String> for remove
+        Self {
+            config: HTTPHeaderFilter {
+                set: config.set,
+                add: config.add,
+                remove: config.remove,
+            }
+        }
     }
 }
 

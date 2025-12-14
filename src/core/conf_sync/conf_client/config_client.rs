@@ -16,6 +16,7 @@ pub struct ConfigClient {
     gateway_class_key: String,
     pub base_conf: RwLock<Option<GatewayBaseConf>>,
     routes: ClientCache<HTTPRoute>,
+    grpc_routes: ClientCache<GRPCRoute>,
     services: ClientCache<Service>,
     endpoint_slices: ClientCache<EndpointSlice>,
     edgion_tls: ClientCache<EdgionTls>,
@@ -49,6 +50,7 @@ impl ConfigClient {
             gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(None),
             routes: routes_cache,
+            grpc_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,
             edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
@@ -60,6 +62,11 @@ impl ConfigClient {
     /// Get routes cache for direct access
     pub fn routes(&self) -> &ClientCache<HTTPRoute> {
         &self.routes
+    }
+
+    /// Get grpc_routes cache for direct access
+    pub fn grpc_routes(&self) -> &ClientCache<GRPCRoute> {
+        &self.grpc_routes
     }
 
     /// Get services cache for direct access
@@ -98,6 +105,9 @@ impl ConfigClient {
         
         if !self.routes.is_ready() {
             not_ready.push("routes");
+        }
+        if !self.grpc_routes.is_ready() {
+            not_ready.push("grpc_routes");
         }
         if !self.services.is_ready() {
             not_ready.push("services");
@@ -195,6 +205,12 @@ impl ConfigClient {
                     .map_err(|e| format!("Failed to serialize HTTPRoute data: {}", e))?;
                 (json, list_data.resource_version)
             }
+            ResourceKind::GRPCRoute => {
+                let list_data = self.grpc_routes.list();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize GRPCRoute data: {}", e))?;
+                (json, list_data.resource_version)
+            }
             ResourceKind::Service => {
                 let list_data = self.services.list();
                 let json = serde_json::to_string(&list_data.data)
@@ -236,6 +252,11 @@ impl ConfigClient {
     /// List HTTP routes
     pub fn list_routes(&self) -> ListData<HTTPRoute> {
         self.routes.list_owned()
+    }
+
+    /// List gRPC routes
+    pub fn list_grpc_routes(&self) -> ListData<GRPCRoute> {
+        self.grpc_routes.list_owned()
     }
 
     /// List services
@@ -301,6 +322,17 @@ impl ConfigClient {
         let list_data = self.list_routes();
         println!(
             "HTTPRoutes (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, route) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(route));
+        }
+
+        // gRPC Routes
+        let list_data = self.list_grpc_routes();
+        println!(
+            "GRPCRoutes (count: {}, version: {}):",
             list_data.data.len(),
             list_data.resource_version
         );
@@ -413,6 +445,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     Self::apply_change_to_cache(&self.routes, change, resource);
                 }
                 Err(e) => log_error("HTTPRoute", &e),
+            },
+            ResourceKind::GRPCRoute => match serde_yaml::from_str::<GRPCRoute>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.grpc_routes, change, resource);
+                }
+                Err(e) => log_error("GRPCRoute", &e),
             },
             ResourceKind::Service => match serde_yaml::from_str::<Service>(&data) {
                 Ok(resource) => {

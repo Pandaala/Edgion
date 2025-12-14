@@ -170,6 +170,9 @@ impl ConfigSyncClient {
             HTTPRoute => {
                 self.config_client.routes().start_watch().await?;
             }
+            GRPCRoute => {
+                self.config_client.grpc_routes().start_watch().await?;
+            }
             Service => {
                 self.config_client.services().start_watch().await?;
             }

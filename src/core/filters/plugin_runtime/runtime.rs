@@ -6,7 +6,7 @@ use pingora_proxy::Session;
 use crate::types::EdgionHttpContext;
 use crate::types::filters::PluginRunningStage;
 use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
-use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, EdgionPlugin, PluginEntry};
+use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, GRPCRouteFilter, GRPCRouteFilterType, EdgionPlugin, PluginEntry};
 
 use super::log::PluginLog;
 use crate::core::filters::gapi_filters::{ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
@@ -63,6 +63,20 @@ impl PluginRuntime {
     pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter], namespace: &str) {
         for filter in filters {
             if let Some(p) = Self::create_plugin(filter, namespace) {
+                self.add_plugin(p);
+            }
+        }
+    }
+
+    pub fn from_grpcroute_filters(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
+        let mut runtime = Self::new();
+        runtime.add_from_grpcroute_filters(filters, namespace);
+        runtime
+    }
+
+    pub fn add_from_grpcroute_filters(&mut self, filters: &[GRPCRouteFilter], namespace: &str) {
+        for filter in filters {
+            if let Some(p) = Self::create_grpc_plugin(filter, namespace) {
                 self.add_plugin(p);
             }
         }
@@ -142,6 +156,28 @@ impl PluginRuntime {
                 })
             }
             // TODO: Add other plugin types (UrlRewrite, RequestMirror)
+            _ => None,
+        }
+    }
+
+    fn create_grpc_plugin(filter: &GRPCRouteFilter, namespace: &str) -> Option<Box<dyn Plugin>> {
+        match filter.filter_type {
+            GRPCRouteFilterType::RequestHeaderModifier => {
+                filter.request_header_modifier.as_ref().map(|config| {
+                    Box::new(RequestHeaderModifierFilter::new_from_grpc(config.clone())) as Box<dyn Plugin>
+                })
+            }
+            GRPCRouteFilterType::ResponseHeaderModifier => {
+                filter.response_header_modifier.as_ref().map(|config| {
+                    Box::new(ResponseHeaderModifierFilter::new_from_grpc(config.clone())) as Box<dyn Plugin>
+                })
+            }
+            GRPCRouteFilterType::ExtensionRef => {
+                filter.extension_ref.as_ref().map(|ext_ref| {
+                    Box::new(ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone())) as Box<dyn Plugin>
+                })
+            }
+            // TODO: Add RequestMirror support for gRPC
             _ => None,
         }
     }

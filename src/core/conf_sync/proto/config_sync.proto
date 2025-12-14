@@ -26,6 +26,7 @@ enum ResourceKind {
     RESOURCE_KIND_ENDPOINT_SLICE = 6;
     RESOURCE_KIND_EDGION_TLS = 7;
     RESOURCE_KIND_SECRET = 8;
+    RESOURCE_KIND_GRPC_ROUTE = 10;
 }
 
 // List request

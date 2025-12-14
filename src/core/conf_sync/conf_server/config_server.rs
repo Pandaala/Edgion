@@ -18,6 +18,7 @@ pub enum ResourceItem {
     EdgionGatewayConfig(EdgionGatewayConfig),
     Gateway(Gateway),
     HTTPRoute(HTTPRoute),
+    GRPCRoute(GRPCRoute),
     Service(Service),
     EndpointSlice(EndpointSlice),
     EdgionTls(EdgionTls),
@@ -31,6 +32,7 @@ pub enum ResourceItem {
 pub struct ConfigServer {
     pub base_conf: RwLock<GatewayBaseConf>,
     pub routes: ServerCache<HTTPRoute>,
+    pub grpc_routes: ServerCache<GRPCRoute>,
     pub services: ServerCache<Service>,
     pub endpoint_slices: ServerCache<EndpointSlice>,
     pub edgion_tls: ServerCache<EdgionTls>,
@@ -58,6 +60,7 @@ impl ConfigServer {
         Self {
             base_conf: RwLock::new(base_conf),
             routes: ServerCache::new(200),
+            grpc_routes: ServerCache::new(200),
             services: ServerCache::new(200),
             endpoint_slices: ServerCache::new(200),
             edgion_tls: ServerCache::new(200),
@@ -107,6 +110,12 @@ impl ConfigServer {
                 let list_data = self.list_routes();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize HTTPRoute data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::GRPCRoute => {
+                let list_data = self.list_grpc_routes();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize GRPCRoute data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::Service => {
@@ -167,6 +176,34 @@ impl ConfigServer {
             }
             ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
                 return Err("Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are not available via list/watch API".to_string());
+            }
+            ResourceKind::GRPCRoute => {
+                let mut receiver = self.watch_grpc_routes(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize GRPCRoute events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
             }
             ResourceKind::HTTPRoute => {
                 let mut receiver = self.watch_routes(client_id, client_name, from_version);
@@ -346,6 +383,10 @@ impl ConfigServer {
         self.routes.list_owned()
     }
 
+    pub fn list_grpc_routes(&self) -> ListData<GRPCRoute> {
+        self.grpc_routes.list_owned()
+    }
+
     /// List services
     pub fn list_services(&self) -> ListData<Service> {
         self.services.list_owned()
@@ -379,6 +420,16 @@ impl ConfigServer {
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<HTTPRoute>> {
         self.routes.watch(client_id, client_name, from_version)
+    }
+
+    /// Watch gRPC routes
+    pub fn watch_grpc_routes(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<GRPCRoute>> {
+        self.grpc_routes.watch(client_id, client_name, from_version)
     }
 
     /// Watch services
