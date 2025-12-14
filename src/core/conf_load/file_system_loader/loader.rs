@@ -140,8 +140,8 @@ impl LocalPathLoader {
         }
     }
 
-    /// 验证文件名是否符合命名规范: namespace_name_kind.yaml
-    /// 对于 cluster-scoped 资源（namespace 为 None），格式为: _name_kind.yaml
+    /// 验证文件名是否符合命名规范: Kind_namespace_name.yaml
+    /// 对于 cluster-scoped 资源（namespace 为 None），格式为: Kind__name.yaml
     /// 返回期望的文件名，如果验证通过返回 None，如果失败返回期望的文件名
     fn validate_filename_format(&self, path: &Path, metadata: &ResourceMetadata) -> Option<String> {
         // 获取文件名（不含路径）
@@ -156,10 +156,10 @@ impl LocalPathLoader {
             metadata.name.as_ref(),
             metadata.kind.as_ref(),
         ) {
-            format!("{}_{}_{}.yaml", ns, name, kind)
+            format!("{}_{}_{ }.yaml", kind, ns, name)
         } else if let (Some(name), Some(kind)) = (metadata.name.as_ref(), metadata.kind.as_ref()) {
             // cluster-scoped 资源
-            format!("_{}_{}.yaml", name, kind)
+            format!("{}__{}.yaml", kind, name)
         } else {
             return None;
         };
