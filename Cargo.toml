@@ -78,6 +78,7 @@ etcd-client = "0.11"
 
 # Metrics
 metrics = "0.24"
+metrics-exporter-prometheus = "0.15"
 
 # CLI
 clap = { version = "4.0", features = ["derive"] }

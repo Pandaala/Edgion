@@ -133,6 +133,25 @@ impl EdgionGatewayCli {
             "Gateway Admin API server spawned"
         );
 
+        // Spawn Metrics API server in background
+        tokio::spawn(async move {
+            if let Err(e) = crate::core::api::metrics::serve(5901).await {
+                tracing::error!(
+                    component = "metrics_api",
+                    event = "server_error",
+                    error = %e,
+                    "Metrics API server failed"
+                );
+            }
+        });
+
+        tracing::info!(
+            component = "metrics_api",
+            event = "server_spawned",
+            port = 5901,
+            "Metrics API server spawned"
+        );
+
         // Wait for all caches to be ready
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
