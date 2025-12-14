@@ -52,7 +52,8 @@ pub enum EdgionStatus {
     /// ServiceImport not yet implemented
     BackendServiceImportNotImplemented = 503_08,
 
-
+    /// Localhost backend not allowed for security reasons
+    BackendLocalhostNotAllowed = 503_09,
 
 }
 

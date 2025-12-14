@@ -9,6 +9,7 @@ use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 use crate::core::gateway::end_response_503;
+use crate::core::utils::net::is_localhost;
 use crate::types::edgion_status::EdgionStatus;
 use crate::types::{ConsistentHashOn, EdgionHttpContext, HTTPBackendRef, ParsedLBPolicy};
 
@@ -203,6 +204,16 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session) -> Result<Box<Ht
             let addr = addr_str.parse::<SocketAddr>()
                 .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
             
+            // Security check: reject localhost connections
+            if is_localhost(&addr) {
+                tracing::error!(
+                    addr = %addr,
+                    service_key = %service_key,
+                    "Rejected localhost backend for security reasons"
+                );
+                return Err(EdgionStatus::BackendLocalhostNotAllowed);
+            }
+            
             Ok(Box::new(HttpPeer::new(addr, false, String::new())))
         }
         
@@ -231,6 +242,16 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session) -> Result<Box<Ht
             let addr = addr_str.parse::<SocketAddr>()
                 .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
             
+            // Security check: reject localhost connections
+            if is_localhost(&addr) {
+                tracing::error!(
+                    addr = %addr,
+                    service_key = %service_key,
+                    "Rejected localhost backend for security reasons"
+                );
+                return Err(EdgionStatus::BackendLocalhostNotAllowed);
+            }
+            
             Ok(Box::new(HttpPeer::new(addr, false, String::new())))
         }
         
@@ -254,4 +275,3 @@ pub async fn get_peer(session: &mut Session, ctx: &mut EdgionHttpContext) -> pin
         }
     }
 }
-
