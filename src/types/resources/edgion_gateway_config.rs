@@ -465,6 +465,10 @@ pub struct ServerConfig {
     /// Error log file path
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_log: Option<String>,
+    
+    /// Enable downstream response compression (default: false)
+    #[serde(default)]
+    pub enable_compression: bool,
 }
 
 fn default_work_stealing() -> bool {

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use pingora_core::modules::http::grpc_web::{GrpcWeb, GrpcWebBridge};
 use pingora_core::modules::http::HttpModules;
+use pingora_core::modules::http::compression::ResponseCompressionBuilder;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::Digest;
 use pingora_core::upstreams::peer::Peer;
@@ -155,6 +156,16 @@ impl ProxyHttp for EdgionHttp {
 
 
     fn init_downstream_modules(&self, modules: &mut HttpModules) {
+        // Configure downstream compression based on global config (default: disabled)
+        let enable_compression = self.edgion_gateway_config.spec.server.as_ref()
+            .map(|s| s.enable_compression)
+            .unwrap_or(false);
+        
+        if !enable_compression {
+            // Explicitly disable compression
+            modules.add_module(ResponseCompressionBuilder::enable(0));
+        }
+        
         modules.add_module(Box::new(GrpcWeb));
     }
 
