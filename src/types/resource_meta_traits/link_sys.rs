@@ -2,7 +2,7 @@
 
 use crate::types::resource_kind::ResourceKind;
 use crate::types::resources::LinkSys;
-use crate::types::resources::link_sys::{SystemType, redis::RedisTopologyMode};
+use crate::types::resources::link_sys::{SystemConfig, redis::RedisTopologyMode};
 
 use super::traits::{extract_version, ResourceMeta};
 
@@ -29,51 +29,53 @@ impl ResourceMeta for LinkSys {
     
     fn pre_parse(&mut self) {
         // Validate configuration based on system type
-        match self.spec.sys_type {
-            SystemType::Redis => {
-                if let Some(redis_config) = &self.spec.redis {
-                    // Validate endpoints
-                    if redis_config.endpoints.is_empty() {
-                        tracing::warn!(
-                            "LinkSys {}: Redis configuration has no endpoints",
-                            self.key_name()
-                        );
-                    }
-                    
-                    // Validate topology consistency
-                    if let Some(topology) = &redis_config.topology {
-                        match topology.mode {
-                            RedisTopologyMode::Sentinel => {
-                                if topology.sentinel.is_none() {
-                                    tracing::warn!(
-                                        "LinkSys {}: Sentinel mode specified but sentinel config is missing",
-                                        self.key_name()
-                                    );
-                                }
-                            }
-                            RedisTopologyMode::Cluster => {
-                                if topology.cluster.is_none() {
-                                    tracing::warn!(
-                                        "LinkSys {}: Cluster mode specified but cluster config is missing",
-                                        self.key_name()
-                                    );
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                } else {
+        match &self.spec.config {
+            SystemConfig::Redis(redis_config) => {
+                // Validate endpoints
+                if redis_config.endpoints.is_empty() {
                     tracing::warn!(
-                        "LinkSys {}: System type is Redis but redis config is missing",
+                        "LinkSys {}: Redis configuration has no endpoints",
+                        self.key_name()
+                    );
+                }
+                
+                // Validate topology consistency
+                if let Some(topology) = &redis_config.topology {
+                    match topology.mode {
+                        RedisTopologyMode::Sentinel => {
+                            if topology.sentinel.is_none() {
+                                tracing::warn!(
+                                    "LinkSys {}: Sentinel mode specified but sentinel config is missing",
+                                    self.key_name()
+                                );
+                            }
+                        }
+                        RedisTopologyMode::Cluster => {
+                            if topology.cluster.is_none() {
+                                tracing::warn!(
+                                    "LinkSys {}: Cluster mode specified but cluster config is missing",
+                                    self.key_name()
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            SystemConfig::Etcd(etcd_config) => {
+                // Validate endpoints
+                if etcd_config.endpoints.is_empty() {
+                    tracing::warn!(
+                        "LinkSys {}: Etcd configuration has no endpoints",
                         self.key_name()
                     );
                 }
             }
             _ => {
                 tracing::warn!(
-                    "LinkSys {}: System type {:?} is not yet implemented",
+                    "LinkSys {}: System type {:?} is not yet fully implemented",
                     self.key_name(),
-                    self.spec.sys_type
+                    self.spec.config.system_type()
                 );
             }
         }

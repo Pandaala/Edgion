@@ -33,22 +33,69 @@ pub const LINK_SYS_KIND: &str = "LinkSys";
 )]
 #[serde(rename_all = "camelCase")]
 pub struct LinkSysSpec {
-    /// Type of the system to connect to
-    #[serde(rename = "type")]
-    pub sys_type: SystemType,
-
-    /// Redis client configuration (only present when type is Redis)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub redis: Option<RedisClientConfig>,
-
-    /// Etcd client configuration (only present when type is Etcd)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub etcd: Option<EtcdClientConfig>,
-
-    // Future: Add other system configs like ES, Kafka, etc.
+    /// System configuration
+    #[serde(flatten)]
+    pub config: SystemConfig,
 }
 
-/// System type enumeration
+/// System configuration enum
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(tag = "type", content = "config", rename_all = "lowercase")]
+pub enum SystemConfig {
+    /// Redis client configuration
+    Redis(RedisClientConfig),
+    /// Etcd client configuration
+    Etcd(EtcdClientConfig),
+    /// Elasticsearch client configuration (future)
+    Elasticsearch(ElasticsearchClientConfig),
+    /// Kafka client configuration (future)
+    Kafka(KafkaClientConfig),
+}
+
+// Placeholder types for future implementations
+/// Elasticsearch client configuration (placeholder)
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+pub struct ElasticsearchClientConfig {
+    /// Elasticsearch endpoints
+    pub endpoints: Vec<String>,
+}
+
+/// Kafka client configuration (placeholder)
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+pub struct KafkaClientConfig {
+    /// Kafka brokers
+    pub brokers: Vec<String>,
+}
+
+impl SystemConfig {
+    /// Get the system type
+    pub fn system_type(&self) -> SystemType {
+        match self {
+            SystemConfig::Redis(_) => SystemType::Redis,
+            SystemConfig::Etcd(_) => SystemType::Etcd,
+            SystemConfig::Elasticsearch(_) => SystemType::Elasticsearch,
+            SystemConfig::Kafka(_) => SystemType::Kafka,
+        }
+    }
+
+    /// Get Redis configuration if this is a Redis system
+    pub fn as_redis(&self) -> Option<&RedisClientConfig> {
+        match self {
+            SystemConfig::Redis(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// Get Etcd configuration if this is an Etcd system
+    pub fn as_etcd(&self) -> Option<&EtcdClientConfig> {
+        match self {
+            SystemConfig::Etcd(config) => Some(config),
+            _ => None,
+        }
+    }
+}
+
+/// System type enumeration (for helper methods and logging)
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SystemType {

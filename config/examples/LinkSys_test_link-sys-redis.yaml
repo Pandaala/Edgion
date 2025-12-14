@@ -5,7 +5,7 @@ metadata:
   namespace: default
 spec:
   type: redis
-  redis:
+  config:
     # Redis endpoints
     endpoints:
       - "redis://127.0.0.1:6379"

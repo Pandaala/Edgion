@@ -8,7 +8,7 @@ metadata:
   namespace: test
 spec:
   type: etcd
-  etcd:
+  config:
     # Multiple etcd server endpoints for high availability
     endpoints:
       - "https://etcd-1.example.com:2379"

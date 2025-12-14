@@ -8,7 +8,7 @@ metadata:
   namespace: test
 spec:
   type: etcd
-  etcd:
+  config:
     # Etcd server endpoints
     endpoints:
       - "http://etcd-server:2379"

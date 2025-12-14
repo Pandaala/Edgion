@@ -197,7 +197,7 @@ pub struct EtcdLogging {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::{LinkSys, LinkSysSpec, SystemType};
+    use super::super::{LinkSys, LinkSysSpec, SystemType, SystemConfig};
 
     #[test]
     fn test_deserialize_etcd_simple() {
@@ -209,7 +209,7 @@ metadata:
   namespace: test
 spec:
   type: etcd
-  etcd:
+  config:
     endpoints:
       - "http://etcd-server:2379"
 "#;
@@ -217,9 +217,9 @@ spec:
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
         assert_eq!(link_sys.metadata.name.as_deref(), Some("etcd-simple"));
         assert_eq!(link_sys.metadata.namespace.as_deref(), Some("test"));
-        assert_eq!(link_sys.spec.sys_type, SystemType::Etcd);
+        assert_eq!(link_sys.spec.config.system_type(), SystemType::Etcd);
         
-        let etcd_config = link_sys.spec.etcd.expect("Etcd config should be present");
+        let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
         assert_eq!(etcd_config.endpoints.len(), 1);
         assert_eq!(etcd_config.endpoints[0], "http://etcd-server:2379");
         assert!(etcd_config.auth.is_none());
@@ -236,7 +236,7 @@ metadata:
   namespace: test
 spec:
   type: etcd
-  etcd:
+  config:
     endpoints:
       - "https://etcd.example.com:2379"
     auth:
@@ -245,9 +245,9 @@ spec:
 "#;
 
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
-        let etcd_config = link_sys.spec.etcd.expect("Etcd config should be present");
+        let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
         
-        let auth = etcd_config.auth.expect("Auth should be present");
+        let auth = etcd_config.auth.as_ref().expect("Auth should be present");
         assert_eq!(auth.username.as_deref(), Some("test-user"));
         assert_eq!(auth.password.as_deref(), Some("test-password"));
     }
@@ -262,7 +262,7 @@ metadata:
   namespace: test
 spec:
   type: etcd
-  etcd:
+  config:
     endpoints:
       - "https://etcd.example.com:2379"
     tls:
@@ -275,13 +275,13 @@ spec:
 "#;
 
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
-        let etcd_config = link_sys.spec.etcd.expect("Etcd config should be present");
+        let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
         
-        let tls = etcd_config.tls.expect("TLS should be present");
+        let tls = etcd_config.tls.as_ref().expect("TLS should be present");
         assert!(tls.enabled);
         assert_eq!(tls.insecure_skip_verify, Some(false));
         
-        let certs = tls.certs.expect("Certs should be present");
+        let certs = tls.certs.as_ref().expect("Certs should be present");
         assert_eq!(certs.ca_cert.as_deref(), Some("CA_CERT_CONTENT"));
         assert_eq!(certs.client_cert.as_deref(), Some("CLIENT_CERT_CONTENT"));
         assert_eq!(certs.client_key.as_deref(), Some("CLIENT_KEY_CONTENT"));
@@ -297,7 +297,7 @@ metadata:
   namespace: test
 spec:
   type: etcd
-  etcd:
+  config:
     endpoints:
       - "http://etcd:2379"
     timeout:
@@ -307,9 +307,9 @@ spec:
 "#;
 
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
-        let etcd_config = link_sys.spec.etcd.expect("Etcd config should be present");
+        let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
         
-        let timeout = etcd_config.timeout.expect("Timeout should be present");
+        let timeout = etcd_config.timeout.as_ref().expect("Timeout should be present");
         assert_eq!(timeout.dial, Some(5000));
         assert_eq!(timeout.request, Some(10000));
         assert_eq!(timeout.keep_alive, Some(30000));
@@ -325,7 +325,7 @@ metadata:
   namespace: test
 spec:
   type: etcd
-  etcd:
+  config:
     endpoints:
       - "http://etcd:2379"
     keepAlive:
@@ -335,9 +335,9 @@ spec:
 "#;
 
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
-        let etcd_config = link_sys.spec.etcd.expect("Etcd config should be present");
+        let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
         
-        let keep_alive = etcd_config.keep_alive.expect("KeepAlive should be present");
+        let keep_alive = etcd_config.keep_alive.as_ref().expect("KeepAlive should be present");
         assert_eq!(keep_alive.time, Some(30));
         assert_eq!(keep_alive.timeout, Some(10));
         assert_eq!(keep_alive.permit_without_stream, Some(true));
@@ -353,7 +353,7 @@ metadata:
   namespace: test
 spec:
   type: etcd
-  etcd:
+  config:
     endpoints:
       - "https://etcd-1:2379"
       - "https://etcd-2:2379"
@@ -387,7 +387,7 @@ spec:
 "#;
 
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
-        let etcd_config = link_sys.spec.etcd.expect("Etcd config should be present");
+        let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
         
         assert_eq!(etcd_config.endpoints.len(), 2);
         assert_eq!(etcd_config.namespace.as_deref(), Some("/my-app/"));
@@ -397,15 +397,15 @@ spec:
         assert_eq!(etcd_config.user_agent.as_deref(), Some("edgion-gateway/v1.0.0"));
         assert_eq!(etcd_config.reject_old_cluster, Some(true));
         
-        let observability = etcd_config.observability.expect("Observability should be present");
-        let logging = observability.logging.expect("Logging should be present");
+        let observability = etcd_config.observability.as_ref().expect("Observability should be present");
+        let logging = observability.logging.as_ref().expect("Logging should be present");
         assert!(logging.enabled);
         assert_eq!(logging.level.as_deref(), Some("info"));
         assert_eq!(logging.slow_log_threshold, Some(1000));
         
-        let metrics = observability.metrics.expect("Metrics should be present");
+        let metrics = observability.metrics.as_ref().expect("Metrics should be present");
         assert!(metrics.enabled);
-        let labels = metrics.labels.expect("Labels should be present");
+        let labels = metrics.labels.as_ref().expect("Labels should be present");
         assert_eq!(labels.get("environment").map(|s| s.as_str()), Some("production"));
     }
 
@@ -418,9 +418,7 @@ spec:
                 ..Default::default()
             },
             spec: LinkSysSpec {
-                sys_type: SystemType::Etcd,
-                redis: None,
-                etcd: Some(EtcdClientConfig {
+                config: SystemConfig::Etcd(EtcdClientConfig {
                     endpoints: vec!["http://etcd:2379".to_string()],
                     auth: Some(EtcdAuth {
                         username: Some("user".to_string()),
@@ -464,7 +462,7 @@ metadata:
   namespace: test
 spec:
   type: etcd
-  etcd:
+  config:
     endpoints:
       - "https://etcd:2379"
     auth:
@@ -482,16 +480,16 @@ spec:
 "#;
 
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
-        let etcd_config = link_sys.spec.etcd.expect("Etcd config should be present");
+        let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
         
-        let auth = etcd_config.auth.expect("Auth should be present");
-        let secret_ref = auth.secret_ref.expect("Secret ref should be present");
+        let auth = etcd_config.auth.as_ref().expect("Auth should be present");
+        let secret_ref = auth.secret_ref.as_ref().expect("Secret ref should be present");
         assert_eq!(secret_ref.name, "etcd-creds");
         assert_eq!(secret_ref.namespace.as_deref(), Some("test"));
         
-        let tls = etcd_config.tls.expect("TLS should be present");
-        let tls_certs = tls.certs.expect("TLS certs should be present");
-        let tls_secret_ref = tls_certs.secret_ref.expect("TLS secret ref should be present");
+        let tls = etcd_config.tls.as_ref().expect("TLS should be present");
+        let tls_certs = tls.certs.as_ref().expect("TLS certs should be present");
+        let tls_secret_ref = tls_certs.secret_ref.as_ref().expect("TLS secret ref should be present");
         assert_eq!(tls_secret_ref.name, "etcd-tls");
     }
 }
