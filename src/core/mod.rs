@@ -11,4 +11,5 @@ pub mod utils;
 pub mod backends;
 pub mod observe;
 pub mod link_sys;
+pub mod api;
 mod gateway;

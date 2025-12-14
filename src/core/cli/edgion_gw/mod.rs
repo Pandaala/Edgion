@@ -113,6 +113,26 @@ impl EdgionGwCli {
 
         Self::spawn_config_printer(config_client.clone());
 
+        // Spawn Admin API server in background
+        let config_client_for_admin = config_client.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::core::api::gw::serve(config_client_for_admin, 5900).await {
+                tracing::error!(
+                    component = "admin_api_gw",
+                    event = "server_error",
+                    error = %e,
+                    "Gateway Admin API server failed"
+                );
+            }
+        });
+
+        tracing::info!(
+            component = "admin_api_gw",
+            event = "server_spawned",
+            port = 5900,
+            "Gateway Admin API server spawned"
+        );
+
         // Wait for all caches to be ready
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;

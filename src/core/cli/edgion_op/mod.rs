@@ -113,13 +113,24 @@ impl EdgionOpCli {
         // Spawn task to print config every 10 seconds
         Self::spawn_config_printer(config_server.clone());
 
-        // Run both services concurrently using tokio::join!
-        let (sync_result, loader_result) = tokio::join!(
-            sync_server.serve(addr),
-            loader.run()
+        // Admin API port
+        let admin_port = 5800;
+        
+        tracing::info!(
+            component = COMPONENT_EDGION_OPERATOR,
+            event = "admin_api_starting",
+            admin_port = admin_port,
+            "Starting Admin API server"
         );
 
-        // Check results - if either service fails, return error
+        // Run all three services concurrently using tokio::join!
+        let (sync_result, loader_result, admin_result) = tokio::join!(
+            sync_server.serve(addr),
+            loader.run(),
+            crate::core::api::op::serve(config_server.clone(), admin_port)
+        );
+
+        // Check results - if any service fails, return error
         if let Err(e) = &sync_result {
             tracing::error!(
                 component = COMPONENT_EDGION_OPERATOR,
@@ -138,8 +149,18 @@ impl EdgionOpCli {
             );
         }
 
+        if let Err(e) = &admin_result {
+            tracing::error!(
+                component = COMPONENT_EDGION_OPERATOR,
+                event = "admin_api_error",
+                error = %e,
+                "Admin API server failed"
+            );
+        }
+
         sync_result.map_err(|e| anyhow!("gRPC conf_server error: {}", e))?;
         loader_result?;
+        admin_result?;
 
         tracing::info!(
             component = COMPONENT_EDGION_OPERATOR,
