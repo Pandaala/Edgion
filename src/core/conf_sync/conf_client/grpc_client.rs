@@ -52,10 +52,16 @@ impl ConfigSyncClient {
 
                     // Set gRPC conf_client for each cache
                     config_client.routes().set_grpc_client(client.clone()).await;
+                    config_client.grpc_routes().set_grpc_client(client.clone()).await;
+                    config_client.tcp_routes().set_grpc_client(client.clone()).await;
+                    config_client.udp_routes().set_grpc_client(client.clone()).await;
+                    config_client.tls_routes().set_grpc_client(client.clone()).await;
+                    config_client.link_sys().set_grpc_client(client.clone()).await;
                     config_client.services().set_grpc_client(client.clone()).await;
                     config_client.endpoint_slices().set_grpc_client(client.clone()).await;
                     config_client.edgion_tls().set_grpc_client(client.clone()).await;
                     config_client.edgion_plugins().set_grpc_client(client.clone()).await;
+                    config_client.plugin_metadata().set_grpc_client(client.clone()).await;
                     config_client.secrets().set_grpc_client(client.clone()).await;
 
                     return Ok(Self {
@@ -208,18 +214,24 @@ impl ConfigSyncClient {
         Ok(())
     }
 
-    /// Start watching all resource types (kept for compatibility, but implementation removed)
+    /// Start watching all resource types
     pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
         let hub = &self.config_client;
         let key = hub.get_gateway_class_key().clone();
 
-        // Only watch non-base_conf resources
+        // Watch all non-base_conf resources
         let resource_kinds = vec![
             HTTPRoute,
+            GRPCRoute,
+            TCPRoute,
+            UDPRoute,
+            TLSRoute,
+            LinkSys,
             Service,
             EndpointSlice,
             EdgionTls,
             EdgionPlugins,
+            PluginMetaData,
             Secret,
         ];
         

@@ -773,6 +773,61 @@ impl ConfigServer {
             println!("  [{}] {}", idx, format_resource_info(route));
         }
 
+        // gRPC Routes
+        let list_data = self.list_grpc_routes();
+        println!(
+            "GRPCRoutes (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, route) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(route));
+        }
+
+        // TCP Routes
+        let list_data = self.list_tcp_routes();
+        println!(
+            "TCPRoutes (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, route) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(route));
+        }
+
+        // UDP Routes
+        let list_data = self.list_udp_routes();
+        println!(
+            "UDPRoutes (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, route) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(route));
+        }
+
+        // TLS Routes
+        let list_data = self.list_tls_routes();
+        println!(
+            "TLSRoutes (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, route) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(route));
+        }
+
+        // LinkSys
+        let list_data = self.list_link_sys();
+        println!(
+            "LinkSys (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, link_sys) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(link_sys));
+        }
+
         // Services
         let list_data = self.list_services();
         println!(
@@ -815,6 +870,17 @@ impl ConfigServer {
         );
         for (idx, plugin) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(plugin));
+        }
+
+        // Plugin Metadata
+        let list_data = self.list_plugin_metadata();
+        println!(
+            "PluginMetaData (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, metadata) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(metadata));
         }
 
         // Secrets

@@ -5,9 +5,9 @@ metadata:
   namespace: default
 spec:
   parentRefs:
-    - name: example-gateway
+    - name: gateway1
       namespace: default
-      sectionName: https
+      sectionName: https18443
   hostnames:
     - "example.com"
     - "*.example.com"
