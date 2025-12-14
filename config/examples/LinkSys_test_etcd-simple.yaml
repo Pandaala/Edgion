@@ -1,0 +1,15 @@
+# Simple Etcd Connection (No Authentication)
+# This is a minimal etcd client configuration for testing or development environments.
+
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: etcd-simple
+  namespace: test
+spec:
+  type: etcd
+  etcd:
+    # Etcd server endpoints
+    endpoints:
+      - "http://etcd-server:2379"
+

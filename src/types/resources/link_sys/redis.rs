@@ -1,49 +1,10 @@
-//! LinkSys resource definition
-//!
-//! LinkSys is used to connect to external systems like Redis, Etcd, Elasticsearch, Kafka, etc.
+//! Redis client configuration types
 
-use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// API group for LinkSys
-pub const LINK_SYS_GROUP: &str = "edgion.io";
-
-/// Kind for LinkSys
-pub const LINK_SYS_KIND: &str = "LinkSys";
-
-/// LinkSys defines connections to external systems
-#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[kube(
-    group = "edgion.io",
-    version = "v1",
-    kind = "LinkSys",
-    plural = "linksys",
-    namespaced
-)]
-#[serde(rename_all = "camelCase")]
-pub struct LinkSysSpec {
-    /// Type of the system to connect to
-    #[serde(rename = "type")]
-    pub sys_type: SystemType,
-
-    /// Redis client configuration (only present when type is Redis)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub redis: Option<RedisClientConfig>,
-
-    // Future: Add other system configs like Etcd, ES, Kafka, etc.
-}
-
-/// System type enumeration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum SystemType {
-    Redis,
-    Etcd,
-    Elasticsearch,
-    Kafka,
-}
+use super::common::SecretReference;
 
 /// Redis client configuration
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -100,26 +61,6 @@ pub struct RedisAuth {
     /// Secret reference for credentials
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_ref: Option<SecretReference>,
-}
-
-/// Reference to a Kubernetes Secret
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SecretReference {
-    /// Name of the secret
-    pub name: String,
-
-    /// Namespace of the secret (defaults to LinkSys namespace)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-
-    /// Key in the secret for username
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username_key: Option<String>,
-
-    /// Key in the secret for password
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password_key: Option<String>,
 }
 
 /// Redis timeout configuration (in milliseconds)

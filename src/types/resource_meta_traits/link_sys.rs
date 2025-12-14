@@ -2,6 +2,7 @@
 
 use crate::types::resource_kind::ResourceKind;
 use crate::types::resources::LinkSys;
+use crate::types::resources::link_sys::{SystemType, redis::RedisTopologyMode};
 
 use super::traits::{extract_version, ResourceMeta};
 
@@ -29,7 +30,7 @@ impl ResourceMeta for LinkSys {
     fn pre_parse(&mut self) {
         // Validate configuration based on system type
         match self.spec.sys_type {
-            crate::types::resources::SystemType::Redis => {
+            SystemType::Redis => {
                 if let Some(redis_config) = &self.spec.redis {
                     // Validate endpoints
                     if redis_config.endpoints.is_empty() {
@@ -42,7 +43,7 @@ impl ResourceMeta for LinkSys {
                     // Validate topology consistency
                     if let Some(topology) = &redis_config.topology {
                         match topology.mode {
-                            crate::types::resources::RedisTopologyMode::Sentinel => {
+                            RedisTopologyMode::Sentinel => {
                                 if topology.sentinel.is_none() {
                                     tracing::warn!(
                                         "LinkSys {}: Sentinel mode specified but sentinel config is missing",
@@ -50,7 +51,7 @@ impl ResourceMeta for LinkSys {
                                     );
                                 }
                             }
-                            crate::types::resources::RedisTopologyMode::Cluster => {
+                            RedisTopologyMode::Cluster => {
                                 if topology.cluster.is_none() {
                                     tracing::warn!(
                                         "LinkSys {}: Cluster mode specified but cluster config is missing",
