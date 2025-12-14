@@ -9,6 +9,7 @@ mod edgion_gateway_config;
 mod gateway;
 mod http_route;
 mod grpc_route;
+mod tcp_route;
 mod service;
 mod endpoint_slice;
 mod secret;

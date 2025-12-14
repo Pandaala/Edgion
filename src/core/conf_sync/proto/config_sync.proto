@@ -27,6 +27,7 @@ enum ResourceKind {
     RESOURCE_KIND_EDGION_TLS = 7;
     RESOURCE_KIND_SECRET = 8;
     RESOURCE_KIND_GRPC_ROUTE = 10;
+    RESOURCE_KIND_TCP_ROUTE = 11;
 }
 
 // List request

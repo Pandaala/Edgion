@@ -99,6 +99,71 @@ impl ConfigServer {
                     Self::execute_change_on_cache::<GRPCRoute>(change, &self.grpc_routes, resource);
                 }
             }
+            ResourceKind::TCPRoute => {
+                if let Ok(resource) = serde_yaml::from_str::<TCPRoute>(&data) {
+                    // Check if TCPRoute references a gateway that exists in base_conf
+                    let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
+                        if let Some(first_ref) = parent_refs.first() {
+                            // Get gateway namespace (if not specified, use TCPRoute's namespace)
+                            let gateway_namespace = first_ref
+                                .namespace
+                                .as_ref()
+                                .or_else(|| resource.metadata.namespace.as_ref());
+                            let gateway_name = Some(&first_ref.name);
+
+                            let base_conf_guard = self.base_conf.read().unwrap();
+                            base_conf_guard.has_gateway(gateway_namespace, gateway_name)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if !gateway_exists {
+                        let (gateway_info, message) = if let Some(parent_refs) = &resource.spec.parent_refs {
+                            if let Some(first_ref) = parent_refs.first() {
+                                let info = format!(
+                                    "namespace={:?}, name={}",
+                                    first_ref
+                                        .namespace
+                                        .as_ref()
+                                        .or_else(|| resource.metadata.namespace.as_ref()),
+                                    first_ref.name
+                                );
+                                (info, "TCPRoute references a Gateway that does not exist in base_conf, skipping")
+                            } else {
+                                (
+                                    "no parent_refs".to_string(),
+                                    "TCPRoute has empty parent_refs, skipping",
+                                )
+                            }
+                        } else {
+                            ("no parent_refs".to_string(), "TCPRoute has no parent_refs, skipping")
+                        };
+
+                        tracing::warn!(
+                            component = "config_server",
+                            change = ?change,
+                            kind = "TCPRoute",
+                            route_name = ?resource.metadata.name,
+                            route_namespace = ?resource.metadata.namespace,
+                            gateway = gateway_info,
+                            "{}",
+                            message
+                        );
+                        return;
+                    }
+
+                    tracing::info!(
+                        component = "config_server",
+                        change = ?change,
+                        kind = "TCPRoute",
+                        "Applying TCPRoute resource change"
+                    );
+                    Self::execute_change_on_cache::<TCPRoute>(change, &self.tcp_routes, resource);
+                }
+            }
             ResourceKind::HTTPRoute => {
                 if let Ok(resource) = serde_yaml::from_str::<HTTPRoute>(&data) {
                     // 检查 HTTPRoute 引用的 gateway 是否存在于 base_conf 中
@@ -292,6 +357,7 @@ impl ConfigServerEventDispatcher for ConfigServer {
     fn enable_version_fix_mode(&self) {
         self.routes.enable_version_fix_mode();
         self.grpc_routes.enable_version_fix_mode();
+        self.tcp_routes.enable_version_fix_mode();
         self.services.enable_version_fix_mode();
         self.endpoint_slices.enable_version_fix_mode();
         self.edgion_tls.enable_version_fix_mode();
@@ -302,6 +368,7 @@ impl ConfigServerEventDispatcher for ConfigServer {
     fn set_ready(&self) {
         self.routes.set_ready();
         self.grpc_routes.set_ready();
+        self.tcp_routes.set_ready();
         self.services.set_ready();
         self.endpoint_slices.set_ready();
         self.edgion_tls.set_ready();

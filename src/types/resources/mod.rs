@@ -10,6 +10,7 @@ pub mod gateway_class;
 pub mod http_route_preparse;
 pub mod http_route;
 pub mod grpc_route;
+pub mod tcp_route;
 
 // Re-export all resource types
 pub use self::edgion_gateway_config::*;
@@ -20,4 +21,5 @@ pub use self::gateway_class::*;
 pub use self::http_route_preparse::*;
 pub use self::http_route::*;
 pub use self::grpc_route::*;
+pub use self::tcp_route::*;
 

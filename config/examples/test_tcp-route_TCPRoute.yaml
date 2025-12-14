@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: example-tcp-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: gateway1
+      namespace: default
+      sectionName: tcp-listener
+  rules:
+    - backendRefs:
+        - name: tcp-service
+          port: 3306
+          weight: 1
+

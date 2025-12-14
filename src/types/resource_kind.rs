@@ -13,6 +13,7 @@ pub enum ResourceKind {
     Secret = 8,
     EdgionPlugins = 9,
     GRPCRoute = 10,
+    TCPRoute = 11,
 }
 
 impl ResourceKind {
@@ -48,6 +49,7 @@ impl ResourceKind {
             "Secret" => Some(ResourceKind::Secret),
             "EdgionPlugins" => Some(ResourceKind::EdgionPlugins),
             "GRPCRoute" => Some(ResourceKind::GRPCRoute),
+            "TCPRoute" => Some(ResourceKind::TCPRoute),
             _ => None,
         }
     }
