@@ -27,9 +27,13 @@ pub struct AccessLogEntry<'a> {
     
     #[serde(skip_serializing_if = "is_empty")]
     pub plugin_logs: &'a [PluginLog],
+    
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conn_est: Option<bool>,
 }
 
 impl<'a> AccessLogEntry<'a> {
+    #[inline]
     pub fn from_context(ctx: &'a EdgionHttpContext) -> Self {
         let match_info = ctx.route_unit.as_ref().map(|ru| &ru.matched_info);
         
@@ -40,7 +44,14 @@ impl<'a> AccessLogEntry<'a> {
             errors: &ctx.error_codes,
             backend_context: ctx.backend_context.as_ref(),
             plugin_logs: &ctx.plugin_logs,
+            conn_est: None,
         }
+    }
+    
+    /// Set connection established flag
+    #[inline]
+    pub fn set_conn_est(&mut self) {
+        self.conn_est = Some(true);
     }
 
     pub fn to_json(&self) -> String {

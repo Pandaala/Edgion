@@ -53,6 +53,9 @@ pub struct RequestInfo {
     pub path: String,
     /// Response status code (e.g., 200, 400, 404, 500)
     pub status: u16,
+    /// Auto-discovered protocol (e.g., "grpc-web", "websocket")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discover_protocol: Option<String>,
 }
 
 /// Upstream connection information for a single connection attempt
@@ -107,8 +110,6 @@ pub struct EdgionHttpContext {
 
     pub request_id: Option<String>,
 
-    pub auto_gprc: bool,
-
     /// Request information (hostname, path, x-trace-id)
     pub request_info: RequestInfo,
 
@@ -143,7 +144,6 @@ impl EdgionHttpContext {
         Self {
             start_time: Instant::now(),
             request_id: None,
-            auto_gprc: false,
             request_info: RequestInfo::default(),
             error_codes: Vec::with_capacity(5),
             route_unit: None,

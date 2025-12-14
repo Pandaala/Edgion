@@ -19,6 +19,30 @@ use crate::types::err::EdError;
 use crate::core::observe::{AccessLogEntry, global_metrics};
 use crate::core::routes::routes_mgr::RouteRules;
 
+/// Auto-discover protocol from request headers
+#[inline]
+fn discover_protocol(req_header: &pingora_http::RequestHeader) -> Option<String> {
+    // Check for gRPC-Web
+    if let Some(content_type) = req_header.headers.get("content-type") {
+        if let Ok(ct_str) = content_type.to_str() {
+            if ct_str.len() >= 21 && ct_str[..21].eq_ignore_ascii_case("application/grpc-web") {
+                return Some("grpc-web".to_string());
+            }
+        }
+    }
+    
+    // Check for WebSocket
+    if let Some(upgrade) = req_header.headers.get("upgrade") {
+        if let Ok(upgrade_str) = upgrade.to_str() {
+            if upgrade_str.eq_ignore_ascii_case("websocket") {
+                return Some("websocket".to_string());
+            }
+        }
+    }
+    
+    None
+}
+
 #[async_trait]
 impl ProxyHttp for EdgionHttp {
     type CTX = EdgionHttpContext;
@@ -218,15 +242,15 @@ impl ProxyHttp for EdgionHttp {
             .and_then(|h| h.to_str().ok())
             .map(|s| s.to_string());
 
-        // process gprc
+        // Auto-discover protocol and update context
+        let protocol = discover_protocol(req_header);
+        ctx.request_info.discover_protocol = protocol.clone();
 
-        if let Some(content_type) = req_header.headers.get("content-type") {
-            if let Ok(ct_str) = content_type.to_str() {
-                if ct_str.len() >= 21 && ct_str[..21].eq_ignore_ascii_case("application/grpc-web") {
-                    if let Some(grpc) = session.downstream_modules_ctx.get_mut::<GrpcWebBridge>() {
-                        grpc.init();
-                        ctx.auto_gprc = true;
-                    }
+        // Process gRPC-Web if detected
+        if let Some(proto) = protocol {
+            if proto == "grpc-web" {
+                if let Some(grpc) = session.downstream_modules_ctx.get_mut::<GrpcWebBridge>() {
+                    grpc.init();
                 }
             }
         }
@@ -448,6 +472,19 @@ impl ProxyHttp for EdgionHttp {
         if let Some(upstream) = ctx.get_current_upstream_mut() {
             let ct = upstream.start_time.elapsed().as_millis() as u64;
             upstream.ct = Some(ct);
+        }
+        
+        // For gRPC-Web or WebSocket, log connection establishment immediately
+        if let Some(protocol) = &ctx.request_info.discover_protocol {
+            if protocol == "grpc-web" || protocol == "websocket" {
+                let mut entry = AccessLogEntry::from_context(ctx);
+                entry.set_conn_est();
+                
+                // Send to access logger if configured
+                if let Some(logger) = &self.access_logger {
+                    logger.send(entry.to_json()).await;
+                }
+            }
         }
         
         Ok(())
