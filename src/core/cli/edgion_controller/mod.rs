@@ -54,10 +54,11 @@ impl EdgionControllerCli {
             component = COMPONENT_EDGION_CONTROLLER,
             event = "system_start",
             version = VERSION,
+            allocator = crate::allocator_name(),
             grpc_addr = %config.grpc_listen(),
             admin_addr = %config.admin_listen(),
             log_level = %config.log_level(),
-            "Edgion Operator starting"
+            "Edgion Controller starting"
         );
 
         let loader_args = config.to_loader_args();

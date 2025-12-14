@@ -74,6 +74,14 @@ impl EdgionGatewayCli {
         
         tracing::info!("Logging initialized at: {:?}", log_config.log_dir);
         
+        // Log allocator information
+        tracing::info!(
+            component = "startup",
+            allocator = crate::allocator_name(),
+            version = env!("CARGO_PKG_VERSION"),
+            "Starting Edgion Gateway"
+        );
+        
         // Initialize logging and get the WorkerGuard
         // The guard owns a background thread that performs actual file writes
         let log_guard = init_logging(log_config.to_log_config()).await?;

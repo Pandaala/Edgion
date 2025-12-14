@@ -17,13 +17,22 @@ name = "edgion-controller"
 path = "src/bin/edgion_controller.rs"
 
 [features]
+# Default features
+default = ["allocator-jemalloc"]
+
+# Memory allocator selection (mutually exclusive)
+allocator-jemalloc = ["tikv-jemallocator"]
+allocator-mimalloc = ["mimalloc"]
+allocator-system = []
+
 # Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
 legacy_route_tests = []
 
-# Default feature
-default = []
-
 [dependencies]
+# Memory allocators (optional, controlled by features)
+tikv-jemallocator = { version = "0.6", optional = true }
+mimalloc = { version = "0.1", default-features = false, optional = true }
+
 # Core async runtime and error handling
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = "0.1"
