@@ -33,8 +33,8 @@ impl RadixPath {
             if segment.is_empty() {
                 return;
             }
-            if segment.starts_with('{') && segment.ends_with('}') {
-                let param_name = &segment[1..segment.len() - 1];
+            if segment.starts_with(':') {
+                let param_name = &segment[1..];
                 if param_name.is_empty() {
                     panic!("Empty param name in path: {}", path);
                 }
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_exact_match_with_param() {
-        let path = RadixPath::new("/users/{id}", 0, false);
+        let path = RadixPath::new("/users/:id", 0, false);
         assert_eq!(path.radix_key, "/users/");
         assert_eq!(path.is_prefix_match, false);
         assert_eq!(path.match_segments.len(), 1);
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_prefix_match_with_param() {
-        let path = RadixPath::new("/users/{id}", 0, true);
+        let path = RadixPath::new("/users/:id", 0, true);
         assert_eq!(path.radix_key, "/users/");
         assert_eq!(path.is_prefix_match, true);
         assert_eq!(path.match_type_str(), "ParamPrefix");
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn test_multiple_params() {
-        let path = RadixPath::new("/api/{version}/users/{id}", 0, false);
+        let path = RadixPath::new("/api/:version/users/:id", 0, false);
         assert_eq!(path.radix_key, "/api/");
         assert_eq!(path.match_segments.len(), 3);
 
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_param_with_literal_suffix() {
-        let path = RadixPath::new("/users/{id}/profile", 0, false);
+        let path = RadixPath::new("/users/:id/profile", 0, false);
         assert_eq!(path.radix_key, "/users/");
         assert_eq!(path.match_segments.len(), 2);
 
@@ -337,13 +337,13 @@ mod tests {
     fn test_match_type_str_variants() {
         assert_eq!(RadixPath::new("/api", 0, false).match_type_str(), "Exact");
         assert_eq!(RadixPath::new("/api", 0, true).match_type_str(), "Prefix");
-        assert_eq!(RadixPath::new("/users/{id}", 0, false).match_type_str(), "Param");
-        assert_eq!(RadixPath::new("/users/{id}", 0, true).match_type_str(), "ParamPrefix");
+        assert_eq!(RadixPath::new("/users/:id", 0, false).match_type_str(), "Param");
+        assert_eq!(RadixPath::new("/users/:id", 0, true).match_type_str(), "ParamPrefix");
     }
 
     #[test]
     fn test_complex_pattern() {
-        let path = RadixPath::new("/api/{version}/users/{userId}/posts/{postId}", 0, false);
+        let path = RadixPath::new("/api/:version/users/:userId/posts/:postId", 0, false);
 
         assert!(path.matches("/api/v1/users/123/posts/456"));
         assert!(!path.matches("/api/v1/users/123/posts"));
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn test_empty_param_name_panics() {
         let result = std::panic::catch_unwind(|| {
-            RadixPath::new("/users/{}", 0, false);
+            RadixPath::new("/users/:", 0, false);
         });
         assert!(result.is_err());
     }
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_param_cannot_be_empty() {
-        let path = RadixPath::new("/users/{id}/profile", 0, false);
+        let path = RadixPath::new("/users/:id/profile", 0, false);
 
         // Param must match_engine at least one character
         assert!(!path.matches("/users//profile"));
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_param_stops_at_slash() {
-        let path = RadixPath::new("/users/{id}/profile", 0, false);
+        let path = RadixPath::new("/users/:id/profile", 0, false);
 
         // Param should capture up to the next slash
         assert!(path.matches("/users/123/profile"));
@@ -400,15 +400,15 @@ mod tests {
     #[test]
     fn test_consecutive_params() {
         // This is an edge case - params right next to each other without separator
-        // "{key}{value}" is treated as a single param with name "key}{value"
-        let path = RadixPath::new("/data/{key}{value}", 0, false);
+        // ":key:value" is treated as a single param with name "key:value"
+        let path = RadixPath::new("/data/:key:value", 0, false);
 
-        // Will be parsed as one param segment with name "key}{value"
+        // Will be parsed as one param segment with name "key:value"
         // This is expected behavior - params need proper separation for clarity
         assert_eq!(path.radix_key, "/data/");
         assert_eq!(path.match_segments.len(), 1);
         match &path.match_segments[0] {
-            MatchSegment::Param(name) => assert_eq!(name, "key}{value"),
+            MatchSegment::Param(name) => assert_eq!(name, "key:value"),
             _ => panic!("Expected Param segment"),
         }
     }
@@ -418,9 +418,9 @@ mod tests {
         // radix_key should be the longest literal prefix before first param
         let test_cases = vec![
             ("/api/users", "/api/users"),
-            ("/api/{version}", "/api/"),
-            ("/{org}/repos", "/"),
-            ("/a/b/c/{id}/d", "/a/b/c/"),
+            ("/api/:version", "/api/"),
+            ("/:org/repos", "/"),
+            ("/a/b/c/:id/d", "/a/b/c/"),
         ];
 
         for (input, expected_key) in test_cases {
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_original_path_preserved() {
-        let original = "/users/{userId}/posts/{postId}";
+        let original = "/users/:userId/posts/:postId";
         let path = RadixPath::new(original, 42, true);
 
         assert_eq!(path.original, original);

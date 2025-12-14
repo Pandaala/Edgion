@@ -38,7 +38,7 @@ spec:
             value: /bbb/123
         - path:
             type: Exact
-            value: /bbb/{id1}/ccc/{id2}/eee
+            value: /bbb/:id1/ccc/:id2/eee
       backendRefs:
         - name: aaa-service
           port: 30002
@@ -60,7 +60,7 @@ spec:
             value: /ccc/api/
         - path:
             type: Exact
-            value: /ccc/{id1}/{id2}/ddd
+            value: /ccc/:id1/:id2/ddd
       filters:
         # 规则级别的直接 filter
         - type: RequestHeaderModifier

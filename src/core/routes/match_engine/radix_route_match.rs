@@ -378,7 +378,7 @@ mod tests {
         let routes: Vec<Arc<dyn RouteEntry>> = vec![
             Arc::new(MockRoute::new("route1", vec![("/api", false)])),
             Arc::new(MockRoute::new("route2", vec![("/users", true)])),
-            Arc::new(MockRoute::new("route3", vec![("/posts/{id}", false)])),
+            Arc::new(MockRoute::new("route3", vec![("/posts/:id", false)])),
         ];
 
         let engine = RadixRouteMatchEngine::build(routes).unwrap();
@@ -454,8 +454,8 @@ mod tests {
     fn test_engine_radix_key_reuse() {
         // Multiple paths with same radix_key should reuse tree_idx
         let routes: Vec<Arc<dyn RouteEntry>> = vec![
-            Arc::new(MockRoute::new("r1", vec![("/api/{v1}", false)])),
-            Arc::new(MockRoute::new("r2", vec![("/api/{v2}", false)])),
+            Arc::new(MockRoute::new("r1", vec![("/api/:v1", false)])),
+            Arc::new(MockRoute::new("r2", vec![("/api/:v2", false)])),
         ];
 
         let engine = RadixRouteMatchEngine::build(routes).unwrap();
