@@ -191,6 +191,9 @@ impl ConfigSyncClient {
             EdgionPlugins => {
                 self.config_client.edgion_plugins().start_watch().await?;
             }
+            PluginMetaData => {
+                self.config_client.plugin_metadata().start_watch().await?;
+            }
             Secret => {
                 self.config_client.secrets().start_watch().await?;
             }

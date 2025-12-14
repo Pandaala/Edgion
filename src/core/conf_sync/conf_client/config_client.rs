@@ -23,6 +23,7 @@ pub struct ConfigClient {
     endpoint_slices: ClientCache<EndpointSlice>,
     edgion_tls: ClientCache<EdgionTls>,
     edgion_plugins: ClientCache<EdgionPlugins>,
+    plugin_metadata: ClientCache<PluginMetaData>,
     secrets: ClientCache<Secret>,
 }
 
@@ -59,6 +60,7 @@ impl ConfigClient {
             endpoint_slices: endpoint_slices_cache,
             edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             edgion_plugins: plugins_cache,
+            plugin_metadata: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             secrets: ClientCache::new(gateway_class_key, client_id, client_name),
         }
     }
@@ -103,6 +105,11 @@ impl ConfigClient {
         &self.edgion_plugins
     }
 
+    /// Get plugin_metadata cache for direct access
+    pub fn plugin_metadata(&self) -> &ClientCache<PluginMetaData> {
+        &self.plugin_metadata
+    }
+
     /// Get secrets cache for direct access
     pub fn secrets(&self) -> &ClientCache<Secret> {
         &self.secrets
@@ -140,6 +147,9 @@ impl ConfigClient {
         }
         if !self.edgion_plugins.is_ready() {
             not_ready.push("edgion_plugins");
+        }
+        if !self.plugin_metadata.is_ready() {
+            not_ready.push("plugin_metadata");
         }
         if !self.secrets.is_ready() {
             not_ready.push("secrets");
@@ -267,6 +277,12 @@ impl ConfigClient {
                     .map_err(|e| format!("Failed to serialize EdgionPlugins data: {}", e))?;
                 (json, list_data.resource_version)
             }
+            ResourceKind::PluginMetaData => {
+                let list_data = self.plugin_metadata.list();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize PluginMetaData data: {}", e))?;
+                (json, list_data.resource_version)
+            }
             ResourceKind::Secret => {
                 let list_data = self.secrets.list();
                 let json = serde_json::to_string(&list_data.data)
@@ -319,6 +335,11 @@ impl ConfigClient {
     /// List Edgion Plugins
     pub fn list_edgion_plugins(&self) -> ListData<EdgionPlugins> {
         self.edgion_plugins.list_owned()
+    }
+
+    /// List plugin metadata
+    pub fn list_plugin_metadata(&self) -> ListData<PluginMetaData> {
+        self.plugin_metadata.list_owned()
     }
 
     /// List secrets
@@ -529,6 +550,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     Self::apply_change_to_cache(&self.edgion_plugins, change, resource);
                 }
                 Err(e) => log_error("EdgionPlugins", &e),
+            },
+            ResourceKind::PluginMetaData => match serde_yaml::from_str::<PluginMetaData>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.plugin_metadata, change, resource);
+                }
+                Err(e) => log_error("PluginMetaData", &e),
             },
             ResourceKind::Secret => match serde_yaml::from_str::<Secret>(&data) {
                 Ok(resource) => {

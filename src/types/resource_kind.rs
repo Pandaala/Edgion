@@ -15,6 +15,7 @@ pub enum ResourceKind {
     GRPCRoute = 10,
     TCPRoute = 11,
     UDPRoute = 12,
+    PluginMetaData = 13,
 }
 
 impl ResourceKind {
@@ -52,6 +53,7 @@ impl ResourceKind {
             "GRPCRoute" => Some(ResourceKind::GRPCRoute),
             "TCPRoute" => Some(ResourceKind::TCPRoute),
             "UDPRoute" => Some(ResourceKind::UDPRoute),
+            "PluginMetaData" => Some(ResourceKind::PluginMetaData),
             _ => None,
         }
     }

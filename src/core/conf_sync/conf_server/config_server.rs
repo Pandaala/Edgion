@@ -25,6 +25,7 @@ pub enum ResourceItem {
     EndpointSlice(EndpointSlice),
     EdgionTls(EdgionTls),
     EdgionPlugins(EdgionPlugins),
+    PluginMetaData(PluginMetaData),
     Secret(Secret),
 }
 
@@ -41,6 +42,7 @@ pub struct ConfigServer {
     pub endpoint_slices: ServerCache<EndpointSlice>,
     pub edgion_tls: ServerCache<EdgionTls>,
     pub edgion_plugins: ServerCache<EdgionPlugins>,
+    pub plugin_metadata: ServerCache<PluginMetaData>,
     pub secrets: ServerCache<Secret>,
 }
 
@@ -71,6 +73,7 @@ impl ConfigServer {
             endpoint_slices: ServerCache::new(200),
             edgion_tls: ServerCache::new(200),
             edgion_plugins: ServerCache::new(200),
+            plugin_metadata: ServerCache::new(200),
             secrets: ServerCache::new(200),
         }
     }
@@ -134,6 +137,12 @@ impl ConfigServer {
                 let list_data = self.list_udp_routes();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize UDPRoute data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::PluginMetaData => {
+                let list_data = self.list_plugin_metadata();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize PluginMetaData data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::Service => {
@@ -265,6 +274,34 @@ impl ConfigServer {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize UDPRoute events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::PluginMetaData => {
+                let mut receiver = self.watch_plugin_metadata(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize PluginMetaData events: {}", e);
                                 continue;
                             }
                         };
@@ -469,6 +506,10 @@ impl ConfigServer {
         self.udp_routes.list_owned()
     }
 
+    pub fn list_plugin_metadata(&self) -> ListData<PluginMetaData> {
+        self.plugin_metadata.list_owned()
+    }
+
     /// List services
     pub fn list_services(&self) -> ListData<Service> {
         self.services.list_owned()
@@ -532,6 +573,16 @@ impl ConfigServer {
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<UDPRoute>> {
         self.udp_routes.watch(client_id, client_name, from_version)
+    }
+
+    /// Watch plugin metadata
+    pub fn watch_plugin_metadata(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<PluginMetaData>> {
+        self.plugin_metadata.watch(client_id, client_name, from_version)
     }
 
     /// Watch services

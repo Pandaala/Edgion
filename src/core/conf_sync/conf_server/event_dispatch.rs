@@ -395,6 +395,18 @@ impl ConfigServer {
                     Self::execute_change_on_cache::<EdgionPlugins>(change, &self.edgion_plugins, resource);
                 }
             }
+            ResourceKind::PluginMetaData => {
+                if let Ok(resource) = serde_yaml::from_str::<PluginMetaData>(&data) {
+                    tracing::info!(
+                        component = "config_server",
+                        kind = "PluginMetaData",
+                        metadata_name = ?resource.metadata.name,
+                        data_type = ?resource.data_type(),
+                        "Applying PluginMetaData resource change"
+                    );
+                    Self::execute_change_on_cache::<PluginMetaData>(change, &self.plugin_metadata, resource);
+                }
+            }
             ResourceKind::Secret => {
                 if let Ok(resource) = serde_yaml::from_str::<Secret>(&data) {
                     tracing::info!(
@@ -428,6 +440,7 @@ impl ConfigServerEventDispatcher for ConfigServer {
         self.endpoint_slices.enable_version_fix_mode();
         self.edgion_tls.enable_version_fix_mode();
         self.edgion_plugins.enable_version_fix_mode();
+        self.plugin_metadata.enable_version_fix_mode();
         self.secrets.enable_version_fix_mode();
     }
 
@@ -440,6 +453,7 @@ impl ConfigServerEventDispatcher for ConfigServer {
         self.endpoint_slices.set_ready();
         self.edgion_tls.set_ready();
         self.edgion_plugins.set_ready();
+        self.plugin_metadata.set_ready();
         self.secrets.set_ready();
     }
 }
