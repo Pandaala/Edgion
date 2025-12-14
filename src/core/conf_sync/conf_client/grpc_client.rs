@@ -179,6 +179,9 @@ impl ConfigSyncClient {
             UDPRoute => {
                 self.config_client.udp_routes().start_watch().await?;
             }
+            TLSRoute => {
+                self.config_client.tls_routes().start_watch().await?;
+            }
             Service => {
                 self.config_client.services().start_watch().await?;
             }

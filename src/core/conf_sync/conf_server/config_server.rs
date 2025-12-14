@@ -21,6 +21,7 @@ pub enum ResourceItem {
     GRPCRoute(GRPCRoute),
     TCPRoute(TCPRoute),
     UDPRoute(UDPRoute),
+    TLSRoute(TLSRoute),
     Service(Service),
     EndpointSlice(EndpointSlice),
     EdgionTls(EdgionTls),
@@ -38,6 +39,7 @@ pub struct ConfigServer {
     pub grpc_routes: ServerCache<GRPCRoute>,
     pub tcp_routes: ServerCache<TCPRoute>,
     pub udp_routes: ServerCache<UDPRoute>,
+    pub tls_routes: ServerCache<TLSRoute>,
     pub services: ServerCache<Service>,
     pub endpoint_slices: ServerCache<EndpointSlice>,
     pub edgion_tls: ServerCache<EdgionTls>,
@@ -69,6 +71,7 @@ impl ConfigServer {
             grpc_routes: ServerCache::new(200),
             tcp_routes: ServerCache::new(200),
             udp_routes: ServerCache::new(200),
+            tls_routes: ServerCache::new(200),
             services: ServerCache::new(200),
             endpoint_slices: ServerCache::new(200),
             edgion_tls: ServerCache::new(200),
@@ -137,6 +140,12 @@ impl ConfigServer {
                 let list_data = self.list_udp_routes();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize UDPRoute data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::TLSRoute => {
+                let list_data = self.list_tls_routes();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize TLSRoute data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::PluginMetaData => {
@@ -274,6 +283,34 @@ impl ConfigServer {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize UDPRoute events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::TLSRoute => {
+                let mut receiver = self.watch_tls_routes(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize TLSRoute events: {}", e);
                                 continue;
                             }
                         };
@@ -506,6 +543,10 @@ impl ConfigServer {
         self.udp_routes.list_owned()
     }
 
+    pub fn list_tls_routes(&self) -> ListData<TLSRoute> {
+        self.tls_routes.list_owned()
+    }
+
     pub fn list_plugin_metadata(&self) -> ListData<PluginMetaData> {
         self.plugin_metadata.list_owned()
     }
@@ -573,6 +614,16 @@ impl ConfigServer {
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<UDPRoute>> {
         self.udp_routes.watch(client_id, client_name, from_version)
+    }
+
+    /// Watch TLS routes
+    pub fn watch_tls_routes(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<TLSRoute>> {
+        self.tls_routes.watch(client_id, client_name, from_version)
     }
 
     /// Watch plugin metadata

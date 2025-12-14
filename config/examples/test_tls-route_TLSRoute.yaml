@@ -1,0 +1,20 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: example-tls-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: example-gateway
+      namespace: default
+      sectionName: https
+  hostnames:
+    - "example.com"
+    - "*.example.com"
+  rules:
+    - backendRefs:
+        - name: example-backend-service
+          namespace: default
+          port: 8443
+          weight: 100
+

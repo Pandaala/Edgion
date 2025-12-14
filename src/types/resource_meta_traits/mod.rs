@@ -11,6 +11,7 @@ mod http_route;
 mod grpc_route;
 mod tcp_route;
 mod udp_route;
+mod tls_route;
 mod plugin_metadata;
 mod service;
 mod endpoint_slice;

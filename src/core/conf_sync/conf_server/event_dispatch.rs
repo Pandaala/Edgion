@@ -229,6 +229,47 @@ impl ConfigServer {
                     Self::execute_change_on_cache::<UDPRoute>(change, &self.udp_routes, resource);
                 }
             }
+            ResourceKind::TLSRoute => {
+                if let Ok(resource) = serde_yaml::from_str::<TLSRoute>(&data) {
+                    // Check if TLSRoute references a gateway that exists in base_conf
+                    let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
+                        if let Some(first_ref) = parent_refs.first() {
+                            let gateway_namespace = first_ref
+                                .namespace
+                                .as_ref()
+                                .or_else(|| resource.metadata.namespace.as_ref());
+                            let gateway_name = Some(&first_ref.name);
+
+                            let base_conf_guard = self.base_conf.read().unwrap();
+                            base_conf_guard.has_gateway(gateway_namespace, gateway_name)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if !gateway_exists {
+                        tracing::warn!(
+                            component = "config_server",
+                            change = ?change,
+                            kind = "TLSRoute",
+                            route_name = ?resource.metadata.name,
+                            route_namespace = ?resource.metadata.namespace,
+                            "TLSRoute references a Gateway that does not exist in base_conf, skipping"
+                        );
+                        return;
+                    }
+
+                    tracing::info!(
+                        component = "config_server",
+                        change = ?change,
+                        kind = "TLSRoute",
+                        "Applying TLSRoute resource change"
+                    );
+                    Self::execute_change_on_cache::<TLSRoute>(change, &self.tls_routes, resource);
+                }
+            }
             ResourceKind::HTTPRoute => {
                 if let Ok(resource) = serde_yaml::from_str::<HTTPRoute>(&data) {
                     // 检查 HTTPRoute 引用的 gateway 是否存在于 base_conf 中
@@ -436,6 +477,7 @@ impl ConfigServerEventDispatcher for ConfigServer {
         self.grpc_routes.enable_version_fix_mode();
         self.tcp_routes.enable_version_fix_mode();
         self.udp_routes.enable_version_fix_mode();
+        self.tls_routes.enable_version_fix_mode();
         self.services.enable_version_fix_mode();
         self.endpoint_slices.enable_version_fix_mode();
         self.edgion_tls.enable_version_fix_mode();
@@ -449,6 +491,7 @@ impl ConfigServerEventDispatcher for ConfigServer {
         self.grpc_routes.set_ready();
         self.tcp_routes.set_ready();
         self.udp_routes.set_ready();
+        self.tls_routes.set_ready();
         self.services.set_ready();
         self.endpoint_slices.set_ready();
         self.edgion_tls.set_ready();

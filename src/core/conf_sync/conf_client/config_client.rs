@@ -19,6 +19,7 @@ pub struct ConfigClient {
     grpc_routes: ClientCache<GRPCRoute>,
     tcp_routes: ClientCache<TCPRoute>,
     udp_routes: ClientCache<UDPRoute>,
+    tls_routes: ClientCache<TLSRoute>,
     services: ClientCache<Service>,
     endpoint_slices: ClientCache<EndpointSlice>,
     edgion_tls: ClientCache<EdgionTls>,
@@ -56,6 +57,7 @@ impl ConfigClient {
             grpc_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             tcp_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             udp_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            tls_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,
             edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
@@ -83,6 +85,11 @@ impl ConfigClient {
     /// Get udp_routes cache for direct access
     pub fn udp_routes(&self) -> &ClientCache<UDPRoute> {
         &self.udp_routes
+    }
+
+    /// Get tls_routes cache for direct access
+    pub fn tls_routes(&self) -> &ClientCache<TLSRoute> {
+        &self.tls_routes
     }
 
     /// Get services cache for direct access
@@ -135,6 +142,9 @@ impl ConfigClient {
         }
         if !self.udp_routes.is_ready() {
             not_ready.push("udp_routes");
+        }
+        if !self.tls_routes.is_ready() {
+            not_ready.push("tls_routes");
         }
         if !self.services.is_ready() {
             not_ready.push("services");
@@ -253,6 +263,12 @@ impl ConfigClient {
                     .map_err(|e| format!("Failed to serialize UDPRoute data: {}", e))?;
                 (json, list_data.resource_version)
             }
+            ResourceKind::TLSRoute => {
+                let list_data = self.tls_routes.list();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize TLSRoute data: {}", e))?;
+                (json, list_data.resource_version)
+            }
             ResourceKind::Service => {
                 let list_data = self.services.list();
                 let json = serde_json::to_string(&list_data.data)
@@ -315,6 +331,11 @@ impl ConfigClient {
     /// List UDP routes
     pub fn list_udp_routes(&self) -> ListData<UDPRoute> {
         self.udp_routes.list_owned()
+    }
+
+    /// List TLS routes
+    pub fn list_tls_routes(&self) -> ListData<TLSRoute> {
+        self.tls_routes.list_owned()
     }
 
     /// List services
@@ -403,6 +424,39 @@ impl ConfigClient {
             println!("  [{}] {}", idx, format_resource_info(route));
         }
 
+        // TCP Routes
+        let list_data = self.list_tcp_routes();
+        println!(
+            "TCPRoutes (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, route) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(route));
+        }
+
+        // UDP Routes
+        let list_data = self.list_udp_routes();
+        println!(
+            "UDPRoutes (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, route) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(route));
+        }
+
+        // TLS Routes
+        let list_data = self.list_tls_routes();
+        println!(
+            "TLSRoutes (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, route) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(route));
+        }
+
         // Services
         let list_data = self.list_services();
         println!(
@@ -445,6 +499,17 @@ impl ConfigClient {
         );
         for (idx, plugin) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(plugin));
+        }
+
+        // Plugin Metadata
+        let list_data = self.list_plugin_metadata();
+        println!(
+            "PluginMetaData (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, metadata) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(metadata));
         }
 
         // Secrets
@@ -526,6 +591,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     Self::apply_change_to_cache(&self.udp_routes, change, resource);
                 }
                 Err(e) => log_error("UDPRoute", &e),
+            },
+            ResourceKind::TLSRoute => match serde_yaml::from_str::<TLSRoute>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.tls_routes, change, resource);
+                }
+                Err(e) => log_error("TLSRoute", &e),
             },
             ResourceKind::Service => match serde_yaml::from_str::<Service>(&data) {
                 Ok(resource) => {

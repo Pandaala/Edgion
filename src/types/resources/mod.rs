@@ -12,6 +12,7 @@ pub mod http_route;
 pub mod grpc_route;
 pub mod tcp_route;
 pub mod udp_route;
+pub mod tls_route;
 pub mod plugin_metadata;
 
 // Re-export all resource types
@@ -25,5 +26,6 @@ pub use self::http_route::*;
 pub use self::grpc_route::*;
 pub use self::tcp_route::*;
 pub use self::udp_route::*;
+pub use self::tls_route::*;
 pub use self::plugin_metadata::*;
 
