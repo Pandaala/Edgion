@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::core::conf_sync::ConfigServer;
+use crate::core::conf_sync::ConfigClient;
 use crate::types::prelude_resources::*;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
@@ -96,7 +96,7 @@ async fn health_check() -> Json<ApiResponse<String>> {
 
 /// Get HTTPRoute by namespace and name
 async fn get_httproute(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<HTTPRoute>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -104,7 +104,7 @@ async fn get_httproute(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.routes.list();
+    let list_data = client.routes().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -118,15 +118,15 @@ async fn get_httproute(
 
 /// List all HTTPRoute resources
 async fn list_httproute(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<HTTPRoute>> {
-    let list_data = server.routes.list();
+    let list_data = client.routes().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Get GRPCRoute by namespace and name
 async fn get_grpcroute(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<GRPCRoute>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -134,7 +134,7 @@ async fn get_grpcroute(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.grpc_routes.list();
+    let list_data = client.grpc_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -148,15 +148,15 @@ async fn get_grpcroute(
 
 /// List all GRPCRoute resources
 async fn list_grpcroute(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<GRPCRoute>> {
-    let list_data = server.grpc_routes.list();
+    let list_data = client.grpc_routes().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Get TCPRoute by namespace and name
 async fn get_tcproute(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<TCPRoute>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -164,7 +164,7 @@ async fn get_tcproute(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.tcp_routes.list();
+    let list_data = client.tcp_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -178,15 +178,15 @@ async fn get_tcproute(
 
 /// List all TCPRoute resources
 async fn list_tcproute(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<TCPRoute>> {
-    let list_data = server.tcp_routes.list();
+    let list_data = client.tcp_routes().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Get UDPRoute by namespace and name
 async fn get_udproute(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<UDPRoute>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -194,7 +194,7 @@ async fn get_udproute(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.udp_routes.list();
+    let list_data = client.udp_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -208,15 +208,15 @@ async fn get_udproute(
 
 /// List all UDPRoute resources
 async fn list_udproute(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<UDPRoute>> {
-    let list_data = server.udp_routes.list();
+    let list_data = client.udp_routes().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Get TLSRoute by namespace and name
 async fn get_tlsroute(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<TLSRoute>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -224,7 +224,7 @@ async fn get_tlsroute(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.tls_routes.list();
+    let list_data = client.tls_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -238,15 +238,15 @@ async fn get_tlsroute(
 
 /// List all TLSRoute resources
 async fn list_tlsroute(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<TLSRoute>> {
-    let list_data = server.tls_routes.list();
+    let list_data = client.tls_routes().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Get Service by namespace and name
 async fn get_service(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<Service>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -254,7 +254,7 @@ async fn get_service(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.services.list();
+    let list_data = client.services().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -268,15 +268,15 @@ async fn get_service(
 
 /// List all Service resources
 async fn list_service(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<Service>> {
-    let list_data = server.services.list();
+    let list_data = client.services().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Get EndpointSlice by namespace and name
 async fn get_endpointslice(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<EndpointSlice>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -284,7 +284,7 @@ async fn get_endpointslice(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.endpoint_slices.list();
+    let list_data = client.endpoint_slices().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -298,15 +298,15 @@ async fn get_endpointslice(
 
 /// List all EndpointSlice resources
 async fn list_endpointslice(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<EndpointSlice>> {
-    let list_data = server.endpoint_slices.list();
+    let list_data = client.endpoint_slices().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Get EdgionTls by namespace and name
 async fn get_edgiontls(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<EdgionTls>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -314,7 +314,7 @@ async fn get_edgiontls(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.edgion_tls.list();
+    let list_data = client.edgion_tls().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -328,15 +328,15 @@ async fn get_edgiontls(
 
 /// List all EdgionTls resources
 async fn list_edgiontls(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<EdgionTls>> {
-    let list_data = server.edgion_tls.list();
+    let list_data = client.edgion_tls().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Get EdgionPlugins by namespace and name
 async fn get_edgionplugins(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<EdgionPlugins>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -344,7 +344,7 @@ async fn get_edgionplugins(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.edgion_plugins.list();
+    let list_data = client.edgion_plugins().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -358,15 +358,15 @@ async fn get_edgionplugins(
 
 /// List all EdgionPlugins resources
 async fn list_edgionplugins(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<EdgionPlugins>> {
-    let list_data = server.edgion_plugins.list();
+    let list_data = client.edgion_plugins().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Get PluginMetaData by namespace and name
 async fn get_pluginmetadata(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<PluginMetaData>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -374,7 +374,7 @@ async fn get_pluginmetadata(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.plugin_metadata.list();
+    let list_data = client.plugin_metadata().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -388,15 +388,15 @@ async fn get_pluginmetadata(
 
 /// List all PluginMetaData resources
 async fn list_pluginmetadata(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<PluginMetaData>> {
-    let list_data = server.plugin_metadata.list();
+    let list_data = client.plugin_metadata().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Get LinkSys by namespace and name
 async fn get_linksys(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<LinkSys>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -404,7 +404,7 @@ async fn get_linksys(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.link_sys.list();
+    let list_data = client.link_sys().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -418,15 +418,15 @@ async fn get_linksys(
 
 /// List all LinkSys resources
 async fn list_linksys(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<LinkSys>> {
-    let list_data = server.link_sys.list();
+    let list_data = client.link_sys().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Get Secret by namespace and name
 async fn get_secret(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<Secret>> {
     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
@@ -434,7 +434,7 @@ async fn get_secret(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    let list_data = server.secrets.list();
+    let list_data = client.secrets().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
@@ -448,67 +448,67 @@ async fn get_secret(
 
 /// List all Secret resources
 async fn list_secret(
-    State(server): State<Arc<ConfigServer>>,
+    State(client): State<Arc<ConfigClient>>,
 ) -> Json<ListResponse<Secret>> {
-    let list_data = server.secrets.list();
+    let list_data = client.secrets().list();
     Json(ListResponse::success(list_data.data))
 }
 
 /// Create the admin API router with all endpoints
-pub fn create_admin_router(config_server: Arc<ConfigServer>) -> Router {
+pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
     Router::new()
         // Health check
         .route("/health", get(health_check))
         // HTTPRoute
-        .route("/configserver/httproute", get(get_httproute))
-        .route("/configserver/httproute/list", get(list_httproute))
+        .route("/configclient/httproute", get(get_httproute))
+        .route("/configclient/httproute/list", get(list_httproute))
         // GRPCRoute
-        .route("/configserver/grpcroute", get(get_grpcroute))
-        .route("/configserver/grpcroute/list", get(list_grpcroute))
+        .route("/configclient/grpcroute", get(get_grpcroute))
+        .route("/configclient/grpcroute/list", get(list_grpcroute))
         // TCPRoute
-        .route("/configserver/tcproute", get(get_tcproute))
-        .route("/configserver/tcproute/list", get(list_tcproute))
+        .route("/configclient/tcproute", get(get_tcproute))
+        .route("/configclient/tcproute/list", get(list_tcproute))
         // UDPRoute
-        .route("/configserver/udproute", get(get_udproute))
-        .route("/configserver/udproute/list", get(list_udproute))
+        .route("/configclient/udproute", get(get_udproute))
+        .route("/configclient/udproute/list", get(list_udproute))
         // TLSRoute
-        .route("/configserver/tlsroute", get(get_tlsroute))
-        .route("/configserver/tlsroute/list", get(list_tlsroute))
+        .route("/configclient/tlsroute", get(get_tlsroute))
+        .route("/configclient/tlsroute/list", get(list_tlsroute))
         // Service
-        .route("/configserver/service", get(get_service))
-        .route("/configserver/service/list", get(list_service))
+        .route("/configclient/service", get(get_service))
+        .route("/configclient/service/list", get(list_service))
         // EndpointSlice
-        .route("/configserver/endpointslice", get(get_endpointslice))
-        .route("/configserver/endpointslice/list", get(list_endpointslice))
+        .route("/configclient/endpointslice", get(get_endpointslice))
+        .route("/configclient/endpointslice/list", get(list_endpointslice))
         // EdgionTls
-        .route("/configserver/edgiontls", get(get_edgiontls))
-        .route("/configserver/edgiontls/list", get(list_edgiontls))
+        .route("/configclient/edgiontls", get(get_edgiontls))
+        .route("/configclient/edgiontls/list", get(list_edgiontls))
         // EdgionPlugins
-        .route("/configserver/edgionplugins", get(get_edgionplugins))
-        .route("/configserver/edgionplugins/list", get(list_edgionplugins))
+        .route("/configclient/edgionplugins", get(get_edgionplugins))
+        .route("/configclient/edgionplugins/list", get(list_edgionplugins))
         // PluginMetaData
-        .route("/configserver/pluginmetadata", get(get_pluginmetadata))
-        .route("/configserver/pluginmetadata/list", get(list_pluginmetadata))
+        .route("/configclient/pluginmetadata", get(get_pluginmetadata))
+        .route("/configclient/pluginmetadata/list", get(list_pluginmetadata))
         // LinkSys
-        .route("/configserver/linksys", get(get_linksys))
-        .route("/configserver/linksys/list", get(list_linksys))
+        .route("/configclient/linksys", get(get_linksys))
+        .route("/configclient/linksys/list", get(list_linksys))
         // Secret
-        .route("/configserver/secret", get(get_secret))
-        .route("/configserver/secret/list", get(list_secret))
-        .with_state(config_server)
+        .route("/configclient/secret", get(get_secret))
+        .route("/configclient/secret/list", get(list_secret))
+        .with_state(config_client)
 }
 
 /// Serve the admin API on the specified port
-pub async fn serve(config_server: Arc<ConfigServer>, port: u16) -> anyhow::Result<()> {
-    let app = create_admin_router(config_server);
+pub async fn serve(config_client: Arc<ConfigClient>, port: u16) -> anyhow::Result<()> {
+    let app = create_admin_router(config_client);
     let addr_str = format!("0.0.0.0:{}", port);
     let addr: std::net::SocketAddr = addr_str.parse()?;
     
     tracing::info!(
-        component = "admin_api_op",
+        component = "admin_api_gateway",
         event = "server_starting",
         addr = %addr,
-        "Operator Admin API server listening"
+        "Gateway Admin API server listening"
     );
     
     let listener = tokio::net::TcpListener::bind(addr).await?;

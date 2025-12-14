@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 // Component names
-pub const COMPONENT_EDGION_OPERATOR: &str = "edgion-operator";
+pub const COMPONENT_EDGION_CONTROLLER: &str = "edgion-controller";
 pub const COMPONENT_EDGION_GATEWAY: &str = "edgion-gateway";
 
 // Log file prefixes

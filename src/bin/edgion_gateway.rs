@@ -1,7 +1,7 @@
-use edgion::EdgionGwCli;
+use edgion::EdgionGatewayCli;
 
 fn main() {
-    let cli = EdgionGwCli::parse_args();
+    let cli = EdgionGatewayCli::parse_args();
     if let Err(err) = cli.run() {
         eprintln!("Error: {}", err);
         std::process::exit(1);

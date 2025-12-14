@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::types::DEFAULT_PREFIX_DIR;
 
-/// Edgion Operator configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Args)]
+/// Edgion Controller configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
 #[serde(default)]
-pub struct EdgionOpConfig {
+pub struct EdgionControllerConfig {
     /// Prefix directory for Edgion (default: /usr/local/edgion)
     #[arg(short = 'p', long, value_name = "DIR", default_value = DEFAULT_PREFIX_DIR)]
     #[serde(default = "default_prefix_dir")]
@@ -131,7 +131,7 @@ fn default_log_dir() -> String {
 }
 
 fn default_log_prefix() -> String {
-    "edgion-operator".to_string()
+    "edgion-controller".to_string()
 }
 
 fn default_log_level() -> String {
@@ -191,20 +191,9 @@ impl Default for DebugConfig {
     }
 }
 
-impl Default for EdgionOpConfig {
-    fn default() -> Self {
-        Self {
-            prefix_dir: default_prefix_dir(),
-            config_file: None,
-            server: ServerConfig::default(),
-            logging: LoggingConfig::default(),
-            loader: LoaderConfig::default(),
-            debug: DebugConfig::default(),
-        }
-    }
-}
+// Default implementation is now derived
 
-impl EdgionOpConfig {
+impl EdgionControllerConfig {
     /// Load configuration from TOML file if config_file is specified,
     /// then merge with CLI arguments (CLI takes precedence)
     pub fn load(cli_config: Self) -> Result<Self> {
@@ -213,10 +202,10 @@ impl EdgionOpConfig {
             let content =
                 std::fs::read_to_string(config_path).context(format!("Failed to read config file: {}", config_path))?;
 
-            toml::from_str::<EdgionOpConfig>(&content)
+            toml::from_str::<EdgionControllerConfig>(&content)
                 .context(format!("Failed to parse config file: {}", config_path))?
         } else {
-            EdgionOpConfig::default()
+            EdgionControllerConfig::default()
         };
 
         // Merge: CLI args override file config

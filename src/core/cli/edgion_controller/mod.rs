@@ -1,26 +1,26 @@
-use crate::core::cli::config::EdgionOpConfig;
+use crate::core::cli::config::EdgionControllerConfig;
 use crate::core::conf_load::Loader;
 use crate::core::conf_sync::{ConfigServer, ConfigServerEventDispatcher, ConfigSyncServer};
 use crate::core::observe::init_logging;
 use crate::core::utils;
-use crate::types::{init_prefix_dir, COMPONENT_EDGION_OPERATOR, VERSION};
+use crate::types::{init_prefix_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "edgion-operator",
+    name = "edgion-controller",
     version,
-    about = "Edgion Operator standalone executable",
+    about = "Edgion Controller standalone executable",
     long_about = None
 )]
-pub struct EdgionOpCli {
+pub struct EdgionControllerCli {
     #[command(flatten)]
-    pub config: EdgionOpConfig,
+    pub config: EdgionControllerConfig,
 }
 
-impl EdgionOpCli {
+impl EdgionControllerCli {
     pub fn parse_args() -> Self {
         Self::parse()
     }
@@ -39,7 +39,7 @@ impl EdgionOpCli {
 
     pub async fn run(&self) -> Result<()> {
         // Load and merge configuration
-        let config = EdgionOpConfig::load(self.config.clone())?;
+        let config = EdgionControllerConfig::load(self.config.clone())?;
 
         // Initialize and create prefix directory
         init_prefix_dir(&config.prefix_dir)
@@ -51,7 +51,7 @@ impl EdgionOpCli {
 
         // Log system startup
         tracing::info!(
-            component = COMPONENT_EDGION_OPERATOR,
+            component = COMPONENT_EDGION_CONTROLLER,
             event = "system_start",
             version = VERSION,
             grpc_addr = %config.grpc_listen(),
@@ -85,7 +85,7 @@ impl EdgionOpCli {
         // Validate base configuration schema
         if let Err(e) = base_conf.validate_schema() {
             tracing::error!(
-                component = COMPONENT_EDGION_OPERATOR,
+                component = COMPONENT_EDGION_CONTROLLER,
                 event = "schema_validation_failed",
                 error = %e,
                 "Base configuration schema validation failed: {}. Process will exit in 5 seconds.",
@@ -104,7 +104,7 @@ impl EdgionOpCli {
         let addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
 
         tracing::info!(
-            component = COMPONENT_EDGION_OPERATOR,
+            component = COMPONENT_EDGION_CONTROLLER,
             event = "services_starting",
             grpc_addr = %addr,
             "Starting gRPC conf_server and configuration loader"
@@ -117,7 +117,7 @@ impl EdgionOpCli {
         let admin_port = 5800;
         
         tracing::info!(
-            component = COMPONENT_EDGION_OPERATOR,
+            component = COMPONENT_EDGION_CONTROLLER,
             event = "admin_api_starting",
             admin_port = admin_port,
             "Starting Admin API server"
@@ -127,13 +127,13 @@ impl EdgionOpCli {
         let (sync_result, loader_result, admin_result) = tokio::join!(
             sync_server.serve(addr),
             loader.run(),
-            crate::core::api::op::serve(config_server.clone(), admin_port)
+            crate::core::api::controller::serve(config_server.clone(), admin_port)
         );
 
         // Check results - if any service fails, return error
         if let Err(e) = &sync_result {
             tracing::error!(
-                component = COMPONENT_EDGION_OPERATOR,
+                component = COMPONENT_EDGION_CONTROLLER,
                 event = "grpc_server_error",
                 error = %e,
                 "gRPC conf_server failed"
@@ -142,7 +142,7 @@ impl EdgionOpCli {
 
         if let Err(e) = &loader_result {
             tracing::error!(
-                component = COMPONENT_EDGION_OPERATOR,
+                component = COMPONENT_EDGION_CONTROLLER,
                 event = "loader_error",
                 error = %e,
                 "Configuration loader failed"
@@ -151,7 +151,7 @@ impl EdgionOpCli {
 
         if let Err(e) = &admin_result {
             tracing::error!(
-                component = COMPONENT_EDGION_OPERATOR,
+                component = COMPONENT_EDGION_CONTROLLER,
                 event = "admin_api_error",
                 error = %e,
                 "Admin API server failed"
@@ -163,7 +163,7 @@ impl EdgionOpCli {
         admin_result?;
 
         tracing::info!(
-            component = COMPONENT_EDGION_OPERATOR,
+            component = COMPONENT_EDGION_CONTROLLER,
             event = "system_shutdown",
             "Edgion Operator shutting down"
         );

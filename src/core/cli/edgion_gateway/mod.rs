@@ -18,7 +18,7 @@ use log_config::GatewayLogConfig;
     about = "Edgion Gateway standalone executable",
     long_about = None
 )]
-pub struct EdgionGwCli {
+pub struct EdgionGatewayCli {
     /// Prefix directory for Edgion (default: /usr/local/edgion)
     #[arg(short = 'p', long, value_name = "DIR", default_value = DEFAULT_PREFIX_DIR)]
     pub prefix_dir: PathBuf,
@@ -40,7 +40,7 @@ pub struct EdgionGwCli {
     pub log_dir: Option<PathBuf>,
 }
 
-impl EdgionGwCli {
+impl EdgionGatewayCli {
     pub fn parse_args() -> Self {
         Self::parse()
     }
@@ -116,9 +116,9 @@ impl EdgionGwCli {
         // Spawn Admin API server in background
         let config_client_for_admin = config_client.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::core::api::gw::serve(config_client_for_admin, 5900).await {
+            if let Err(e) = crate::core::api::gateway::serve(config_client_for_admin, 5900).await {
                 tracing::error!(
-                    component = "admin_api_gw",
+                    component = "admin_api_gateway",
                     event = "server_error",
                     error = %e,
                     "Gateway Admin API server failed"
@@ -127,7 +127,7 @@ impl EdgionGwCli {
         });
 
         tracing::info!(
-            component = "admin_api_gw",
+            component = "admin_api_gateway",
             event = "server_spawned",
             port = 5900,
             "Gateway Admin API server spawned"

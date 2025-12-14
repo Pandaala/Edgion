@@ -1,6 +1,6 @@
 pub mod config;
-pub mod edgion_gw;
-pub mod edgion_op;
+pub mod edgion_gateway;
+pub mod edgion_controller;
 
-pub use edgion_gw::EdgionGwCli;
-pub use edgion_op::EdgionOpCli;
+pub use edgion_gateway::EdgionGatewayCli;
+pub use edgion_controller::EdgionControllerCli;
