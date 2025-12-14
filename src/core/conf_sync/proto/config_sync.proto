@@ -28,6 +28,7 @@ enum ResourceKind {
     RESOURCE_KIND_SECRET = 8;
     RESOURCE_KIND_GRPC_ROUTE = 10;
     RESOURCE_KIND_TCP_ROUTE = 11;
+    RESOURCE_KIND_UDP_ROUTE = 12;
 }
 
 // List request

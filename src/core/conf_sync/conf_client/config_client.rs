@@ -18,6 +18,7 @@ pub struct ConfigClient {
     routes: ClientCache<HTTPRoute>,
     grpc_routes: ClientCache<GRPCRoute>,
     tcp_routes: ClientCache<TCPRoute>,
+    udp_routes: ClientCache<UDPRoute>,
     services: ClientCache<Service>,
     endpoint_slices: ClientCache<EndpointSlice>,
     edgion_tls: ClientCache<EdgionTls>,
@@ -53,6 +54,7 @@ impl ConfigClient {
             routes: routes_cache,
             grpc_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             tcp_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            udp_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,
             edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
@@ -74,6 +76,11 @@ impl ConfigClient {
     /// Get tcp_routes cache for direct access
     pub fn tcp_routes(&self) -> &ClientCache<TCPRoute> {
         &self.tcp_routes
+    }
+
+    /// Get udp_routes cache for direct access
+    pub fn udp_routes(&self) -> &ClientCache<UDPRoute> {
+        &self.udp_routes
     }
 
     /// Get services cache for direct access
@@ -118,6 +125,9 @@ impl ConfigClient {
         }
         if !self.tcp_routes.is_ready() {
             not_ready.push("tcp_routes");
+        }
+        if !self.udp_routes.is_ready() {
+            not_ready.push("udp_routes");
         }
         if !self.services.is_ready() {
             not_ready.push("services");
@@ -227,6 +237,12 @@ impl ConfigClient {
                     .map_err(|e| format!("Failed to serialize TCPRoute data: {}", e))?;
                 (json, list_data.resource_version)
             }
+            ResourceKind::UDPRoute => {
+                let list_data = self.udp_routes.list();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize UDPRoute data: {}", e))?;
+                (json, list_data.resource_version)
+            }
             ResourceKind::Service => {
                 let list_data = self.services.list();
                 let json = serde_json::to_string(&list_data.data)
@@ -278,6 +294,11 @@ impl ConfigClient {
     /// List TCP routes
     pub fn list_tcp_routes(&self) -> ListData<TCPRoute> {
         self.tcp_routes.list_owned()
+    }
+
+    /// List UDP routes
+    pub fn list_udp_routes(&self) -> ListData<UDPRoute> {
+        self.udp_routes.list_owned()
     }
 
     /// List services
@@ -478,6 +499,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     Self::apply_change_to_cache(&self.tcp_routes, change, resource);
                 }
                 Err(e) => log_error("TCPRoute", &e),
+            },
+            ResourceKind::UDPRoute => match serde_yaml::from_str::<UDPRoute>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.udp_routes, change, resource);
+                }
+                Err(e) => log_error("UDPRoute", &e),
             },
             ResourceKind::Service => match serde_yaml::from_str::<Service>(&data) {
                 Ok(resource) => {

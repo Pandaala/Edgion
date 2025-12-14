@@ -20,6 +20,7 @@ pub enum ResourceItem {
     HTTPRoute(HTTPRoute),
     GRPCRoute(GRPCRoute),
     TCPRoute(TCPRoute),
+    UDPRoute(UDPRoute),
     Service(Service),
     EndpointSlice(EndpointSlice),
     EdgionTls(EdgionTls),
@@ -35,6 +36,7 @@ pub struct ConfigServer {
     pub routes: ServerCache<HTTPRoute>,
     pub grpc_routes: ServerCache<GRPCRoute>,
     pub tcp_routes: ServerCache<TCPRoute>,
+    pub udp_routes: ServerCache<UDPRoute>,
     pub services: ServerCache<Service>,
     pub endpoint_slices: ServerCache<EndpointSlice>,
     pub edgion_tls: ServerCache<EdgionTls>,
@@ -64,6 +66,7 @@ impl ConfigServer {
             routes: ServerCache::new(200),
             grpc_routes: ServerCache::new(200),
             tcp_routes: ServerCache::new(200),
+            udp_routes: ServerCache::new(200),
             services: ServerCache::new(200),
             endpoint_slices: ServerCache::new(200),
             edgion_tls: ServerCache::new(200),
@@ -125,6 +128,12 @@ impl ConfigServer {
                 let list_data = self.list_tcp_routes();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize TCPRoute data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::UDPRoute => {
+                let list_data = self.list_udp_routes();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize UDPRoute data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::Service => {
@@ -228,6 +237,34 @@ impl ConfigServer {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize TCPRoute events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::UDPRoute => {
+                let mut receiver = self.watch_udp_routes(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize UDPRoute events: {}", e);
                                 continue;
                             }
                         };
@@ -428,6 +465,10 @@ impl ConfigServer {
         self.tcp_routes.list_owned()
     }
 
+    pub fn list_udp_routes(&self) -> ListData<UDPRoute> {
+        self.udp_routes.list_owned()
+    }
+
     /// List services
     pub fn list_services(&self) -> ListData<Service> {
         self.services.list_owned()
@@ -481,6 +522,16 @@ impl ConfigServer {
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<TCPRoute>> {
         self.tcp_routes.watch(client_id, client_name, from_version)
+    }
+
+    /// Watch UDP routes
+    pub fn watch_udp_routes(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<UDPRoute>> {
+        self.udp_routes.watch(client_id, client_name, from_version)
     }
 
     /// Watch services

@@ -173,6 +173,12 @@ impl ConfigSyncClient {
             GRPCRoute => {
                 self.config_client.grpc_routes().start_watch().await?;
             }
+            TCPRoute => {
+                self.config_client.tcp_routes().start_watch().await?;
+            }
+            UDPRoute => {
+                self.config_client.udp_routes().start_watch().await?;
+            }
             Service => {
                 self.config_client.services().start_watch().await?;
             }
