@@ -14,10 +14,15 @@
 #
 # ================================================================================
 
+# Prefix directory for Edgion runtime files
+# 运行时文件存储目录（包含配置、状态等）
+# 开发环境建议使用相对路径，生产环境使用绝对路径
+prefix_dir = "runtime"
+
 [gateway]
 # Gateway class name that this gateway instance will handle
 # 指定此 gateway 实例将处理的 gateway class 名称
-gateway_class = "edgion-gateway-public"
+gateway_class = "public-gateway"
 
 # Operator gRPC server address
 # Gateway 连接到此地址以获取配置
@@ -30,7 +35,7 @@ server_addr = "http://127.0.0.1:50051"
 
 [logging]
 # 日志文件存储目录
-log_dir = "/usr/local/edgion/logs"
+log_dir = "logs"
 
 # 日志文件名前缀
 # 实际文件名格式: {log_prefix}.{date}.log

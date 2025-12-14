@@ -149,8 +149,11 @@ impl EdgionGatewayConfig {
 
     /// Merge CLI config into file config (CLI takes precedence)
     fn merge(base: &mut Self, cli: &Self) {
-        // Prefix directory (always use CLI value, which has default if not specified)
-        base.prefix_dir = cli.prefix_dir.clone();
+        // Prefix directory: only override if CLI value differs from default
+        // This allows config file to set prefix_dir
+        if cli.prefix_dir != PathBuf::from(DEFAULT_PREFIX_DIR) {
+            base.prefix_dir = cli.prefix_dir.clone();
+        }
         
         // Gateway config
         if cli.gateway.gateway_class.is_some() {
