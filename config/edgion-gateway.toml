@@ -1,0 +1,58 @@
+# ================================================================================
+# Edgion Gateway Configuration File
+# ================================================================================
+# 
+# 使用方法:
+#   1. 直接使用配置文件运行:
+#      ./edgion-gateway --config /usr/local/edgion/config/edgion-gateway.toml
+#   
+#   2. 使用默认配置 (不指定 --config):
+#      ./edgion-gateway --gateway-class public-gateway --server-addr http://127.0.0.1:50051
+#   
+#   3. 命令行参数覆盖配置文件:
+#      ./edgion-gateway --config /usr/local/edgion/config/edgion-gateway.toml --gateway-class my-gateway
+#
+# ================================================================================
+
+[gateway]
+# Gateway class name that this gateway instance will handle
+# 指定此 gateway 实例将处理的 gateway class 名称
+gateway_class = "edgion-gateway-public"
+
+# Operator gRPC server address
+# Gateway 连接到此地址以获取配置
+# 格式: http://host:port 或 https://host:port
+server_addr = "http://127.0.0.1:50051"
+
+# Admin HTTP server listen address (optional)
+# 用于管理和健康检查端点
+# admin_listen = "0.0.0.0:8081"
+
+[logging]
+# 日志文件存储目录
+log_dir = "/usr/local/edgion/logs"
+
+# 日志文件名前缀
+# 实际文件名格式: {log_prefix}.{date}.log
+log_prefix = "edgion-gateway"
+
+# 日志级别: trace, debug, info, warn, error
+# - trace: 最详细的日志，包含所有调试信息
+# - debug: 调试级别，包含详细的运行时信息
+# - info:  常规信息，生产环境推荐使用
+# - warn:  警告信息
+# - error: 错误信息
+log_level = "info"
+
+# 是否使用 JSON 格式输出日志
+# true:  使用结构化 JSON 格式，便于日志采集和分析
+# false: 使用人类可读的文本格式
+json_format = false
+
+# 是否同时输出到控制台
+console = true
+
+# 异步日志通道缓冲区大小
+# 增大此值可以提高高并发场景下的日志性能
+buffer_size = 10000
+

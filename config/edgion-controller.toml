@@ -1,16 +1,16 @@
 # ================================================================================
-# Edgion Operator Configuration File
+# Edgion Controller Configuration File
 # ================================================================================
 # 
 # 使用方法:
 #   1. 直接使用配置文件运行:
-#      ./edgion-op --config edgion/config/edgion-op.toml
+#      ./edgion-controller --config /usr/local/edgion/config/edgion-controller.toml
 #   
 #   2. 使用默认配置 (不指定 --config):
-#      ./edgion-op
+#      ./edgion-controller --gateway-class public-gateway
 #   
 #   3. 命令行参数覆盖配置文件:
-#      ./edgion-op --config edgion/config/edgion-op.toml --log-level debug
+#      ./edgion-controller --config /usr/local/edgion/config/edgion-controller.toml --log-level debug
 #
 # ================================================================================
 
@@ -29,11 +29,11 @@ gateway_class = "edgion-gateway-public"
 
 [logging]
 # 日志文件存储目录
-log_dir = "logs"
+log_dir = "/usr/local/edgion/logs"
 
 # 日志文件名前缀
 # 实际文件名格式: {log_prefix}.{date}.log
-log_prefix = "edgion-operator"
+log_prefix = "edgion-controller"
 
 # 日志级别: trace, debug, info, warn, error
 # - trace: 最详细的日志，包含所有调试信息
@@ -60,7 +60,7 @@ type = "filesystem"
 
 # 文件系统加载器的根目录 (仅当 type = "filesystem" 时生效)
 # 该目录应包含所有 Gateway API 资源的 YAML 文件
-dir = "edgion/config/examples"
+dir = "/usr/local/edgion/config/examples"
 
 # Etcd 集群端点列表 (仅当 type = "etcd" 时生效)
 # 示例: etcd_endpoints = ["http://127.0.0.1:2379", "http://127.0.0.1:2380"]
