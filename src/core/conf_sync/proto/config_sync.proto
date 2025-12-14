@@ -31,6 +31,7 @@ enum ResourceKind {
     RESOURCE_KIND_UDP_ROUTE = 12;
     RESOURCE_KIND_PLUGIN_METADATA = 13;
     RESOURCE_KIND_TLS_ROUTE = 14;
+    RESOURCE_KIND_LINK_SYS = 15;
 }
 
 // List request

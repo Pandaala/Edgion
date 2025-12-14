@@ -448,6 +448,17 @@ impl ConfigServer {
                     Self::execute_change_on_cache::<PluginMetaData>(change, &self.plugin_metadata, resource);
                 }
             }
+            ResourceKind::LinkSys => {
+                if let Ok(resource) = serde_yaml::from_str::<LinkSys>(&data) {
+                    tracing::info!(
+                        component = "config_server",
+                        change = ?change,
+                        kind = "LinkSys",
+                        "Applying LinkSys resource change"
+                    );
+                    Self::execute_change_on_cache::<LinkSys>(change, &self.link_sys, resource);
+                }
+            }
             ResourceKind::Secret => {
                 if let Ok(resource) = serde_yaml::from_str::<Secret>(&data) {
                     tracing::info!(
@@ -478,6 +489,7 @@ impl ConfigServerEventDispatcher for ConfigServer {
         self.tcp_routes.enable_version_fix_mode();
         self.udp_routes.enable_version_fix_mode();
         self.tls_routes.enable_version_fix_mode();
+        self.link_sys.enable_version_fix_mode();
         self.services.enable_version_fix_mode();
         self.endpoint_slices.enable_version_fix_mode();
         self.edgion_tls.enable_version_fix_mode();
@@ -492,6 +504,7 @@ impl ConfigServerEventDispatcher for ConfigServer {
         self.tcp_routes.set_ready();
         self.udp_routes.set_ready();
         self.tls_routes.set_ready();
+        self.link_sys.set_ready();
         self.services.set_ready();
         self.endpoint_slices.set_ready();
         self.edgion_tls.set_ready();

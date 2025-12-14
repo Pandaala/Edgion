@@ -14,6 +14,7 @@ pub mod tcp_route;
 pub mod udp_route;
 pub mod tls_route;
 pub mod plugin_metadata;
+pub mod link_sys;
 
 // Re-export all resource types
 pub use self::edgion_gateway_config::*;
@@ -28,4 +29,5 @@ pub use self::tcp_route::*;
 pub use self::udp_route::*;
 pub use self::tls_route::*;
 pub use self::plugin_metadata::*;
+pub use self::link_sys::*;
 

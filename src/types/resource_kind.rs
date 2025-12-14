@@ -17,6 +17,7 @@ pub enum ResourceKind {
     UDPRoute = 12,
     PluginMetaData = 13,
     TLSRoute = 14,
+    LinkSys = 15,
 }
 
 impl ResourceKind {
@@ -56,6 +57,7 @@ impl ResourceKind {
             "UDPRoute" => Some(ResourceKind::UDPRoute),
             "PluginMetaData" => Some(ResourceKind::PluginMetaData),
             "TLSRoute" => Some(ResourceKind::TLSRoute),
+            "LinkSys" => Some(ResourceKind::LinkSys),
             _ => None,
         }
     }

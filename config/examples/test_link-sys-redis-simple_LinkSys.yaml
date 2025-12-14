@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: simple-redis
+  namespace: default
+spec:
+  type: redis
+  redis:
+    endpoints:
+      - "redis://localhost:6379"
+    auth:
+      password: "mypassword"
+    topology:
+      mode: standalone
+

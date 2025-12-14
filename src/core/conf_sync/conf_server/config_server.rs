@@ -22,6 +22,7 @@ pub enum ResourceItem {
     TCPRoute(TCPRoute),
     UDPRoute(UDPRoute),
     TLSRoute(TLSRoute),
+    LinkSys(LinkSys),
     Service(Service),
     EndpointSlice(EndpointSlice),
     EdgionTls(EdgionTls),
@@ -40,6 +41,7 @@ pub struct ConfigServer {
     pub tcp_routes: ServerCache<TCPRoute>,
     pub udp_routes: ServerCache<UDPRoute>,
     pub tls_routes: ServerCache<TLSRoute>,
+    pub link_sys: ServerCache<LinkSys>,
     pub services: ServerCache<Service>,
     pub endpoint_slices: ServerCache<EndpointSlice>,
     pub edgion_tls: ServerCache<EdgionTls>,
@@ -72,6 +74,7 @@ impl ConfigServer {
             tcp_routes: ServerCache::new(200),
             udp_routes: ServerCache::new(200),
             tls_routes: ServerCache::new(200),
+            link_sys: ServerCache::new(50),
             services: ServerCache::new(200),
             endpoint_slices: ServerCache::new(200),
             edgion_tls: ServerCache::new(200),
@@ -146,6 +149,12 @@ impl ConfigServer {
                 let list_data = self.list_tls_routes();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize TLSRoute data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::LinkSys => {
+                let list_data = self.list_link_sys();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize LinkSys data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::PluginMetaData => {
@@ -311,6 +320,34 @@ impl ConfigServer {
                             Ok(json) => json,
                             Err(e) => {
                                 eprintln!("Failed to serialize TLSRoute events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::LinkSys => {
+                let mut receiver = self.watch_link_sys(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize LinkSys events: {}", e);
                                 continue;
                             }
                         };
@@ -547,6 +584,10 @@ impl ConfigServer {
         self.tls_routes.list_owned()
     }
 
+    pub fn list_link_sys(&self) -> ListData<LinkSys> {
+        self.link_sys.list_owned()
+    }
+
     pub fn list_plugin_metadata(&self) -> ListData<PluginMetaData> {
         self.plugin_metadata.list_owned()
     }
@@ -624,6 +665,16 @@ impl ConfigServer {
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<TLSRoute>> {
         self.tls_routes.watch(client_id, client_name, from_version)
+    }
+
+    /// Watch LinkSys
+    pub fn watch_link_sys(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<LinkSys>> {
+        self.link_sys.watch(client_id, client_name, from_version)
     }
 
     /// Watch plugin metadata

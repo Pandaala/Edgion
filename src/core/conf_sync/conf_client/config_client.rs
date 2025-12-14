@@ -20,6 +20,7 @@ pub struct ConfigClient {
     tcp_routes: ClientCache<TCPRoute>,
     udp_routes: ClientCache<UDPRoute>,
     tls_routes: ClientCache<TLSRoute>,
+    link_sys: ClientCache<LinkSys>,
     services: ClientCache<Service>,
     endpoint_slices: ClientCache<EndpointSlice>,
     edgion_tls: ClientCache<EdgionTls>,
@@ -58,6 +59,7 @@ impl ConfigClient {
             tcp_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             udp_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             tls_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            link_sys: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,
             edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
@@ -90,6 +92,11 @@ impl ConfigClient {
     /// Get tls_routes cache for direct access
     pub fn tls_routes(&self) -> &ClientCache<TLSRoute> {
         &self.tls_routes
+    }
+
+    /// Get link_sys cache for direct access
+    pub fn link_sys(&self) -> &ClientCache<LinkSys> {
+        &self.link_sys
     }
 
     /// Get services cache for direct access
@@ -145,6 +152,9 @@ impl ConfigClient {
         }
         if !self.tls_routes.is_ready() {
             not_ready.push("tls_routes");
+        }
+        if !self.link_sys.is_ready() {
+            not_ready.push("link_sys");
         }
         if !self.services.is_ready() {
             not_ready.push("services");
@@ -269,6 +279,12 @@ impl ConfigClient {
                     .map_err(|e| format!("Failed to serialize TLSRoute data: {}", e))?;
                 (json, list_data.resource_version)
             }
+            ResourceKind::LinkSys => {
+                let list_data = self.link_sys.list();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize LinkSys data: {}", e))?;
+                (json, list_data.resource_version)
+            }
             ResourceKind::Service => {
                 let list_data = self.services.list();
                 let json = serde_json::to_string(&list_data.data)
@@ -336,6 +352,11 @@ impl ConfigClient {
     /// List TLS routes
     pub fn list_tls_routes(&self) -> ListData<TLSRoute> {
         self.tls_routes.list_owned()
+    }
+
+    /// List LinkSys
+    pub fn list_link_sys(&self) -> ListData<LinkSys> {
+        self.link_sys.list_owned()
     }
 
     /// List services
@@ -512,6 +533,17 @@ impl ConfigClient {
             println!("  [{}] {}", idx, format_resource_info(metadata));
         }
 
+        // LinkSys
+        let list_data = self.list_link_sys();
+        println!(
+            "LinkSys (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, link_sys) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(link_sys));
+        }
+
         // Secrets
         let list_data = self.list_secrets();
         println!(
@@ -597,6 +629,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     Self::apply_change_to_cache(&self.tls_routes, change, resource);
                 }
                 Err(e) => log_error("TLSRoute", &e),
+            },
+            ResourceKind::LinkSys => match serde_yaml::from_str::<LinkSys>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.link_sys, change, resource);
+                }
+                Err(e) => log_error("LinkSys", &e),
             },
             ResourceKind::Service => match serde_yaml::from_str::<Service>(&data) {
                 Ok(resource) => {

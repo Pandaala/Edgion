@@ -182,6 +182,9 @@ impl ConfigSyncClient {
             TLSRoute => {
                 self.config_client.tls_routes().start_watch().await?;
             }
+            LinkSys => {
+                self.config_client.link_sys().start_watch().await?;
+            }
             Service => {
                 self.config_client.services().start_watch().await?;
             }

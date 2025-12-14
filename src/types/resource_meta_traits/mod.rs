@@ -13,6 +13,7 @@ mod tcp_route;
 mod udp_route;
 mod tls_route;
 mod plugin_metadata;
+mod link_sys;
 mod service;
 mod endpoint_slice;
 mod secret;
