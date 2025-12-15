@@ -1,4 +1,3 @@
-use super::match_engine::RouteEntry;
 use crate::types::err::EdError;
 use crate::types::{HTTPRouteMatch, HTTPRouteRule, MatchInfo};
 use pingora_proxy::Session;
@@ -236,10 +235,10 @@ impl HttpRouteRuleUnit {
         );
         Ok(true)
     }
-}
 
-impl RouteEntry for HttpRouteRuleUnit {
-    fn extract_paths(&self) -> Vec<(String, bool)> {
+    /// Extract all path patterns from this route with their match types
+    /// Returns Vec<(path, is_prefix)>
+    pub fn extract_paths(&self) -> Vec<(String, bool)> {
         let mut paths = Vec::new();
 
         // Extract path from the single match_item
@@ -251,16 +250,6 @@ impl RouteEntry for HttpRouteRuleUnit {
         }
 
         paths
-    }
-
-    fn identifier(&self) -> String {
-        format!("{}/{}", self.matched_info.rns, self.matched_info.rn)
-    }
-
-    // Host , Path , Header , QueryParam , Method
-    fn deep_match(&self, session: &Session) -> Result<bool, EdError> {
-        let req_header = session.req_header();
-        Self::deep_match_common(&self.matched_info.m, req_header, &self.identifier())
     }
 }
 
