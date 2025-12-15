@@ -270,7 +270,9 @@ pub async fn get_peer(session: &mut Session, ctx: &mut EdgionHttpContext) -> pin
         Ok(peer) => Ok(peer),
         Err(status) => {
             ctx.add_error(status);
-            let _ = end_response_503(session, ctx).await;
+            // Use default server header options for error response
+            let server_header_opts = crate::core::gateway::server_header::ServerHeaderOpts::default();
+            let _ = end_response_503(session, ctx, &server_header_opts).await;
             Err(PingoraError::new(ErrorType::InternalError))
         }
     }

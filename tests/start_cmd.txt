@@ -5,3 +5,7 @@ cargo run --bin edgion-gateway -- --config-file ./config/edgion-gateway.toml
 # 或使用短参数 -c
 cargo run --bin edgion-controller -- -c ./config/edgion-controller.toml
 cargo run --bin edgion-gateway -- -c ./config/edgion-gateway.toml
+
+
+# start test-server
+cargo run -p edgion --example test_server

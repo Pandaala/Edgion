@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use pingora_http::ResponseHeader;
 
 #[derive(Clone, Debug)]
 pub struct ServerHeaderOpts {
@@ -37,5 +38,17 @@ impl ServerHeaderOpts {
 
     pub fn enable(&mut self, enable: bool) {
         self.enable = enable;
+    }
+
+    /// Apply configured headers to response
+    pub fn apply_to_response(&self, response: &mut ResponseHeader) {
+        if self.enable {
+            for (key, value) in &self.headers {
+                // Remove existing header first to avoid duplicates
+                response.remove_header(key);
+                // Insert custom header (clone strings to satisfy 'static lifetime requirement)
+                let _ = response.insert_header(key.clone(), value.clone());
+            }
+        }
     }
 }

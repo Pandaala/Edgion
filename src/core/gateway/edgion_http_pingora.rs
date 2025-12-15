@@ -64,7 +64,7 @@ impl ProxyHttp for EdgionHttp {
                 Some(unit) => unit,
                 None => {
                     ctx.add_error(EdgionStatus::UpstreamNotRouteMatched);
-                    end_response_500(session, ctx).await?;
+                    end_response_500(session, ctx, &self.server_header_opts).await?;
                     return Err(PingoraError::new(ErrorType::InternalError));
                 }
             };
@@ -79,7 +79,7 @@ impl ProxyHttp for EdgionHttp {
                         EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
                         _ => EdgionStatus::Unknown,
                     });
-                    end_response_500(session, ctx).await?;
+                    end_response_500(session, ctx, &self.server_header_opts).await?;
                     return Err(PingoraError::new(ErrorType::InternalError));
                 }
             };
@@ -90,7 +90,7 @@ impl ProxyHttp for EdgionHttp {
             backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
             if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
                 ctx.add_error(EdgionStatus::Unknown);
-                end_response_500(session, ctx).await?;
+                end_response_500(session, ctx, &self.server_header_opts).await?;
                 return Err(PingoraError::new(ErrorType::InternalError));
             }
             
@@ -182,7 +182,7 @@ impl ProxyHttp for EdgionHttp {
             }
             None => {
                 ctx.add_error(EdgionStatus::HostMissing);
-                end_response_400(session, ctx).await?;
+                end_response_400(session, ctx, &self.server_header_opts).await?;
                 return Ok(true);
             }
         }
@@ -210,7 +210,7 @@ impl ProxyHttp for EdgionHttp {
             Err(_e) => {
                 // Route not found, return 404
                 ctx.add_error(EdgionStatus::RouteNotFound);
-                end_response_404(session, ctx).await?;
+                end_response_404(session, ctx, &self.server_header_opts).await?;
                 Ok(true)
             }
         }
@@ -279,6 +279,9 @@ impl ProxyHttp for EdgionHttp {
         // Record status code
         let status_code = upstream_response.status.as_u16();
         ctx.request_info.status = status_code;
+        
+        // Apply custom server headers (including Server header)
+        self.server_header_opts.apply_to_response(upstream_response);
         
         // Record header time (time from this upstream's start_time to receiving response header)
         if let Some(upstream) = ctx.get_current_upstream_mut() {
