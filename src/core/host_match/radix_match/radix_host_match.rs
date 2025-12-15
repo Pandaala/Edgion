@@ -1,5 +1,5 @@
 use super::radix_host::RadixHost;
-use radix_route_matcher::RadixTree;
+use crate::core::routes::radix_match::{RadixTreeBuilder, RadixTree, RouterError};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -9,9 +9,8 @@ use std::sync::Arc;
 /// Hostnames are reversed (e.g., "api.example.com" -> "com.example.api") to enable
 /// longest prefix matching from the TLD down.
 ///
-/// **Lock-free concurrent reads**: Each query creates its own temporary iterator,
-/// enabling true concurrent reads without any mutex contention. The tree itself
-/// is immutable after initialization.
+/// **Lock-free concurrent reads**: The tree is immutable after initialization,
+/// enabling true concurrent reads without any mutex contention.
 ///
 /// Supports wildcard patterns like "*.example.com" which become "com.example" (radix_key)
 /// with wildcard_count tracking.
@@ -19,17 +18,21 @@ pub struct RadixHostMatchEngine<T> {
     tree: RadixTree,
     /// All RadixHost instances
     hosts: Vec<RadixHost<T>>,
-    /// Mapping from tree_idx to list of host_idx
-    /// tree_idx -> Vec<host_idx> (indices in hosts)
-    tree_idx_to_host_idx: HashMap<i32, Vec<usize>>,
+    /// Mapping from tree value to list of host_idx
+    /// tree_value -> Vec<host_idx> (indices in hosts)
+    tree_value_to_host_idx: HashMap<u32, Vec<usize>>,
 }
 
 impl<T> RadixHostMatchEngine<T> {
     pub fn new() -> Self {
+        // Create an empty frozen tree
+        let builder = RadixTreeBuilder::new();
+        let tree = builder.freeze().expect("Failed to create empty radix tree");
+
         Self {
-            tree: RadixTree::new().expect("Failed to create radix tree"),
+            tree,
             hosts: Vec::new(),
-            tree_idx_to_host_idx: HashMap::new(),
+            tree_value_to_host_idx: HashMap::new(),
         }
     }
 
@@ -46,10 +49,10 @@ impl<T> RadixHostMatchEngine<T> {
     /// Match a hostname and return the matched runtime
     ///
     /// # Arguments
-    /// * `hostname` - The hostname to match_engine (e.g., "api.example.com")
+    /// * `hostname` - The hostname to match (e.g., "api.example.com")
     ///
     /// # Returns
-    /// `Some(Arc<T>)` if a match_engine is found, `None` otherwise
+    /// `Some(Arc<T>)` if a match is found, `None` otherwise
     pub fn match_host(&self, hostname: &str) -> Option<Arc<T>> {
         let hostname_lower = hostname.to_lowercase();
         let reversed = RadixHost::<T>::reverse_hostname(&hostname_lower);
@@ -58,46 +61,25 @@ impl<T> RadixHostMatchEngine<T> {
         tracing::trace!("Request Hostname: '{}', Reversed: '{}', Available hosts: {}",
             hostname, reversed, self.hosts.len());
 
-        // Create iterator
-        let iter = match self.tree.create_iter() {
-            Ok(iter) => iter,
-            Err(e) => {
-                tracing::error!("Failed to create iterator: {}", e);
-                return None;
-            }
-        };
-
-        // Use search to initialize iterator, then iterate from longest to shortest using next_prefix
+        // Get all matching prefixes (returns shortest to longest)
         tracing::trace!("[Step 1] Searching in radix tree...");
-        if !self.tree.search(&iter, &reversed) {
+        let all_values = self.tree.match_all_prefixes(&reversed);
+
+        if all_values.is_empty() {
             tracing::trace!("No match found in radix tree");
             return None;
         }
 
-        tracing::trace!("Found matches, iterating from longest to shortest...");
+        tracing::trace!("Found {} value(s), checking from longest to shortest...", all_values.len());
 
-        // Get the first match_engine (longest)
+        // Iterate from longest to shortest (reverse order since API returns shortest to longest)
         let mut match_count = 0;
-        loop {
-            let tree_idx = if match_count == 0 {
-                // First iteration: get current position from search
-                match self.tree.next_prefix(&iter, &reversed) {
-                    Some(idx) => idx,
-                    None => break,
-                }
-            } else {
-                // Subsequent iterations: move up to shorter prefixes
-                match self.tree.next_prefix(&iter, &reversed) {
-                    Some(idx) => idx,
-                    None => break,
-                }
-            };
-
+        for &tree_value in all_values.iter().rev() {
             match_count += 1;
-            tracing::trace!("  [Match #{}] Checking tree_idx: {}", match_count, tree_idx);
+            tracing::trace!("  [Match #{}] Checking tree value: {}", match_count, tree_value);
 
-            if let Some(host_indices) = self.tree_idx_to_host_idx.get(&tree_idx) {
-                tracing::trace!("    -> {} host(s) at this tree node", host_indices.len());
+            if let Some(host_indices) = self.tree_value_to_host_idx.get(&tree_value) {
+                tracing::trace!("    -> {} host(s) for this value", host_indices.len());
                 for &host_idx in host_indices {
                     if let Some(radix_host) = self.hosts.get(host_idx) {
                         tracing::trace!(
@@ -134,7 +116,9 @@ impl<T> RadixHostMatchEngine<T> {
         tracing::debug!("========== RadixHostMatchEngine Initialize ==========");
         tracing::debug!("Total hosts: {}", hosts.len());
 
-        let mut next_tree_idx = 1i32;
+        let mut builder = RadixTreeBuilder::new();
+        let mut next_tree_value = 1usize;
+        let mut radix_key_to_value: HashMap<String, usize> = HashMap::new();
 
         for radix_host in hosts {
             tracing::debug!(
@@ -144,44 +128,51 @@ impl<T> RadixHostMatchEngine<T> {
 
             let radix_key = radix_host.radix_key.clone();
 
-            // Check if this radix_key already exists in the tree
-            let tree_idx = if let Some(existing_tree_idx) = self.tree.find_exact(&radix_key) {
+            // Check if this radix_key already has a value assigned
+            let tree_value = if let Some(&existing_value) = radix_key_to_value.get(&radix_key) {
                 tracing::debug!(
-                    "    Reusing tree_idx: {} for radix_key: '{}'",
-                    existing_tree_idx, radix_key
+                    "    Reusing tree value: {} for radix_key: '{}'",
+                    existing_value, radix_key
                 );
-                existing_tree_idx
+                existing_value
             } else {
-                // First time seeing this radix_key, insert into tree
-                let new_tree_idx = next_tree_idx;
-                self.tree.insert(&radix_key, new_tree_idx).map_err(|e| {
+                // First time seeing this radix_key, assign a new value and insert into builder
+                let new_value = next_tree_value;
+                builder.insert(&radix_key, new_value).map_err(|e: RouterError| {
                     format!(
                         "Failed to insert radix key '{}' for pattern '{}' into radix tree: {}",
                         radix_key, radix_host.original, e
                     )
                 })?;
 
-                tracing::debug!("    Inserted radix_key: '{}' -> tree_idx: {}", radix_key, new_tree_idx);
-                next_tree_idx += 1;
-                new_tree_idx
+                radix_key_to_value.insert(radix_key.clone(), new_value);
+                tracing::debug!("    Inserted radix_key: '{}' -> tree value: {}", radix_key, new_value);
+                next_tree_value += 1;
+                new_value
             };
 
             // Add RadixHost to the list
             let host_idx = self.hosts.len();
             self.hosts.push(radix_host);
 
-            // Map tree_idx to host_idx (append to list)
-            self.tree_idx_to_host_idx
-                .entry(tree_idx)
+            // Map tree_value to host_idx (append to list)
+            self.tree_value_to_host_idx
+                .entry(tree_value as u32)
                 .or_insert_with(Vec::new)
                 .push(host_idx);
         }
+
+        // Freeze the builder to create the immutable tree
+        tracing::debug!("Freezing radix tree...");
+        self.tree = builder.freeze().map_err(|e: RouterError| {
+            format!("Failed to freeze radix tree: {}", e)
+        })?;
 
         tracing::debug!("========== Initialization Complete ==========");
         tracing::debug!(
             "Summary: Total hosts: {}, Unique radix tree nodes: {}",
             self.hosts.len(),
-            self.tree_idx_to_host_idx.len()
+            self.tree_value_to_host_idx.len()
         );
         tracing::debug!("==============================================");
         Ok(())
@@ -227,7 +218,7 @@ mod tests {
         assert!(result.is_ok());
 
         assert_eq!(engine.host_count(), 1);
-        assert_eq!(engine.tree_idx_to_host_idx.len(), 1);
+        assert_eq!(engine.tree_value_to_host_idx.len(), 1);
     }
 
     #[test]
@@ -249,7 +240,7 @@ mod tests {
         assert!(result.is_ok());
 
         assert_eq!(engine.host_count(), 3);
-        assert_eq!(engine.tree_idx_to_host_idx.len(), 3);
+        assert_eq!(engine.tree_value_to_host_idx.len(), 3);
     }
 
     #[test]
@@ -333,7 +324,7 @@ mod tests {
         engine.initialize(vec![host]).unwrap();
 
         let tree = engine.tree();
-        assert_eq!(tree.find_exact("com.example"), Some(1));
+        assert_eq!(tree.match_exact("com.example"), Some(&[1u32][..]));
     }
 
     #[test]
@@ -366,7 +357,7 @@ mod tests {
         engine.initialize(hosts).unwrap();
 
         assert_eq!(engine.host_count(), 4);
-        assert_eq!(engine.tree_idx_to_host_idx.len(), 3); // example.com and *.example.com share same radix_key
+        assert_eq!(engine.tree_value_to_host_idx.len(), 3); // example.com and *.example.com share same radix_key
 
         // Test exact match_engine for example.com (should match_engine runtime1, not wildcard runtime4)
         let r1 = engine.match_host("example.com");

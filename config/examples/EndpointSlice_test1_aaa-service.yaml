@@ -19,4 +19,20 @@ endpoints:
   - addresses:
       - "1.0.0.1"
     conditions:
-      ready: true      
+      ready: true
+  - addresses:
+      - "1.0.0.2"
+    conditions:
+      ready: true
+  - addresses:
+      - "1.0.0.3"
+    conditions:
+      ready: true
+  - addresses:
+      - "1.0.0.4"
+    conditions:
+      ready: true
+  - addresses:
+      - "1.0.0.5"
+    conditions:
+      ready: true

@@ -2,8 +2,8 @@ use super::radix_path::RadixPath;
 use super::route_runtime::RouteEntry;
 use crate::types::err::EdError;
 use crate::types::err::EdError::RouteNotFound;
+use crate::core::routes::radix_match::{RadixTreeBuilder, RadixTree, RouterError};
 use pingora_proxy::Session;
-use radix_route_matcher::RadixTree;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -12,9 +12,8 @@ use std::sync::Arc;
 /// This engine uses a radix tree (compressed trie) for efficient path matching.
 /// It's particularly good for large numbers of routes with common prefixes.
 ///
-/// **Lock-free concurrent reads**: Each query creates its own temporary iterator,
-/// enabling true concurrent reads without any mutex contention. The tree itself
-/// is immutable after initialization.
+/// **Lock-free concurrent reads**: The tree is immutable after initialization,
+/// enabling true concurrent reads without any mutex contention.
 ///
 /// Multiple paths can map to the same route by storing the route_idx directly in the tree.
 ///
@@ -25,21 +24,21 @@ pub struct RadixRouteMatchEngine {
     routes: Vec<Arc<dyn RouteEntry>>,
     /// All RadixPath instances (flattened from all routes)
     radix_paths: Vec<RadixPath>,
-    /// Mapping from tree_idx to list of path indices that share the same radix_key
-    /// tree_idx -> Vec<path_idx> (index in radix_paths)
-    tree_idx_to_path_idx: HashMap<i32, Vec<usize>>,
+    /// Mapping from tree value to list of path indices that share the same radix_key
+    /// tree_value -> Vec<path_idx> (index in radix_paths)
+    tree_value_to_path_idx: HashMap<u32, Vec<usize>>,
 }
 
 impl RadixRouteMatchEngine {
     /// Build a new RadixRouteMatchEngine with the given route runtimes
     pub fn build(route_runtimes: Vec<Arc<dyn RouteEntry>>) -> Result<Self, EdError> {
         let mut engine = Self {
-            tree: RadixTree::new().expect("Failed to create radix tree"),
+            tree: RadixTreeBuilder::new().freeze().expect("Failed to create empty radix tree"),
             routes: Vec::new(),
             radix_paths: Vec::new(),
-            tree_idx_to_path_idx: HashMap::new(),
+            tree_value_to_path_idx: HashMap::new(),
         };
-        
+
         engine.initialize_internal(route_runtimes)?;
         Ok(engine)
     }
@@ -52,7 +51,7 @@ impl RadixRouteMatchEngine {
     /// Get direct access to the underlying radix tree for advanced usage
     pub fn tree(&self) -> &RadixTree {
         &self.tree
-}
+    }
 
     fn try_route_deep_match(
         &self,
@@ -82,64 +81,62 @@ impl RadixRouteMatchEngine {
     /// Returns matched route if found, None if no exact match
     pub fn exact_match(&self, session: &mut Session) -> Result<Option<Arc<dyn RouteEntry>>, EdError> {
         let path = session.req_header().uri.path();
-        
+
         tracing::trace!("[exact_match] Trying exact match for '{}'...", path);
-        if let Some(tree_idx) = self.tree.find_exact(path) {
-            tracing::trace!("Found exact tree_idx: {}", tree_idx);
-            if let Some(path_indices) = self.tree_idx_to_path_idx.get(&tree_idx) {
-                tracing::trace!("Checking {} path(s) at this tree node", path_indices.len());
-                for &path_idx in path_indices {
-                    if let Some(radix_path) = self.radix_paths.get(path_idx) {
-                        tracing::trace!(
-                            "Checking: original='{}', radix_key='{}', is_prefix={}, route_idx={}",
-                            radix_path.original, radix_path.radix_key, radix_path.is_prefix_match, radix_path.route_idx
-                        );
-                        // Skip paths with variables - they should be handled by prefix_match
-                        if !radix_path.match_segments.is_empty() {
-                            tracing::trace!("Skipping path with variables for exact match");
-                            continue;
-                        }
-                        if !radix_path.matches(&path) {
-                            tracing::trace!("Pattern match failed");
-                            continue;
-                        }
-                        tracing::trace!("Pattern matched, trying deep match...");
-                        if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session)? {
-                            tracing::debug!("Exact match succeeded");
-                            return Ok(Some(runtime));
+        if let Some(values) = self.tree.match_exact(path) {
+            tracing::trace!("Found {} value(s) from tree", values.len());
+            for &tree_value in values {
+                if let Some(path_indices) = self.tree_value_to_path_idx.get(&tree_value) {
+                    tracing::trace!("Checking {} path(s) for value {}", path_indices.len(), tree_value);
+                    for &path_idx in path_indices {
+                        if let Some(radix_path) = self.radix_paths.get(path_idx) {
+                            tracing::trace!(
+                                "Checking: original='{}', radix_key='{}', is_prefix={}, route_idx={}",
+                                radix_path.original, radix_path.radix_key, radix_path.is_prefix_match, radix_path.route_idx
+                            );
+                            // Skip paths with variables - they should be handled by prefix_match
+                            if !radix_path.match_segments.is_empty() {
+                                tracing::trace!("Skipping path with variables for exact match");
+                                continue;
+                            }
+                            if !radix_path.matches(&path) {
+                                tracing::trace!("Pattern match failed");
+                                continue;
+                            }
+                            tracing::trace!("Pattern matched, trying deep match...");
+                            if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session)? {
+                                tracing::debug!("Exact match succeeded");
+                                return Ok(Some(runtime));
+                            }
                         }
                     }
                 }
             }
         }
-        
+
         tracing::trace!("No exact match found");
         Ok(None)
     }
-    
+
     /// Try prefix match for the request path
     /// Returns matched route if found, RouteNotFound error if no match
     pub fn prefix_match(&self, session: &mut Session) -> Result<Arc<dyn RouteEntry>, EdError> {
         let path = session.req_header().uri.path();
-        
+
         tracing::trace!("[prefix_match] Trying prefix matching...");
-        let iter = self
-            .tree
-            .create_iter()
-            .map_err(|e| EdError::InternalError(format!("Failed to create iterator: {}", e)))?;
-        let all_prefixes = self.tree.find_all_prefixes(&iter, &path);
-        tracing::trace!("Found {} prefix(es) in radix tree", all_prefixes.len());
-        
-        if all_prefixes.is_empty() {
+        let all_values = self.tree.match_all_prefixes(path);
+        tracing::trace!("Found {} value(s) from radix tree", all_values.len());
+
+        if all_values.is_empty() {
             tracing::debug!("No prefix match found");
             return Err(RouteNotFound());
         }
 
         let mut matched_paths: Vec<usize> = Vec::new();
-        for tree_idx in all_prefixes {
-            tracing::trace!("Checking tree_idx: {}", tree_idx);
-            if let Some(path_indices) = self.tree_idx_to_path_idx.get(&tree_idx) {
-                tracing::trace!("{} path(s) at this tree node", path_indices.len());
+        for tree_value in all_values {
+            tracing::trace!("Checking tree value: {}", tree_value);
+            if let Some(path_indices) = self.tree_value_to_path_idx.get(&tree_value) {
+                tracing::trace!("{} path(s) for this value", path_indices.len());
                 for &path_idx in path_indices {
                     if let Some(radix_path) = self.radix_paths.get(path_idx) {
                         tracing::trace!(
@@ -183,17 +180,17 @@ impl RadixRouteMatchEngine {
         tracing::debug!("No route matched (all deep matches failed)");
         Err(RouteNotFound())
     }
-    
+
     /// Combined match route (for backward compatibility)
     /// Try exact match first, then prefix match
     pub fn match_route(&self, session: &mut Session) -> Result<Arc<dyn RouteEntry>, EdError> {
         tracing::trace!("========== Radix Route Matching ==========");
-        
+
         // Try exact match first
         if let Some(route) = self.exact_match(session)? {
             return Ok(route);
         }
-        
+
         // Fall back to prefix match
         self.prefix_match(session)
     }
@@ -202,11 +199,13 @@ impl RadixRouteMatchEngine {
         tracing::debug!("========== RadixRouteMatchEngine Initialize ==========");
         tracing::debug!("Total route runtimes to compile: {}", route_runtimes.len());
 
+        let mut builder = RadixTreeBuilder::new();
         let mut total_paths = 0usize;
-        let mut next_tree_idx = 1i32; // Start from 1, as 0 might be reserved
+        let mut next_tree_value = 1usize; // Start from 1
+        let mut radix_key_to_value: HashMap<String, usize> = HashMap::new();
 
         for (route_idx, runtime) in route_runtimes.iter().enumerate() {
-            // Extract all paths and their match_engine types from the RouteRuntime
+            // Extract all paths and their match types from the RouteRuntime
             let paths = runtime.extract_paths();
 
             tracing::debug!(
@@ -242,35 +241,36 @@ impl RadixRouteMatchEngine {
 
                 let radix_key = radix_path.radix_key.clone();
 
-                // Check if this radix_key already exists in the tree using find_exact
-                let tree_idx = if let Some(existing_tree_idx) = self.tree.find_exact(&radix_key) {
+                // Check if this radix_key already has a value assigned
+                let tree_value = if let Some(&existing_value) = radix_key_to_value.get(&radix_key) {
                     tracing::debug!(
-                        "    Reusing tree_idx: {} for radix_key: '{}'",
-                        existing_tree_idx, radix_key
+                        "    Reusing tree value: {} for radix_key: '{}'",
+                        existing_value, radix_key
                     );
-                    existing_tree_idx
+                    existing_value
                 } else {
-                    // First time seeing this radix_key, insert into tree
-                    let new_tree_idx = next_tree_idx;
-                    self.tree.insert(&radix_key, new_tree_idx).map_err(|e| {
+                    // First time seeing this radix_key, assign a new value and insert into builder
+                    let new_value = next_tree_value;
+                    builder.insert(&radix_key, new_value).map_err(|e: RouterError| {
                         EdError::InternalError(format!(
                             "Failed to insert radix key '{}' for path '{}' into radix tree: {}",
                             radix_key, path, e
                         ))
                     })?;
 
-                    tracing::debug!("    Inserted radix_key: '{}' -> tree_idx: {}", radix_key, new_tree_idx);
-                    next_tree_idx += 1;
-                    new_tree_idx
+                    radix_key_to_value.insert(radix_key.clone(), new_value);
+                    tracing::debug!("    Inserted radix_key: '{}' -> tree value: {}", radix_key, new_value);
+                    next_tree_value += 1;
+                    new_value
                 };
 
                 // Add RadixPath to the global list
                 let path_idx = self.radix_paths.len();
                 self.radix_paths.push(radix_path.clone());
 
-                // Add path_idx to the tree_idx mapping
-                self.tree_idx_to_path_idx
-                    .entry(tree_idx)
+                // Add path_idx to the tree_value mapping
+                self.tree_value_to_path_idx
+                    .entry(tree_value as u32)
                     .or_insert_with(Vec::new)
                     .push(path_idx);
 
@@ -281,12 +281,18 @@ impl RadixRouteMatchEngine {
             self.routes.push(runtime.clone());
         }
 
+        // Freeze the builder to create the immutable tree
+        tracing::debug!("Freezing radix tree...");
+        self.tree = builder.freeze().map_err(|e: RouterError| {
+            EdError::InternalError(format!("Failed to freeze radix tree: {}", e))
+        })?;
+
         tracing::debug!("========== Initialization Complete ==========");
         tracing::debug!(
             "Summary: Total routes: {}, Total paths compiled: {}, Unique radix tree nodes: {}, RadixPath entries: {}",
             self.routes.len(),
             total_paths,
-            self.tree_idx_to_path_idx.len(),
+            self.tree_value_to_path_idx.len(),
             self.radix_paths.len()
         );
         tracing::debug!("==============================================");
@@ -296,11 +302,15 @@ impl RadixRouteMatchEngine {
 
 impl Default for RadixRouteMatchEngine {
     fn default() -> Self {
+        // Create an empty frozen tree
+        let builder = RadixTreeBuilder::new();
+        let tree = builder.freeze().expect("Failed to create empty radix tree");
+
         Self {
-            tree: RadixTree::new().expect("Failed to create radix tree"),
+            tree,
             routes: Vec::new(),
             radix_paths: Vec::new(),
-            tree_idx_to_path_idx: HashMap::new(),
+            tree_value_to_path_idx: HashMap::new(),
         }
     }
 }
@@ -312,7 +322,6 @@ unsafe impl Sync for RadixRouteMatchEngine {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use radix_route_matcher::RadixTree;
     use std::sync::Arc;
 
     // Mock RouteRuntime for testing
@@ -370,7 +379,7 @@ mod tests {
 
         assert_eq!(engine.route_count(), 1);
         assert_eq!(engine.radix_paths.len(), 1);
-        assert_eq!(engine.tree_idx_to_path_idx.len(), 1);
+        assert_eq!(engine.tree_value_to_path_idx.len(), 1);
     }
 
     #[test]
@@ -447,20 +456,21 @@ mod tests {
 
         // Can access the underlying tree
         let tree = engine.tree();
-        assert_eq!(tree.find_exact("/api"), Some(1));
+        // The new API returns values as &[u32], check if it matches
+        assert_eq!(tree.match_exact("/api"), Some(&[1u32][..]));
     }
 
     #[test]
     fn test_engine_radix_key_reuse() {
-        // Multiple paths with same radix_key should reuse tree_idx
+        // Multiple paths with same radix_key should reuse tree value
         let routes: Vec<Arc<dyn RouteEntry>> = vec![
             Arc::new(MockRoute::new("r1", vec![("/api/:v1", false)])),
             Arc::new(MockRoute::new("r2", vec![("/api/:v2", false)])),
         ];
 
         let engine = RadixRouteMatchEngine::build(routes).unwrap();
-        
-        // Verify that both paths share the same radix_key and tree_idx
+
+        // Verify that both paths share the same radix_key and tree value
         assert_eq!(engine.route_count(), 2);
         assert_eq!(engine.radix_paths.len(), 2);
 
@@ -468,10 +478,12 @@ mod tests {
         assert_eq!(engine.radix_paths[0].radix_key, "/api/");
         assert_eq!(engine.radix_paths[1].radix_key, "/api/");
 
-        // Should share the same tree_idx
-        let tree_idx_1 = engine.tree().find_exact("/api/").unwrap();
-        let paths_at_idx = engine.tree_idx_to_path_idx.get(&tree_idx_1).unwrap();
-        assert_eq!(paths_at_idx.len(), 2);
+        // Should share the same tree value
+        let values = engine.tree().match_exact("/api/").unwrap();
+        assert_eq!(values.len(), 1);
+        let tree_value = values[0];
+        let paths_at_value = engine.tree_value_to_path_idx.get(&tree_value).unwrap();
+        assert_eq!(paths_at_value.len(), 2);
     }
 
     #[test]
@@ -480,95 +492,61 @@ mod tests {
         assert_eq!(engine.route_count(), 0);
     }
 
-    // Original RadixTree tests (keep for tree-level verification)
+    // Original RadixTree tests (adapted for new API)
 
     #[test]
     fn test_exact_match() {
-        let mut tree = RadixTree::new().expect("create tree");
-        tree.insert("/", 1).unwrap();
-        tree.insert("/api", 2).unwrap();
-        tree.insert("/api/users", 3).unwrap();
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/", 1).unwrap();
+        builder.insert("/api", 2).unwrap();
+        builder.insert("/api/users", 3).unwrap();
+        let tree = builder.freeze().unwrap();
 
-        assert_eq!(tree.find_exact("/"), Some(1));
-        assert_eq!(tree.find_exact("/api"), Some(2));
-        assert_eq!(tree.find_exact("/api/users"), Some(3));
-        assert_eq!(tree.find_exact("/api/users/1"), None);
-        assert_eq!(tree.find_exact("/missing"), None);
+        assert_eq!(tree.match_exact("/"), Some(&[1][..]));
+        assert_eq!(tree.match_exact("/api"), Some(&[2][..]));
+        assert_eq!(tree.match_exact("/api/users"), Some(&[3][..]));
+        assert_eq!(tree.match_exact("/api/users/1"), None);
+        assert_eq!(tree.match_exact("/missing"), None);
     }
 
     #[test]
     fn test_longest_prefix() {
-        let mut tree = RadixTree::new().expect("create tree");
-        tree.insert("/", 1).unwrap();
-        tree.insert("/api", 2).unwrap();
-        tree.insert("/api/users", 3).unwrap();
-        tree.insert("/assets", 4).unwrap();
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/", 1).unwrap();
+        builder.insert("/api", 2).unwrap();
+        builder.insert("/api/users", 3).unwrap();
+        builder.insert("/assets", 4).unwrap();
+        let tree = builder.freeze().unwrap();
 
-        let iter = tree.create_iter().unwrap();
-        assert_eq!(tree.longest_prefix(&iter, "/api/users/123"), Some(3));
-        let iter = tree.create_iter().unwrap();
-        assert_eq!(tree.longest_prefix(&iter, "/api/health"), Some(2));
-        let iter = tree.create_iter().unwrap();
-        assert_eq!(tree.longest_prefix(&iter, "/assets/logo.png"), Some(4));
-        let iter = tree.create_iter().unwrap();
-        assert_eq!(tree.longest_prefix(&iter, "/unknown"), Some(1));
+        assert_eq!(tree.match_route_longest("/api/users/123"), &[3]);
+        assert_eq!(tree.match_route_longest("/api/health"), &[2]);
+        assert_eq!(tree.match_route_longest("/assets/logo.png"), &[4]);
+        assert_eq!(tree.match_route_longest("/unknown"), &[1]);
     }
 
     #[test]
-    fn test_all_prefixes_order_longest_to_shortest() {
-        let mut tree = RadixTree::new().expect("create tree");
-        tree.insert("/", 1).unwrap();
-        tree.insert("/api", 2).unwrap();
-        tree.insert("/api/v1", 3).unwrap();
-        tree.insert("/api/v1/users", 4).unwrap();
+    fn test_all_prefixes_order_shortest_to_longest() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/", 1).unwrap();
+        builder.insert("/api", 2).unwrap();
+        builder.insert("/api/v1", 3).unwrap();
+        builder.insert("/api/v1/users", 4).unwrap();
+        let tree = builder.freeze().unwrap();
 
-        let iter = tree.create_iter().unwrap();
-        let prefixes = tree.find_all_prefixes(&iter, "/api/v1/users/42");
-        // Expect longest to shortest
-        assert_eq!(prefixes, vec![4, 3, 2, 1]);
+        let prefixes = tree.match_all_prefixes("/api/v1/users/42");
+        // New API returns shortest to longest
+        assert_eq!(prefixes, vec![1, 2, 3, 4]);
     }
 
     #[test]
     fn test_ascii_paths_instead_of_unicode() {
-        let mut tree = RadixTree::new().expect("create tree");
-        tree.insert("/service", 10).unwrap();
-        tree.insert("/service/user", 11).unwrap();
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/service", 10).unwrap();
+        builder.insert("/service/user", 11).unwrap();
+        let tree = builder.freeze().unwrap();
 
-        let iter = tree.create_iter().unwrap();
-        assert_eq!(tree.longest_prefix(&iter, "/service/user/detail"), Some(11));
-        let iter = tree.create_iter().unwrap();
-        let prefixes = tree.find_all_prefixes(&iter, "/service/user/detail");
-        assert_eq!(prefixes, vec![11, 10]);
-    }
-
-    #[test]
-    fn test_insert_update_and_remove() {
-        let mut tree = RadixTree::new().expect("create tree");
-        tree.insert("/api", 2).unwrap();
-        assert_eq!(tree.find_exact("/api"), Some(2));
-
-        // Update existing key value
-        tree.insert("/api", 5).unwrap();
-        assert_eq!(tree.find_exact("/api"), Some(5));
-
-        // Remove
-        tree.remove("/api").unwrap();
-        assert_eq!(tree.find_exact("/api"), None);
-    }
-
-    #[test]
-    fn test_iterator_sequence_longest_to_shortest() {
-        let mut tree = RadixTree::new().expect("create tree");
-        tree.insert("/", 1).unwrap();
-        tree.insert("/api", 2).unwrap();
-        tree.insert("/api/users", 3).unwrap();
-
-        let iter = tree.create_iter().unwrap();
-        assert!(tree.search(&iter, "/api/users/123"));
-        let mut seen = Vec::new();
-        while let Some(idx) = tree.next_prefix(&iter, "/api/users/123") {
-            seen.push(idx);
-        }
-        assert_eq!(seen, vec![3, 2, 1]);
+        assert_eq!(tree.match_route_longest("/service/user/detail"), &[11]);
+        let prefixes = tree.match_all_prefixes("/service/user/detail");
+        assert_eq!(prefixes, vec![10, 11]);
     }
 }

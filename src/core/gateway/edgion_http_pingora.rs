@@ -357,9 +357,8 @@ impl ProxyHttp for EdgionHttp {
             upstream.et = Some(upstream.start_time.elapsed().as_millis() as u64);
         }
         
-        ctx.try_cnt += 1;
         let max_retries = self.edgion_gateway_config.spec.max_retries;
-        if ctx.try_cnt < max_retries {
+        if ctx.try_cnt <= max_retries {
             e.set_retry(true);
         }
         

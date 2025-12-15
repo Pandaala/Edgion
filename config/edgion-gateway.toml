@@ -47,7 +47,7 @@ log_prefix = "edgion-gateway"
 # - info:  常规信息，生产环境推荐使用
 # - warn:  警告信息
 # - error: 错误信息
-log_level = "info"
+log_level = "debug"
 
 # 是否使用 JSON 格式输出日志
 # true:  使用结构化 JSON 格式，便于日志采集和分析
