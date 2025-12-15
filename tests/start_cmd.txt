@@ -1,10 +1,7 @@
- # 启动operator
- 
- RUST_LOG=debug cargo run -p edgion --bin edgion-op -- -p /Users/caohao/code/Edgion/tests/runtime --gateway-class public-gateway --grpc-listen 127.0.0.1:50061 --loader-type local_path --loader-dir /Users/caohao/code/Edgion/config/examples
+# 使用完整参数名 --config-file
+cargo run --bin edgion-controller -- --config-file ./config/edgion-controller.toml
+cargo run --bin edgion-gateway -- --config-file ./config/edgion-gateway.toml
 
-
-# 启动gateway
-  EDGION_ACCESS_LOG=/Users/caohao/code/Edgion/tests/logs/access.log RUST_LOG=debug cargo run -p edgion --bin edgion-gw -- -p /Users/caohao/code/Edgion/tests/runtime --gateway-class public-gateway --server-addr http://127.0.0.1:50061
-
-# 启动test_server
-cargo run -p edgion --example test_server
+# 或使用短参数 -c
+cargo run --bin edgion-controller -- -c ./config/edgion-controller.toml
+cargo run --bin edgion-gateway -- -c ./config/edgion-gateway.toml
