@@ -11,7 +11,7 @@ const HSTS_KEY: &str = "Strict-Transport-Security";
 impl Default for ServerHeaderOpts {
     fn default() -> Self {
         let mut headers = HashMap::new();
-        headers.insert("Server".to_owned(), "edgion".to_owned());
+        headers.insert("Server".to_owned(), "Edgion".to_owned());
         headers.insert(HSTS_KEY.to_owned(), "max-age=63072000; includeSubDomains; preload".to_owned());
         Self {
             headers,

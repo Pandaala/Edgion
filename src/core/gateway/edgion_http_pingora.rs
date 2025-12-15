@@ -313,6 +313,10 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
+        // Apply custom server headers (including Server header)
+        // This catches all responses, including framework-generated error responses (e.g., 502)
+        self.server_header_opts.apply_to_response(upstream_response);
+        
         // Run rule-level response plugins (async)
         if let Some(route_unit) = ctx.route_unit.clone() {
             route_unit.rule.plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
@@ -353,10 +357,17 @@ impl ProxyHttp for EdgionHttp {
         ctx: &mut Self::CTX,
         mut e: Box<pingora_core::Error>,
     ) -> Box<pingora_core::Error> {
-        // Set status=503 for current upstream
+        // Set status code based on error type: 504 for timeout, 503 for other errors
         if let Some(upstream) = ctx.get_current_upstream_mut() {
-            upstream.status = Some(503);
-            upstream.err.push(e.to_string());
+            let status_code = match e.etype() {
+                ErrorType::ConnectTimedout | ErrorType::TLSHandshakeTimedout => 504,
+                _ => 503,
+            };
+            upstream.status = Some(status_code);
+            // Only add error message for non-timeout errors (503)
+            if status_code != 504 {
+                upstream.err.push(e.to_string());
+            }
             upstream.et = Some(upstream.start_time.elapsed().as_millis() as u64);
         }
         
@@ -411,7 +422,12 @@ impl ProxyHttp for EdgionHttp {
         }
         
         if code > 0 {
-            session.respond_error(code).await.unwrap_or_else(|e| {
+            // Generate error response and apply custom server headers
+            let mut resp = pingora_core::protocols::http::ServerSession::generate_error(code);
+            self.server_header_opts.apply_to_response(&mut resp);
+            
+            // Write error response
+            session.write_error_response(resp, bytes::Bytes::default()).await.unwrap_or_else(|e| {
                 error!("failed to send error response to downstream: {e}");
             });
         }
