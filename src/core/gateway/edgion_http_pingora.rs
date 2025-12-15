@@ -390,6 +390,9 @@ impl ProxyHttp for EdgionHttp {
     {
         let code = match e.etype() {
             HTTPStatus(code) => *code,
+            // Check for timeout errors first
+            ErrorType::ConnectTimedout | ErrorType::TLSHandshakeTimedout | 
+            ErrorType::ReadTimedout | ErrorType::WriteTimedout => 504,
             _ => {
                 match e.esource() {
                     ErrorSource::Upstream => 502,
@@ -417,7 +420,10 @@ impl ProxyHttp for EdgionHttp {
             // Always update current upstream status and error message
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(code as u16);
-                upstream.err.push(e.to_string());
+                // Only add error message for non-timeout errors (not 504)
+                if code != 504 {
+                    upstream.err.push(e.to_string());
+                }
             }
         }
         
