@@ -81,36 +81,25 @@ impl RouteRules {
     ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
         // Step 1: Try exact match first (highest priority) - only if match_engine exists
         if let Some(ref match_engine) = self.match_engine {
-            if let Some(route_entry) = match_engine.exact_match(session)? {
+            if let Some(route_unit) = match_engine.exact_match(session)? {
                 tracing::debug!(path=%session.req_header().uri.path(),"exact match ok");
-                // Convert RouteEntry back to HttpRouteRuleUnit
-                let route_entry_id = route_entry.identifier();
-                let route_rules = self.route_rules_list.read().unwrap();
-                if let Some(unit) = route_rules.iter().find(|u| u.identifier() == route_entry_id) {
-                    return Ok(unit.clone());
-                }
+                return Ok(route_unit);  // Directly return, no lookup needed!
             }
         }
         
         // Step 2: Try regex match - use engine if available
         if let Some(ref regex_engine) = self.regex_routes_engine {
-            if let Some(result) = regex_engine.match_route(session)? {
+            if let Some(route_unit) = regex_engine.match_route(session)? {
                 tracing::debug!(path=%session.req_header().uri.path(),"regex match ok");
-                return Ok(result);
+                return Ok(route_unit);  // Directly return
             }
         }
         
         // Step 3: Fall back to prefix match - only if match_engine exists
         if let Some(ref match_engine) = self.match_engine {
-            let route_entry = match_engine.prefix_match(session)?;
+            let route_unit = match_engine.prefix_match(session)?;
             tracing::debug!(path=%session.req_header().uri.path(),"prefix match ok");
-            
-            // Convert RouteEntry back to HttpRouteRuleUnit
-            let route_entry_id = route_entry.identifier();
-            let route_rules = self.route_rules_list.read().unwrap();
-            if let Some(unit) = route_rules.iter().find(|u| u.identifier() == route_entry_id) {
-                return Ok(unit.clone());
-            }
+            return Ok(route_unit);  // Directly return, no lookup needed!
         }
         
         // No route matched

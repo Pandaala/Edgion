@@ -6,7 +6,6 @@ use crate::core::routes::{RouteManager, HttpRouteRuleUnit, get_global_route_mana
 use crate::core::routes::routes_mgr::RouteRules;
 use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::routes::match_engine::regex_routes_engine::RegexRoutesEngine;
-use crate::core::routes::match_engine::RouteEntry;
 use crate::core::routes::lb_policy_sync::{sync_lb_policies_for_routes, cleanup_lb_policies_for_routes};
 use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::types::{HTTPRoute, ResourceMeta, HTTPRouteMatch, HTTPRouteRule};
@@ -297,12 +296,8 @@ impl RouteManager {
             // Only regex routes, no need for match_engine
             None
         } else {
-            let route_entries: Vec<Arc<dyn RouteEntry>> = route_rules_list
-                .iter()
-                .map(|unit| unit.clone() as Arc<dyn RouteEntry>)
-                .collect();
-            
-            match RadixRouteMatchEngine::build(route_entries.clone()) {
+            // Directly pass HttpRouteRuleUnit, no type conversion needed!
+            match RadixRouteMatchEngine::build(route_rules_list.clone()) {
                 Ok(new_engine) => {
                     Some(Arc::new(new_engine))
                 }
@@ -537,14 +532,8 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                     // Only regex routes, no need for match_engine
                     None
                 } else {
-                    // Convert Vec<Arc<HttpRouteRuleUnit>> to Vec<Arc<dyn RouteEntry>>
-                    let route_entries: Vec<Arc<dyn RouteEntry>> = split.0
-                        .iter()
-                        .map(|unit| unit.clone() as Arc<dyn RouteEntry>)
-                        .collect();
-
-                    // Build RadixRouteMatchEngine for normal routes
-                    match RadixRouteMatchEngine::build(route_entries) {
+                    // Directly pass HttpRouteRuleUnit, no type conversion needed!
+                    match RadixRouteMatchEngine::build(split.0.clone()) {
                         Ok(engine) => Some(Arc::new(engine)),
                         Err(e) => {
                             tracing::error!(component="route_manager",gw=%gateway_key,domain=%domain,err=?e,"build failed");
