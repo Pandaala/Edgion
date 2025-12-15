@@ -194,17 +194,11 @@ impl RadixRouteMatchEngine {
         Err(RouteNotFound())
     }
 
-    /// Combined match route (for backward compatibility)
-    /// Try exact match first, then prefix match
+    /// Combined match route
+    /// Uses prefix_match which automatically handles exact match with higher priority
     pub fn match_route(&self, session: &mut Session) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
-        tracing::trace!("========== Radix Route Matching ==========");
-
-        // Try exact match first
-        if let Some(route) = self.exact_match(session)? {
-            return Ok(route);
-        }
-
-        // Fall back to prefix match
+        // prefix_match already handles exact match with higher priority
+        // (exact routes have odd priority_weight, prefix routes have even priority_weight)
         self.prefix_match(session)
     }
 

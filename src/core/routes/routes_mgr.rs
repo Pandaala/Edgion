@@ -73,33 +73,25 @@ impl RouteRules {
     }
 
     /// Match a route using the match_engine engine
-    /// Try match in order: exact → regex → prefix
+    /// Try match in order: regex → radix (exact + prefix)
     /// Returns Arc<HttpRouteRuleUnit> on success
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
     ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
-        // Step 1: Try exact match first (highest priority) - only if match_engine exists
-        if let Some(ref match_engine) = self.match_engine {
-            if let Some(route_unit) = match_engine.exact_match(session)? {
-                tracing::debug!(path=%session.req_header().uri.path(),"exact match ok");
-                return Ok(route_unit);  // Directly return, no lookup needed!
-            }
-        }
-        
-        // Step 2: Try regex match - use engine if available
+        // Step 1: Try regex match first (highest priority)
         if let Some(ref regex_engine) = self.regex_routes_engine {
             if let Some(route_unit) = regex_engine.match_route(session)? {
                 tracing::debug!(path=%session.req_header().uri.path(),"regex match ok");
-                return Ok(route_unit);  // Directly return
+                return Ok(route_unit);
             }
         }
         
-        // Step 3: Fall back to prefix match - only if match_engine exists
+        // Step 2: Fall back to radix tree match (exact + prefix)
         if let Some(ref match_engine) = self.match_engine {
-            let route_unit = match_engine.prefix_match(session)?;
-            tracing::debug!(path=%session.req_header().uri.path(),"prefix match ok");
-            return Ok(route_unit);  // Directly return, no lookup needed!
+            let route_unit = match_engine.match_route(session)?;
+            tracing::debug!(path=%session.req_header().uri.path(),"radix match ok");
+            return Ok(route_unit);
         }
         
         // No route matched
