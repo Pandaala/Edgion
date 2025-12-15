@@ -6,7 +6,7 @@ mod conf_handler_impl;
 
 #[cfg(test)]
 mod tests;
-mod radix_match;
+pub mod radix_match;
 
 pub use match_unit::HttpRouteRuleUnit;
 pub use routes_mgr::{RouteManager, DomainRouteRules, get_global_route_manager};

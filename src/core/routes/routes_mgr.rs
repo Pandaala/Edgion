@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use crate::core::routes::HttpRouteRuleUnit;
-use crate::types::{HTTPRouteRule, MatchInfo, HTTPBackendRef};
+use crate::types::{HTTPRouteRule, HTTPBackendRef};
 use crate::types::err::EdError;
 use crate::core::routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::routes::match_engine::regex_routes_engine::RegexRoutesEngine;

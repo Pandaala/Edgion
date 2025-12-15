@@ -35,4 +35,3 @@ mod error;
 pub use builder::RadixRouter as RadixTreeBuilder;
 pub use frozen::FrozenRadixTree as RadixTree;
 pub use error::RouterError;
-pub use frozen::TreeStats;
