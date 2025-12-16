@@ -18,12 +18,28 @@ path = "src/bin/edgion_controller.rs"
 
 [features]
 # Default features
-default = ["allocator-jemalloc"]
+default = ["allocator-jemalloc", "boringssl"]
 
 # Memory allocator selection (mutually exclusive)
 allocator-jemalloc = ["tikv-jemallocator"]
 allocator-mimalloc = ["mimalloc"]
 allocator-system = []
+
+# TLS backend selection (mutually exclusive)
+boringssl = [
+    "pingora-core/boringssl",
+    "pingora-proxy/boringssl",
+]
+
+openssl = [
+    "pingora-core/openssl",
+    "pingora-proxy/openssl",
+]
+
+rustls = [
+    "pingora-core/rustls",
+    "pingora-proxy/rustls",
+]
 
 # Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
 legacy_route_tests = []
@@ -76,10 +92,10 @@ regex = "1.0"
 rand = "0.8"
 
 # Pingora
-pingora-core = { version = "0.6", features = ["openssl_derived", "boringssl"] }
+pingora-core = { version = "0.6" }
 pingora-http = "0.6"
 pingora-load-balancing = "0.6"
-pingora-proxy = { version = "0.6", features = ["openssl_derived", "boringssl"] }
+pingora-proxy = { version = "0.6" }
 etcd-client = "0.11"
 
 # Metrics
