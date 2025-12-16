@@ -98,11 +98,11 @@ impl EdgionGatewayCli {
         let base_conf = config_client.get_base_conf()
             .ok_or_else(|| anyhow!("Base configuration not available"))?;
 
-        // Create Gateway
-        let gateway = Arc::new(GatewayBase::new(base_conf));
-        
         // Initialize access logger asynchronously
-        gateway.init_access_logger(&config.access_log).await?;
+        let access_logger = crate::core::gateway::gateway_base::create_access_logger(&config.access_log).await?;
+        
+        // Create Gateway with access logger
+        let gateway = Arc::new(GatewayBase::new(base_conf, access_logger));
         
         // Bootstrap Gateway
         gateway.bootstrap()?;

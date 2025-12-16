@@ -156,7 +156,7 @@ pub struct EdgionHttp {
     pub domain_routes: Arc<DomainRouteRules>,
     
     /// Access logger for writing access logs
-    pub access_logger: Option<Arc<AccessLogger>>,
+    pub access_logger: Arc<AccessLogger>,
     
     /// Global gateway configuration
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,

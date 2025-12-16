@@ -466,10 +466,8 @@ impl ProxyHttp for EdgionHttp {
             );
         }
         
-        // Send to access logger if configured
-        if let Some(logger) = &self.access_logger {
-            logger.send(entry.to_json()).await;
-        }
+        // Send to access logger
+        self.access_logger.send(entry.to_json()).await;
     }
 
 
@@ -515,10 +513,8 @@ impl ProxyHttp for EdgionHttp {
                 let mut entry = AccessLogEntry::from_context(ctx);
                 entry.set_conn_est();
                 
-                // Send to access logger if configured
-                if let Some(logger) = &self.access_logger {
-                    logger.send(entry.to_json()).await;
-                }
+                // Send to access logger
+                self.access_logger.send(entry.to_json()).await;
             }
         }
         

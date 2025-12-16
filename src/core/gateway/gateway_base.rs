@@ -14,64 +14,67 @@ use crate::core::observe::AccessLogger;
 use crate::core::link_sys::LocalFileWriter;
 use crate::types::link_sys::LocalFileWriterConfig;
 
+/// Create and initialize AccessLogger from configuration
+/// If path is empty, returns an empty AccessLogger (no senders)
+pub async fn create_access_logger(config: &crate::core::cli::edgion_gateway::config::AccessLogConfig) -> Result<Arc<AccessLogger>> {
+    use crate::core::link_sys::DataSender;
+    
+    // If no path configured, return empty logger
+    if config.path.is_empty() {
+        tracing::info!("Access logger disabled (no path configured)");
+        return Ok(Arc::new(AccessLogger::new()));
+    }
+    
+    tracing::info!(
+        path = %config.path,
+        queue_size = ?config.queue_size,
+        "Initializing access logger"
+    );
+    
+    // Create LocalFileWriterConfig
+    let mut writer_config = LocalFileWriterConfig::new(&config.path);
+    
+    if let Some(queue_size) = config.queue_size {
+        writer_config = writer_config.with_queue_size(queue_size);
+    }
+    
+    if let Some(rotation) = &config.rotation {
+        writer_config = writer_config.with_rotation(rotation.clone());
+    }
+    
+    // Create LocalFileWriter
+    let mut writer = LocalFileWriter::new(writer_config);
+    
+    // Initialize the writer asynchronously
+    writer.init().await?;
+    
+    // Create AccessLogger and register the writer
+    let mut logger = AccessLogger::new();
+    logger.register(Box::new(writer));
+    
+    tracing::info!("Access logger initialized successfully");
+    
+    Ok(Arc::new(logger))
+}
+
 pub struct GatewayBase {
     base_conf: GatewayBaseConf,
     pingora_server: Mutex<Option<Server>>,
-    access_logger: Mutex<Option<Arc<AccessLogger>>>,
+    access_logger: Arc<AccessLogger>,
 }
 
 impl GatewayBase {
-    pub fn new(base_conf: GatewayBaseConf) -> Self {
+    pub fn new(base_conf: GatewayBaseConf, access_logger: Arc<AccessLogger>) -> Self {
         Self {
             base_conf,
             pingora_server: Mutex::new(None),
-            access_logger: Mutex::new(None),
+            access_logger,
         }
     }
     
-    /// Initialize AccessLogger asynchronously from configuration
-    pub async fn init_access_logger(&self, config: &crate::core::cli::edgion_gateway::config::AccessLogConfig) -> Result<()> {
-        use crate::core::link_sys::DataSender;
-        
-        tracing::info!(
-            path = %config.path,
-            queue_size = ?config.queue_size,
-            "Initializing access logger"
-        );
-        
-        // Create LocalFileWriterConfig
-        let mut writer_config = LocalFileWriterConfig::new(&config.path);
-        
-        if let Some(queue_size) = config.queue_size {
-            writer_config = writer_config.with_queue_size(queue_size);
-        }
-        
-        if let Some(rotation) = &config.rotation {
-            writer_config = writer_config.with_rotation(rotation.clone());
-        }
-        
-        // Create LocalFileWriter
-        let mut writer = LocalFileWriter::new(writer_config);
-        
-        // Initialize the writer asynchronously
-        writer.init().await?;
-        
-        // Create AccessLogger and register the writer
-        let mut logger = AccessLogger::new();
-        logger.register(Box::new(writer));
-        
-        // Store the logger
-        let mut access_logger_guard = self.access_logger.lock().unwrap();
-        *access_logger_guard = Some(Arc::new(logger));
-        
-        tracing::info!("Access logger initialized successfully");
-        
-        Ok(())
-    }
-    
-    /// Get the access logger if initialized
-    fn get_access_logger(&self) -> Option<Arc<AccessLogger>> {
-        self.access_logger.lock().unwrap().clone()
+    /// Get the access logger
+    fn get_access_logger(&self) -> Arc<AccessLogger> {
+        self.access_logger.clone()
     }
 
     pub fn bootstrap(&self) -> Result<()> {
