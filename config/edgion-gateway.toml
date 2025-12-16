@@ -17,7 +17,8 @@
 # Prefix directory for Edgion runtime files
 # 运行时文件存储目录（包含配置、状态等）
 # 开发环境建议使用相对路径，生产环境使用绝对路径
-prefix_dir = "runtime"
+# 设置为 "." 表示当前目录
+prefix_dir = "."
 
 [gateway]
 # Gateway class name that this gateway instance will handle
@@ -61,9 +62,14 @@ console = true
 # 增大此值可以提高高并发场景下的日志性能
 buffer_size = 10000
 
-[access_log]
+# ================================================================================
+# Access Log Configuration
+# ================================================================================
+# Access log 支持多种输出目标：LocalFile, Elasticsearch, Kafka 等
+# 当前使用 LocalFile 输出到本地文件
+
+[access_log.output.localFile]
 # Access log 文件路径（相对于 prefix_dir）
-# 默认路径: logs/edgion_access.log
 path = "logs/edgion_access.log"
 
 # 可选：队列大小
@@ -71,8 +77,17 @@ path = "logs/edgion_access.log"
 # queue_size = 100000
 
 # 可选：日志轮转配置
-# [access_log.rotation]
+# [access_log.output.localFile.rotation]
 # strategy = "daily"  # 可选: "daily", "hourly", "never", 或 { size = 104857600 }
 # max_files = 10
 # check_interval_secs = 30
+
+# 未来支持的输出目标示例：
+# [access_log.output.es]
+# endpoint = "http://localhost:9200"
+# index = "edgion-access"
+# 
+# [access_log.output.kafka]
+# brokers = ["localhost:9092"]
+# topic = "edgion-access"
 

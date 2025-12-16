@@ -3,7 +3,7 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::types::DEFAULT_PREFIX_DIR;
-use crate::types::link_sys::RotationConfig;
+use crate::types::link_sys::StringOutput;
 
 /// Edgion Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
@@ -56,34 +56,19 @@ pub struct GatewayConfig {
 }
 
 /// Access log configuration
+/// Supports multiple output targets: LocalFile, Elasticsearch, Kafka, etc.
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
 pub struct AccessLogConfig {
-    /// Access log file path (relative to prefix_dir)
-    #[arg(skip)]
-    #[serde(default = "default_access_log_path")]
-    pub path: String,
-
-    /// Queue size for the write queue (optional)
+    /// Output destination for access logs
     #[arg(skip)]
     #[serde(default)]
-    pub queue_size: Option<usize>,
-
-    /// Rotation configuration (optional)
-    #[arg(skip)]
-    #[serde(default)]
-    pub rotation: Option<RotationConfig>,
-}
-
-fn default_access_log_path() -> String {
-    "logs/edgion_access.log".to_string()
+    pub output: StringOutput,
 }
 
 impl Default for AccessLogConfig {
     fn default() -> Self {
         Self {
-            path: default_access_log_path(),
-            queue_size: None,
-            rotation: None,
+            output: StringOutput::default(),
         }
     }
 }

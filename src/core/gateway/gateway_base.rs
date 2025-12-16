@@ -15,44 +15,52 @@ use crate::core::link_sys::LocalFileWriter;
 use crate::types::link_sys::LocalFileWriterConfig;
 
 /// Create and initialize AccessLogger from configuration
-/// If path is empty, returns an empty AccessLogger (no senders)
+/// Supports multiple output targets based on StringOutput enum
 pub async fn create_access_logger(config: &crate::core::cli::edgion_gateway::config::AccessLogConfig) -> Result<Arc<AccessLogger>> {
     use crate::core::link_sys::DataSender;
+    use crate::types::link_sys::StringOutput;
     
-    // If no path configured, return empty logger
-    if config.path.is_empty() {
-        tracing::info!("Access logger disabled (no path configured)");
-        return Ok(Arc::new(AccessLogger::new()));
-    }
-    
-    tracing::info!(
-        path = %config.path,
-        queue_size = ?config.queue_size,
-        "Initializing access logger"
-    );
-    
-    // Create LocalFileWriterConfig
-    let mut writer_config = LocalFileWriterConfig::new(&config.path);
-    
-    if let Some(queue_size) = config.queue_size {
-        writer_config = writer_config.with_queue_size(queue_size);
-    }
-    
-    if let Some(rotation) = &config.rotation {
-        writer_config = writer_config.with_rotation(rotation.clone());
-    }
-    
-    // Create LocalFileWriter
-    let mut writer = LocalFileWriter::new(writer_config);
-    
-    // Initialize the writer asynchronously
-    writer.init().await?;
-    
-    // Create AccessLogger and register the writer
     let mut logger = AccessLogger::new();
-    logger.register(Box::new(writer));
     
-    tracing::info!("Access logger initialized successfully");
+    // Process output configuration based on variant
+    match &config.output {
+        StringOutput::LocalFile(file_cfg) => {
+            // If path is empty, return empty logger
+            if file_cfg.path.is_empty() {
+                tracing::info!("Access logger disabled (no path configured)");
+                return Ok(Arc::new(logger));
+            }
+            
+            tracing::info!(
+                path = %file_cfg.path,
+                queue_size = ?file_cfg.queue_size,
+                "Initializing access logger with LocalFile output"
+            );
+            
+            // Create LocalFileWriterConfig from config
+            let mut writer_config = LocalFileWriterConfig::new(&file_cfg.path);
+            
+            if let Some(queue_size) = file_cfg.queue_size {
+                writer_config = writer_config.with_queue_size(queue_size);
+            }
+            
+            if let Some(rotation) = &file_cfg.rotation {
+                writer_config = writer_config.with_rotation(rotation.clone());
+            }
+            
+            // Create and initialize LocalFileWriter
+            let mut writer = LocalFileWriter::new(writer_config);
+            writer.init().await?;
+            
+            // Register the writer
+            logger.register(Box::new(writer));
+            
+            tracing::info!("Access logger initialized successfully with LocalFile output");
+        }
+        // Future: Add support for other output types
+        // StringOutput::Es(es_cfg) => { ... }
+        // StringOutput::Kafka(kafka_cfg) => { ... }
+    }
     
     Ok(Arc::new(logger))
 }
