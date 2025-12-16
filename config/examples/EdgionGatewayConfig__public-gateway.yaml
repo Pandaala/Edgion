@@ -11,17 +11,8 @@ spec:
     defaultLBPolicy: round-robin
     healthCheck:
       enabled: false
-  accessLog:
-    enabled: true
-    format: json
-    logPath: /var/log/edgion/access.log
-    samplingRate: 1.0
-    includeHeaders:
-      - User-Agent
-      - X-Request-ID
-    excludePaths:
-      - /health
-      - /metrics
+  # Note: accessLog has been moved to local TOML configuration (edgion-gateway.toml)
+  # Configure access log in the [access_log] section of edgion-gateway.toml instead
   security:
     tls:
       minTLSVersion: "1.2"

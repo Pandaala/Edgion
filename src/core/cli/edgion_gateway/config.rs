@@ -3,6 +3,7 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::types::DEFAULT_PREFIX_DIR;
+use crate::types::link_sys::RotationConfig;
 
 /// Edgion Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
@@ -25,6 +26,10 @@ pub struct EdgionGatewayConfig {
     #[command(flatten)]
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    #[command(flatten)]
+    #[serde(default)]
+    pub access_log: AccessLogConfig,
 }
 
 fn default_prefix_dir() -> PathBuf {
@@ -48,6 +53,39 @@ pub struct GatewayConfig {
     #[arg(long = "admin-listen", value_name = "ADDR")]
     #[serde(default)]
     pub admin_listen: Option<String>,
+}
+
+/// Access log configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Args)]
+pub struct AccessLogConfig {
+    /// Access log file path (relative to prefix_dir)
+    #[arg(skip)]
+    #[serde(default = "default_access_log_path")]
+    pub path: String,
+
+    /// Queue size for the write queue (optional)
+    #[arg(skip)]
+    #[serde(default)]
+    pub queue_size: Option<usize>,
+
+    /// Rotation configuration (optional)
+    #[arg(skip)]
+    #[serde(default)]
+    pub rotation: Option<RotationConfig>,
+}
+
+fn default_access_log_path() -> String {
+    "logs/edgion_access.log".to_string()
+}
+
+impl Default for AccessLogConfig {
+    fn default() -> Self {
+        Self {
+            path: default_access_log_path(),
+            queue_size: None,
+            rotation: None,
+        }
+    }
 }
 
 /// Logging configuration
@@ -176,6 +214,9 @@ impl EdgionGatewayConfig {
         if cli.logging.json_format.is_some() {
             base.logging.json_format = cli.logging.json_format;
         }
+
+        // Access log config (CLI doesn't support overriding, only from file)
+        // No merge needed as there are no CLI args for access_log
     }
 
     /// Get gateway_class

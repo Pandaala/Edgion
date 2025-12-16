@@ -61,3 +61,18 @@ console = true
 # 增大此值可以提高高并发场景下的日志性能
 buffer_size = 10000
 
+[access_log]
+# Access log 文件路径（相对于 prefix_dir）
+# 默认路径: logs/edgion_access.log
+path = "logs/edgion_access.log"
+
+# 可选：队列大小
+# 如果不设置，默认使用 cpu_cores * 10_000
+# queue_size = 100000
+
+# 可选：日志轮转配置
+# [access_log.rotation]
+# strategy = "daily"  # 可选: "daily", "hourly", "never", 或 { size = 104857600 }
+# max_files = 10
+# check_interval_secs = 30
+

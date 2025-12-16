@@ -7,7 +7,7 @@ use clap::Parser;
 use std::sync::Arc;
 use std::time::Duration;
 
-mod config;
+pub mod config;
 
 use config::EdgionGatewayConfig;
 
@@ -98,8 +98,8 @@ impl EdgionGatewayCli {
         let base_conf = config_client.get_base_conf()
             .ok_or_else(|| anyhow!("Base configuration not available"))?;
 
-        // bootstrap Gateway
-        let gateway = Arc::new(GatewayBase::new(base_conf));
+        // bootstrap Gateway with access_log config
+        let gateway = Arc::new(GatewayBase::new(base_conf, Some(&config.access_log)));
         gateway.bootstrap()?;
         tracing::info!("Gateway bootstrap completed successfully");
 

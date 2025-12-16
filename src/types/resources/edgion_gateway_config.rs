@@ -28,10 +28,6 @@ pub struct EdgionGatewayConfigSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_balancing: Option<LoadBalancing>,
 
-    /// Access log configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub access_log: Option<AccessLog>,
-
     /// Security policies
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<Security>,
@@ -164,20 +160,6 @@ fn default_unhealthy_threshold() -> u32 {
 
 fn default_healthy_threshold() -> u32 {
     2
-}
-
-// ============================================
-// Access Log
-// ============================================
-
-use crate::types::link_sys::StringOutput;
-
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AccessLog {
-    /// Output destination for access logs
-    #[serde(default)]
-    pub output: StringOutput,
 }
 
 // ============================================
@@ -648,9 +630,6 @@ spec:
     allowInsecure: false
   loadBalancing:
     defaultLBPolicy: round-robin
-  accessLog:
-    enabled: true
-    format: json
 "#;
         let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Failed to parse YAML");
         assert_eq!(config.metadata.name, Some("test-config".to_string()));
@@ -658,7 +637,7 @@ spec:
         let spec = config.spec;
         assert!(spec.listener_defaults.is_some());
         assert!(spec.load_balancing.is_some());
-        assert!(spec.access_log.is_some());
+        // Note: access_log has been moved to local TOML config
     }
 
     #[test]

@@ -10,18 +10,75 @@ use crate::core::routes::get_global_route_manager;
 use crate::types::{GatewayBaseConf, ResourceMeta};
 use anyhow::Result;
 use crate::core::tls::tls_pingora::TlsCallback;
+use crate::core::observe::AccessLogger;
+use crate::core::link_sys::LocalFileWriter;
+use crate::types::link_sys::LocalFileWriterConfig;
 
 pub struct GatewayBase {
     base_conf: GatewayBaseConf,
     pingora_server: Mutex<Option<Server>>,
+    access_logger: Option<Arc<AccessLogger>>,
 }
 
 impl GatewayBase {
-    pub fn new(base_conf: GatewayBaseConf) -> Self {
+    pub fn new(base_conf: GatewayBaseConf, access_log_config: Option<&crate::core::cli::edgion_gateway::config::AccessLogConfig>) -> Self {
+        // Initialize access logger if config is provided
+        let access_logger = access_log_config.and_then(|cfg| {
+            Self::create_access_logger(cfg).ok()
+        });
+        
         Self {
             base_conf,
             pingora_server: Mutex::new(None),
+            access_logger,
         }
+    }
+    
+    /// Create and initialize AccessLogger from configuration
+    fn create_access_logger(config: &crate::core::cli::edgion_gateway::config::AccessLogConfig) -> Result<Arc<AccessLogger>> {
+        use crate::core::link_sys::DataSender;
+        
+        tracing::info!(
+            path = %config.path,
+            queue_size = ?config.queue_size,
+            "Initializing access logger"
+        );
+        
+        // Create LocalFileWriterConfig
+        let mut writer_config = LocalFileWriterConfig::new(&config.path);
+        
+        if let Some(queue_size) = config.queue_size {
+            writer_config = writer_config.with_queue_size(queue_size);
+        }
+        
+        if let Some(rotation) = &config.rotation {
+            writer_config = writer_config.with_rotation(rotation.clone());
+        }
+        
+        // Create LocalFileWriter
+        let mut writer = LocalFileWriter::new(writer_config);
+        
+        // Initialize the writer
+        let rt = tokio::runtime::Handle::try_current();
+        if let Ok(handle) = rt {
+            handle.block_on(async {
+                writer.init().await
+            })?;
+        } else {
+            // If no tokio runtime, create a temporary one
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                writer.init().await
+            })?;
+        }
+        
+        // Create AccessLogger and register the writer
+        let mut logger = AccessLogger::new();
+        logger.register(Box::new(writer));
+        
+        tracing::info!("Access logger initialized successfully");
+        
+        Ok(Arc::new(logger))
     }
 
     pub fn bootstrap(&self) -> Result<()> {
@@ -79,7 +136,7 @@ impl GatewayBase {
                         server_start_time: SystemTime::now(),
                         server_header_opts: Default::default(),
                         domain_routes: domain_routes.clone(),
-                        access_logger: None, // TODO: Initialize from config
+                        access_logger: self.access_logger.clone(),
                         edgion_gateway_config,
                         parsed_timeouts,
                     };
