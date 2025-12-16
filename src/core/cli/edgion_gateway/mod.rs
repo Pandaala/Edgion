@@ -98,8 +98,13 @@ impl EdgionGatewayCli {
         let base_conf = config_client.get_base_conf()
             .ok_or_else(|| anyhow!("Base configuration not available"))?;
 
-        // bootstrap Gateway with access_log config
-        let gateway = Arc::new(GatewayBase::new(base_conf, Some(&config.access_log)));
+        // Create Gateway
+        let gateway = Arc::new(GatewayBase::new(base_conf));
+        
+        // Initialize access logger asynchronously
+        gateway.init_access_logger(&config.access_log).await?;
+        
+        // Bootstrap Gateway
         gateway.bootstrap()?;
         tracing::info!("Gateway bootstrap completed successfully");
 

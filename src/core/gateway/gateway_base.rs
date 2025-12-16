@@ -17,25 +17,20 @@ use crate::types::link_sys::LocalFileWriterConfig;
 pub struct GatewayBase {
     base_conf: GatewayBaseConf,
     pingora_server: Mutex<Option<Server>>,
-    access_logger: Option<Arc<AccessLogger>>,
+    access_logger: Mutex<Option<Arc<AccessLogger>>>,
 }
 
 impl GatewayBase {
-    pub fn new(base_conf: GatewayBaseConf, access_log_config: Option<&crate::core::cli::edgion_gateway::config::AccessLogConfig>) -> Self {
-        // Initialize access logger if config is provided
-        let access_logger = access_log_config.and_then(|cfg| {
-            Self::create_access_logger(cfg).ok()
-        });
-        
+    pub fn new(base_conf: GatewayBaseConf) -> Self {
         Self {
             base_conf,
             pingora_server: Mutex::new(None),
-            access_logger,
+            access_logger: Mutex::new(None),
         }
     }
     
-    /// Create and initialize AccessLogger from configuration
-    fn create_access_logger(config: &crate::core::cli::edgion_gateway::config::AccessLogConfig) -> Result<Arc<AccessLogger>> {
+    /// Initialize AccessLogger asynchronously from configuration
+    pub async fn init_access_logger(&self, config: &crate::core::cli::edgion_gateway::config::AccessLogConfig) -> Result<()> {
         use crate::core::link_sys::DataSender;
         
         tracing::info!(
@@ -58,27 +53,25 @@ impl GatewayBase {
         // Create LocalFileWriter
         let mut writer = LocalFileWriter::new(writer_config);
         
-        // Initialize the writer
-        let rt = tokio::runtime::Handle::try_current();
-        if let Ok(handle) = rt {
-            handle.block_on(async {
-                writer.init().await
-            })?;
-        } else {
-            // If no tokio runtime, create a temporary one
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(async {
-                writer.init().await
-            })?;
-        }
+        // Initialize the writer asynchronously
+        writer.init().await?;
         
         // Create AccessLogger and register the writer
         let mut logger = AccessLogger::new();
         logger.register(Box::new(writer));
         
+        // Store the logger
+        let mut access_logger_guard = self.access_logger.lock().unwrap();
+        *access_logger_guard = Some(Arc::new(logger));
+        
         tracing::info!("Access logger initialized successfully");
         
-        Ok(Arc::new(logger))
+        Ok(())
+    }
+    
+    /// Get the access logger if initialized
+    fn get_access_logger(&self) -> Option<Arc<AccessLogger>> {
+        self.access_logger.lock().unwrap().clone()
     }
 
     pub fn bootstrap(&self) -> Result<()> {
@@ -136,7 +129,7 @@ impl GatewayBase {
                         server_start_time: SystemTime::now(),
                         server_header_opts: Default::default(),
                         domain_routes: domain_routes.clone(),
-                        access_logger: self.access_logger.clone(),
+                        access_logger: self.get_access_logger(),
                         edgion_gateway_config,
                         parsed_timeouts,
                     };
