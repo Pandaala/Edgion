@@ -366,7 +366,7 @@ impl ProxyHttp for EdgionHttp {
             upstream.status = Some(status_code);
             // Only add error message for non-timeout errors (503)
             if status_code != 504 {
-                upstream.err.push(e.to_string());
+                upstream.err.push(e.etype().as_str().to_string());
             }
             upstream.et = Some(upstream.start_time.elapsed().as_millis() as u64);
         }
@@ -422,7 +422,7 @@ impl ProxyHttp for EdgionHttp {
                 upstream.status = Some(code as u16);
                 // Only add error message for non-timeout errors (not 504)
                 if code != 504 {
-                    upstream.err.push(e.to_string());
+                    upstream.err.push(e.etype().as_str().to_string());
                 }
             }
         }
