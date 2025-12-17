@@ -109,7 +109,7 @@ pub fn add_tcp_listener(
     use pingora_core::services::listening::Service;
     use pingora_core::listeners::Listeners;
     use pingora_core::connectors::TransportConnector;
-    use crate::core::gateway::edgion_tcp::EdgionTcp;
+    use crate::core::routes::tcp_routes::EdgionTcp;
     use crate::core::routes::tcp_routes::get_global_tcp_route_manager;
     
     let listener_name = context.listener.name.clone();

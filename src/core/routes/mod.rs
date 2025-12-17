@@ -15,4 +15,5 @@ pub use tcp_routes::{
     get_global_tcp_route_manager,
     TcpRouteManager,
     create_tcp_route_handler,
+    EdgionTcp,  // TCP 代理类型
 };

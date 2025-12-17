@@ -1,4 +1,3 @@
-mod edgion_tcp;
 pub mod server_header;
 mod err_resp;
 pub mod gateway_base;
