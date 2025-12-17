@@ -21,14 +21,23 @@ impl TlsAccept for TlsCallback {
         }
     }
 }
+
 impl TlsCallback {
     pub fn new() -> Self {
         Self {}
     }
 
-    pub fn new_tls_settings_with_callback() -> Result<TlsSettings> {
+    pub fn new_tls_settings_with_callback(enable_http2: bool) -> Result<TlsSettings> {
         let callback = Box::new(TlsCallback::new());
-        TlsSettings::with_callbacks(callback).map_err(|e| anyhow!("Failed to create TLS settings: {}", e))
+        let mut settings = TlsSettings::with_callbacks(callback)
+            .map_err(|e| anyhow!("Failed to create TLS settings: {}", e))?;
+        
+        // Enable HTTP/2 support if requested
+        if enable_http2 {
+            settings.enable_h2();
+        }
+        
+        Ok(settings)
     }
 
     async fn load_cert_from_sni(&self, ssl: &mut SslRef) -> Result<(), Box<PingoraError>> {

@@ -1,4 +1,4 @@
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, tungstenite::handshake::client::Request};
 use futures::{SinkExt, StreamExt};
 use std::time::Duration;
 
@@ -14,14 +14,22 @@ async fn main() {
         "ws://127.0.0.1:30014/ws",
     ];
 
-    // Get server URL from command line or use first server
+    // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
     let server_url_input = if args.len() > 1 {
         args[1].clone()
     } else {
-        println!("Usage: {} <ws://server:port/path> or <http://server:port/path>", args[0]);
+        println!("Usage: {} <ws://server:port/path> [host_header]", args[0]);
+        println!("Example: {} ws://127.0.0.1:8080/ws example.com", args[0]);
         println!("Using default: {}\n", servers[0]);
         servers[0].to_string()
+    };
+
+    // Optional host header from command line (second argument)
+    let custom_host = if args.len() > 2 {
+        Some(args[2].clone())
+    } else {
+        None
     };
 
     // Convert http:// to ws:// if needed
@@ -33,9 +41,31 @@ async fn main() {
         server_url_input
     };
 
-    println!("Connecting to {}...", server_url);
+    if let Some(ref host) = custom_host {
+        println!("Connecting to {} with Host: {}...", server_url, host);
+    } else {
+        println!("Connecting to {}...", server_url);
+    }
 
-    match connect_async(server_url).await {
+    // Build WebSocket request with custom Host header if provided
+    let connect_result = if let Some(host) = custom_host {
+        // Build custom request with Host header
+        let request = Request::builder()
+            .uri(&server_url)
+            .header("Host", host)
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", tokio_tungstenite::tungstenite::handshake::client::generate_key())
+            .body(())
+            .expect("Failed to build request");
+        
+        connect_async(request).await
+    } else {
+        connect_async(server_url).await
+    };
+
+    match connect_result {
         Ok((ws_stream, _)) => {
             println!("✓ Connected successfully!\n");
             

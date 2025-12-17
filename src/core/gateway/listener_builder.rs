@@ -84,7 +84,7 @@ pub fn add_http_listener(
 
     // Add listener with or without TLS
     if enable_tls {
-        let tls_settings = TlsCallback::new_tls_settings_with_callback()?;
+        let tls_settings = TlsCallback::new_tls_settings_with_callback(true)?;
         http_service.add_tls_with_settings(&addr, None, tls_settings);
         tracing::info!(
             gateway=%params.gateway_key,
