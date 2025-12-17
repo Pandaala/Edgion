@@ -35,19 +35,15 @@ pub struct ListenerContext {
 /// Add an HTTP or HTTPS listener to the Pingora server
 ///
 /// This function creates an EdgionHttp proxy service and adds it to the server
-/// with or without TLS based on the listener configuration.
+/// with or without TLS based on the enable_tls parameter.
 pub fn add_http_listener(
     server: &mut Server,
     context: &ListenerContext,
+    enable_tls: bool,
 ) -> Result<()> {
     let listener_name = context.listener.name.clone();
     let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
     let addr = format!("{}:{}", host, context.listener.port);
-
-    // Determine if TLS should be enabled
-    let enable_tls = context.listener.tls.is_some() 
-        || context.listener.port == 443 
-        || context.listener.port == 8443;
 
     // Pre-parse timeout configurations once at initialization
     let parsed_timeouts = crate::core::gateway::edgion_http::ParsedTimeouts::from_config(
@@ -138,8 +134,11 @@ pub fn add_listener(
     context: ListenerContext,
 ) -> Result<()> {
     match context.listener.protocol.to_uppercase().as_str() {
-        "HTTP" | "HTTPS" => {
-            add_http_listener(server, &context)
+        "HTTP" => {
+            add_http_listener(server, &context, false)
+        }
+        "HTTPS" => {
+            add_http_listener(server, &context, true)
         }
         "TCP" => {
             add_tcp_listener(server, &context)
@@ -148,12 +147,12 @@ pub fn add_listener(
             add_udp_listener(server, &context)
         }
         "GRPC" => {
-            // GRPC is essentially HTTP/2, so treat it as HTTP for now
+            // GRPC is essentially HTTP/2, so treat it as HTTPS
             tracing::info!(
                 listener=%context.listener.name,
-                "GRPC protocol detected, treating as HTTP/2"
+                "GRPC protocol detected, treating as HTTP/2 with TLS"
             );
-            add_http_listener(server, &context)
+            add_http_listener(server, &context, true)
         }
         protocol => {
             anyhow::bail!("Unsupported protocol: {}", protocol)
