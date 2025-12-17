@@ -13,7 +13,6 @@ use std::time::SystemTime;
 
 use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::core::observe::AccessLogger;
-use crate::core::routes::DomainRouteRules;
 use crate::core::tls::tls_pingora::TlsCallback;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::gateway::Listener;
@@ -26,7 +25,6 @@ pub struct ListenerContext {
     pub gateway_name: String,
     pub gateway_key: String,
     pub listener: Listener,
-    pub domain_routes: Arc<DomainRouteRules>,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     pub server_conf: Arc<ServerConf>,
@@ -41,9 +39,16 @@ pub fn add_http_listener(
     context: &ListenerContext,
     enable_tls: bool,
 ) -> Result<()> {
+    use crate::core::routes::get_global_route_manager;
+    
     let listener_name = context.listener.name.clone();
     let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
     let addr = format!("{}:{}", host, context.listener.port);
+
+    // Get or create domain routes from global RouteManager
+    let route_manager = get_global_route_manager();
+    let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
+    let domain_routes = route_manager.get_or_create_domain_routes(namespace_str, &context.gateway_name);
 
     // Pre-parse timeout configurations once at initialization
     let parsed_timeouts = crate::core::gateway::edgion_http::ParsedTimeouts::from_config(
@@ -58,7 +63,7 @@ pub fn add_http_listener(
         listener: context.listener.clone(),
         server_start_time: SystemTime::now(),
         server_header_opts: Default::default(),
-        domain_routes: context.domain_routes.clone(),
+        domain_routes,
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         parsed_timeouts,

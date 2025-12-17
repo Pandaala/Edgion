@@ -4,7 +4,6 @@ use pingora_core::server::Server;
 use pingora_core::server::configuration::ServerConf;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::core::gateway::listener_builder;
-use crate::core::routes::get_global_route_manager;
 use crate::types::{GatewayBaseConf, ResourceMeta};
 use anyhow::Result;
 use crate::core::observe::AccessLogger;
@@ -102,17 +101,10 @@ impl GatewayBase {
         }
 
         for gateway in self.base_conf.gateways().iter() {
-            // Prepare gateway metadata and routes before processing listeners
+            // Prepare gateway metadata before processing listeners
             let gateway_class_name = self.base_conf.gateway_class().metadata.name.clone();
             let gateway_namespace = gateway.metadata.namespace.clone();
             let gateway_name = gateway.name_any();
-            
-            // Get or create domain routes from global RouteManager
-            // Use empty string for namespace if not present (key will be "/name")
-            let route_manager = get_global_route_manager();
-            let namespace_str = gateway.metadata.namespace.as_deref().unwrap_or("");
-            let domain_routes = route_manager.get_or_create_domain_routes(namespace_str, &gateway_name);
-            tracing::info!("Retrieved domain routes hook for gateway '{}'", gateway.key_name());
 
             // Process listeners
             if let Some(listeners) = &gateway.spec.listeners {
@@ -127,7 +119,6 @@ impl GatewayBase {
                         gateway_name: gateway_name.clone(),
                         gateway_key: gateway.key_name(),
                         listener: listener.clone(),
-                        domain_routes: domain_routes.clone(),
                         access_logger: self.get_access_logger(),
                         edgion_gateway_config: Arc::new(self.base_conf.edgion_gateway_config().clone()),
                         server_conf: server_conf.clone(),
