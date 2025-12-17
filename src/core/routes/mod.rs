@@ -8,9 +8,11 @@ pub use http_routes::{
     RouteManager,
     HttpRouteRuleUnit,
     create_route_manager_handler,
+    EdgionHttp,  // HTTP 代理类型
 };
 
 pub use tcp_routes::{
     get_global_tcp_route_manager,
     TcpRouteManager,
+    create_tcp_route_handler,
 };

@@ -11,7 +11,7 @@ use pingora_proxy::http_proxy_service;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use crate::core::gateway::edgion_http::EdgionHttp;
+use crate::core::routes::http_routes::EdgionHttp;
 use crate::core::observe::AccessLogger;
 use crate::core::tls::tls_pingora::TlsCallback;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -51,7 +51,7 @@ pub fn add_http_listener(
     let domain_routes = route_manager.get_or_create_domain_routes(namespace_str, &context.gateway_name);
 
     // Pre-parse timeout configurations once at initialization
-    let parsed_timeouts = crate::core::gateway::edgion_http::ParsedTimeouts::from_config(
+    let parsed_timeouts = crate::core::routes::http_routes::edgion_http::ParsedTimeouts::from_config(
         &context.edgion_gateway_config
     );
 

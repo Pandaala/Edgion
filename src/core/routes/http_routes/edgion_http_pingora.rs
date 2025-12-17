@@ -10,7 +10,7 @@ use pingora_core::{ConnectionClosed, Error as PingoraError, Error, ErrorSource, 
 use pingora_http::ResponseHeader;
 use pingora_proxy::{FailToProxy, ProxyHttp, Session};
 use tracing::log::error;
-use crate::core::gateway::edgion_http::EdgionHttp;
+use super::edgion_http::EdgionHttp;
 use crate::types::EdgionHttpContext;
 use crate::types::filters::PluginRunningResult;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
