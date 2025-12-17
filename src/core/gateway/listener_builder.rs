@@ -100,13 +100,48 @@ pub fn add_http_listener(
 /// This is a placeholder for future TCP proxy implementation.
 #[allow(dead_code)]
 pub fn add_tcp_listener(
-    _server: &mut Server,
-    _context: &ListenerContext,
+    server: &mut Server,
+    context: &ListenerContext,
 ) -> Result<()> {
-    tracing::warn!(
-        listener=%_context.listener.name,
-        "TCP listener not yet supported, skipping"
+    use pingora_core::services::listening::Service;
+    use pingora_core::listeners::Listeners;
+    use pingora_core::connectors::TransportConnector;
+    use crate::core::gateway::edgion_tcp::EdgionTcp;
+    use crate::core::routes::tcp_routes::get_global_tcp_route_manager;
+    
+    let listener_name = context.listener.name.clone();
+    let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
+    let addr = format!("{}:{}", host, context.listener.port);
+    let port = context.listener.port as u16;
+    
+    // 创建 EdgionTcp
+    let edgion_tcp = EdgionTcp {
+        gateway_name: context.gateway_name.clone(),
+        listener_port: port,
+        tcp_route_manager: get_global_tcp_route_manager(),
+        access_logger: context.access_logger.clone(),
+        edgion_gateway_config: context.edgion_gateway_config.clone(),
+        connector: TransportConnector::new(None),
+    };
+    
+    // 创建 TCP 服务
+    let tcp_service = Service::with_listeners(
+        format!("TCP-{}", listener_name),
+        Listeners::tcp(&addr),
+        edgion_tcp,
     );
+    
+    // 添加到 server
+    server.add_service(tcp_service);
+    
+    tracing::info!(
+        gateway=%context.gateway_key,
+        listener=%listener_name,
+        addr=%addr,
+        protocol="TCP",
+        "Adding TCP listener"
+    );
+    
     Ok(())
 }
 

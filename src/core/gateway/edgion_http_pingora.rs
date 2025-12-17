@@ -18,7 +18,7 @@ use crate::core::backends::get_peer;
 use crate::types::EdgionStatus;
 use crate::types::err::EdError;
 use crate::core::observe::{AccessLogEntry, global_metrics};
-use crate::core::routes::routes_mgr::RouteRules;
+use crate::core::routes::http_routes::routes_mgr::RouteRules;
 
 /// Auto-discover protocol from request headers
 #[inline]

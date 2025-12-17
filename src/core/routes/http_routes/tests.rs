@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod route_matching_tests {
-    use crate::core::routes::routes_mgr::RouteManager;
-    use crate::core::routes::routes_mgr::DomainRouteRules;
+    use crate::core::routes::http_routes::routes_mgr::RouteManager;
+    use crate::core::routes::http_routes::routes_mgr::DomainRouteRules;
     use crate::core::gateway::gateway_store::get_global_gateway_store;
     use crate::core::conf_sync::traits::ConfHandler;
     use crate::types::{Gateway, HTTPRoute};
