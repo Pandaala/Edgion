@@ -3,6 +3,7 @@ use kube::ResourceExt;
 use pingora_core::server::Server;
 use pingora_core::server::configuration::ServerConf;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
+use crate::core::gateway::listener_builder;
 use crate::core::routes::get_global_route_manager;
 use crate::types::{GatewayBaseConf, ResourceMeta};
 use anyhow::Result;
@@ -119,24 +120,21 @@ impl GatewayBase {
                 let server_conf = pingora_server.configuration.clone();
                 
                 for listener in listeners {
-                    // Create listener context with gateway-level information
-                    let context = crate::core::gateway::listener_builder::ListenerContext {
+                    // Create listener context with gateway-level information and listener config
+                    let context = listener_builder::ListenerContext {
                         gateway_class_name: gateway_class_name.clone(),
                         gateway_namespace: gateway_namespace.clone(),
                         gateway_name: gateway_name.clone(),
                         gateway_key: gateway.key_name(),
+                        listener: listener.clone(),
                         domain_routes: domain_routes.clone(),
                         access_logger: self.get_access_logger(),
                         edgion_gateway_config: Arc::new(self.base_conf.edgion_gateway_config().clone()),
+                        server_conf: server_conf.clone(),
                     };
                     
                     // Dispatch to appropriate listener builder based on protocol
-                    crate::core::gateway::listener_builder::add_listener(
-                        &mut pingora_server,
-                        &server_conf,
-                        listener,
-                        context,
-                    )?;
+                    listener_builder::add_listener(&mut pingora_server, context)?;
                 }
             }
         }
