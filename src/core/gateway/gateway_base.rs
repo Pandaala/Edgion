@@ -1,15 +1,11 @@
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
 use kube::ResourceExt;
 use pingora_core::server::Server;
 use pingora_core::server::configuration::ServerConf;
-use pingora_proxy::http_proxy_service;
-use crate::core::gateway::edgion_http::EdgionHttp;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::core::routes::get_global_route_manager;
 use crate::types::{GatewayBaseConf, ResourceMeta};
 use anyhow::Result;
-use crate::core::tls::tls_pingora::TlsCallback;
 use crate::core::observe::AccessLogger;
 use crate::core::link_sys::LocalFileWriter;
 use crate::types::link_sys::LocalFileWriterConfig;
@@ -119,56 +115,28 @@ impl GatewayBase {
 
             // Process listeners
             if let Some(listeners) = &gateway.spec.listeners {
+                // Clone the server configuration Arc to avoid borrowing conflicts
+                let server_conf = pingora_server.configuration.clone();
+                
                 for listener in listeners {
-                    let listener = listener.clone();
-                    let listener_name = listener.name.clone();
-                    let host = listener.hostname.as_deref().unwrap_or("0.0.0.0");
-                    let addr = format!("{}:{}", host, listener.port);
-
-                    let enable_tls = listener.tls.is_some() || listener.port == 443 || listener.port == 8443;
-
-                    let edgion_gateway_config = Arc::new(self.base_conf.edgion_gateway_config().clone());
-                    
-                    // Pre-parse timeout configurations once at initialization
-                    let parsed_timeouts = crate::core::gateway::edgion_http::ParsedTimeouts::from_config(&edgion_gateway_config);
-                    
-                    let edgion_http = EdgionHttp {
+                    // Create listener context with gateway-level information
+                    let context = crate::core::gateway::listener_builder::ListenerContext {
                         gateway_class_name: gateway_class_name.clone(),
                         gateway_namespace: gateway_namespace.clone(),
                         gateway_name: gateway_name.clone(),
-                        listener,
-                        server_start_time: SystemTime::now(),
-                        server_header_opts: Default::default(),
+                        gateway_key: gateway.key_name(),
                         domain_routes: domain_routes.clone(),
                         access_logger: self.get_access_logger(),
-                        edgion_gateway_config,
-                        parsed_timeouts,
+                        edgion_gateway_config: Arc::new(self.base_conf.edgion_gateway_config().clone()),
                     };
-
-                    let mut http_service = http_proxy_service(&pingora_server.configuration, edgion_http);
-
-                    if enable_tls {
-                        let tls_settings = TlsCallback::new_tls_settings_with_callback()?;
-                        http_service.add_tls_with_settings(&addr, None, tls_settings);
-                        tracing::info!(
-                            gateway=%gateway.key_name(),
-                            listener=%listener_name,
-                            addr=%addr,
-                            protocol="HTTPS",
-                            "Adding TLS listener"
-                        );
-                    } else {
-                        http_service.add_tcp(&addr);
-                        tracing::info!(
-                            gateway=%gateway.key_name(),
-                            listener=%listener_name,
-                            addr=%addr,
-                            protocol="HTTP",
-                            "Adding TCP listener"
-                        );
-                    }
-
-                    pingora_server.add_service(http_service);
+                    
+                    // Dispatch to appropriate listener builder based on protocol
+                    crate::core::gateway::listener_builder::add_listener(
+                        &mut pingora_server,
+                        &server_conf,
+                        listener,
+                        context,
+                    )?;
                 }
             }
         }
