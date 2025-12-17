@@ -7,10 +7,12 @@ spec:
   parentRefs:
     - name: gateway1
       namespace: default
-      sectionName: udp-listener
+      sectionName: udp19001
+      port: 19001  # Must match Gateway listener port
   rules:
     - backendRefs:
         - name: udp-service
+          namespace: default
           port: 5353
           weight: 1
 

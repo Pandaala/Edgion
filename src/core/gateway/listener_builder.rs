@@ -159,16 +159,57 @@ pub fn add_tcp_listener(
 
 /// Add a UDP listener to the Pingora server
 ///
-/// This is a placeholder for future UDP proxy implementation.
+/// UDP listeners don't use Pingora's Service abstraction - they run as independent tokio tasks
 #[allow(dead_code)]
 pub fn add_udp_listener(
     _server: &mut Server,
-    _context: &ListenerContext,
+    context: &ListenerContext,
 ) -> Result<()> {
-    tracing::warn!(
-        listener=%_context.listener.name,
-        "UDP listener not yet supported, skipping"
+    use crate::core::routes::udp_routes::{EdgionUdp, get_global_udp_route_manager};
+    use tokio::net::UdpSocket;
+    
+    let listener_name = context.listener.name.clone();
+    let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
+    let addr = format!("{}:{}", host, context.listener.port);
+    let port = context.listener.port as u16;
+    
+    // Get UDP routes for this gateway
+    let udp_route_manager = get_global_udp_route_manager();
+    let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
+    let gateway_udp_routes = udp_route_manager.get_or_create_gateway_udp_routes(
+        namespace_str,
+        &context.gateway_name
     );
+    
+    // Create UDP socket
+    // Note: This is blocking, but it's called during server initialization
+    let socket = std::net::UdpSocket::bind(&addr)?;
+    socket.set_nonblocking(true)?;
+    let socket = UdpSocket::from_std(socket)?;
+    
+    // Create EdgionUdp service
+    let edgion_udp = Arc::new(EdgionUdp::new(
+        context.gateway_name.clone(),
+        context.gateway_namespace.clone(),
+        port,
+        gateway_udp_routes,
+        context.edgion_gateway_config.clone(),
+        socket,
+    ));
+    
+    // Start UDP service in a background task
+    tokio::spawn(async move {
+        edgion_udp.serve().await;
+    });
+    
+    tracing::info!(
+        gateway=%context.gateway_key,
+        listener=%listener_name,
+        addr=%addr,
+        protocol="UDP",
+        "Adding UDP listener"
+    );
+    
     Ok(())
 }
 

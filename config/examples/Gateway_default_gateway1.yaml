@@ -17,3 +17,7 @@ spec:
     - name: tcp19000
       protocol: TCP
       port: 19000
+    
+    - name: udp19001
+      protocol: UDP
+      port: 19001
