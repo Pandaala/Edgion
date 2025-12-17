@@ -15,7 +15,7 @@ use crate::core::routes::tcp_routes::GatewayTcpRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::core::backends::endpoint_slice::get_roundrobin_store;
 
-/// TCP 连接上下文
+/// TCP connection context
 pub struct TcpContext {
     pub listener_port: u16,
     pub client_addr: String,
@@ -24,6 +24,7 @@ pub struct TcpContext {
     pub bytes_sent: u64,
     pub bytes_received: u64,
     pub status: TcpStatus,
+    pub connection_established: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -36,7 +37,7 @@ pub enum TcpStatus {
     DownstreamWriteError,
 }
 
-/// TCP 代理服务
+/// TCP proxy service
 pub struct EdgionTcp {
     pub gateway_name: String,
     pub gateway_namespace: Option<String>,
@@ -54,31 +55,34 @@ impl ServerApp for EdgionTcp {
         downstream: Stream,
         _shutdown: &ShutdownWatch,
     ) -> Option<Stream> {
-        // 创建上下文
+        // Create context
         let mut ctx = TcpContext {
             listener_port: self.listener_port,
-            client_addr: "unknown".to_string(), // TODO: 从 Stream 提取
+            client_addr: "unknown".to_string(), // TODO: Extract from Stream
             upstream_addr: None,
             start_time: Instant::now(),
             bytes_sent: 0,
             bytes_received: 0,
             status: TcpStatus::Success,
+            connection_established: false,
         };
 
-        // 处理连接（无论成功或失败都会更新 ctx）
+        // Handle connection (context will be updated regardless of success or failure)
         self.handle_connection(downstream, &mut ctx).await;
         
-        // 统一记录访问日志
-        self.log_connection(&ctx).await;
+        // Only log if connection was actually established
+        if ctx.connection_established {
+            self.log_connection(&ctx).await;
+        }
         
         None
     }
 }
 
 impl EdgionTcp {
-    /// 处理 TCP 连接的核心逻辑
+    /// Core logic for handling TCP connections
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TcpContext) {
-        // 1. 匹配 TCPRoute
+        // 1. Match TCPRoute
         let tcp_route = match self.gateway_tcp_routes.match_route(self.listener_port) {
             Some(route) => route,
             None => {
@@ -87,7 +91,7 @@ impl EdgionTcp {
             }
         };
         
-        // 2. 选择后端
+        // 2. Select backend
         let backend_ref = match tcp_route.spec.rules.as_ref()
             .and_then(|rules| rules.first())
         {
@@ -106,13 +110,13 @@ impl EdgionTcp {
             }
         };
         
-        // 3. 通过 EndpointSlice 解析后端地址
+        // 3. Resolve backend address via EndpointSlice
         let namespace = backend_ref.namespace.as_deref()
             .or_else(|| tcp_route.metadata.namespace.as_deref())
             .unwrap_or("default");
         let service_key = format!("{}/{}", namespace, &backend_ref.name);
         
-        // 从 EndpointSlice store 选择后端
+        // Select backend from EndpointSlice store
         let ep_store = get_roundrobin_store();
         let backend = match ep_store.select_peer(&service_key, b"", 256) {
             Some(backend) => backend,
@@ -122,7 +126,7 @@ impl EdgionTcp {
             }
         };
         
-        // 4. 构建上游地址（使用实际的 IP 地址）
+        // 4. Build upstream address (using actual IP address)
         let mut upstream_addr = backend.addr;
         if let Some(port) = backend_ref.port {
             upstream_addr.set_port(port as u16);
@@ -130,7 +134,7 @@ impl EdgionTcp {
         let upstream_addr_str = upstream_addr.to_string();
         ctx.upstream_addr = Some(upstream_addr_str.clone());
         
-        // 5. 连接上游
+        // 5. Connect to upstream
         let peer = BasicPeer::new(&upstream_addr_str);
         let upstream = match self.connector.new_stream(&peer).await {
             Ok(stream) => stream,
@@ -140,11 +144,14 @@ impl EdgionTcp {
             }
         };
         
-        // 6. 双向数据转发
+        // Mark connection as established
+        ctx.connection_established = true;
+        
+        // 6. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx).await;
     }
     
-    /// 双向数据转发
+    /// Bidirectional data transfer
     async fn duplex(
         &self,
         mut downstream: Stream,
@@ -207,7 +214,7 @@ impl EdgionTcp {
         }
     }
     
-    /// 记录访问日志
+    /// Log access record
     async fn log_connection(&self, ctx: &TcpContext) {
         let duration_ms = ctx.start_time.elapsed().as_millis() as u64;
         
