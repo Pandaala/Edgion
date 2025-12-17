@@ -8,6 +8,7 @@ spec:
     - name: gateway1
       namespace: default
       sectionName: tcp19000
+      port: 19000  # 必须指定端口号，用于匹配 Gateway listener
   rules:
     - backendRefs:
         - name: aaa-service

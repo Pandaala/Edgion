@@ -13,6 +13,7 @@ use pingora_core::upstreams::peer::BasicPeer;
 use crate::core::observe::AccessLogger;
 use crate::core::routes::tcp_routes::GatewayTcpRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
+use crate::core::backends::endpoint_slice::get_roundrobin_store;
 
 /// TCP 连接上下文
 pub struct TcpContext {
@@ -63,8 +64,26 @@ impl ServerApp for EdgionTcp {
             bytes_received: 0,
             status: TcpStatus::Success,
         };
+
+        tracing::info!(
+            port = self.listener_port,
+            "TCP connection received"
+        );
+
+        // 处理连接（无论成功或失败都会更新 ctx）
+        self.handle_connection(downstream, &mut ctx).await;
         
-        // 直接从预获取的路由中匹配（无需访问全局 manager）
+        // 统一记录访问日志
+        self.log_connection(&ctx).await;
+        
+        None
+    }
+}
+
+impl EdgionTcp {
+    /// 处理 TCP 连接的核心逻辑
+    async fn handle_connection(&self, downstream: Stream, ctx: &mut TcpContext) {
+        // 1. 匹配 TCPRoute
         let tcp_route = match self.gateway_tcp_routes.match_route(self.listener_port) {
             Some(route) => route,
             None => {
@@ -76,11 +95,12 @@ impl ServerApp for EdgionTcp {
                     ),
                     "No TCPRoute found for port"
                 );
-                return None;
+                ctx.status = TcpStatus::UpstreamConnectionFailed;
+                return;
             }
         };
         
-        // 选择后端
+        // 2. 选择后端
         let backend_ref = match tcp_route.spec.rules.as_ref()
             .and_then(|rules| rules.first())
         {
@@ -93,59 +113,70 @@ impl ServerApp for EdgionTcp {
                             "Failed to select backend"
                         );
                         ctx.status = TcpStatus::UpstreamConnectionFailed;
-                        self.log_connection(&ctx).await;
-                        return None;
+                        return;
                     }
                 }
             }
             None => {
                 tracing::error!("No TCPRoute rules found");
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
-                self.log_connection(&ctx).await;
-                return None;
+                return;
             }
         };
         
-        // 构建上游地址
-        let upstream_addr = format!("{}:{}", 
-            backend_ref.name,
-            backend_ref.port.unwrap_or(self.listener_port as i32)
-        );
-        ctx.upstream_addr = Some(upstream_addr.clone());
+        // 3. 通过 EndpointSlice 解析后端地址
+        let namespace = backend_ref.namespace.as_deref()
+            .or_else(|| tcp_route.metadata.namespace.as_deref())
+            .unwrap_or("default");
+        let service_key = format!("{}/{}", namespace, &backend_ref.name);
         
-        // 连接上游
-        let peer = BasicPeer::new(&upstream_addr);
+        // 从 EndpointSlice store 选择后端
+        let ep_store = get_roundrobin_store();
+        let backend = match ep_store.select_peer(&service_key, b"", 256) {
+            Some(backend) => backend,
+            None => {
+                tracing::error!(
+                    service_key = %service_key,
+                    "No available backend endpoints found"
+                );
+                ctx.status = TcpStatus::UpstreamConnectionFailed;
+                return;
+            }
+        };
+        
+        // 4. 构建上游地址（使用实际的 IP 地址）
+        let mut upstream_addr = backend.addr;
+        if let Some(port) = backend_ref.port {
+            upstream_addr.set_port(port as u16);
+        }
+        let upstream_addr_str = upstream_addr.to_string();
+        ctx.upstream_addr = Some(upstream_addr_str.clone());
+        
+        // 5. 连接上游
+        let peer = BasicPeer::new(&upstream_addr_str);
         let upstream = match self.connector.new_stream(&peer).await {
             Ok(stream) => stream,
             Err(e) => {
                 tracing::error!(
-                    upstream = %upstream_addr,
+                    upstream = %upstream_addr_str,
                     error = %e,
                     "Failed to connect to upstream"
                 );
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
-                self.log_connection(&ctx).await;
-                return None;
+                return;
             }
         };
         
         tracing::info!(
             port = self.listener_port,
-            upstream = %upstream_addr,
+            upstream = %upstream_addr_str,
             "TCP connection established"
         );
         
-        // 双工转发
-        self.duplex(downstream, upstream, &mut ctx).await;
-        
-        // 记录访问日志
-        self.log_connection(&ctx).await;
-        
-        None
+        // 6. 双向数据转发
+        self.duplex(downstream, upstream, ctx).await;
     }
-}
-
-impl EdgionTcp {
+    
     /// 双向数据转发
     async fn duplex(
         &self,
