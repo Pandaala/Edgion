@@ -9,3 +9,5 @@ cargo run --bin edgion-gateway -- -c ./config/edgion-gateway.toml
 
 # start test-server
 cargo run -p edgion --example test_server
+
+./test_tcp_client.sh

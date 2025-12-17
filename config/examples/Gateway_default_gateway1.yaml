@@ -13,3 +13,7 @@ spec:
     - name: http18080
       protocol: HTTP
       port: 18080
+    
+    - name: tcp19000
+      protocol: TCP
+      port: 19000

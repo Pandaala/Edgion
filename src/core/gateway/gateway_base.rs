@@ -140,8 +140,7 @@ impl GatewayBase {
                 for listener in listeners {
                     let host = listener.hostname.as_deref().unwrap_or("0.0.0.0");
                     let addr = format!("{}:{}", host, listener.port);
-                    let enable_tls = listener.tls.is_some() || listener.port == 443 || listener.port == 8443;
-                    let protocol = if enable_tls { "HTTPS" } else { "HTTP" };
+                    let protocol = &listener.protocol;
                     tracing::info!(
                         gateway=%gateway.key_name(),
                         listener=%listener.name,
@@ -211,8 +210,7 @@ impl GatewayBase {
                     for listener in listeners {
                         let host = listener.hostname.as_deref().unwrap_or("0.0.0.0");
                         let addr = format!("{}:{}", host, listener.port);
-                        let enable_tls = listener.tls.is_some() || listener.port == 443 || listener.port == 8443 || listener.port == 18443;
-                        let protocol = if enable_tls { "HTTPS" } else { "HTTP" };
+                        let protocol = &listener.protocol;
                         tracing::info!(
                             gateway=%gateway.key_name(),
                             listener=%listener.name,
