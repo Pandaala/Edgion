@@ -13,7 +13,7 @@
 //!
 //! # Example
 //! ```
-//! use edgion::core::routes::radix_match::{RadixTreeBuilder, RadixTree};
+//! use edgion::core::routes::http_routes::radix_match::{RadixTreeBuilder, RadixTree};
 //!
 //! let mut builder = RadixTreeBuilder::new();
 //! builder.insert("/api/users", 1).unwrap();

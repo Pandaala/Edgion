@@ -97,7 +97,7 @@ pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
 /// # Example
 /// ```
 /// use std::collections::HashSet;
-/// use edgion::core::routes::lb_policy_sync::cleanup_lb_policies_for_routes;
+/// use edgion::core::routes::http_routes::lb_policy_sync::cleanup_lb_policies_for_routes;
 /// 
 /// let mut removed = HashSet::new();
 /// removed.insert("default/my-route".to_string());

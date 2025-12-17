@@ -257,7 +257,7 @@ impl FrozenRadixTree {
     ///
     /// # Example
     /// ```
-    /// use edgion::core::routes::radix_match::RadixTreeBuilder;
+    /// use edgion::core::routes::http_routes::radix_match::RadixTreeBuilder;
     ///
     /// let mut builder = RadixTreeBuilder::new();
     /// builder.insert("/api", 1).unwrap();
@@ -297,7 +297,7 @@ impl FrozenRadixTree {
     ///
     /// # Example
     /// ```
-    /// use edgion::core::routes::radix_match::RadixTreeBuilder;
+    /// use edgion::core::routes::http_routes::radix_match::RadixTreeBuilder;
     ///
     /// let mut builder = RadixTreeBuilder::new();
     /// builder.insert("/api", 1).unwrap();
@@ -339,7 +339,7 @@ impl FrozenRadixTree {
     ///
     /// # Example
     /// ```
-    /// use edgion::core::routes::radix_match::RadixTreeBuilder;
+    /// use edgion::core::routes::http_routes::radix_match::RadixTreeBuilder;
     ///
     /// let mut builder = RadixTreeBuilder::new();
     /// builder.insert("/api/users", 1).unwrap();
