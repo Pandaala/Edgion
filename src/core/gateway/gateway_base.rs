@@ -108,6 +108,20 @@ impl GatewayBase {
 
             // Process listeners
             if let Some(listeners) = &gateway.spec.listeners {
+                tracing::info!(
+                    "Processing gateway {} with {} listeners",
+                    gateway_name,
+                    listeners.len()
+                );
+                for (idx, listener) in listeners.iter().enumerate() {
+                    tracing::info!(
+                        "  Listener {}: name={}, protocol={}, port={}",
+                        idx,
+                        listener.name,
+                        listener.protocol,
+                        listener.port
+                    );
+                }
                 // Clone the server configuration Arc to avoid borrowing conflicts
                 let server_conf = pingora_server.configuration.clone();
                 
