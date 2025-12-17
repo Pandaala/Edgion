@@ -3,14 +3,11 @@
 //! TCPRoute defines TCP rules for mapping requests to backends
 
 use std::fmt;
-use std::sync::Arc;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::lb::BackendSelector;
-use crate::core::filters::PluginRuntime;
-use super::http_route_preparse::BackendExtensionInfo;
 
 /// API group for TCPRoute
 pub const TCP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -78,11 +75,6 @@ pub struct TCPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub backend_finder: BackendSelector<TCPBackendRef>,
-
-    /// Filter runtime (runtime only, not serialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub plugin_runtime: Arc<PluginRuntime>,
 }
 
 impl Clone for TCPRouteRule {
@@ -90,7 +82,6 @@ impl Clone for TCPRouteRule {
         Self {
             backend_refs: self.backend_refs.clone(),
             backend_finder: BackendSelector::new(),
-            plugin_runtime: self.plugin_runtime.clone(),
         }
     }
 }
@@ -100,7 +91,6 @@ impl fmt::Debug for TCPRouteRule {
         f.debug_struct("TCPRouteRule")
             .field("backend_refs", &self.backend_refs)
             .field("backend_finder", &"<skipped>")
-            .field("plugin_runtime", &self.plugin_runtime)
             .finish()
     }
 }
@@ -131,15 +121,5 @@ pub struct TCPBackendRef {
     /// Kind is the kind of the referent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-
-    /// Parsed extension info (runtime only, not serialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub extension_info: BackendExtensionInfo,
-
-    /// Filter runtime (runtime only, not serialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub plugin_runtime: Arc<PluginRuntime>,
 }
 

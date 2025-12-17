@@ -129,7 +129,7 @@ impl ConfHandler<TCPRoute> for TcpRouteManager {
 }
 
 impl TcpRouteManager {
-    /// Initialize a TCPRoute by setting up BackendSelector and PluginRuntime
+    /// Initialize a TCPRoute by setting up BackendSelector
     fn initialize_route(&self, mut route: TCPRoute) -> Result<Arc<TCPRoute>, String> {
         let route_key = route.key_name();
         
@@ -152,9 +152,6 @@ impl TcpRouteManager {
                         "Initialized BackendSelector for TCPRoute rule"
                     );
                 }
-                
-                // TODO: Initialize PluginRuntime when plugin support is added
-                // For now, keep the default empty PluginRuntime
             }
         }
         
@@ -193,11 +190,8 @@ mod tests {
                         weight: Some(1),
                         group: None,
                         kind: None,
-                        extension_info: Default::default(),
-                        plugin_runtime: Arc::new(Default::default()),
                     }]),
                     backend_finder: Default::default(),
-                    plugin_runtime: Arc::new(Default::default()),
                 }]),
             },
         }
