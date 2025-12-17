@@ -117,6 +117,7 @@ pub fn add_tcp_listener(
     // 创建 EdgionTcp
     let edgion_tcp = EdgionTcp {
         gateway_name: context.gateway_name.clone(),
+        gateway_namespace: context.gateway_namespace.clone(),
         listener_port: port,
         tcp_route_manager: get_global_tcp_route_manager(),
         access_logger: context.access_logger.clone(),

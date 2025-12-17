@@ -38,6 +38,7 @@ pub enum TcpStatus {
 /// TCP 代理服务
 pub struct EdgionTcp {
     pub gateway_name: String,
+    pub gateway_namespace: Option<String>,
     pub listener_port: u16,
     pub tcp_route_manager: &'static TcpRouteManager,
     pub access_logger: Arc<AccessLogger>,
@@ -63,13 +64,22 @@ impl ServerApp for EdgionTcp {
             status: TcpStatus::Success,
         };
         
-        // 匹配路由
-        let tcp_route = match self.tcp_route_manager.match_route(self.listener_port) {
+        // 匹配路由 - 现在传入 gateway 信息以获得更精确的匹配
+        let gateway_key = format!("{}/{}", 
+            self.gateway_namespace.as_deref().unwrap_or("default"),
+            &self.gateway_name
+        );
+
+        let tcp_route = match self.tcp_route_manager.match_route(
+            self.listener_port,
+            Some(&gateway_key)
+        ) {
             Some(route) => route,
             None => {
                 tracing::warn!(
                     port = self.listener_port,
-                    "No TCPRoute found for port"
+                    gateway = %gateway_key,
+                    "No TCPRoute found for port and gateway"
                 );
                 return None;
             }

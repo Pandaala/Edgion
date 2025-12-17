@@ -51,12 +51,17 @@ impl ConfigClient {
         let plugin_handler = crate::core::plugins::create_plugin_handler();
         plugins_cache.set_conf_processor(plugin_handler);
         
+        // Register TcpRouteManager as the handler for TCPRoute resources
+        let tcp_routes_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let tcp_route_handler = crate::core::routes::tcp_routes::create_tcp_route_handler();
+        tcp_routes_cache.set_conf_processor(tcp_route_handler);
+        
         Self {
             gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(None),
             routes: routes_cache,
             grpc_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
-            tcp_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            tcp_routes: tcp_routes_cache,
             udp_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             tls_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             link_sys: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
