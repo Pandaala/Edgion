@@ -11,7 +11,7 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
 use crate::core::observe::AccessLogger;
-use crate::core::routes::tcp_routes::TcpRouteManager;
+use crate::core::routes::tcp_routes::GatewayTcpRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 
 /// TCP 连接上下文
@@ -40,7 +40,7 @@ pub struct EdgionTcp {
     pub gateway_name: String,
     pub gateway_namespace: Option<String>,
     pub listener_port: u16,
-    pub tcp_route_manager: &'static TcpRouteManager,
+    pub gateway_tcp_routes: Arc<GatewayTcpRoutes>,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     pub connector: TransportConnector,
@@ -64,22 +64,17 @@ impl ServerApp for EdgionTcp {
             status: TcpStatus::Success,
         };
         
-        // 匹配路由 - 现在传入 gateway 信息以获得更精确的匹配
-        let gateway_key = format!("{}/{}", 
-            self.gateway_namespace.as_deref().unwrap_or("default"),
-            &self.gateway_name
-        );
-
-        let tcp_route = match self.tcp_route_manager.match_route(
-            self.listener_port,
-            Some(&gateway_key)
-        ) {
+        // 直接从预获取的路由中匹配（无需访问全局 manager）
+        let tcp_route = match self.gateway_tcp_routes.match_route(self.listener_port) {
             Some(route) => route,
             None => {
                 tracing::warn!(
                     port = self.listener_port,
-                    gateway = %gateway_key,
-                    "No TCPRoute found for port and gateway"
+                    gateway = format!("{}/{}", 
+                        self.gateway_namespace.as_deref().unwrap_or("default"),
+                        &self.gateway_name
+                    ),
+                    "No TCPRoute found for port"
                 );
                 return None;
             }

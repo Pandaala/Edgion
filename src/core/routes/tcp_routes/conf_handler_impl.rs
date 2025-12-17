@@ -216,9 +216,11 @@ mod tests {
         
         manager.full_set(&data);
         
-        assert!(manager.match_route(9000, Some("default/gateway1")).is_some());
-        assert!(manager.match_route(9001, Some("default/gateway1")).is_some());
-        assert!(manager.match_route(9002, None).is_none());
+        // Test via GatewayTcpRoutes
+        let gateway_routes = manager.get_or_create_gateway_tcp_routes("default", "gateway1");
+        assert!(gateway_routes.match_route(9000).is_some());
+        assert!(gateway_routes.match_route(9001).is_some());
+        assert!(gateway_routes.match_route(9002).is_none());
     }
     
     #[test]
@@ -231,13 +233,16 @@ mod tests {
         add.insert("default/route1".to_string(), route1);
         
         manager.partial_update(add, HashMap::new(), HashSet::new());
-        assert!(manager.match_route(9000, Some("default/gateway1")).is_some());
+        
+        // Test via GatewayTcpRoutes
+        let gateway_routes = manager.get_or_create_gateway_tcp_routes("default", "gateway1");
+        assert!(gateway_routes.match_route(9000).is_some());
         
         // Remove the route
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
         manager.partial_update(HashMap::new(), HashMap::new(), remove);
-        assert!(manager.match_route(9000, None).is_none());
+        assert!(gateway_routes.match_route(9000).is_none());
     }
 }
 

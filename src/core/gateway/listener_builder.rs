@@ -101,8 +101,6 @@ pub fn add_http_listener(
 }
 
 /// Add a TCP listener to the Pingora server
-///
-/// This is a placeholder for future TCP proxy implementation.
 #[allow(dead_code)]
 pub fn add_tcp_listener(
     server: &mut Server,
@@ -119,12 +117,20 @@ pub fn add_tcp_listener(
     let addr = format!("{}:{}", host, context.listener.port);
     let port = context.listener.port as u16;
     
+    // 预获取该 gateway 的 TCP 路由（类似 HTTP 的方式）
+    let tcp_route_manager = get_global_tcp_route_manager();
+    let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
+    let gateway_tcp_routes = tcp_route_manager.get_or_create_gateway_tcp_routes(
+        namespace_str,
+        &context.gateway_name
+    );
+    
     // 创建 EdgionTcp
     let edgion_tcp = EdgionTcp {
         gateway_name: context.gateway_name.clone(),
         gateway_namespace: context.gateway_namespace.clone(),
         listener_port: port,
-        tcp_route_manager: get_global_tcp_route_manager(),
+        gateway_tcp_routes,  // 传入预获取的路由
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         connector: TransportConnector::new(None),

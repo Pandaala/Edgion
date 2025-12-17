@@ -5,28 +5,107 @@ use once_cell::sync::OnceCell;
 
 use crate::types::resources::TCPRoute;
 use crate::types::ResourceMeta;
+use crate::core::routes::tcp_routes::GatewayTcpRoutes;
 
 /// TCP 路由管理器
 pub struct TcpRouteManager {
-    /// port -> Vec<Arc<TCPRoute>> mapping
-    /// Multiple routes can listen on the same port (different gateways)
-    routes_by_port: Arc<DashMap<u16, Vec<Arc<TCPRoute>>>>,
-    
-    /// gateway_key -> Set<port> mapping
-    /// Tracks which ports each gateway is using
-    gateway_ports: Arc<DashMap<String, HashSet<u16>>>,
-    
     /// resource_key -> Arc<TCPRoute> mapping
     /// For quick lookup and updates
     routes_by_key: Arc<DashMap<String, Arc<TCPRoute>>>,
+    
+    /// gateway_key -> GatewayTcpRoutes mapping
+    /// Each gateway has its own set of TCP routes
+    gateway_tcp_routes_map: Arc<DashMap<String, Arc<GatewayTcpRoutes>>>,
 }
 
 impl TcpRouteManager {
     pub fn new() -> Self {
         Self {
-            routes_by_port: Arc::new(DashMap::new()),
-            gateway_ports: Arc::new(DashMap::new()),
             routes_by_key: Arc::new(DashMap::new()),
+            gateway_tcp_routes_map: Arc::new(DashMap::new()),
+        }
+    }
+    
+    /// Get or create GatewayTcpRoutes for a specific gateway
+    /// 
+    /// This method returns a cached GatewayTcpRoutes for the given gateway.
+    /// If it doesn't exist, creates a new empty one.
+    pub fn get_or_create_gateway_tcp_routes(&self, namespace: &str, name: &str) -> Arc<GatewayTcpRoutes> {
+        let gateway_key = format!("{}/{}", namespace, name);
+        
+        let entry = self.gateway_tcp_routes_map.entry(gateway_key.clone());
+        let is_new = matches!(entry, dashmap::mapref::entry::Entry::Vacant(_));
+        
+        let gateway_routes = entry
+            .or_insert_with(|| Arc::new(GatewayTcpRoutes::new()))
+            .value()
+            .clone();
+        
+        if is_new {
+            tracing::debug!(
+                gateway_key = %gateway_key,
+                "Created new GatewayTcpRoutes"
+            );
+        }
+        
+        gateway_routes
+    }
+    
+    /// Rebuild gateway routes maps after route changes
+    /// 
+    /// This method should be called after add_route, remove_route, or replace_all
+    /// to update the GatewayTcpRoutes for affected gateways.
+    fn rebuild_gateway_routes_map(&self) {
+        // Group routes by gateway
+        let mut gateway_routes: HashMap<String, HashMap<u16, Vec<Arc<TCPRoute>>>> = HashMap::new();
+        
+        for entry in self.routes_by_key.iter() {
+            let route = entry.value();
+            let gateway_keys = self.extract_gateway_keys_from_route(route);
+            let ports = self.extract_ports_from_route(route);
+            
+            for gateway_key in gateway_keys {
+                let gateway_map = gateway_routes
+                    .entry(gateway_key)
+                    .or_insert_with(HashMap::new);
+                
+                for port in &ports {
+                    gateway_map
+                        .entry(*port)
+                        .or_insert_with(Vec::new)
+                        .push(route.clone());
+                }
+            }
+        }
+        
+        // Update all gateways in the map
+        // First, update gateways that have routes
+        for (gateway_key, port_routes) in &gateway_routes {
+            let ports_count = port_routes.len();
+            let gateway_tcp_routes = self.gateway_tcp_routes_map
+                .entry(gateway_key.clone())
+                .or_insert_with(|| Arc::new(GatewayTcpRoutes::new()))
+                .clone();
+            
+            gateway_tcp_routes.update_routes(port_routes.clone());
+            tracing::debug!(
+                gateway_key = %gateway_key,
+                ports = ports_count,
+                "Updated GatewayTcpRoutes"
+            );
+        }
+        
+        // Clear routes for gateways that exist in map but have no routes
+        for entry in self.gateway_tcp_routes_map.iter() {
+            let gateway_key = entry.key();
+            if !gateway_routes.contains_key(gateway_key.as_str()) {
+                // This gateway has no routes, clear it
+                entry.value().update_routes(HashMap::new());
+                tracing::debug!(
+                    gateway_key = %gateway_key,
+                    "Cleared GatewayTcpRoutes (no routes)"
+                );
+            }
         }
     }
     
@@ -34,109 +113,33 @@ impl TcpRouteManager {
     pub fn add_route(&self, route: Arc<TCPRoute>) {
         let resource_key = route.key_name();
         
-        // Extract ports from parent_refs
-        let ports = self.extract_ports_from_route(&route);
-        
-        // Extract gateway keys from parent_refs
-        let gateway_keys = self.extract_gateway_keys_from_route(&route);
-        
         // Store by resource key
-        self.routes_by_key.insert(resource_key.clone(), route.clone());
+        self.routes_by_key.insert(resource_key, route);
         
-        // Index by port
-        for port in &ports {
-            self.routes_by_port
-                .entry(*port)
-                .or_insert_with(Vec::new)
-                .push(route.clone());
-        }
-        
-        // Track gateway -> port mapping
-        for gateway_key in &gateway_keys {
-            self.gateway_ports
-                .entry(gateway_key.clone())
-                .or_insert_with(HashSet::new)
-                .extend(&ports);
-        }
+        // Rebuild gateway routes map
+        self.rebuild_gateway_routes_map();
     }
     
     /// Remove a TCPRoute by resource key
     pub fn remove_route(&self, resource_key: &str) {
-        if let Some((_, route)) = self.routes_by_key.remove(resource_key) {
-            let ports = self.extract_ports_from_route(&route);
-            let gateway_keys = self.extract_gateway_keys_from_route(&route);
-            
-            // Remove from port index
-            for port in &ports {
-                if let Some(mut routes) = self.routes_by_port.get_mut(port) {
-                    routes.retain(|r| r.key_name() != resource_key);
-                    if routes.is_empty() {
-                        drop(routes);
-                        self.routes_by_port.remove(port);
-                    }
-                }
-            }
-            
-            // Clean up gateway -> port mapping
-            for gateway_key in &gateway_keys {
-                if let Some(mut port_set) = self.gateway_ports.get_mut(gateway_key.as_str()) {
-                    for port in &ports {
-                        port_set.remove(port);
-                    }
-                    if port_set.is_empty() {
-                        drop(port_set);
-                        self.gateway_ports.remove(gateway_key.as_str());
-                    }
-                }
-            }
-        }
-    }
-    
-    /// Match a TCPRoute by listener port and gateway
-    pub fn match_route(&self, port: u16, gateway_key: Option<&str>) -> Option<Arc<TCPRoute>> {
-        self.routes_by_port.get(&port).and_then(|routes| {
-            if let Some(gw_key) = gateway_key {
-                // Find route matching this gateway
-                routes.iter()
-                    .find(|r| self.route_matches_gateway(r, gw_key))
-                    .cloned()
-            } else {
-                // Return first available route
-                routes.first().cloned()
-            }
-        })
+        // Remove from routes_by_key
+        self.routes_by_key.remove(resource_key);
+        
+        // Rebuild gateway routes map
+        self.rebuild_gateway_routes_map();
     }
     
     /// Replace all routes (used in full_set)
     pub fn replace_all(&self, routes: HashMap<String, Arc<TCPRoute>>) {
-        // Clear all existing data
+        // Clear and rebuild routes_by_key
         self.routes_by_key.clear();
-        self.routes_by_port.clear();
-        self.gateway_ports.clear();
         
-        // Add all new routes
-        for route in routes.values() {
-            self.add_route(route.clone());
+        for (key, route) in routes {
+            self.routes_by_key.insert(key, route);
         }
-    }
-    
-    /// Get all routes for a specific gateway
-    pub fn get_routes_for_gateway(&self, gateway_key: &str) -> Vec<Arc<TCPRoute>> {
-        if let Some(ports) = self.gateway_ports.get(gateway_key) {
-            let mut routes = Vec::new();
-            for port in ports.iter() {
-                if let Some(port_routes) = self.routes_by_port.get(port) {
-                    for route in port_routes.iter() {
-                        if self.route_matches_gateway(route, gateway_key) {
-                            routes.push(route.clone());
-                        }
-                    }
-                }
-            }
-            routes
-        } else {
-            Vec::new()
-        }
+        
+        // Rebuild gateway routes map
+        self.rebuild_gateway_routes_map();
     }
     
     // Private helper methods
@@ -165,11 +168,6 @@ impl TcpRouteManager {
             }
         }
         gateway_keys
-    }
-    
-    fn route_matches_gateway(&self, route: &TCPRoute, gateway_key: &str) -> bool {
-        let gateway_keys = self.extract_gateway_keys_from_route(route);
-        gateway_keys.contains(gateway_key)
     }
 }
 
