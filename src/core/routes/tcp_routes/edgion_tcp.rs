@@ -65,11 +65,6 @@ impl ServerApp for EdgionTcp {
             status: TcpStatus::Success,
         };
 
-        tracing::info!(
-            port = self.listener_port,
-            "TCP connection received"
-        );
-
         // 处理连接（无论成功或失败都会更新 ctx）
         self.handle_connection(downstream, &mut ctx).await;
         
@@ -87,14 +82,6 @@ impl EdgionTcp {
         let tcp_route = match self.gateway_tcp_routes.match_route(self.listener_port) {
             Some(route) => route,
             None => {
-                tracing::warn!(
-                    port = self.listener_port,
-                    gateway = format!("{}/{}", 
-                        self.gateway_namespace.as_deref().unwrap_or("default"),
-                        &self.gateway_name
-                    ),
-                    "No TCPRoute found for port"
-                );
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
                 return;
             }
@@ -107,18 +94,13 @@ impl EdgionTcp {
             Some(rule) => {
                 match rule.backend_finder.select() {
                     Ok(backend) => backend,
-                    Err(e) => {
-                        tracing::error!(
-                            error_code = e,
-                            "Failed to select backend"
-                        );
+                    Err(_) => {
                         ctx.status = TcpStatus::UpstreamConnectionFailed;
                         return;
                     }
                 }
             }
             None => {
-                tracing::error!("No TCPRoute rules found");
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
                 return;
             }
@@ -135,10 +117,6 @@ impl EdgionTcp {
         let backend = match ep_store.select_peer(&service_key, b"", 256) {
             Some(backend) => backend,
             None => {
-                tracing::error!(
-                    service_key = %service_key,
-                    "No available backend endpoints found"
-                );
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
                 return;
             }
@@ -156,22 +134,11 @@ impl EdgionTcp {
         let peer = BasicPeer::new(&upstream_addr_str);
         let upstream = match self.connector.new_stream(&peer).await {
             Ok(stream) => stream,
-            Err(e) => {
-                tracing::error!(
-                    upstream = %upstream_addr_str,
-                    error = %e,
-                    "Failed to connect to upstream"
-                );
+            Err(_) => {
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
                 return;
             }
         };
-        
-        tracing::info!(
-            port = self.listener_port,
-            upstream = %upstream_addr_str,
-            "TCP connection established"
-        );
         
         // 6. 双向数据转发
         self.duplex(downstream, upstream, ctx).await;
@@ -190,60 +157,52 @@ impl EdgionTcp {
         
         loop {
             select! {
-                // Client → Upstream
-                result = downstream.read(&mut upstream_buf) => {
-                    match result {
-                        Ok(0) => {
-                            tracing::debug!("Client closed connection");
+            // Client → Upstream
+            result = downstream.read(&mut upstream_buf) => {
+                match result {
+                    Ok(0) => {
+                        break;
+                    }
+                    Ok(n) => {
+                        ctx.bytes_sent += n as u64;
+                        if let Err(_) = upstream.write_all(&upstream_buf[0..n]).await {
+                            ctx.status = TcpStatus::UpstreamWriteError;
                             break;
                         }
-                        Ok(n) => {
-                            ctx.bytes_sent += n as u64;
-                            if let Err(e) = upstream.write_all(&upstream_buf[0..n]).await {
-                                tracing::error!("Failed to write to upstream: {}", e);
-                                ctx.status = TcpStatus::UpstreamWriteError;
-                                break;
-                            }
-                            if let Err(e) = upstream.flush().await {
-                                tracing::error!("Failed to flush upstream: {}", e);
-                                ctx.status = TcpStatus::UpstreamWriteError;
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to read from client: {}", e);
-                            ctx.status = TcpStatus::DownstreamReadError;
+                        if let Err(_) = upstream.flush().await {
+                            ctx.status = TcpStatus::UpstreamWriteError;
                             break;
                         }
                     }
+                    Err(_) => {
+                        ctx.status = TcpStatus::DownstreamReadError;
+                        break;
+                    }
                 }
-                // Upstream → Client
-                result = upstream.read(&mut downstream_buf) => {
-                    match result {
-                        Ok(0) => {
-                            tracing::debug!("Upstream closed connection");
+            }
+            // Upstream → Client
+            result = upstream.read(&mut downstream_buf) => {
+                match result {
+                    Ok(0) => {
+                        break;
+                    }
+                    Ok(n) => {
+                        ctx.bytes_received += n as u64;
+                        if let Err(_) = downstream.write_all(&downstream_buf[0..n]).await {
+                            ctx.status = TcpStatus::DownstreamWriteError;
                             break;
                         }
-                        Ok(n) => {
-                            ctx.bytes_received += n as u64;
-                            if let Err(e) = downstream.write_all(&downstream_buf[0..n]).await {
-                                tracing::error!("Failed to write to client: {}", e);
-                                ctx.status = TcpStatus::DownstreamWriteError;
-                                break;
-                            }
-                            if let Err(e) = downstream.flush().await {
-                                tracing::error!("Failed to flush downstream: {}", e);
-                                ctx.status = TcpStatus::DownstreamWriteError;
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to read from upstream: {}", e);
-                            ctx.status = TcpStatus::UpstreamReadError;
+                        if let Err(_) = downstream.flush().await {
+                            ctx.status = TcpStatus::DownstreamWriteError;
                             break;
                         }
                     }
+                    Err(_) => {
+                        ctx.status = TcpStatus::UpstreamReadError;
+                        break;
+                    }
                 }
+            }
             }
         }
     }
