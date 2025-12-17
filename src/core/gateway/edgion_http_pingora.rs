@@ -349,6 +349,47 @@ impl ProxyHttp for EdgionHttp {
         Ok(())
     }
 
+    async fn logging(&self, session: &mut Session, _e: Option<&PingoraError>, ctx: &mut Self::CTX)
+    where
+        Self::CTX: Send + Sync,
+    {
+        // Update response status from session
+        if let Some(resp_header) = session.response_written() {
+            ctx.request_info.status = resp_header.status.as_u16();
+        }
+
+        // Create access log entry
+        let entry = AccessLogEntry::from_context(ctx);
+
+        // In DEBUG mode, print access log to terminal
+        if tracing::level_filters::LevelFilter::current() >= tracing::level_filters::LevelFilter::DEBUG {
+            tracing::debug!(
+                access_log = %entry.to_json(),
+                "Access log"
+            );
+        }
+
+        // Send to access logger
+        self.access_logger.send(entry.to_json()).await;
+    }
+
+    fn error_while_proxy(
+        &self,
+        peer: &HttpPeer,
+        session: &mut Session,
+        e: Box<Error>,
+        _ctx: &mut Self::CTX,
+        client_reused: bool,
+    ) -> Box<Error> {
+        let mut e = e.more_context(format!("Peer: {}", peer));
+        // only reused client connections where retry buffer is not truncated
+        e.retry
+            .decide_reuse(client_reused && !session.as_ref().retry_buffer_truncated());
+        // todo need add retry logic?
+        e
+    }
+
+
     /// fail_to_connect - called when connection to upstream fails
     fn fail_to_connect(
         &self,
@@ -370,14 +411,15 @@ impl ProxyHttp for EdgionHttp {
             }
             upstream.et = Some(upstream.start_time.elapsed().as_millis() as u64);
         }
-        
+
         let max_retries = self.edgion_gateway_config.spec.max_retries;
         if ctx.try_cnt <= max_retries {
             e.set_retry(true);
         }
-        
+
         e
     }
+
 
     async fn fail_to_proxy(
         &self,
@@ -391,7 +433,7 @@ impl ProxyHttp for EdgionHttp {
         let code = match e.etype() {
             HTTPStatus(code) => *code,
             // Check for timeout errors first
-            ErrorType::ConnectTimedout | ErrorType::TLSHandshakeTimedout | 
+            ErrorType::ConnectTimedout | ErrorType::TLSHandshakeTimedout |
             ErrorType::ReadTimedout | ErrorType::WriteTimedout => 504,
             _ => {
                 match e.esource() {
@@ -409,14 +451,14 @@ impl ProxyHttp for EdgionHttp {
                 }
             }
         };
-        
+
         // Record error status code
         if code > 0 {
             // Only update request_info.status if not already set (default is 0)
             if ctx.request_info.status == 0 {
                 ctx.request_info.status = code as u16;
             }
-            
+
             // Always update current upstream status and error message
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(code as u16);
@@ -426,12 +468,12 @@ impl ProxyHttp for EdgionHttp {
                 }
             }
         }
-        
+
         if code > 0 {
             // Generate error response and apply custom server headers
             let mut resp = pingora_core::protocols::http::ServerSession::generate_error(code);
             self.server_header_opts.apply_to_response(&mut resp);
-            
+
             // Write error response
             session.write_error_response(resp, bytes::Bytes::default()).await.unwrap_or_else(|e| {
                 error!("failed to send error response to downstream: {e}");
@@ -443,48 +485,6 @@ impl ProxyHttp for EdgionHttp {
             // default to no reuse, which is safest
             can_reuse_downstream: false,
         }
-    }
-    
-
-    async fn logging(&self, session: &mut Session, _e: Option<&PingoraError>, ctx: &mut Self::CTX)
-    where
-        Self::CTX: Send + Sync,
-    {
-        // Update response status from session
-        if let Some(resp_header) = session.response_written() {
-            ctx.request_info.status = resp_header.status.as_u16();
-        }
-
-        // Create access log entry
-        let entry = AccessLogEntry::from_context(ctx);
-        
-        // In DEBUG mode, print access log to terminal
-        if tracing::level_filters::LevelFilter::current() >= tracing::level_filters::LevelFilter::DEBUG {
-            tracing::debug!(
-                access_log = %entry.to_json(),
-                "Access log"
-            );
-        }
-        
-        // Send to access logger
-        self.access_logger.send(entry.to_json()).await;
-    }
-
-
-    fn error_while_proxy(
-        &self,
-        peer: &HttpPeer,
-        session: &mut Session,
-        e: Box<Error>,
-        _ctx: &mut Self::CTX,
-        client_reused: bool,
-    ) -> Box<Error> {
-        let mut e = e.more_context(format!("Peer: {}", peer));
-        // only reused client connections where retry buffer is not truncated
-        e.retry
-            .decide_reuse(client_reused && !session.as_ref().retry_buffer_truncated());
-        // todo need add retry logic?
-        e
     }
 
 
