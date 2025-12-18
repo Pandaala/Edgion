@@ -14,11 +14,12 @@ impl HttpTestSuite {
             |ctx: TestContext| Box::pin(async move {
                 let start = Instant::now();
                 
-                match ctx.http_client
-                    .get(format!("{}/health", ctx.http_url()))
-                    .send()
-                    .await
-                {
+                let mut request = ctx.http_client.get(format!("{}/health", ctx.http_url()));
+                if let Some(host) = &ctx.http_host {
+                    request = request.header("Host", host);
+                }
+                
+                match request.send().await {
                     Ok(response) => {
                         if response.status().is_success() {
                             TestResult::passed_with_message(
@@ -45,11 +46,12 @@ impl HttpTestSuite {
             |ctx: TestContext| Box::pin(async move {
                 let start = Instant::now();
                 
-                match ctx.http_client
-                    .get(format!("{}/echo", ctx.http_url()))
-                    .send()
-                    .await
-                {
+                let mut request = ctx.http_client.get(format!("{}/echo", ctx.http_url()));
+                if let Some(host) = &ctx.http_host {
+                    request = request.header("Host", host);
+                }
+                
+                match request.send().await {
                     Ok(response) => {
                         match response.text().await {
                             Ok(body) => {
@@ -79,12 +81,14 @@ impl HttpTestSuite {
                 let start = Instant::now();
                 let test_body = "Hello World";
                 
-                match ctx.http_client
+                let mut request = ctx.http_client
                     .post(format!("{}/echo", ctx.http_url()))
-                    .body(test_body)
-                    .send()
-                    .await
-                {
+                    .body(test_body);
+                if let Some(host) = &ctx.http_host {
+                    request = request.header("Host", host);
+                }
+                
+                match request.send().await {
                     Ok(response) => {
                         match response.text().await {
                             Ok(body) => {
@@ -115,11 +119,13 @@ impl HttpTestSuite {
                 let test_codes = vec![200, 404, 500];
                 
                 for code in test_codes {
-                    match ctx.http_client
-                        .get(format!("{}/status/{}", ctx.http_url(), code))
-                        .send()
-                        .await
-                    {
+                    let mut request = ctx.http_client
+                        .get(format!("{}/status/{}", ctx.http_url(), code));
+                    if let Some(host) = &ctx.http_host {
+                        request = request.header("Host", host);
+                    }
+                    
+                    match request.send().await {
                         Ok(response) => {
                             if response.status().as_u16() != code {
                                 return TestResult::failed(
@@ -148,11 +154,13 @@ impl HttpTestSuite {
                 let start = Instant::now();
                 let delay_seconds = 1;
                 
-                match ctx.http_client
-                    .get(format!("{}/delay/{}", ctx.http_url(), delay_seconds))
-                    .send()
-                    .await
-                {
+                let mut request = ctx.http_client
+                    .get(format!("{}/delay/{}", ctx.http_url(), delay_seconds));
+                if let Some(host) = &ctx.http_host {
+                    request = request.header("Host", host);
+                }
+                
+                match request.send().await {
                     Ok(response) => {
                         let elapsed = start.elapsed();
                         if response.status().is_success() && elapsed.as_secs() >= delay_seconds {

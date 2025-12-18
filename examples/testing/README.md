@@ -12,9 +12,31 @@ cargo run --example test_server
 
 ### 2. 运行测试客户端
 
+测试客户端支持两种模式：
+
+**Direct 模式（默认，直连后端服务）**：
 ```bash
-# 在另一个终端运行
+# 测试所有协议
 cargo run --example test_client -- all
+
+# 测试单个协议
+cargo run --example test_client -- http
+
+# 自定义端口
+cargo run --example test_client -- --http-port 30001 http
+```
+
+**Gateway 模式（通过 Gateway 代理）**：
+```bash
+# 使用 -g flag 启用 Gateway 模式
+cargo run --example test_client -- -g http
+
+# 或使用长参数
+cargo run --example test_client -- --gateway http
+
+# Gateway 模式会自动：
+# - 使用 Gateway 端口（HTTP: 10080, gRPC: 18443, TCP: 19000, UDP: 19002）
+# - 设置 Host header 为 test.example.com（HTTP 路由匹配需要）
 ```
 
 ## 默认端口
@@ -31,6 +53,8 @@ test-server 默认监听以下端口：
 
 ## 测试命令
 
+### Direct 模式示例
+
 ```bash
 # 测试所有协议
 cargo run --example test_client -- all
@@ -45,6 +69,22 @@ cargo run --example test_client -- --verbose all
 
 # 生成 JSON 报告
 cargo run --example test_client -- --json all
+```
+
+### Gateway 模式示例
+
+```bash
+# 测试 HTTP（通过 Gateway）
+cargo run --example test_client -- -g http
+
+# 测试所有协议（通过 Gateway）
+cargo run --example test_client -- -g all
+
+# Gateway 模式 + 详细输出
+cargo run --example test_client -- -g --verbose http
+
+# Gateway 模式 + JSON 报告
+cargo run --example test_client -- -g --json http
 ```
 
 ## 自定义端口

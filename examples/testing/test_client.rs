@@ -9,7 +9,7 @@ mod reporter;
 mod suites;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use framework::{TestContext, TestRunner};
 use reporter::{ConsoleReporter, JsonReporter};
 use std::time::Instant;
@@ -21,8 +21,8 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
     
-    #[arg(long, default_value = "direct", value_enum)]
-    mode: TestMode,
+    #[arg(short = 'g', long = "gateway")]
+    gateway: bool,
     
     #[arg(long, default_value = "127.0.0.1")]
     target_host: String,
@@ -52,12 +52,6 @@ struct Cli {
     verbose: bool,
 }
 
-#[derive(Clone, Debug, ValueEnum)]
-enum TestMode {
-    Direct,
-    Gateway,
-}
-
 #[derive(Subcommand, Debug)]
 enum Commands {
     Http,
@@ -78,20 +72,46 @@ async fn main() -> Result<()> {
             .init();
     }
     
+    // Determine ports and host based on gateway flag
+    let (http_port, grpc_port, tcp_port, udp_port, websocket_port, http_host) = if cli.gateway {
+        // Gateway mode: use Gateway ports
+        (
+            10080,  // Gateway HTTP port
+            18443,  // Gateway gRPC port
+            19000,  // Gateway TCP port
+            19002,  // Gateway UDP port
+            cli.websocket_port,  // WebSocket uses original port
+            Some("test.example.com".to_string()),
+        )
+    } else {
+        // Direct mode: use CLI provided ports
+        (
+            cli.http_port,
+            cli.grpc_port,
+            cli.tcp_port,
+            cli.udp_port,
+            cli.websocket_port,
+            None,
+        )
+    };
+    
+    let mode_name = if cli.gateway { "Gateway" } else { "Direct" };
+    
     println!("\n========================================");
     println!("Edgion 测试客户端");
     println!("========================================");
-    println!("模式: {:?}", cli.mode);
-    println!("目标: {}:{}", cli.target_host, cli.http_port);
+    println!("模式: {}", mode_name);
+    println!("目标: {}:{}", cli.target_host, http_port);
     println!("========================================\n");
     
     let context = TestContext::new(
         cli.target_host.clone(),
-        cli.http_port,
-        cli.grpc_port,
-        cli.websocket_port,
-        cli.tcp_port,
-        cli.udp_port,
+        http_port,
+        grpc_port,
+        websocket_port,
+        tcp_port,
+        udp_port,
+        http_host,
         cli.verbose,
     );
     

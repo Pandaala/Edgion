@@ -1,0 +1,32 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: test-http
+  namespace: edge
+spec:
+  parentRefs:
+    - name: example-gateway
+      namespace: edge
+
+  hostnames:
+    - "test.example.com"
+  
+  rules:
+    # 规则1: API 路径前缀匹配
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则2: 精确路径匹配 - 健康检查端点
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          port: 30001
+
