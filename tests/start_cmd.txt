@@ -112,3 +112,22 @@ tail -f logs/edgion_access.log | grep -i grpc
 
 # 8. 自动化测试脚本
 ./tests/test_grpc_routes.sh
+
+
+
+
+
+
+
+# 1. 先启动 test-server（在一个终端）
+cargo run --example test_server
+
+# 2. 然后在另一个终端运行测试
+# 测试 HTTP
+cargo run --example test_client -- http
+
+# 测试所有协议
+cargo run --example test_client -- all
+
+# 详细输出 + JSON 报告
+cargo run --example test_client -- --verbose --json all
