@@ -4,13 +4,37 @@
 
 ## 快速开始
 
-### 1. 启动测试服务器
+### 方式 1：一键集成测试（推荐）
+
+使用集成测试脚本，自动启动所有服务并运行测试：
+
+```bash
+# 进入测试目录
+cd examples/testing
+
+# 运行集成测试脚本
+./run_integration_test.sh
+```
+
+脚本会自动：
+1. 启动 test_server（后端服务）
+2. 启动 edgion-controller（加载 examples/conf 配置）
+3. 启动 edgion-gateway（网关服务）
+4. 等待 10 秒让服务完全启动
+5. 运行 Direct 模式测试
+6. 运行 Gateway 模式测试
+7. 显示测试结果和日志
+8. 自动清理所有服务
+
+### 方式 2：手动启动和测试
+
+#### 1. 启动测试服务器
 
 ```bash
 cargo run --example test_server
 ```
 
-### 2. 运行测试客户端
+#### 2. 运行测试客户端
 
 测试客户端支持两种模式：
 
@@ -101,5 +125,30 @@ cargo run --example test_client -- \
   --http-port 30001 \
   --tcp-port 30010 \
   all
+```
+
+## 日志文件
+
+集成测试脚本会将日志保存到 `examples/testing/logs/` 目录：
+
+```
+examples/testing/logs/
+├── controller.log    # edgion-controller 日志
+├── gateway.log       # edgion-gateway 日志
+├── test_server.log   # test_server 日志
+├── access.log        # HTTP 访问日志
+└── test_result.log   # 测试结果日志
+```
+
+查看日志：
+```bash
+# 查看 Gateway 访问日志
+tail -f examples/testing/logs/access.log
+
+# 查看测试结果
+cat examples/testing/logs/test_result.log
+
+# 查看所有日志
+ls -lh examples/testing/logs/
 ```
 
