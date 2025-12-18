@@ -26,13 +26,13 @@ impl GrpcTestSuite {
                 // 构建连接 URL
                 let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
                 
-                // 创建 gRPC 客户端，tonic 默认会使用 HTTP/2
+                // 创建 gRPC 客户端
                 let mut client = match TestServiceClient::connect(grpc_url.clone()).await {
                     Ok(c) => c,
                     Err(e) => {
                         return TestResult::failed(
                             start.elapsed(),
-                            format!("Failed to connect to gRPC server at {}: {}", grpc_url, e)
+                            format!("Failed to connect to {}: {}", grpc_url, e)
                         );
                     }
                 };
@@ -42,17 +42,23 @@ impl GrpcTestSuite {
                     name: "Edgion".to_string(),
                 });
                 
-                // 如果是 Gateway 模式，添加 :authority pseudo-header
+                // Gateway 模式：使用 metadata 设置 authority
+                // 注意：这实际上不会设置 :authority pseudo-header，
+                // 但可以设置普通的 authority header
                 if let Some(ref host) = ctx.grpc_host {
-                    // 在 tonic 中，需要使用 URI 的 authority 部分来设置 :authority header
-                    // 这是通过重新创建带有正确 URI 的 request 来实现的
-                    request.metadata_mut().insert(
-                        ":authority",
-                        host.parse().expect("Invalid authority"),
-                    );
+                    use tonic::metadata::AsciiMetadataValue;
+                    let authority_value = match AsciiMetadataValue::try_from(host.as_str()) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Invalid authority value: {}", e)
+                            );
+                        }
+                    };
+                    request.metadata_mut().insert("host", authority_value);
                 }
                 
-                // 发送请求
                 match client.say_hello(request).await {
                     Ok(response) => {
                         let reply = response.into_inner();

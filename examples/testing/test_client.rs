@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
         // Gateway mode: use Gateway ports
         (
             10080,  // Gateway HTTP port
-            18443,  // Gateway gRPC port
+            10080,  // Gateway HTTP port (gRPC uses HTTP listener)
             19000,  // Gateway TCP port
             19002,  // Gateway UDP port
             10080,  // WebSocket through HTTP Gateway

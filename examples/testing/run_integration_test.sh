@@ -263,6 +263,18 @@ else
     echo_error "HTTP Gateway mode: FAILED"
 fi
 
+if [ $DIRECT_GRPC_RESULT -eq 0 ]; then
+    echo_success "gRPC Direct mode: PASSED"
+else
+    echo_error "gRPC Direct mode: FAILED"
+fi
+
+if [ $GATEWAY_GRPC_RESULT -eq 0 ]; then
+    echo_success "gRPC Gateway mode: PASSED"
+else
+    echo_error "gRPC Gateway mode: FAILED"
+fi
+
 if [ $DIRECT_TCP_RESULT -eq 0 ]; then
     echo_success "TCP Direct mode: PASSED"
 else
