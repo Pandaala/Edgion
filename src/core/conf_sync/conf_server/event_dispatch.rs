@@ -358,7 +358,7 @@ impl ConfigServer {
                 }
             }
             ResourceKind::EdgionTls => {
-                if let Ok(resource) = serde_yaml::from_str::<EdgionTls>(&data) {
+                if let Ok(mut resource) = serde_yaml::from_str::<EdgionTls>(&data) {
                     // 检查 EdgionTls 引用的 gateway 是否存在于 base_conf 中
                     let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
                         if let Some(first_ref) = parent_refs.first() {
@@ -418,6 +418,58 @@ impl ConfigServer {
                         return;
                     }
 
+                    // Handle Secret reference
+                    use super::secret_ref::ResourceRef;
+                    use crate::types::ResourceKind as RK;
+                    
+                    let resource_ref = ResourceRef::new(
+                        RK::EdgionTls,
+                        resource.metadata.namespace.clone(),
+                        resource.metadata.name.clone().unwrap_or_default(),
+                    );
+
+                    // Build secret key from secret_ref
+                    let secret_namespace = resource.spec.secret_ref.namespace.as_ref()
+                        .or(resource.metadata.namespace.as_ref());
+                    let secret_key = if let Some(ns) = secret_namespace {
+                        format!("{}/{}", ns, resource.spec.secret_ref.name)
+                    } else {
+                        resource.spec.secret_ref.name.clone()
+                    };
+
+                    // Register reference relationship
+                    match change {
+                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                            self.secret_ref_manager.add_ref(secret_key.clone(), resource_ref.clone());
+                            
+                            // Try to resolve Secret immediately from cache
+                            let secret_list = self.secrets.list_owned();
+                            let secret_data = secret_list.data.into_iter().find(|s| {
+                                let s_namespace = s.metadata.namespace.as_deref();
+                                let s_name = s.metadata.name.as_deref().unwrap_or("");
+                                s_namespace == secret_namespace.map(|s| s.as_str()) && s_name == resource.spec.secret_ref.name
+                            });
+                            
+                            if let Some(secret) = secret_data {
+                                resource.spec.secret = Some(secret);
+                                tracing::debug!(
+                                    edgion_tls = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    "Secret resolved and filled into EdgionTls"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    edgion_tls = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    "Secret not found, EdgionTls will be sent without Secret data"
+                                );
+                            }
+                        }
+                        ResourceChange::EventDelete => {
+                            self.secret_ref_manager.clear_resource_refs(&resource_ref);
+                        }
+                    }
+
                     tracing::info!(
                         component = "config_server",
                         kind = "EdgionTls",
@@ -466,7 +518,81 @@ impl ConfigServer {
                         kind = "Secret",
                         "Applying Secret resource change"
                     );
-                    Self::execute_change_on_cache::<Secret>(change, &self.secrets, resource);
+                    
+                    // Build secret key
+                    let secret_namespace = resource.metadata.namespace.as_ref();
+                    let secret_name = resource.metadata.name.as_ref()
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    let secret_key = if let Some(ns) = secret_namespace {
+                        format!("{}/{}", ns, secret_name)
+                    } else {
+                        secret_name.to_string()
+                    };
+
+                    // Apply the Secret change first
+                    Self::execute_change_on_cache::<Secret>(change, &self.secrets, resource.clone());
+
+                    // Handle resource references when Secret is added or updated
+                    match change {
+                        ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                            // Get all resources that reference this Secret
+                            let refs = self.secret_ref_manager.get_refs(&secret_key);
+                            
+                            if !refs.is_empty() {
+                                tracing::info!(
+                                    secret_key = %secret_key,
+                                    ref_count = refs.len(),
+                                    "Secret updated, triggering cascading updates for referencing resources"
+                                );
+                            }
+
+                            use crate::types::ResourceKind as RK;
+                            for resource_ref in refs {
+                                match resource_ref.kind {
+                                    RK::EdgionTls => {
+                                        // Reload EdgionTls from cache
+                                        let edgion_tls_list = self.edgion_tls.list_owned();
+                                        if let Some(mut edgion_tls) = edgion_tls_list.data.into_iter().find(|tls| {
+                                            let tls_namespace = tls.metadata.namespace.as_deref();
+                                            let tls_name = tls.metadata.name.as_deref().unwrap_or("");
+                                            tls_namespace == resource_ref.namespace.as_deref() && tls_name == resource_ref.name
+                                        }) {
+                                            // Fill in the Secret
+                                            edgion_tls.spec.secret = Some(resource.clone());
+                                            
+                                            tracing::debug!(
+                                                edgion_tls = %resource_ref.key(),
+                                                secret_key = %secret_key,
+                                                "Updating EdgionTls with resolved Secret"
+                                            );
+                                            
+                                            // Trigger update event
+                                            Self::execute_change_on_cache::<EdgionTls>(
+                                                ResourceChange::EventUpdate,
+                                                &self.edgion_tls,
+                                                edgion_tls
+                                            );
+                                        }
+                                    }
+                                    _ => {
+                                        tracing::warn!(
+                                            resource = %resource_ref.key(),
+                                            "Unexpected resource kind referencing Secret, skipping"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        ResourceChange::EventDelete => {
+                            // When Secret is deleted, we don't need to clean up references
+                            // because the referencing resources will handle it when they're deleted
+                            tracing::debug!(
+                                secret_key = %secret_key,
+                                "Secret deleted, referencing resources will have empty Secret field"
+                            );
+                        }
+                    }
                 }
             }
         }

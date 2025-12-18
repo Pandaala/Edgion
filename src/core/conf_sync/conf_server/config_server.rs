@@ -1,6 +1,6 @@
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
 use crate::types::GatewayBaseConf;
@@ -8,6 +8,7 @@ use crate::core::conf_sync::cache_server::ServerCache;
 use crate::core::conf_sync::types::{ListData, WatchResponse};
 use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
+use super::secret_ref::SecretRefManager;
 use anyhow::Result;
 
 // internal key
@@ -48,6 +49,7 @@ pub struct ConfigServer {
     pub edgion_plugins: ServerCache<EdgionPlugins>,
     pub plugin_metadata: ServerCache<PluginMetaData>,
     pub secrets: ServerCache<Secret>,
+    pub secret_ref_manager: Arc<SecretRefManager>,
 }
 
 pub struct ListDataSimple {
@@ -81,6 +83,7 @@ impl ConfigServer {
             edgion_plugins: ServerCache::new(200),
             plugin_metadata: ServerCache::new(200),
             secrets: ServerCache::new(200),
+            secret_ref_manager: Arc::new(SecretRefManager::new()),
         }
     }
 
@@ -88,6 +91,24 @@ impl ConfigServer {
     pub fn gateway_class(&self) -> Option<String> {
         let base_conf_guard = self.base_conf.read().unwrap();
         base_conf_guard.gateway_class_name().map(|s| s.clone())
+    }
+
+    /// Get SecretRefManager statistics for monitoring
+    pub fn secret_ref_stats(&self) -> super::secret_ref::RefManagerStats {
+        self.secret_ref_manager.stats()
+    }
+
+    /// Print SecretRefManager statistics
+    pub fn print_secret_ref_stats(&self) {
+        let stats = self.secret_ref_manager.stats();
+        tracing::info!(
+            component = "config_server",
+            event = "secret_ref_stats",
+            secret_count = stats.secret_count,
+            resource_count = stats.resource_count,
+            total_references = stats.total_references,
+            "Secret reference manager statistics"
+        );
     }
 
     /// Get base configuration for a specific gateway class
