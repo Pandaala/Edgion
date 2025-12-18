@@ -425,34 +425,34 @@ async fn list_linksys(
 }
 
 /// Get Secret by namespace and name
-async fn get_secret(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<Secret>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
+// async fn get_secret(
+//     State(client): State<Arc<ConfigClient>>,
+//     Query(query): Query<ResourceQuery>,
+// ) -> Json<ApiResponse<Secret>> {
+//     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
+//         Ok(k) => k,
+//         Err(e) => return Json(ApiResponse::error(e)),
+//     };
 
-    let list_data = client.secrets().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+//     let list_data = client.secrets().list();
+//     let name = query.name.as_ref().unwrap().as_str();
+//     let namespace = query.namespace.as_ref().map(|s| s.as_str());
     
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
-        Some(secret) => Json(ApiResponse::success(secret)),
-        None => Json(ApiResponse::error(format!("Secret not found: {}", key))),
-    }
-}
+//     match list_data.data.into_iter().find(|r| {
+//         r.name_any() == name && r.namespace().as_deref() == namespace
+//     }) {
+//         Some(secret) => Json(ApiResponse::success(secret)),
+//         None => Json(ApiResponse::error(format!("Secret not found: {}", key))),
+//     }
+// }
 
-/// List all Secret resources
-async fn list_secret(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<Secret>> {
-    let list_data = client.secrets().list();
-    Json(ListResponse::success(list_data.data))
-}
+// /// List all Secret resources
+// async fn list_secret(
+//     State(client): State<Arc<ConfigClient>>,
+// ) -> Json<ListResponse<Secret>> {
+//     let list_data = client.secrets().list();
+//     Json(ListResponse::success(list_data.data))
+// }
 
 /// Create the admin API router with all endpoints
 pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
@@ -492,9 +492,9 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
         // LinkSys
         .route("/configclient/linksys", get(get_linksys))
         .route("/configclient/linksys/list", get(list_linksys))
-        // Secret
-        .route("/configclient/secret", get(get_secret))
-        .route("/configclient/secret/list", get(list_secret))
+        // // Secret
+        // .route("/configclient/secret", get(get_secret))
+        // .route("/configclient/secret/list", get(list_secret))
         .with_state(config_client)
 }
 

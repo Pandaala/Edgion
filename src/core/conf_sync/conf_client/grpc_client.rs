@@ -62,7 +62,7 @@ impl ConfigSyncClient {
                     config_client.edgion_tls().set_grpc_client(client.clone()).await;
                     config_client.edgion_plugins().set_grpc_client(client.clone()).await;
                     config_client.plugin_metadata().set_grpc_client(client.clone()).await;
-                    config_client.secrets().set_grpc_client(client.clone()).await;
+                    // config_client.secrets().set_grpc_client(client.clone()).await;
 
                     return Ok(Self {
                         config_client,
@@ -207,8 +207,14 @@ impl ConfigSyncClient {
                 self.config_client.plugin_metadata().start_watch().await?;
             }
             Secret => {
-                self.config_client.secrets().start_watch().await?;
+                // Secret now follows related resources, not watched separately
+                return Err(tonic::Status::invalid_argument(
+                    "Secret resources are not watched separately",
+                ));
             }
+            // Secret => {
+            //     self.config_client.secrets().start_watch().await?;
+            // }
         }
 
         Ok(())

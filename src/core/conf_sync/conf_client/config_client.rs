@@ -26,7 +26,7 @@ pub struct ConfigClient {
     edgion_tls: ClientCache<EdgionTls>,
     edgion_plugins: ClientCache<EdgionPlugins>,
     plugin_metadata: ClientCache<PluginMetaData>,
-    secrets: ClientCache<Secret>,
+    // secrets: ClientCache<Secret>,  // Secret now follows related resources
 }
 
 impl ConfigClient {
@@ -80,7 +80,7 @@ impl ConfigClient {
             edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             edgion_plugins: plugins_cache,
             plugin_metadata: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
-            secrets: ClientCache::new(gateway_class_key, client_id, client_name),
+            // secrets: ClientCache::new(gateway_class_key, client_id, client_name),
         }
     }
 
@@ -139,10 +139,10 @@ impl ConfigClient {
         &self.plugin_metadata
     }
 
-    /// Get secrets cache for direct access
-    pub fn secrets(&self) -> &ClientCache<Secret> {
-        &self.secrets
-    }
+    // /// Get secrets cache for direct access
+    // pub fn secrets(&self) -> &ClientCache<Secret> {
+    //     &self.secrets
+    // }
 
     pub fn get_gateway_class_key(&self) -> &String {
         &self.gateway_class_key
@@ -186,9 +186,9 @@ impl ConfigClient {
         if !self.plugin_metadata.is_ready() {
             not_ready.push("plugin_metadata");
         }
-        if !self.secrets.is_ready() {
-            not_ready.push("secrets");
-        }
+        // if !self.secrets.is_ready() {
+        //     not_ready.push("secrets");
+        // }
         
         if not_ready.is_empty() {
             Ok(())
@@ -331,11 +331,15 @@ impl ConfigClient {
                 (json, list_data.resource_version)
             }
             ResourceKind::Secret => {
-                let list_data = self.secrets.list();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize Secret data: {}", e))?;
-                (json, list_data.resource_version)
+                // Secret now follows related resources, not stored separately
+                return Err("Secret resources are not stored in ConfigClient".to_string());
             }
+            // ResourceKind::Secret => {
+            //     let list_data = self.secrets.list();
+            //     let json = serde_json::to_string(&list_data.data)
+            //         .map_err(|e| format!("Failed to serialize Secret data: {}", e))?;
+            //     (json, list_data.resource_version)
+            // }
         };
 
         Ok(ListDataSimple {
@@ -399,10 +403,10 @@ impl ConfigClient {
         self.plugin_metadata.list_owned()
     }
 
-    /// List secrets
-    pub fn list_secrets(&self) -> ListData<Secret> {
-        self.secrets.list_owned()
-    }
+    // /// List secrets
+    // pub fn list_secrets(&self) -> ListData<Secret> {
+    //     self.secrets.list_owned()
+    // }
 
     /// Trigger update event for an endpoint slice by key
     pub fn trigger_endpoint_slice_update_event(&self, key: &str) {
@@ -559,16 +563,16 @@ impl ConfigClient {
             println!("  [{}] {}", idx, format_resource_info(link_sys));
         }
 
-        // Secrets
-        let list_data = self.list_secrets();
-        println!(
-            "Secrets (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, secret) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(secret));
-        }
+        // // Secrets
+        // let list_data = self.list_secrets();
+        // println!(
+        //     "Secrets (count: {}, version: {}):",
+        //     list_data.data.len(),
+        //     list_data.resource_version
+        // );
+        // for (idx, secret) in list_data.data.iter().enumerate() {
+        //     println!("  [{}] {}", idx, format_resource_info(secret));
+        // }
 
         println!("=== End ConfigHub Config ===\n");
     }
@@ -681,13 +685,13 @@ impl ConfigClientEventDispatcher for ConfigClient {
                 }
                 Err(e) => log_error("PluginMetaData", &e),
             },
-            ResourceKind::Secret => match serde_yaml::from_str::<Secret>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.secrets, change, resource);
-                }
-                Err(e) => log_error("Secret", &e),
-            },
-            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
+            // ResourceKind::Secret => match serde_yaml::from_str::<Secret>(&data) {
+            //     Ok(resource) => {
+            //         Self::apply_change_to_cache(&self.secrets, change, resource);
+            //     }
+            //     Err(e) => log_error("Secret", &e),
+            // },
+            ResourceKind::Secret | ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
                 tracing::warn!("skip resource change {:?}", change);
             }
         }

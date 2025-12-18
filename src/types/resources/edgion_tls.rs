@@ -171,11 +171,13 @@ mod tests {
             spec: EdgionTlsSpec {
                 parent_refs: None,
                 hosts: hosts.iter().map(|s| s.to_string()).collect(),
-                secret_ref: SecretReference {
-                    name: Some("test-secret".to_string()),
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "test-secret".to_string(),
                     namespace: Some("default".to_string()),
                 },
-                certificate_refs: None,
+                secret: None,
             },
             status: None,
         }
