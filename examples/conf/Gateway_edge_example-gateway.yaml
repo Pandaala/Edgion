@@ -1,0 +1,38 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: example-gateway
+  namespace: edge
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # HTTP 监听器
+    - name: http
+      protocol: HTTP
+      port: 10080
+
+    # HTTPS 监听器
+    - name: https
+      protocol: HTTPS
+      port: 10443
+
+    # gRPC 监听器 (使用 HTTPS 协议)
+    - name: grpc
+      protocol: HTTPS
+      port: 18443
+
+    # TCP 代理监听器
+    - name: tcp
+      protocol: TCP
+      port: 19000
+
+    # TLS Passthrough 监听器
+    - name: tls
+      protocol: TLS
+      port: 19001
+
+    # UDP 代理监听器
+    - name: udp
+      protocol: UDP
+      port: 19002
+

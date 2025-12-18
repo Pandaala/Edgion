@@ -5,6 +5,7 @@
 ## 文件列表
 
 - `EdgionGatewayConfig__example-gateway.yaml` - 网关全局配置
+- `Gateway_edge_example-gateway.yaml` - Gateway 示例，包含多协议监听器（HTTP/HTTPS/gRPC/TLS/TCP/UDP）
 
 ## 使用方法
 
