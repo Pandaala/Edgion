@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
     }
     
     // Determine ports and host based on gateway flag
-    let (http_port, grpc_port, tcp_port, udp_port, websocket_port, http_host) = if cli.gateway {
+    let (http_port, grpc_port, tcp_port, udp_port, websocket_port, http_host, grpc_host) = if cli.gateway {
         // Gateway mode: use Gateway ports
         (
             10080,  // Gateway HTTP port
@@ -82,6 +82,7 @@ async fn main() -> Result<()> {
             19002,  // Gateway UDP port
             cli.websocket_port,  // WebSocket uses original port
             Some("test.example.com".to_string()),
+            Some("grpc.example.com".to_string()),
         )
     } else {
         // Direct mode: use CLI provided ports
@@ -91,6 +92,7 @@ async fn main() -> Result<()> {
             cli.tcp_port,
             cli.udp_port,
             cli.websocket_port,
+            None,
             None,
         )
     };
@@ -112,6 +114,7 @@ async fn main() -> Result<()> {
         tcp_port,
         udp_port,
         http_host,
+        grpc_host,
         cli.verbose,
     );
     

@@ -1,0 +1,34 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: test-grpc
+  namespace: edge
+spec:
+  parentRefs:
+    - name: example-gateway
+      namespace: edge
+      sectionName: grpc
+
+  hostnames:
+    - "grpc.example.com"
+
+  rules:
+    # 规则1: 匹配 test.TestService 的所有方法
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      backendRefs:
+        - name: test-grpc
+          port: 30021
+
+    # 规则2: 匹配 test.TestService.SayHello 方法
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      backendRefs:
+        - name: test-grpc
+          port: 30021
+

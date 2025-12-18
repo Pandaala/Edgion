@@ -16,6 +16,7 @@ pub struct TestContext {
     pub udp_port: u16,
     pub http_client: reqwest::Client,
     pub http_host: Option<String>,
+    pub grpc_host: Option<String>,
     pub verbose: bool,
 }
 
@@ -28,6 +29,7 @@ impl TestContext {
         tcp_port: u16,
         udp_port: u16,
         http_host: Option<String>,
+        grpc_host: Option<String>,
         verbose: bool,
     ) -> Self {
         let http_client = reqwest::Client::builder()
@@ -44,6 +46,7 @@ impl TestContext {
             udp_port,
             http_client,
             http_host,
+            grpc_host,
             verbose,
         }
     }

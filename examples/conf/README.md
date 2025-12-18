@@ -1,69 +1,52 @@
 # Edgion 配置示例
 
-网关配置示例文件，用于快速测试。
+用于测试的网关配置文件。
 
-## 文件列表
+## 配置文件
 
-### 网关配置
-- `GatewayClass__public-gateway.yaml` - GatewayClass 定义
-- `EdgionGatewayConfig__example-gateway.yaml` - 网关全局配置
-- `Gateway_edge_example-gateway.yaml` - Gateway 示例，包含多协议监听器（HTTP/HTTPS/gRPC/TLS/TCP/UDP）
+- `GatewayClass__public-gateway.yaml` - GatewayClass
+- `Gateway_edge_example-gateway.yaml` - Gateway（HTTP/HTTPS/gRPC/TCP）
+- `HTTPRoute_edge_test-http.yaml` - HTTP 路由
+- `GRPCRoute_edge_test-grpc.yaml` - gRPC 路由
+- `Service_*.yaml` / `EndpointSlice_*.yaml` - 后端服务
 
-### HTTP 路由相关
-- `HTTPRoute_edge_test-http.yaml` - HTTP 路由配置示例
-  - `/api/*` → test-http:30001（路径前缀匹配）
-  - `/health` → test-http:30001（精确路径匹配）
-- `Service_edge_test-http.yaml` - test-http 服务（端口 30001）
-- `EndpointSlice_edge_test-http.yaml` - test-http 服务端点（127.0.0.1:30001）
-
-## 使用方法
+## 手动启动服务
 
 ```bash
-# 启动 controller（加载配置）
-cargo run --bin edgion-controller -- \
-  --gateway-class public-gateway \
-  --loader-dir examples/conf
+# 1. 启动后端测试服务（30001-30004, 30021 等端口）
+cargo run --example test_server
 
-# 启动 gateway
-cargo run --bin edgion-gateway -- \
-  --gateway-class public-gateway
+# 2. 启动 controller（使用默认配置 config/edgion-controller.toml）
+cargo run --bin edgion-controller
+
+# 3. 启动 gateway（使用默认配置 config/edgion-gateway.toml）
+cargo run --bin edgion-gateway
 ```
 
-## 配合测试
+## 手动测试
 
-### 启动后端测试服务
-
-```bash
-# 启动 test_http_server（默认监听 30001 等端口）
-cargo run --example test_http_server
-```
-
-### HTTP 路由测试
-
-**方法 1：使用 test_client（推荐）**
+### HTTP 测试（curl）
 
 ```bash
-# Gateway 模式测试（自动设置 Host header）
-cargo run --example test_client -- -g http
-
-# Direct 模式测试（直连后端）
-cargo run --example test_client -- http
-```
-
-**方法 2：使用 curl 手动测试**
-
-```bash
-# 测试 API 路径前缀匹配
-curl -H "Host: test.example.com" http://localhost:10080/api/users
-curl -H "Host: test.example.com" http://localhost:10080/api/v1/orders
-
-# 测试健康检查端点（精确匹配）
+# 健康检查
 curl -H "Host: test.example.com" http://localhost:10080/health
+
+# Echo 测试
+curl -H "Host: test.example.com" http://localhost:10080/echo
+
+# 延迟测试
+curl -H "Host: test.example.com" http://localhost:10080/delay/1
+
+# API 测试
+curl -H "Host: test.example.com" http://localhost:10080/api/users
 ```
 
-### 验证 access.log
+### gRPC 测试（grpcurl）
 
-测试后检查访问日志，确认请求被正确路由和记录：
 ```bash
-tail -f logs/edgion_access.log
+# Gateway 模式
+grpcurl -plaintext -authority grpc.example.com localhost:18443 test.TestService/SayHello
+
+# Direct 模式
+grpcurl -plaintext localhost:30021 test.TestService/SayHello
 ```

@@ -65,15 +65,24 @@ cargo run --example test_client -- --gateway http
 
 ## 默认端口
 
-test-server 默认监听以下端口：
+### test_server 后端端口
 
 | 协议 | 端口 | 说明 |
 |------|------|------|
-| HTTP | 30001 | HTTP 测试服务 |
+| HTTP | 30001-30004 | HTTP 测试服务（4 个实例）|
 | gRPC | 30021 | gRPC 测试服务 |
 | WebSocket | 30005 | WebSocket 回显服务 |
 | TCP | 30010 | TCP 回显服务 |
 | UDP | 30011 | UDP 回显服务 |
+
+### Gateway 监听端口
+
+| 协议 | 端口 | 说明 |
+|------|------|------|
+| HTTP | 10080 | HTTP 网关 |
+| HTTPS | 10443 | HTTPS 网关 |
+| gRPC | 18443 | gRPC 网关（HTTPS/HTTP2）|
+| TCP | 19000 | TCP 代理 |
 
 ## 测试命令
 
@@ -98,8 +107,11 @@ cargo run --example test_client -- --json all
 ### Gateway 模式示例
 
 ```bash
-# 测试 HTTP（通过 Gateway）
+# 测试 HTTP（通过 Gateway :10080）
 cargo run --example test_client -- -g http
+
+# 测试 gRPC（通过 Gateway :18443）
+cargo run --example test_client -- -g grpc
 
 # 测试所有协议（通过 Gateway）
 cargo run --example test_client -- -g all

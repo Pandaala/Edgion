@@ -12,20 +12,47 @@ spec:
     - "test.example.com"
   
   rules:
-    # 规则1: API 路径前缀匹配
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /api/
-      backendRefs:
-        - name: test-http
-          port: 30001
-
-    # 规则2: 精确路径匹配 - 健康检查端点
+    # 规则1: 健康检查端点（精确匹配）
     - matches:
         - path:
             type: Exact
             value: /health
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则2: Echo 端点（前缀匹配）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /echo
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则3: Status 端点（前缀匹配）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /status/
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则4: Delay 端点（前缀匹配）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /delay/
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则5: API 路径（前缀匹配，catch-all）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
       backendRefs:
         - name: test-http
           port: 30001
