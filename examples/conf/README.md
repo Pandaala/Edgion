@@ -8,6 +8,7 @@
 - `Gateway_edge_example-gateway.yaml` - Gateway（HTTP/HTTPS/gRPC/TCP）
 - `HTTPRoute_edge_test-http.yaml` - HTTP 路由
 - `GRPCRoute_edge_test-grpc.yaml` - gRPC 路由
+- `TCPRoute_edge_test-tcp.yaml` - TCP 路由
 - `Service_*.yaml` / `EndpointSlice_*.yaml` - 后端服务
 
 ## 手动启动服务
@@ -49,4 +50,14 @@ grpcurl -plaintext -authority grpc.example.com localhost:18443 test.TestService/
 
 # Direct 模式
 grpcurl -plaintext localhost:30021 test.TestService/SayHello
+```
+
+### TCP 测试（nc/telnet）
+
+```bash
+# Gateway 模式（通过 19000）
+echo "Hello TCP" | nc localhost 19000
+
+# Direct 模式（直连 30010）
+echo "Hello TCP" | nc localhost 30010
 ```

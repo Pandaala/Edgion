@@ -158,19 +158,37 @@ echo "  Running Tests"
 echo "=========================================="
 echo ""
 
-# Direct 模式测试
-echo_info "Test 1: Direct mode (backend:30001)"
+# Direct 模式 HTTP 测试
+echo_info "Test 1: HTTP Direct mode (backend:30001)"
 cargo run --example test_client -- http 2>&1 | tee -a "$TEST_RESULT_LOG"
-DIRECT_RESULT=$?
+DIRECT_HTTP_RESULT=$?
 
 echo ""
 echo "---"
 echo ""
 
-# Gateway 模式测试
-echo_info "Test 2: Gateway mode (gateway:10080)"
+# Gateway 模式 HTTP 测试
+echo_info "Test 2: HTTP Gateway mode (gateway:10080)"
 cargo run --example test_client -- -g http 2>&1 | tee -a "$TEST_RESULT_LOG"
-GATEWAY_RESULT=$?
+GATEWAY_HTTP_RESULT=$?
+
+echo ""
+echo "---"
+echo ""
+
+# Direct 模式 TCP 测试
+echo_info "Test 3: TCP Direct mode (backend:30010)"
+cargo run --example test_client -- tcp 2>&1 | tee -a "$TEST_RESULT_LOG"
+DIRECT_TCP_RESULT=$?
+
+echo ""
+echo "---"
+echo ""
+
+# Gateway 模式 TCP 测试
+echo_info "Test 4: TCP Gateway mode (gateway:19000)"
+cargo run --example test_client -- -g tcp 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_TCP_RESULT=$?
 
 # 6. 显示结果
 echo ""
@@ -179,16 +197,28 @@ echo "  Test Results"
 echo "=========================================="
 echo ""
 
-if [ $DIRECT_RESULT -eq 0 ]; then
-    echo_success "Direct mode test: PASSED"
+if [ $DIRECT_HTTP_RESULT -eq 0 ]; then
+    echo_success "HTTP Direct mode: PASSED"
 else
-    echo_error "Direct mode test: FAILED"
+    echo_error "HTTP Direct mode: FAILED"
 fi
 
-if [ $GATEWAY_RESULT -eq 0 ]; then
-    echo_success "Gateway mode test: PASSED"
+if [ $GATEWAY_HTTP_RESULT -eq 0 ]; then
+    echo_success "HTTP Gateway mode: PASSED"
 else
-    echo_error "Gateway mode test: FAILED"
+    echo_error "HTTP Gateway mode: FAILED"
+fi
+
+if [ $DIRECT_TCP_RESULT -eq 0 ]; then
+    echo_success "TCP Direct mode: PASSED"
+else
+    echo_error "TCP Direct mode: FAILED"
+fi
+
+if [ $GATEWAY_TCP_RESULT -eq 0 ]; then
+    echo_success "TCP Gateway mode: PASSED"
+else
+    echo_error "TCP Gateway mode: FAILED"
 fi
 
 echo ""
@@ -213,7 +243,8 @@ if [ -f "$ACCESS_LOG" ] && [ -s "$ACCESS_LOG" ]; then
 fi
 
 # 返回测试结果
-if [ $DIRECT_RESULT -eq 0 ] && [ $GATEWAY_RESULT -eq 0 ]; then
+if [ $DIRECT_HTTP_RESULT -eq 0 ] && [ $GATEWAY_HTTP_RESULT -eq 0 ] && \
+   [ $DIRECT_TCP_RESULT -eq 0 ] && [ $GATEWAY_TCP_RESULT -eq 0 ]; then
     echo_success "All tests PASSED! ✨"
     exit 0
 else
