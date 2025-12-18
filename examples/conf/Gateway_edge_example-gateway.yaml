@@ -26,14 +26,14 @@ spec:
       protocol: TCP
       port: 19000
 
-    # 注意：TLS 和 UDP 协议暂未完全支持，暂时注释掉
+    # UDP 代理监听器
+    - name: udp
+      protocol: UDP
+      port: 19002
+
+    # 注意：TLS 协议暂未完全支持，暂时注释掉
     # TLS Passthrough 监听器
     # - name: tls
     #   protocol: TLS
     #   port: 19001
-
-    # UDP 代理监听器
-    # - name: udp
-    #   protocol: UDP
-    #   port: 19002
 

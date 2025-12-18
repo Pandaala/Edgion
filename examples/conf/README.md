@@ -5,10 +5,11 @@
 ## 配置文件
 
 - `GatewayClass__public-gateway.yaml` - GatewayClass
-- `Gateway_edge_example-gateway.yaml` - Gateway（HTTP/HTTPS/gRPC/TCP）
+- `Gateway_edge_example-gateway.yaml` - Gateway（HTTP/HTTPS/gRPC/TCP/UDP）
 - `HTTPRoute_edge_test-http.yaml` - HTTP 路由
 - `GRPCRoute_edge_test-grpc.yaml` - gRPC 路由
 - `TCPRoute_edge_test-tcp.yaml` - TCP 路由
+- `UDPRoute_edge_test-udp.yaml` - UDP 路由
 - `Service_*.yaml` / `EndpointSlice_*.yaml` - 后端服务
 
 ## 手动启动服务
@@ -60,4 +61,14 @@ echo "Hello TCP" | nc localhost 19000
 
 # Direct 模式（直连 30010）
 echo "Hello TCP" | nc localhost 30010
+```
+
+### UDP 测试（nc）
+
+```bash
+# Gateway 模式（通过 19002）
+echo "Hello UDP" | nc -u localhost 19002
+
+# Direct 模式（直连 30011）
+echo "Hello UDP" | nc -u localhost 30011
 ```

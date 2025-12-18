@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-udp
+  namespace: edge
+spec:
+  ports:
+    - name: udp-30011
+      port: 30011
+      protocol: UDP
+      targetPort: 30011
+  type: ClusterIP
+
