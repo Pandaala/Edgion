@@ -123,15 +123,21 @@ fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Ve
 }
 
 /// Internal: try to get peer, returns Result with EdgionStatus on error
-fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session) -> Result<Box<HttpPeer>, EdgionStatus> {
+fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -> Result<Box<HttpPeer>, EdgionStatus> {
     // Extract needed fields from backend_ref to avoid clone and borrow checker issues
-    let br = ctx.selected_backend.as_ref()
-        .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
+    let (br_name, br_port, br_kind, lb_policy) = if is_grpc {
+        // gRPC backend
+        let grpc_br = ctx.selected_grpc_backend.as_ref()
+            .ok_or(EdgionStatus::GrpcUpstreamNotBackendRefs)?;
+        (&grpc_br.name, grpc_br.port, grpc_br.kind.as_ref(), &grpc_br.extension_info.lb_policy)
+    } else {
+        // HTTP backend
+        let http_br = ctx.selected_backend.as_ref()
+            .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
+        (&http_br.name, http_br.port, http_br.kind.as_ref(), &http_br.extension_info.lb_policy)
+    };
     
-    let service_type = EdgionService::from_kind(br.kind.as_ref());
-    let br_name = &br.name;
-    let br_port = br.port;
-    let lb_policy = &br.extension_info.lb_policy;
+    let service_type = EdgionService::from_kind(br_kind);
     
     // Get backend info for service key
     let namespace = ctx.backend_context.as_ref()
@@ -265,8 +271,11 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session) -> Result<Box<Ht
 /// Get HTTP peer from service and endpoint slice stores using load balancing
 /// 
 /// On error, sets error status to ctx and sends 503 response
-pub async fn get_peer(session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<Box<HttpPeer>> {
-    match try_get_peer(ctx, session) {
+/// 
+/// # Parameters
+/// - `is_grpc`: true if this is for gRPC backend, false for HTTP backend
+pub async fn get_peer(session: &mut Session, ctx: &mut EdgionHttpContext, is_grpc: bool) -> pingora_core::Result<Box<HttpPeer>> {
+    match try_get_peer(ctx, session, is_grpc) {
         Ok(peer) => Ok(peer),
         Err(status) => {
             ctx.add_error(status);

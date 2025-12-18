@@ -61,11 +61,16 @@ impl ConfigClient {
         let udp_route_handler = crate::core::routes::udp_routes::create_udp_route_handler();
         udp_routes_cache.set_conf_processor(udp_route_handler);
         
+        // Register GrpcRouteManager as the handler for GRPCRoute resources
+        let grpc_routes_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let grpc_route_handler = crate::core::routes::grpc_routes::create_grpc_route_handler();
+        grpc_routes_cache.set_conf_processor(grpc_route_handler);
+        
         Self {
             gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(None),
             routes: routes_cache,
-            grpc_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            grpc_routes: grpc_routes_cache,
             tcp_routes: tcp_routes_cache,
             udp_routes: udp_routes_cache,
             tls_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{SystemTime, Duration};
 use crate::core::gateway::server_header::ServerHeaderOpts;
-use crate::core::routes::DomainRouteRules;
+use crate::core::routes::{DomainRouteRules, grpc_routes::DomainGrpcRouteRules};
 use crate::types::Listener;
 use crate::types::EdgionGatewayConfig;
 use crate::types::resources::edgion_gateway_config::{ClientTimeout, BackendTimeout};
@@ -152,8 +152,11 @@ pub struct EdgionHttp {
 
     pub server_header_opts: ServerHeaderOpts,
     
-    /// Domain routes for this gateway
+    /// HTTP domain routes for this gateway
     pub domain_routes: Arc<DomainRouteRules>,
+    
+    /// gRPC domain routes for this gateway
+    pub grpc_routes: Arc<DomainGrpcRouteRules>,
     
     /// Access logger for writing access logs
     pub access_logger: Arc<AccessLogger>,
@@ -163,5 +166,8 @@ pub struct EdgionHttp {
     
     /// Pre-parsed timeout configurations (always has default values if not configured)
     pub parsed_timeouts: ParsedTimeouts,
+    
+    /// Whether HTTP/2 is enabled for this listener
+    pub enable_http2: bool,
 }
 

@@ -1,0 +1,21 @@
+# Edgion Gateway 开发规则
+
+## 构建与测试
+- 开发时用 debug 模式：`cargo run`（不带 --release）
+- 快速检查用：`cargo check`
+- 如果有重构，需要运行 `cargo test` 进行测试
+
+## 代码规范
+- 注释用英文
+- 控制面日志用tracing，数据面日志整合到access.log。tracing日志字符宽度内尽量不要换行
+- 用短 use 导入，不用长路径
+- 遵循 no-hidden-logic 原则
+
+## 测试策略
+- 避免创建临时脚本/文档
+- 各种请求测试都考虑好access.log的输出和测试
+
+## 响应风格
+- 回复用中文
+- 代码修改后自测验证
+- 重要变更说明影响范围

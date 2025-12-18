@@ -1,6 +1,7 @@
 pub mod http_routes;
 pub mod tcp_routes;
 pub mod udp_routes;
+pub mod grpc_routes;
 
 // Re-export commonly used types for convenience
 pub use http_routes::{
@@ -24,4 +25,10 @@ pub use udp_routes::{
     UdpRouteManager,
     create_udp_route_handler,
     EdgionUdp,  // UDP proxy type
+};
+
+pub use grpc_routes::{
+    get_global_grpc_route_manager,
+    GrpcRouteManager,
+    create_grpc_route_handler,
 };

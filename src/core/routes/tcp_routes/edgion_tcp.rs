@@ -66,7 +66,7 @@ impl ServerApp for EdgionTcp {
             status: TcpStatus::Success,
             connection_established: false,
         };
-
+        
         // Handle connection (context will be updated regardless of success or failure)
         self.handle_connection(downstream, &mut ctx).await;
         
@@ -164,52 +164,52 @@ impl EdgionTcp {
         
         loop {
             select! {
-            // Client → Upstream
-            result = downstream.read(&mut upstream_buf) => {
-                match result {
-                    Ok(0) => {
-                        break;
-                    }
-                    Ok(n) => {
-                        ctx.bytes_sent += n as u64;
+                // Client → Upstream
+                result = downstream.read(&mut upstream_buf) => {
+                    match result {
+                        Ok(0) => {
+                            break;
+                        }
+                        Ok(n) => {
+                            ctx.bytes_sent += n as u64;
                         if let Err(_) = upstream.write_all(&upstream_buf[0..n]).await {
-                            ctx.status = TcpStatus::UpstreamWriteError;
-                            break;
-                        }
+                                ctx.status = TcpStatus::UpstreamWriteError;
+                                break;
+                            }
                         if let Err(_) = upstream.flush().await {
-                            ctx.status = TcpStatus::UpstreamWriteError;
+                                ctx.status = TcpStatus::UpstreamWriteError;
+                                break;
+                            }
+                        }
+                    Err(_) => {
+                            ctx.status = TcpStatus::DownstreamReadError;
                             break;
                         }
                     }
-                    Err(_) => {
-                        ctx.status = TcpStatus::DownstreamReadError;
-                        break;
-                    }
                 }
-            }
-            // Upstream → Client
-            result = upstream.read(&mut downstream_buf) => {
-                match result {
-                    Ok(0) => {
-                        break;
-                    }
-                    Ok(n) => {
-                        ctx.bytes_received += n as u64;
+                // Upstream → Client
+                result = upstream.read(&mut downstream_buf) => {
+                    match result {
+                        Ok(0) => {
+                            break;
+                        }
+                        Ok(n) => {
+                            ctx.bytes_received += n as u64;
                         if let Err(_) = downstream.write_all(&downstream_buf[0..n]).await {
-                            ctx.status = TcpStatus::DownstreamWriteError;
-                            break;
-                        }
+                                ctx.status = TcpStatus::DownstreamWriteError;
+                                break;
+                            }
                         if let Err(_) = downstream.flush().await {
-                            ctx.status = TcpStatus::DownstreamWriteError;
+                                ctx.status = TcpStatus::DownstreamWriteError;
+                                break;
+                            }
+                        }
+                    Err(_) => {
+                            ctx.status = TcpStatus::UpstreamReadError;
                             break;
                         }
-                    }
-                    Err(_) => {
-                        ctx.status = TcpStatus::UpstreamReadError;
-                        break;
                     }
                 }
-            }
             }
         }
     }

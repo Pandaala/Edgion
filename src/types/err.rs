@@ -35,4 +35,13 @@ pub enum EdError {
 
     #[error("Inconsistent backend weight configuration")]
     InconsistentWeight(),
+
+    #[error("Invalid gRPC path format: {0}, expected /<service>/<method>")]
+    InvalidGrpcPath(String),
+
+    #[error("Plugin terminated the request")]
+    PluginTerminated(),
+
+    #[error("HTTP/2 required for gRPC")]
+    Http2Required,
 }

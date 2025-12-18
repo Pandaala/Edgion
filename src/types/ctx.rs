@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::fmt;
 use serde::Serialize;
-use crate::types::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
+use crate::types::{EdgionStatus, HTTPBackendRef, GRPCBackendRef, HTTPRouteMatch};
 use crate::types::filters::{PluginRunningResult};
 use crate::core::filters::PluginLog;
 use crate::core::routes::HttpRouteRuleUnit;
@@ -53,9 +53,15 @@ pub struct RequestInfo {
     pub path: String,
     /// Response status code (e.g., 200, 400, 404, 500)
     pub status: u16,
-    /// Auto-discovered protocol (e.g., "grpc-web", "websocket")
+    /// Auto-discovered protocol (e.g., "grpc", "grpc-web", "websocket")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discover_protocol: Option<String>,
+    /// gRPC service (parsed from path)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grpc_service: Option<String>,
+    /// gRPC method (parsed from path)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grpc_method: Option<String>,
 }
 
 /// Upstream connection information for a single connection attempt
@@ -108,19 +114,27 @@ pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
 
-    pub request_id: Option<String>,
-
     /// Request information (hostname, path, x-trace-id)
     pub request_info: RequestInfo,
 
     /// Error codes collected during request processing
     pub error_codes: Vec<EdgionStatus>,
 
-    /// Matched route unit containing full route information
+    /// Matched HTTP route unit containing full route information
     pub route_unit: Option<Arc<HttpRouteRuleUnit>>,
 
-    /// Selected backend from load balancing
+    /// Selected HTTP backend from load balancing
     pub selected_backend: Option<HTTPBackendRef>,
+
+    /// Matched gRPC route unit (for gRPC routes)
+    pub grpc_route_unit: Option<Arc<crate::core::routes::grpc_routes::GrpcRouteRuleUnit>>,
+
+    /// Selected gRPC backend (for gRPC routes)
+    pub selected_grpc_backend: Option<GRPCBackendRef>,
+
+    /// Whether this request is handled by GRPCRoute (not just gRPC protocol)
+    /// Used to determine backend peer selection and plugin execution
+    pub is_grpc_route: bool,
 
     /// Backend context containing service info and upstream attempts
     pub backend_context: Option<BackendContext>,
@@ -143,11 +157,13 @@ impl EdgionHttpContext {
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),
-            request_id: None,
             request_info: RequestInfo::default(),
             error_codes: Vec::with_capacity(5),
             route_unit: None,
             selected_backend: None,
+            grpc_route_unit: None,
+            selected_grpc_backend: None,
+            is_grpc_route: false,
             backend_context: None,
             plugin_logs: Vec::with_capacity(10),
             plugin_running_result: PluginRunningResult::Nothing,

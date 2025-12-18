@@ -20,6 +20,9 @@ pub enum EdgionStatus {
     /// Inconsistent weight configuration (some backends have weight, some don't)
     UpstreamInconsistentWeight = 500_03,
 
+    /// gRPC upstream route not matched
+    GrpcUpstreamNotRouteMatched = 500_04,
+
     /// EndpointSlice not found for service (Consistent hash store)
     BackendEndpointSliceNotFoundByConsistent = 500_05,
 
@@ -54,6 +57,12 @@ pub enum EdgionStatus {
 
     /// Localhost backend not allowed for security reasons
     BackendLocalhostNotAllowed = 503_09,
+
+    /// HTTP/2 required for gRPC
+    Http2Required = 503_10,
+
+    /// gRPC backend refs not found
+    GrpcUpstreamNotBackendRefs = 503_11,
 
 }
 

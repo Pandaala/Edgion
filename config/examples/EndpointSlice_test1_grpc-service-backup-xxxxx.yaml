@@ -1,0 +1,21 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: grpc-service-backup
+  namespace: test1
+  labels:
+    kubernetes.io/service-name: grpc-service-backup
+addressType: IPv4
+ports:
+  - name: grpc-30023
+    port: 30023
+    protocol: TCP
+  - name: grpc-30024
+    port: 30024
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+

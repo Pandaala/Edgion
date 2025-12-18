@@ -19,29 +19,83 @@ use crate::types::EdgionStatus;
 use crate::types::err::EdError;
 use crate::core::observe::{AccessLogEntry, global_metrics};
 use crate::core::routes::http_routes::routes_mgr::RouteRules;
+use crate::core::routes::grpc_routes::{
+    try_match_grpc_route,
+    run_grpc_route_plugins,
+    handle_grpc_upstream,
+};
 
-/// Auto-discover protocol from request headers
+/// Extract or generate trace_id and detect protocol from request headers (inline for performance)
 #[inline]
-fn discover_protocol(req_header: &pingora_http::RequestHeader) -> Option<String> {
-    // Check for gRPC-Web
-    if let Some(content_type) = req_header.headers.get("content-type") {
-        if let Ok(ct_str) = content_type.to_str() {
-            if ct_str.len() >= 21 && ct_str[..21].eq_ignore_ascii_case("application/grpc-web") {
-                return Some("grpc-web".to_string());
+fn extract_request_metadata(session: &Session, ctx: &mut EdgionHttpContext) {
+    let req_header = session.req_header();
+
+    // Try to get X-Trace-Id from request headers, generate if not present
+    ctx.request_info.x_trace_id = req_header
+        .headers
+        .get("x-trace-id")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            // Generate new trace_id if not present
+            Some(uuid::Uuid::new_v4().to_string())
+        });
+
+    // Protocol detection: check for WebSocket, gRPC-Web, and gRPC
+    if ctx.request_info.discover_protocol.is_none() {
+        // Check for WebSocket
+        if let Some(upgrade) = req_header.headers.get("upgrade") {
+            if let Ok(upgrade_str) = upgrade.to_str() {
+                if upgrade_str.eq_ignore_ascii_case("websocket") {
+                    ctx.request_info.discover_protocol = Some("websocket".to_string());
+                }
+            }
+        }
+        
+        // Check for gRPC/gRPC-Web (if not WebSocket)
+        if ctx.request_info.discover_protocol.is_none() {
+            if let Some(ct) = req_header.headers.get("content-type") {
+                if let Ok(ct_str) = ct.to_str() {
+                    if ct_str.starts_with("application/grpc-web") {
+                        ctx.request_info.discover_protocol = Some("grpc-web".to_string());
+                    } else if ct_str.starts_with("application/grpc") {
+                        ctx.request_info.discover_protocol = Some("grpc".to_string());
+                    }
+                }
             }
         }
     }
-    
-    // Check for WebSocket
-    if let Some(upgrade) = req_header.headers.get("upgrade") {
-        if let Ok(upgrade_str) = upgrade.to_str() {
-            if upgrade_str.eq_ignore_ascii_case("websocket") {
-                return Some("websocket".to_string());
-            }
-        }
+}
+
+/// Initialize backend context if not yet initialized (inline for performance)
+/// This function handles both gRPC and HTTP backends
+#[inline]
+fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
+    if ctx.backend_context.is_some() {
+        return Ok(()); // Already initialized
     }
     
-    None
+    // Get namespace from selected backend (gRPC or HTTP)
+    let (name, namespace) = if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
+        let ns = grpc_br.namespace.clone().unwrap_or_else(|| {
+            ctx.grpc_route_unit.as_ref()
+                .map(|unit| unit.matched_info.rns.clone())
+                .unwrap_or_default()
+        });
+        (grpc_br.name.clone(), ns)
+    } else if let Some(http_br) = ctx.selected_backend.as_ref() {
+        let ns = http_br.namespace.clone().unwrap_or_else(|| {
+            ctx.route_unit.as_ref()
+                .map(|unit| unit.matched_info.rns.clone())
+                .unwrap_or_default()
+        });
+        (http_br.name.clone(), ns)
+    } else {
+        return Err(PingoraError::new(ErrorType::InternalError));
+    };
+    
+    ctx.init_backend_context(name, namespace);
+    Ok(())
 }
 
 #[async_trait]
@@ -55,105 +109,13 @@ impl ProxyHttp for EdgionHttp {
     }
 
     async fn upstream_peer(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
-        tracing::info!("upstream_peer");
-
-        // Select backend_ref if not already selected (only once)
-        if ctx.selected_backend.is_none() {
-            // First time, select backend from route
-            let route_unit = match ctx.route_unit.as_ref() {
-                Some(unit) => unit,
-                None => {
-                    ctx.add_error(EdgionStatus::UpstreamNotRouteMatched);
-                    end_response_500(session, ctx, &self.server_header_opts).await?;
-                    return Err(PingoraError::new(ErrorType::InternalError));
-                }
-            };
-
-            // Select backend from the route unit
-            let backend_ref = match RouteRules::select_backend(&route_unit.rule) {
-                Ok(backend) => backend,
-                Err(e) => {
-                    tracing::error!("Failed to select backend: {:?}", e);
-                    ctx.add_error(match e {
-                        EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
-                        EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-                        _ => EdgionStatus::Unknown,
-                    });
-                    end_response_500(session, ctx, &self.server_header_opts).await?;
-                    return Err(PingoraError::new(ErrorType::InternalError));
-                }
-            };
-            
-            tracing::info!("Selected backend: {:?}", backend_ref);
-            
-            // Run backend-level request plugins (only on first selection)
-            backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
-            if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-                ctx.add_error(EdgionStatus::Unknown);
-                end_response_500(session, ctx, &self.server_header_opts).await?;
-                return Err(PingoraError::new(ErrorType::InternalError));
-            }
-            
-            // Store selected backend in context (only once)
-            ctx.selected_backend = Some(backend_ref);
+        // Route to appropriate handler based on matched route type (not protocol)
+        if ctx.is_grpc_route {
+            self.upstream_peer_grpc(session, ctx).await
+        } else {
+            self.upstream_peer_http(session, ctx).await
         }
-        
-        // Initialize backend context on first call (only once)
-        if ctx.backend_context.is_none() {
-            let backend_ref = ctx.selected_backend.as_ref().unwrap();
-            let namespace = backend_ref.namespace.clone().unwrap_or_else(|| {
-                ctx.route_unit.as_ref()
-                    .map(|unit| unit.matched_info.rns.clone())
-                    .unwrap_or_default()
-            });
-            ctx.init_backend_context(backend_ref.name.clone(), namespace);
-        }
-        
-        // Get peer from backend (will update upstream info with ip and port)
-        let mut peer = get_peer(session, ctx).await?;
-        
-        // Set backend timeouts from pre-parsed config (no runtime overhead)
-        let backend_timeout = &self.parsed_timeouts.backend;
-        
-        // Check for route-level timeout overrides
-        let route_timeouts = ctx.route_unit.as_ref()
-            .and_then(|unit| unit.rule.parsed_timeouts.as_ref());
-        
-        // Connection timeout (only from global config)
-        peer.options.connection_timeout = Some(backend_timeout.connect_timeout);
-        
-        // Read/Write timeout: route-level per_try_timeout overrides global
-        let effective_per_try_timeout = route_timeouts
-            .and_then(|rt| rt.per_try_timeout)
-            .unwrap_or(backend_timeout.per_try_timeout);
-        
-        peer.options.read_timeout = Some(effective_per_try_timeout);
-        peer.options.write_timeout = Some(effective_per_try_timeout);
-        
-        // Idle timeout: route-level overrides global
-        peer.options.idle_timeout = Some(
-            route_timeouts
-                .and_then(|rt| rt.idle_timeout)
-                .unwrap_or(backend_timeout.idle_timeout)
-        );
-        
-        // Increment try count
-        ctx.try_cnt += 1;
-        
-        // Extract peer address info and push upstream connection attempt
-        let (ip, port) = peer.address().as_inet()
-            .map(|addr| (Some(addr.ip().to_string()), Some(addr.port())))
-            .unwrap_or((None, None));
-        ctx.push_upstream(ip, port);
-        
-        // Set upstream start time on first try
-        if ctx.upstream_start_time.is_none() {
-            ctx.upstream_start_time = Some(std::time::Instant::now());
-        }
-        
-        Ok(peer)
     }
-
 
     fn init_downstream_modules(&self, modules: &mut HttpModules) {
         // Configure downstream compression based on global config (default: disabled)
@@ -166,7 +128,14 @@ impl ProxyHttp for EdgionHttp {
             modules.add_module(ResponseCompressionBuilder::enable(0));
         }
         
-        modules.add_module(Box::new(GrpcWeb));
+        // Only add GrpcWeb module if HTTP/2 is enabled
+        // gRPC-Web requires HTTP/2 support
+        if self.enable_http2 {
+            modules.add_module(Box::new(GrpcWeb));
+            tracing::debug!(gateway=%self.gateway_name, listener=%self.listener.name, "GrpcWeb module enabled");
+        } else {
+            tracing::debug!(gateway=%self.gateway_name, listener=%self.listener.name, "GrpcWeb module disabled (HTTP/2 not enabled)");
+        }
     }
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<bool>
@@ -188,32 +157,72 @@ impl ProxyHttp for EdgionHttp {
         }
         ctx.request_info.path = req_header.uri.path().to_string();
 
-        // Match route
-        match self.domain_routes.match_route(&ctx.request_info.hostname, session) {
-            Ok(route_unit) => {
-                // Store route unit in context
-                ctx.route_unit = Some(route_unit.clone());
-                
-                tracing::debug!(
-                    matched_info = %route_unit.matched_info,
-                    "Route matched"
-                );
-                
-                // Run rule-level request plugins
-                route_unit.rule.plugin_runtime.run_request_plugins(session, ctx).await;
-                if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-                    return Ok(true);
-                }
-                
-                Ok(false)
+        // Step 1: Route matching - try gRPC first if applicable, then HTTP
+        let is_grpc_request = ctx.request_info.discover_protocol.as_deref() == Some("grpc") 
+            || ctx.request_info.discover_protocol.as_deref() == Some("grpc-web");
+        
+        if is_grpc_request {
+            // Check if HTTP/2 is enabled for gRPC
+            if !self.enable_http2 {
+                ctx.add_error(EdgionStatus::Http2Required);
+                end_response_500(session, ctx, &self.server_header_opts).await?;
+                return Ok(true);
             }
-            Err(_e) => {
-                // Route not found, return 404
-                ctx.add_error(EdgionStatus::RouteNotFound);
-                end_response_404(session, ctx, &self.server_header_opts).await?;
-                Ok(true)
+            
+            // Try to match gRPC route
+            match try_match_grpc_route(&self.grpc_routes, session, ctx).await {
+                Ok(true) => {
+                    // gRPC route matched - mark as gRPC route handling
+                    ctx.is_grpc_route = true;
+                }
+                Ok(false) | Err(_) => {
+                    // gRPC route not matched, fallback to HTTP route matching
+                    // Note: ctx.grpc_route_unit remains None, is_grpc_route remains false
+                }
             }
         }
+        
+        // If no gRPC route matched, try HTTP route
+        if ctx.grpc_route_unit.is_none() {
+            match self.domain_routes.match_route(&ctx.request_info.hostname, session) {
+                Ok(route_unit) => {
+                    ctx.route_unit = Some(route_unit.clone());
+                    tracing::debug!(
+                        matched_info = %route_unit.matched_info,
+                        "HTTP route matched"
+                    );
+                }
+                Err(_) => {
+                    // No route found at all
+                    ctx.add_error(EdgionStatus::RouteNotFound);
+                    end_response_404(session, ctx, &self.server_header_opts).await?;
+                    return Ok(true);
+                }
+            }
+        }
+        
+        // Step 2: Run plugins based on matched route type
+        if ctx.is_grpc_route {
+            // Run gRPC route plugins
+            match run_grpc_route_plugins(session, ctx).await {
+                Ok(true) => return Ok(true), // Plugin terminated request
+                Ok(false) => return Ok(false), // Continue processing
+                Err(e) => {
+                    tracing::error!("Error running gRPC route plugins: {:?}", e);
+                    ctx.add_error(EdgionStatus::Unknown);
+                    end_response_500(session, ctx, &self.server_header_opts).await?;
+                    return Ok(true);
+                }
+            }
+        } else if let Some(route_unit) = ctx.route_unit.clone() {
+            // Run HTTP route plugins
+            route_unit.rule.plugin_runtime.run_request_plugins(session, ctx).await;
+            if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+                return Ok(true);
+            }
+        }
+        
+        Ok(false)
     }
 
     async fn early_request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<()>
@@ -232,39 +241,8 @@ impl ProxyHttp for EdgionHttp {
         // Set keepalive timeout (pre-parsed, no runtime overhead)
         session.set_keepalive(Some(client_timeout.keepalive_timeout));
         
-        // Extract or generate trace_id and request_id
-        let req_header = session.req_header();
-
-        // Try to get X-Trace-Id from request headers, generate if not present
-        ctx.request_info.x_trace_id = req_header
-            .headers
-            .get("x-trace-id")
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                // Generate new trace_id if not present
-                Some(uuid::Uuid::new_v4().to_string())
-            });
-
-        // Try to get X-Request-Id from request headers
-        ctx.request_id = req_header
-            .headers
-            .get("x-request-id")
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.to_string());
-
-        // Auto-discover protocol and update context
-        let protocol = discover_protocol(req_header);
-        ctx.request_info.discover_protocol = protocol.clone();
-
-        // Process gRPC-Web if detected
-        if let Some(proto) = protocol {
-            if proto == "grpc-web" {
-                if let Some(grpc) = session.downstream_modules_ctx.get_mut::<GrpcWebBridge>() {
-                    grpc.init();
-                }
-            }
-        }
+        // Extract request metadata (trace_id and protocol detection)
+        extract_request_metadata(session, ctx);
 
         Ok(())
     }
@@ -519,5 +497,162 @@ impl ProxyHttp for EdgionHttp {
         }
         
         Ok(())
+    }
+}
+
+/// Additional helper methods for EdgionHttp (separate from ProxyHttp trait)
+impl EdgionHttp {
+    /// Handle gRPC upstream peer selection
+    async fn upstream_peer_grpc(&self, session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<Box<HttpPeer>> {
+        // 1. Handle gRPC upstream selection
+        match handle_grpc_upstream(session, ctx).await {
+            Ok(Some(())) => {
+                tracing::debug!("gRPC backend selected");
+            }
+            Ok(None) => {
+                // No gRPC route found - this shouldn't happen as route matching
+                // should be done in request_filter stage
+                tracing::error!("No gRPC route found at upstream_peer stage");
+                ctx.add_error(EdgionStatus::GrpcUpstreamNotRouteMatched);
+                end_response_500(session, ctx, &self.server_header_opts).await?;
+                return Err(PingoraError::new(ErrorType::InternalError));
+            }
+            Err(e) => {
+                tracing::error!("Failed to handle gRPC upstream: {:?}", e);
+                ctx.add_error(EdgionStatus::GrpcUpstreamNotBackendRefs);
+                end_response_500(session, ctx, &self.server_header_opts).await?;
+                return Err(PingoraError::new(ErrorType::InternalError));
+            }
+        }
+        
+        // 2. Initialize GrpcWebBridge for gRPC-Web requests
+        // Standard gRPC requests don't need protocol conversion
+        if ctx.request_info.discover_protocol.as_deref() == Some("grpc-web") {
+            if let Some(grpc) = session.downstream_modules_ctx.get_mut::<GrpcWebBridge>() {
+                grpc.init();
+            }
+        }
+        
+        // 3. Initialize backend context (unified logic)
+        init_backend_context_if_needed(ctx)?;
+        
+        // 4. Get peer from gRPC backend
+        let mut peer = get_peer(session, ctx, true).await?;
+        
+        // 5. Force HTTP/2 for gRPC
+        peer.options.set_http_version(2, 2);
+        
+        // 6. Configure peer (shared logic)
+        self.configure_peer_timeouts(&mut peer, ctx);
+        self.update_peer_metrics(&mut peer, ctx);
+        
+        Ok(peer)
+    }
+
+    /// Handle HTTP upstream peer selection
+    async fn upstream_peer_http(&self, session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<Box<HttpPeer>> {
+        // 1. Select HTTP backend if not already selected
+        if ctx.selected_backend.is_none() && ctx.selected_grpc_backend.is_none() {
+            self.select_http_backend(session, ctx).await?;
+        }
+        
+        // 2. Initialize backend context (unified logic)
+        init_backend_context_if_needed(ctx)?;
+        
+        // 3. Get peer
+        let mut peer = get_peer(session, ctx, false).await?;
+        
+        // 4. Configure peer (shared logic)
+        self.configure_peer_timeouts(&mut peer, ctx);
+        self.update_peer_metrics(&mut peer, ctx);
+        
+        Ok(peer)
+    }
+
+    /// Select HTTP backend from route (extracted from upstream_peer)
+    async fn select_http_backend(&self, session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
+        let route_unit = match ctx.route_unit.as_ref() {
+            Some(unit) => unit,
+            None => {
+                ctx.add_error(EdgionStatus::UpstreamNotRouteMatched);
+                end_response_500(session, ctx, &self.server_header_opts).await?;
+                return Err(PingoraError::new(ErrorType::InternalError));
+            }
+        };
+
+        let backend_ref = match RouteRules::select_backend(&route_unit.rule) {
+            Ok(backend) => backend,
+            Err(e) => {
+                tracing::error!("Failed to select backend: {:?}", e);
+                ctx.add_error(match e {
+                    EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
+                    EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
+                    _ => EdgionStatus::Unknown,
+                });
+                end_response_500(session, ctx, &self.server_header_opts).await?;
+                return Err(PingoraError::new(ErrorType::InternalError));
+            }
+        };
+        
+        tracing::info!("Selected HTTP backend: {:?}", backend_ref);
+        
+        // Run backend-level request plugins
+        backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
+        if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+            ctx.add_error(EdgionStatus::Unknown);
+            end_response_500(session, ctx, &self.server_header_opts).await?;
+            return Err(PingoraError::new(ErrorType::InternalError));
+        }
+        
+        ctx.selected_backend = Some(backend_ref);
+        Ok(())
+    }
+
+    /// Configure peer timeouts from global and route-level configs (inline for performance)
+    #[inline]
+    fn configure_peer_timeouts(&self, peer: &mut Box<HttpPeer>, ctx: &EdgionHttpContext) {
+        let backend_timeout = &self.parsed_timeouts.backend;
+        let route_timeouts = ctx.route_unit.as_ref()
+            .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
+            .or_else(|| {
+                ctx.grpc_route_unit.as_ref()
+                    .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
+            });
+        
+        // Connection timeout (only from global config)
+        peer.options.connection_timeout = Some(backend_timeout.connect_timeout);
+        
+        // Read/Write timeout: route-level overrides global
+        let effective_per_try_timeout = route_timeouts
+            .and_then(|rt| rt.per_try_timeout)
+            .unwrap_or(backend_timeout.per_try_timeout);
+        
+        peer.options.read_timeout = Some(effective_per_try_timeout);
+        peer.options.write_timeout = Some(effective_per_try_timeout);
+        
+        // Idle timeout: route-level overrides global
+        peer.options.idle_timeout = Some(
+            route_timeouts
+                .and_then(|rt| rt.idle_timeout)
+                .unwrap_or(backend_timeout.idle_timeout)
+        );
+    }
+
+    /// Update peer address info and metrics (inline for performance)
+    #[inline]
+    fn update_peer_metrics(&self, peer: &Box<HttpPeer>, ctx: &mut EdgionHttpContext) {
+        // Increment try count
+        ctx.try_cnt += 1;
+        
+        // Extract and push upstream info
+        let (ip, port) = peer.address().as_inet()
+            .map(|addr| (Some(addr.ip().to_string()), Some(addr.port())))
+            .unwrap_or((None, None));
+        ctx.push_upstream(ip, port);
+        
+        // Set upstream start time on first try
+        if ctx.upstream_start_time.is_none() {
+            ctx.upstream_start_time = Some(std::time::Instant::now());
+        }
     }
 } 

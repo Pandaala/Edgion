@@ -17,6 +17,11 @@ use crate::core::tls::tls_pingora::TlsCallback;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::gateway::Listener;
 
+/// Annotation key to control HTTP/2 support
+/// Set to "false" to disable HTTP/2 (both h2c and ALPN)
+/// Default: "true" (enabled)
+pub const ANNOTATION_ENABLE_HTTP2: &str = "edgion.com/enable-http2";
+
 /// Context passed to listener builders containing gateway-level information and listener config
 #[derive(Clone)]
 pub struct ListenerContext {
@@ -28,16 +33,23 @@ pub struct ListenerContext {
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     pub server_conf: Arc<ServerConf>,
+    /// Whether to enable HTTP/2 support (from Gateway annotation)
+    pub enable_http2: bool,
 }
 
 /// Add an HTTP or HTTPS listener to the Pingora server
 ///
 /// This function creates an EdgionHttp proxy service and adds it to the server
 /// with or without TLS based on the enable_tls parameter.
+///
+/// # Parameters
+/// - `enable_tls`: Whether to enable TLS/HTTPS
+/// - `enable_http2`: Whether to enable HTTP/2 support (h2c for HTTP, ALPN for HTTPS)
 pub fn add_http_listener(
     server: &mut Server,
     context: &ListenerContext,
     enable_tls: bool,
+    enable_http2: bool,
 ) -> Result<()> {
     use crate::core::routes::get_global_route_manager;
     
@@ -49,6 +61,10 @@ pub fn add_http_listener(
     let route_manager = get_global_route_manager();
     let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
     let domain_routes = route_manager.get_or_create_domain_routes(namespace_str, &context.gateway_name);
+
+    // Get or create gRPC routes for this gateway (same pattern as HTTP routes)
+    let grpc_route_manager = crate::core::routes::grpc_routes::get_global_grpc_route_manager();
+    let grpc_routes = grpc_route_manager.get_or_create_domain_grpc_routes(namespace_str, &context.gateway_name);
 
     // Pre-parse timeout configurations once at initialization
     let parsed_timeouts = crate::core::routes::http_routes::edgion_http::ParsedTimeouts::from_config(
@@ -64,32 +80,55 @@ pub fn add_http_listener(
         server_start_time: SystemTime::now(),
         server_header_opts: Default::default(),
         domain_routes,
+        grpc_routes,
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         parsed_timeouts,
+        enable_http2: context.enable_http2,
     };
 
     // Create HTTP proxy service
     let mut http_service = http_proxy_service(&context.server_conf, edgion_http);
 
+    // Enable h2c (HTTP/2 Cleartext) for non-TLS listeners if enable_http2 is true
+    if !enable_tls && enable_http2 {
+        if let Some(http_logic) = http_service.app_logic_mut() {
+            use pingora_core::apps::HttpServerOptions;
+            let mut http_server_options = HttpServerOptions::default();
+            http_server_options.h2c = true;  // Enable HTTP/2 without TLS
+            http_logic.server_options = Some(http_server_options);
+            tracing::info!(
+                gateway=%context.gateway_key,
+                listener=%listener_name,
+                "Enabled h2c (HTTP/2 Cleartext) support"
+            );
+        }
+    }
+
     // Add listener with or without TLS
     if enable_tls {
-        let tls_settings = TlsCallback::new_tls_settings_with_callback(true)?;
+        let mut tls_settings = TlsCallback::new_tls_settings_with_callback(true)?;
+        // Enable HTTP/2 for HTTPS if enable_http2 is true
+        if enable_http2 {
+            tls_settings.enable_h2();
+        }
         http_service.add_tls_with_settings(&addr, None, tls_settings);
+        let protocol = if enable_http2 { "HTTPS (HTTP/2 enabled)" } else { "HTTPS" };
         tracing::info!(
             gateway=%context.gateway_key,
             listener=%listener_name,
             addr=%addr,
-            protocol="HTTPS",
+            protocol=%protocol,
             "Adding TLS listener"
         );
     } else {
         http_service.add_tcp(&addr);
+        let protocol = if enable_http2 { "HTTP (h2c enabled)" } else { "HTTP" };
         tracing::info!(
             gateway=%context.gateway_key,
             listener=%listener_name,
             addr=%addr,
-            protocol="HTTP",
+            protocol=%protocol,
             "Adding TCP listener"
         );
     }
@@ -223,10 +262,10 @@ pub fn add_listener(
 ) -> Result<()> {
     match context.listener.protocol.to_uppercase().as_str() {
         "HTTP" => {
-            add_http_listener(server, &context, false)
+            add_http_listener(server, &context, false, context.enable_http2)
         }
         "HTTPS" => {
-            add_http_listener(server, &context, true)
+            add_http_listener(server, &context, true, context.enable_http2)
         }
         "TCP" => {
             add_tcp_listener(server, &context)
@@ -234,13 +273,13 @@ pub fn add_listener(
         "UDP" => {
             add_udp_listener(server, &context)
         }
-        "GRPC" => {
-            // GRPC is essentially HTTP/2, so treat it as HTTPS
+        "GRPC" | "GRPCWeb"=> {
+            // GRPC always requires HTTP/2
             tracing::info!(
                 listener=%context.listener.name,
-                "GRPC protocol detected, treating as HTTP/2 with TLS"
+                "GRPC/GRPCWeb protocol detected, treating as HTTP/2 with TLS (force enabled)"
             );
-            add_http_listener(server, &context, true)
+            add_http_listener(server, &context, true, true)  // Force enable HTTP/2 for gRPC
         }
         protocol => {
             anyhow::bail!("Unsupported protocol: {}", protocol)

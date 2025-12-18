@@ -4,7 +4,7 @@ use pingora_core::server::Server;
 use pingora_core::server::configuration::ServerConf;
 use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::core::gateway::listener_builder;
-use crate::types::{GatewayBaseConf, ResourceMeta};
+use crate::types::{GatewayBaseConf, ResourceMeta, Gateway};
 use anyhow::Result;
 use crate::core::observe::AccessLogger;
 use crate::core::link_sys::LocalFileWriter;
@@ -67,6 +67,21 @@ pub struct GatewayBase {
     access_logger: Arc<AccessLogger>,
 }
 
+/// Parse HTTP/2 enable flag from Gateway annotations
+/// Returns true if annotation is not set or set to "true"
+/// Returns false if annotation is set to "false"
+fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
+    gateway.metadata.annotations.as_ref()
+        .and_then(|annotations| annotations.get(listener_builder::ANNOTATION_ENABLE_HTTP2))
+        .and_then(|value| {
+            match value.to_lowercase().as_str() {
+                "false" | "0" | "no" | "off" => Some(false),
+                _ => Some(true),
+            }
+        })
+        .unwrap_or(true) // Default to true if annotation is not present
+}
+
 impl GatewayBase {
     pub fn new(base_conf: GatewayBaseConf, access_logger: Arc<AccessLogger>) -> Self {
         Self {
@@ -125,6 +140,16 @@ impl GatewayBase {
                 // Clone the server configuration Arc to avoid borrowing conflicts
                 let server_conf = pingora_server.configuration.clone();
                 
+                // Parse HTTP/2 setting from Gateway annotation
+                let enable_http2 = parse_enable_http2_annotation(&gateway);
+                
+                if !enable_http2 {
+                    tracing::info!(
+                        gateway = %gateway.key_name(),
+                        "HTTP/2 disabled via annotation"
+                    );
+                }
+                
                 for listener in listeners {
                     // Create listener context with gateway-level information and listener config
                     let context = listener_builder::ListenerContext {
@@ -136,6 +161,7 @@ impl GatewayBase {
                         access_logger: self.get_access_logger(),
                         edgion_gateway_config: Arc::new(self.base_conf.edgion_gateway_config().clone()),
                         server_conf: server_conf.clone(),
+                        enable_http2,
                     };
                     
                     // Dispatch to appropriate listener builder based on protocol
