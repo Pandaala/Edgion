@@ -92,72 +92,48 @@ echo ""
 
 # 1. 启动 test_server
 echo_info "Starting test_server..."
-echo "         Working directory: $PROJECT_DIR"
-echo "         Command: cargo run --example test_server"
-echo "         Log: $TEST_SERVER_LOG"
 cd "$PROJECT_DIR"
 cargo run --example test_server > "$TEST_SERVER_LOG" 2>&1 &
 echo $! > "${PID_DIR}/test_server.pid"
 sleep 2
 
 if kill -0 $(cat "${PID_DIR}/test_server.pid") 2>/dev/null; then
-    echo_success "test_server started (PID: $(cat ${PID_DIR}/test_server.pid))"
-    echo "         Listening on ports: 30001-30004"
+    echo_success "test_server started (PID: $(cat ${PID_DIR}/test_server.pid), ports: 30001-30004)"
 else
-    echo_error "Failed to start test_server, check log: $TEST_SERVER_LOG"
-    echo ""
-    echo "Manual start command:"
-    echo "  cd $PROJECT_DIR"
-    echo "  cargo run --example test_server"
+    echo_error "Failed to start test_server"
+    echo "         Log: $TEST_SERVER_LOG"
+    echo "         Manual: cd $PROJECT_DIR && cargo run --example test_server"
     exit 1
 fi
 
 # 2. 启动 edgion-controller
-echo_info "Starting edgion-controller..."
-echo "         Working directory: $PROJECT_DIR"
-echo "         Command: cargo run --bin edgion-controller -- --gateway-class example-gateway --loader-dir ${PROJECT_DIR}/examples/conf"
-echo "         Log: $CONTROLLER_LOG"
-cargo run --bin edgion-controller -- \
-    --gateway-class example-gateway \
-    --loader-dir "${PROJECT_DIR}/examples/conf" \
-    > "$CONTROLLER_LOG" 2>&1 &
+echo_info "Starting edgion-controller (using default config)..."
+cargo run --bin edgion-controller > "$CONTROLLER_LOG" 2>&1 &
 echo $! > "${PID_DIR}/controller.pid"
 sleep 3
 
 if kill -0 $(cat "${PID_DIR}/controller.pid") 2>/dev/null; then
     echo_success "edgion-controller started (PID: $(cat ${PID_DIR}/controller.pid))"
-    echo "         Config dir: ${PROJECT_DIR}/examples/conf"
 else
-    echo_error "Failed to start controller, check log: $CONTROLLER_LOG"
-    echo ""
-    echo "Manual start command:"
-    echo "  cd $PROJECT_DIR"
-    echo "  cargo run --bin edgion-controller -- --gateway-class example-gateway --loader-dir ${PROJECT_DIR}/examples/conf"
+    echo_error "Failed to start controller"
+    echo "         Log: $CONTROLLER_LOG"
+    echo "         Manual: cd $PROJECT_DIR && cargo run --bin edgion-controller"
     exit 1
 fi
 
 # 3. 启动 edgion-gateway
-echo_info "Starting edgion-gateway..."
-echo "         Working directory: $PROJECT_DIR"
-echo "         Command: EDGION_ACCESS_LOG=$ACCESS_LOG cargo run --bin edgion-gateway -- --gateway-class example-gateway"
-echo "         Log: $GATEWAY_LOG"
+echo_info "Starting edgion-gateway (using default config)..."
 EDGION_ACCESS_LOG="$ACCESS_LOG" \
-cargo run --bin edgion-gateway -- \
-    --gateway-class example-gateway \
-    > "$GATEWAY_LOG" 2>&1 &
+cargo run --bin edgion-gateway > "$GATEWAY_LOG" 2>&1 &
 echo $! > "${PID_DIR}/gateway.pid"
 sleep 3
 
 if kill -0 $(cat "${PID_DIR}/gateway.pid") 2>/dev/null; then
-    echo_success "edgion-gateway started (PID: $(cat ${PID_DIR}/gateway.pid))"
-    echo "         HTTP port: 10080"
-    echo "         Access log: $ACCESS_LOG"
+    echo_success "edgion-gateway started (PID: $(cat ${PID_DIR}/gateway.pid), port: 10080)"
 else
-    echo_error "Failed to start gateway, check log: $GATEWAY_LOG"
-    echo ""
-    echo "Manual start command:"
-    echo "  cd $PROJECT_DIR"
-    echo "  EDGION_ACCESS_LOG=$ACCESS_LOG cargo run --bin edgion-gateway -- --gateway-class example-gateway"
+    echo_error "Failed to start gateway"
+    echo "         Log: $GATEWAY_LOG"
+    echo "         Manual: cd $PROJECT_DIR && EDGION_ACCESS_LOG=$ACCESS_LOG cargo run --bin edgion-gateway"
     exit 1
 fi
 
@@ -176,8 +152,7 @@ echo "=========================================="
 echo ""
 
 # Direct 模式测试
-echo_info "Test 1: Direct mode (connecting to backend:30001)"
-echo "         Command: cargo run --example test_client -- http"
+echo_info "Test 1: Direct mode (backend:30001)"
 cargo run --example test_client -- http 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_RESULT=$?
 
@@ -186,8 +161,7 @@ echo "---"
 echo ""
 
 # Gateway 模式测试
-echo_info "Test 2: Gateway mode (through Gateway:10080)"
-echo "         Command: cargo run --example test_client -- -g http"
+echo_info "Test 2: Gateway mode (gateway:10080)"
 cargo run --example test_client -- -g http 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_RESULT=$?
 

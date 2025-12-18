@@ -65,7 +65,8 @@ type = "localpath"
 
 # 文件系统加载器的根目录 (仅当 type = "localpath" 时生效)
 # 该目录应包含所有 Gateway API 资源的 YAML 文件
-dir = "config/examples"
+# 开发测试推荐使用 examples/conf，生产环境使用 config/examples
+dir = "examples/conf"
 
 # Etcd 集群端点列表 (仅当 type = "etcd" 时生效)
 # 示例: etcd_endpoints = ["http://127.0.0.1:2379", "http://127.0.0.1:2380"]

@@ -5,6 +5,7 @@
 ## 文件列表
 
 ### 网关配置
+- `GatewayClass__public-gateway.yaml` - GatewayClass 定义
 - `EdgionGatewayConfig__example-gateway.yaml` - 网关全局配置
 - `Gateway_edge_example-gateway.yaml` - Gateway 示例，包含多协议监听器（HTTP/HTTPS/gRPC/TLS/TCP/UDP）
 
@@ -20,12 +21,12 @@
 ```bash
 # 启动 controller（加载配置）
 cargo run --bin edgion-controller -- \
-  --gateway-class example-gateway \
+  --gateway-class public-gateway \
   --loader-dir examples/conf
 
 # 启动 gateway
 cargo run --bin edgion-gateway -- \
-  --gateway-class example-gateway
+  --gateway-class public-gateway
 ```
 
 ## 配合测试
