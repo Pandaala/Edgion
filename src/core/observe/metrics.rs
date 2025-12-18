@@ -3,7 +3,7 @@
 //! Centralized metrics for monitoring gateway performance.
 //! Uses the `metrics` crate for thread-safe, high-performance counters.
 
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use metrics::{counter, gauge, Counter, Gauge};
 
 /// Metric names as constants for consistency
@@ -16,11 +16,12 @@ pub mod names {
 }
 
 /// Global metrics singleton
-static GLOBAL_METRICS: OnceLock<GatewayMetrics> = OnceLock::new();
+static GLOBAL_METRICS: LazyLock<GatewayMetrics> = 
+    LazyLock::new(|| GatewayMetrics::new());
 
 /// Get the global metrics instance
 pub fn global_metrics() -> &'static GatewayMetrics {
-    GLOBAL_METRICS.get_or_init(GatewayMetrics::new)
+    &GLOBAL_METRICS
 }
 
 /// Gateway metrics collection

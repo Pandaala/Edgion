@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock, Mutex};
 use std::collections::{HashMap, HashSet};
 use dashmap::DashMap;
 use arc_swap::ArcSwap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use crate::core::routes::http_routes::HttpRouteRuleUnit;
 use crate::types::{HTTPRouteRule, HTTPBackendRef};
 use crate::types::err::EdError;
@@ -140,8 +140,8 @@ pub struct RouteManager {
 }
 
 // Global RouteManager instance
-static GLOBAL_ROUTE_MANAGER: Lazy<Arc<RouteManager>> = 
-    Lazy::new(|| Arc::new(RouteManager::new()));
+static GLOBAL_ROUTE_MANAGER: LazyLock<Arc<RouteManager>> = 
+    LazyLock::new(|| Arc::new(RouteManager::new()));
 
 /// Get the global RouteManager instance
 pub fn get_global_route_manager() -> Arc<RouteManager> {

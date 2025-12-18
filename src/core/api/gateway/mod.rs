@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use crate::core::conf_sync::ConfigClient;
 use crate::types::prelude_resources::*;
-use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::ResourceExt;
 

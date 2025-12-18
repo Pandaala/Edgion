@@ -1,23 +1,23 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use arc_swap::ArcSwap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use pingora_load_balancing::selection::{BackendSelection, Consistent, RoundRobin};
 use pingora_load_balancing::Backend;
 use crate::core::lb::leastconn::LeastConnection;
 use super::discovery_impl::EndpointSliceLoadBalancer;
 
 /// Store for RoundRobin LoadBalancers (primary, always present)
-static ROUNDROBIN_STORE: Lazy<Arc<EpSliceStore<RoundRobin>>> =
-    Lazy::new(|| Arc::new(EpSliceStore::new()));
+static ROUNDROBIN_STORE: LazyLock<Arc<EpSliceStore<RoundRobin>>> =
+    LazyLock::new(|| Arc::new(EpSliceStore::new()));
 
 /// Store for Consistent LoadBalancers (optional)
-static CONSISTENT_STORE: Lazy<Arc<EpSliceStore<Consistent>>> =
-    Lazy::new(|| Arc::new(EpSliceStore::new()));
+static CONSISTENT_STORE: LazyLock<Arc<EpSliceStore<Consistent>>> =
+    LazyLock::new(|| Arc::new(EpSliceStore::new()));
 
 /// Store for LeastConnection LoadBalancers (optional)
-static LEASTCONN_STORE: Lazy<Arc<EpSliceStore<LeastConnection>>> =
-    Lazy::new(|| Arc::new(EpSliceStore::new()));
+static LEASTCONN_STORE: LazyLock<Arc<EpSliceStore<LeastConnection>>> =
+    LazyLock::new(|| Arc::new(EpSliceStore::new()));
 
 pub fn get_roundrobin_store() -> Arc<EpSliceStore<RoundRobin>> {
     ROUNDROBIN_STORE.clone()

@@ -3,12 +3,12 @@
 //! Tracks active connections per backend address using a thread-safe DashMap.
 
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Global connection counts per backend address
-static CONNECTION_COUNTS: Lazy<DashMap<SocketAddr, AtomicUsize>> = Lazy::new(DashMap::new);
+static CONNECTION_COUNTS: LazyLock<DashMap<SocketAddr, AtomicUsize>> = LazyLock::new(DashMap::new);
 
 /// Increment the connection count for a backend address.
 /// Call this when a new connection is established.

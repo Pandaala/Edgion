@@ -5,7 +5,7 @@ use crate::core::routes::grpc_routes::{
     GrpcRouteManager, GrpcRouteRuleUnit, get_global_grpc_route_manager, GrpcMatchEngine,
 };
 use crate::core::routes::grpc_routes::routes_mgr::{GrpcRouteRules, DomainGrpcRouteRules};
-use crate::types::{GRPCRoute, ResourceMeta, GRPCRouteRule};
+use crate::types::GRPCRoute;
 
 type GatewayKey = String;
 type DomainStr = String;

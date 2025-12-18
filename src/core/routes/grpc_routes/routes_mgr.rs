@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock, Mutex};
 use std::collections::{HashMap, HashSet};
 use dashmap::DashMap;
 use arc_swap::ArcSwap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::core::routes::grpc_routes::{GrpcRouteRuleUnit, GrpcMatchEngine};
 use crate::types::{GRPCRoute, GRPCRouteRule, GRPCBackendRef};
@@ -163,8 +163,8 @@ impl GrpcRouteManager {
 }
 
 // Global GrpcRouteManager instance
-static GLOBAL_GRPC_ROUTE_MANAGER: Lazy<Arc<GrpcRouteManager>> =
-    Lazy::new(|| Arc::new(GrpcRouteManager::new()));
+static GLOBAL_GRPC_ROUTE_MANAGER: LazyLock<Arc<GrpcRouteManager>> =
+    LazyLock::new(|| Arc::new(GrpcRouteManager::new()));
 
 /// Get the global GrpcRouteManager instance
 pub fn get_global_grpc_route_manager() -> Arc<GrpcRouteManager> {

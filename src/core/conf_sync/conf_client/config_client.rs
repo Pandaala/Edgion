@@ -7,7 +7,7 @@ use crate::core::routes::create_route_manager_handler;
 use crate::core::backends::{create_service_handler, create_ep_slice_handler};
 use crate::types::prelude_resources::*;
 use anyhow::Result;
-use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::Resource;
 use std::sync::RwLock;
@@ -66,6 +66,11 @@ impl ConfigClient {
         let grpc_route_handler = crate::core::routes::grpc_routes::create_grpc_route_handler();
         grpc_routes_cache.set_conf_processor(grpc_route_handler);
         
+        // Register TlsStore as the handler for EdgionTls resources
+        let edgion_tls_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let tls_handler = crate::core::tls::create_tls_handler();
+        edgion_tls_cache.set_conf_processor(tls_handler);
+        
         Self {
             gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(None),
@@ -77,7 +82,7 @@ impl ConfigClient {
             link_sys: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,
-            edgion_tls: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            edgion_tls: edgion_tls_cache,
             edgion_plugins: plugins_cache,
             plugin_metadata: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             // secrets: ClientCache::new(gateway_class_key, client_id, client_name),

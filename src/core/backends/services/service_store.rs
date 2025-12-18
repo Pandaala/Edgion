@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use arc_swap::ArcSwap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use k8s_openapi::api::core::v1::Service;
 
-static GLOBAL_SERVICE_STORE: Lazy<Arc<ServiceStore>> =
-    Lazy::new(|| Arc::new(ServiceStore::new()));
+static GLOBAL_SERVICE_STORE: LazyLock<Arc<ServiceStore>> =
+    LazyLock::new(|| Arc::new(ServiceStore::new()));
 
 pub fn get_global_service_store() -> Arc<ServiceStore> {
     GLOBAL_SERVICE_STORE.clone()

@@ -1,7 +1,7 @@
 use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
 use crate::core::gateway::gateway_base::GatewayBase;
 use crate::core::observe::init_logging;
-use crate::types::init_prefix_dir;
+use crate::types::prefix_dir;
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::sync::Arc;
@@ -48,9 +48,8 @@ impl EdgionGatewayCli {
         // Load and merge configuration
         let config = EdgionGatewayConfig::load(self.config.clone())?;
 
-        // Initialize and create prefix directory
-        init_prefix_dir(&config.prefix_dir)
-            .map_err(|e| anyhow!("Failed to create prefix directory {:?}: {}", &config.prefix_dir, e))?;
+        // Initialize prefix directory (LazyLock auto-initializes on first access)
+        let _ = prefix_dir();
         
         // Initialize logging system with configuration from config file
         let log_config = config.to_log_config();

@@ -4,11 +4,11 @@
 
 use std::collections::{HashMap, HashSet};
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use super::types::LbPolicy;
 
 /// Global policy store
-static POLICY_STORE: Lazy<PolicyStore> = Lazy::new(PolicyStore::default);
+static POLICY_STORE: LazyLock<PolicyStore> = LazyLock::new(PolicyStore::default);
 
 /// Get global policy store instance
 pub fn get_global_policy_store() -> &'static PolicyStore {

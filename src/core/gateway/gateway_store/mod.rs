@@ -39,8 +39,8 @@ impl GatewayStore {
 }
 
 /// Global GatewayStore instance
-static GLOBAL_GATEWAY_STORE: once_cell::sync::Lazy<Arc<RwLock<GatewayStore>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(GatewayStore::new())));
+static GLOBAL_GATEWAY_STORE: std::sync::LazyLock<Arc<RwLock<GatewayStore>>> =
+    std::sync::LazyLock::new(|| Arc::new(RwLock::new(GatewayStore::new())));
 
 /// Get the global GatewayStore instance
 pub fn get_global_gateway_store() -> Arc<RwLock<GatewayStore>> {

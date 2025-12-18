@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 use dashmap::DashMap;
-use once_cell::sync::OnceCell;
+use std::sync::OnceLock;
 
 use crate::types::resources::UDPRoute;
 use crate::types::ResourceMeta;
@@ -172,7 +172,7 @@ impl UdpRouteManager {
 }
 
 /// Global UDP route manager
-static GLOBAL_UDP_ROUTE_MANAGER: OnceCell<UdpRouteManager> = OnceCell::new();
+static GLOBAL_UDP_ROUTE_MANAGER: OnceLock<UdpRouteManager> = OnceLock::new();
 
 pub fn get_global_udp_route_manager() -> &'static UdpRouteManager {
     GLOBAL_UDP_ROUTE_MANAGER.get_or_init(|| UdpRouteManager::new())

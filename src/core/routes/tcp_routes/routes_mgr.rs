@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 use dashmap::DashMap;
-use once_cell::sync::OnceCell;
+use std::sync::OnceLock;
 
 use crate::types::resources::TCPRoute;
 use crate::types::ResourceMeta;
@@ -172,7 +172,7 @@ impl TcpRouteManager {
 }
 
 /// 全局 TCP 路由管理器
-static GLOBAL_TCP_ROUTE_MANAGER: OnceCell<TcpRouteManager> = OnceCell::new();
+static GLOBAL_TCP_ROUTE_MANAGER: OnceLock<TcpRouteManager> = OnceLock::new();
 
 pub fn get_global_tcp_route_manager() -> &'static TcpRouteManager {
     GLOBAL_TCP_ROUTE_MANAGER.get_or_init(|| TcpRouteManager::new())

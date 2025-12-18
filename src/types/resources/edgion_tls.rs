@@ -47,6 +47,36 @@ impl EdgionTls {
             .or_else(|| self.metadata.namespace.clone())
     }
 
+    /// Extract certificate PEM from the secret
+    pub fn cert_pem(&self) -> anyhow::Result<String> {
+        let secret = self.spec.secret.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Secret not found in EdgionTls"))?;
+        
+        let data = secret.data.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Secret data not found"))?;
+        
+        let cert_pem = data.get("tls.crt")
+            .ok_or_else(|| anyhow::anyhow!("Secret data tls.crt not found"))?;
+        
+        String::from_utf8(cert_pem.0.clone())
+            .map_err(|e| anyhow::anyhow!("Failed to decode cert PEM: {}", e))
+    }
+
+    /// Extract private key PEM from the secret
+    pub fn key_pem(&self) -> anyhow::Result<String> {
+        let secret = self.spec.secret.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Secret not found in EdgionTls"))?;
+        
+        let data = secret.data.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Secret data not found"))?;
+        
+        let key_pem = data.get("tls.key")
+            .ok_or_else(|| anyhow::anyhow!("Secret data tls.key not found"))?;
+        
+        String::from_utf8(key_pem.0.clone())
+            .map_err(|e| anyhow::anyhow!("Failed to decode key PEM: {}", e))
+    }
+
     pub fn matches_hostname(&self, hostname: &str) -> bool {
         let hostname_lower = hostname.to_lowercase();
 

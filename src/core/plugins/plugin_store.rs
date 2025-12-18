@@ -3,12 +3,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use arc_swap::ArcSwap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::types::resources::EdgionPlugins;
 
-static GLOBAL_PLUGIN_STORE: Lazy<Arc<PluginStore>> =
-    Lazy::new(|| Arc::new(PluginStore::new()));
+static GLOBAL_PLUGIN_STORE: LazyLock<Arc<PluginStore>> =
+    LazyLock::new(|| Arc::new(PluginStore::new()));
 
 pub fn get_global_plugin_store() -> Arc<PluginStore> {
     GLOBAL_PLUGIN_STORE.clone()
