@@ -48,7 +48,16 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则5: API 路径（前缀匹配，catch-all）
+    # 规则5: WebSocket 端点（前缀匹配）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /ws
+      backendRefs:
+        - name: test-websocket
+          port: 30005
+
+    # 规则6: API 路径（前缀匹配）
     - matches:
         - path:
             type: PathPrefix

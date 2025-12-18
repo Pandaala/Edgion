@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
             18443,  // Gateway gRPC port
             19000,  // Gateway TCP port
             19002,  // Gateway UDP port
-            cli.websocket_port,  // WebSocket uses original port
+            10080,  // WebSocket through HTTP Gateway
             Some("test.example.com".to_string()),
             Some("grpc.example.com".to_string()),
         )
