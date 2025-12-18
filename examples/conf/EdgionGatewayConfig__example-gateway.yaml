@@ -1,0 +1,23 @@
+apiVersion: example.com/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: example-gateway
+spec:
+  # 监听器默认配置
+  listenerDefaults:
+    defaultTLSMode: Terminate
+    allowInsecure: true
+    sniMatchingPolicy: Strict
+
+  # HTTP 超时配置
+  httpTimeout:
+    client:
+      readTimeout: 60s
+      writeTimeout: 60s
+      keepaliveTimeout: 75s
+    backend:
+      defaultConnectTimeout: 5s
+      defaultRequestTimeout: 60s
+      defaultPerTryTimeout: 30s
+      defaultIdleTimeout: 300s
+      defaultMaxRetries: 3

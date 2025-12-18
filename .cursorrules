@@ -11,6 +11,10 @@
 - 用短 use 导入，不用长路径
 - 遵循 no-hidden-logic 原则
 
+## 配置文件命名规范
+- 有 namespace: `Kind_namespace_name.yaml`
+- 无 namespace: `Kind__name.yaml` (两个下划线)
+
 ## 测试策略
 - 避免创建临时脚本/文档
 - 各种请求测试都考虑好access.log的输出和测试

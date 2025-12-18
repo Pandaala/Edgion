@@ -25,4 +25,5 @@ logs/
 # Test reports
 test_report.json
 *_report.json
+runtime/
 
