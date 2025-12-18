@@ -3,7 +3,7 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::time::Instant;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{connect_async, tungstenite::{Message, client::IntoClientRequest}};
 use futures::{SinkExt, StreamExt};
 
 pub struct WebSocketTestSuite;
@@ -15,10 +15,18 @@ impl WebSocketTestSuite {
             "测试 WebSocket echo 功能",
             |ctx: TestContext| Box::pin(async move {
                 let start = Instant::now();
-                let ws_url = ctx.websocket_url();
                 let test_message = "Hello WebSocket";
                 
-                match connect_async(&ws_url).await {
+                // 构建 WebSocket 连接请求
+                let ws_url = ctx.websocket_url();
+                let mut request = ws_url.into_client_request().unwrap();
+                
+                // Gateway 模式：设置 Host header
+                if let Some(ref host) = ctx.http_host {
+                    request.headers_mut().insert("Host", host.parse().unwrap());
+                }
+                
+                match connect_async(request).await {
                     Ok((mut ws_stream, _)) => {
                         // 发送消息
                         if let Err(e) = ws_stream.send(Message::Text(test_message.to_string())).await {
