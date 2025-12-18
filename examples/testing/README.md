@@ -164,3 +164,7 @@ cat examples/testing/logs/test_result.log
 ls -lh examples/testing/logs/
 ```
 
+
+运行gateway和controller:
+cargo run --bin edgion-gateway
+cargo run --bin edgion-controller

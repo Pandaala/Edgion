@@ -23,7 +23,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 static PREFIX_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     std::env::var("EDGION_PREFIX_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/usr/local/edgion"))
+        .unwrap_or_else(|_| PathBuf::from("."))  // Default to current directory for dev
 });
 
 /// Get the global prefix directory

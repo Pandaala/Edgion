@@ -176,8 +176,26 @@ echo ""
 echo "---"
 echo ""
 
+# Direct 模式 gRPC 测试
+echo_info "Test 3: gRPC Direct mode (backend:30021)"
+cargo run --example test_client -- grpc 2>&1 | tee -a "$TEST_RESULT_LOG"
+DIRECT_GRPC_RESULT=$?
+
+echo ""
+echo "---"
+echo ""
+
+# Gateway 模式 gRPC 测试
+echo_info "Test 4: gRPC Gateway mode (gateway:10080)"
+cargo run --example test_client -- -g grpc 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_GRPC_RESULT=$?
+
+echo ""
+echo "---"
+echo ""
+
 # Direct 模式 TCP 测试
-echo_info "Test 3: TCP Direct mode (backend:30010)"
+echo_info "Test 5: TCP Direct mode (backend:30010)"
 cargo run --example test_client -- tcp 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_TCP_RESULT=$?
 
@@ -186,7 +204,7 @@ echo "---"
 echo ""
 
 # Gateway 模式 TCP 测试
-echo_info "Test 4: TCP Gateway mode (gateway:19000)"
+echo_info "Test 6: TCP Gateway mode (gateway:19000)"
 cargo run --example test_client -- -g tcp 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_TCP_RESULT=$?
 
@@ -195,7 +213,7 @@ echo "---"
 echo ""
 
 # Direct 模式 UDP 测试
-echo_info "Test 5: UDP Direct mode (backend:30011)"
+echo_info "Test 7: UDP Direct mode (backend:30011)"
 cargo run --example test_client -- udp 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_UDP_RESULT=$?
 
@@ -204,7 +222,7 @@ echo "---"
 echo ""
 
 # Gateway 模式 UDP 测试
-echo_info "Test 6: UDP Gateway mode (gateway:19002)"
+echo_info "Test 8: UDP Gateway mode (gateway:19002)"
 cargo run --example test_client -- -g udp 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_UDP_RESULT=$?
 
@@ -213,7 +231,7 @@ echo "---"
 echo ""
 
 # Direct 模式 WebSocket 测试
-echo_info "Test 7: WebSocket Direct mode (backend:30005)"
+echo_info "Test 9: WebSocket Direct mode (backend:30005)"
 cargo run --example test_client -- websocket 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_WS_RESULT=$?
 
@@ -222,7 +240,7 @@ echo "---"
 echo ""
 
 # Gateway 模式 WebSocket 测试
-echo_info "Test 8: WebSocket Gateway mode (gateway:10080)"
+echo_info "Test 10: WebSocket Gateway mode (gateway:10080)"
 cargo run --example test_client -- -g websocket 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_WS_RESULT=$?
 

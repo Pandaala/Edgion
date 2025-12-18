@@ -7,7 +7,7 @@ spec:
   parentRefs:
     - name: example-gateway
       namespace: edge
-      sectionName: grpc
+      sectionName: http
 
   hostnames:
     - "grpc.example.com"

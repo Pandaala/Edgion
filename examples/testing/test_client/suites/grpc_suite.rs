@@ -4,20 +4,79 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::time::Instant;
 
+// 引入 proto 生成的代码
+pub mod test {
+    tonic::include_proto!("test");
+}
+
+use test::test_service_client::TestServiceClient;
+use test::HelloRequest;
+
 pub struct GrpcTestSuite;
 
 impl GrpcTestSuite {
-    fn test_placeholder() -> TestCase {
+    /// 测试 gRPC SayHello RPC
+    fn test_grpc_say_hello() -> TestCase {
         TestCase::new(
-            "grpc_placeholder",
-            "gRPC 测试占位符",
-            |_ctx: TestContext| Box::pin(async move {
+            "grpc_say_hello",
+            "gRPC SayHello 测试",
+            |ctx: TestContext| Box::pin(async move {
                 let start = Instant::now();
-                // TODO: 实现 gRPC 测试
-                TestResult::passed_with_message(
-                    start.elapsed(),
-                    "gRPC tests not yet implemented".to_string()
-                )
+                
+                // 构建连接 URL
+                let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
+                
+                // 创建 gRPC 客户端，tonic 默认会使用 HTTP/2
+                let mut client = match TestServiceClient::connect(grpc_url.clone()).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Failed to connect to gRPC server at {}: {}", grpc_url, e)
+                        );
+                    }
+                };
+                
+                // 创建请求
+                let mut request = tonic::Request::new(HelloRequest {
+                    name: "Edgion".to_string(),
+                });
+                
+                // 如果是 Gateway 模式，添加 :authority pseudo-header
+                if let Some(ref host) = ctx.grpc_host {
+                    // 在 tonic 中，需要使用 URI 的 authority 部分来设置 :authority header
+                    // 这是通过重新创建带有正确 URI 的 request 来实现的
+                    request.metadata_mut().insert(
+                        ":authority",
+                        host.parse().expect("Invalid authority"),
+                    );
+                }
+                
+                // 发送请求
+                match client.say_hello(request).await {
+                    Ok(response) => {
+                        let reply = response.into_inner();
+                        if reply.message.contains("Hello, Edgion!") {
+                            let msg = if ctx.grpc_host.is_some() {
+                                format!("Response: {}", reply.message)
+                            } else {
+                                format!("Response: {}, Server: {}", reply.message, reply.server_addr)
+                            };
+                            TestResult::passed_with_message(start.elapsed(), msg)
+                        } else {
+                            TestResult::failed(
+                                start.elapsed(),
+                                format!("Unexpected response: {}", reply.message)
+                            )
+                        }
+                    },
+                    Err(e) => {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("RPC failed: {} (status: {:?})", e.message(), e.code())
+                        )
+                    }
+                }
             })
         )
     }
@@ -31,8 +90,7 @@ impl TestSuite for GrpcTestSuite {
     
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            Self::test_placeholder(),
+            Self::test_grpc_say_hello(),
         ]
     }
 }
-
