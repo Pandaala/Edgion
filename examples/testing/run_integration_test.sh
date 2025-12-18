@@ -83,6 +83,13 @@ echo "  Edgion Integration Test"
 echo "=========================================="
 echo ""
 
+# 清理旧进程
+echo_info "Cleaning up old processes..."
+pkill -f edgion-controller 2>/dev/null && echo "         Stopped old controller" || true
+pkill -f edgion-gateway 2>/dev/null && echo "         Stopped old gateway" || true
+pkill -f "test_server" 2>/dev/null && echo "         Stopped old test_server" || true
+sleep 1
+
 # 清空旧日志
 > "$CONTROLLER_LOG"
 > "$GATEWAY_LOG"
@@ -95,7 +102,7 @@ echo_info "Starting test_server..."
 cd "$PROJECT_DIR"
 cargo run --example test_server > "$TEST_SERVER_LOG" 2>&1 &
 echo $! > "${PID_DIR}/test_server.pid"
-sleep 2
+sleep 1
 
 if kill -0 $(cat "${PID_DIR}/test_server.pid") 2>/dev/null; then
     echo_success "test_server started (PID: $(cat ${PID_DIR}/test_server.pid), ports: 30001-30004)"
@@ -110,7 +117,7 @@ fi
 echo_info "Starting edgion-controller (using default config)..."
 cargo run --bin edgion-controller > "$CONTROLLER_LOG" 2>&1 &
 echo $! > "${PID_DIR}/controller.pid"
-sleep 3
+sleep 1
 
 if kill -0 $(cat "${PID_DIR}/controller.pid") 2>/dev/null; then
     echo_success "edgion-controller started (PID: $(cat ${PID_DIR}/controller.pid))"
@@ -126,7 +133,7 @@ echo_info "Starting edgion-gateway (using default config)..."
 EDGION_ACCESS_LOG="$ACCESS_LOG" \
 cargo run --bin edgion-gateway > "$GATEWAY_LOG" 2>&1 &
 echo $! > "${PID_DIR}/gateway.pid"
-sleep 3
+sleep 1
 
 if kill -0 $(cat "${PID_DIR}/gateway.pid") 2>/dev/null; then
     echo_success "edgion-gateway started (PID: $(cat ${PID_DIR}/gateway.pid), port: 10080)"
