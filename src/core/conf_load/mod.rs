@@ -47,7 +47,7 @@ impl Loader {
     pub fn from_args(args: &LoaderArgs) -> Result<Self> {
         match args.loader {
             LoaderKind::LocalPath => {
-                const DEFAULT_LOCAL_PATH_DIR: &str = "edgion/config/examples";
+                const DEFAULT_LOCAL_PATH_DIR: &str = "examples/conf";
                 let dir = args.dir.clone().unwrap_or_else(|| DEFAULT_LOCAL_PATH_DIR.to_string());
                 let path = PathBuf::from(&dir);
                 if !path.exists() {

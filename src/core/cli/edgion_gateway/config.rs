@@ -15,7 +15,7 @@ pub struct EdgionGatewayConfig {
     pub prefix_dir: PathBuf,
 
     /// Configuration file path (TOML format)
-    #[arg(short = 'c', long = "config-file", value_name = "FILE")]
+    #[arg(short = 'c', long = "config-file", value_name = "FILE", default_value = "config/edgion-gateway.toml")]
     #[serde(skip)]
     pub config_file: Option<String>,
 

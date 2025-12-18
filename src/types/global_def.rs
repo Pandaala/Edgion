@@ -13,7 +13,7 @@ pub const LOG_PREFIX_GATEWAY: &str = "edgion-gateway";
 
 // Default directories
 pub const DEFAULT_LOG_DIR: &str = "logs";
-pub const DEFAULT_CONFIG_DIR: &str = "edgion/config/examples";
+pub const DEFAULT_CONFIG_DIR: &str = "examples/conf";
 pub const DEFAULT_PREFIX_DIR: &str = "/usr/local/edgion";
 
 // Version
