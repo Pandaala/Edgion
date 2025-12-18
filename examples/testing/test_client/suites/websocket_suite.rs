@@ -4,7 +4,7 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::time::Instant;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use futures_util::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 
 pub struct WebSocketTestSuite;
 
@@ -31,12 +31,13 @@ impl WebSocketTestSuite {
                             ws_stream.next()
                         ).await {
                             Ok(Some(Ok(Message::Text(response)))) => {
-                                if response == test_message {
+                                let expected = format!("Echo: {}", test_message);
+                                if response == expected {
                                     TestResult::passed(start.elapsed())
                                 } else {
                                     TestResult::failed(
                                         start.elapsed(),
-                                        format!("Echo mismatch. Expected: {}, Got: {}", test_message, response)
+                                        format!("Echo mismatch. Expected: {}, Got: {}", expected, response)
                                     )
                                 }
                             }

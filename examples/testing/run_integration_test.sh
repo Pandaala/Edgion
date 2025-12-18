@@ -208,6 +208,24 @@ echo_info "Test 6: UDP Gateway mode (gateway:19002)"
 cargo run --example test_client -- -g udp 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_UDP_RESULT=$?
 
+echo ""
+echo "---"
+echo ""
+
+# Direct 模式 WebSocket 测试
+echo_info "Test 7: WebSocket Direct mode (backend:30005)"
+cargo run --example test_client -- websocket 2>&1 | tee -a "$TEST_RESULT_LOG"
+DIRECT_WS_RESULT=$?
+
+echo ""
+echo "---"
+echo ""
+
+# Gateway 模式 WebSocket 测试
+echo_info "Test 8: WebSocket Gateway mode (gateway:10080)"
+cargo run --example test_client -- -g websocket 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_WS_RESULT=$?
+
 # 6. 显示结果
 echo ""
 echo "=========================================="
@@ -251,6 +269,18 @@ else
     echo_error "UDP Gateway mode: FAILED"
 fi
 
+if [ $DIRECT_WS_RESULT -eq 0 ]; then
+    echo_success "WebSocket Direct mode: PASSED"
+else
+    echo_error "WebSocket Direct mode: FAILED"
+fi
+
+if [ $GATEWAY_WS_RESULT -eq 0 ]; then
+    echo_success "WebSocket Gateway mode: PASSED"
+else
+    echo_error "WebSocket Gateway mode: FAILED"
+fi
+
 echo ""
 echo "=========================================="
 echo "  Logs"
@@ -275,7 +305,8 @@ fi
 # 返回测试结果
 if [ $DIRECT_HTTP_RESULT -eq 0 ] && [ $GATEWAY_HTTP_RESULT -eq 0 ] && \
    [ $DIRECT_TCP_RESULT -eq 0 ] && [ $GATEWAY_TCP_RESULT -eq 0 ] && \
-   [ $DIRECT_UDP_RESULT -eq 0 ] && [ $GATEWAY_UDP_RESULT -eq 0 ]; then
+   [ $DIRECT_UDP_RESULT -eq 0 ] && [ $GATEWAY_UDP_RESULT -eq 0 ] && \
+   [ $DIRECT_WS_RESULT -eq 0 ] && [ $GATEWAY_WS_RESULT -eq 0 ]; then
     echo_success "All tests PASSED! ✨"
     exit 0
 else

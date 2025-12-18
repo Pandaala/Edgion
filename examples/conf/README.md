@@ -6,7 +6,7 @@
 
 - `GatewayClass__public-gateway.yaml` - GatewayClass
 - `Gateway_edge_example-gateway.yaml` - Gateway（HTTP/HTTPS/gRPC/TCP/UDP）
-- `HTTPRoute_edge_test-http.yaml` - HTTP 路由
+- `HTTPRoute_edge_test-http.yaml` - HTTP 路由（包含 WebSocket）
 - `GRPCRoute_edge_test-grpc.yaml` - gRPC 路由
 - `TCPRoute_edge_test-tcp.yaml` - TCP 路由
 - `UDPRoute_edge_test-udp.yaml` - UDP 路由
@@ -71,4 +71,16 @@ echo "Hello UDP" | nc -u localhost 19002
 
 # Direct 模式（直连 30011）
 echo "Hello UDP" | nc -u localhost 30011
+```
+
+### WebSocket 测试
+websocket
+```bash
+# 使用 test_client（推荐）
+cargo run --example test_client -- -g websocket  # Gateway 模式
+cargo run --example test_client -- websocket     # Direct 模式
+
+# 使用 websocat 手动测试
+echo "Hello WebSocket" | websocat ws://localhost:10080/ws  # Gateway 模式
+echo "Hello WebSocket" | websocat ws://localhost:30005/ws  # Direct 模式
 ```
