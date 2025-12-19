@@ -5,6 +5,13 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::time::Instant;
 
+// 引入 proto 生成的代码
+pub mod test {
+    tonic::include_proto!("test");
+}
+
+use test::{test_service_client::TestServiceClient, HelloRequest};
+
 pub struct GrpcHttpsTestSuite;
 
 impl GrpcHttpsTestSuite {
@@ -15,19 +22,12 @@ impl GrpcHttpsTestSuite {
             |ctx: TestContext| Box::pin(async move {
                 let start = Instant::now();
                 
-                // Build gRPC-HTTPS URL
-                let grpc_url = if let Some(ref host) = ctx.grpc_host {
-                    format!("https://{}:{}", host, ctx.grpc_https_port)
-                } else {
-                    ctx.grpc_https_url()
-                };
-                
-                // Note: For now, we skip TLS config as tonic's TLS support requires additional features
-                // This test will fail until TLS is properly configured in the Gateway
-                TestResult::failed(
+                // Note: gRPC-HTTPS requires proper TLS configuration with tonic[tls-roots] feature
+                // For now, we skip this test as it requires additional setup
+                return TestResult::failed(
                     start.elapsed(),
-                    format!("gRPC-HTTPS test not yet implemented. TLS support requires tonic[tls] feature. URL: {}", grpc_url)
-                )
+                    format!("gRPC-HTTPS test requires tonic TLS feature configuration. Port: {}", ctx.grpc_https_port)
+                );
             })
         )
     }
