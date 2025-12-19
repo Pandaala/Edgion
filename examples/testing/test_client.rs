@@ -42,7 +42,7 @@ struct Cli {
     #[arg(long, default_value = "30011")]
     udp_port: u16,
     
-    #[arg(long, default_value = "18443")]
+    #[arg(long, default_value = "10443")]
     https_port: u16,
     
     #[arg(long, default_value = "18443")]
@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
             19000,  // Gateway TCP port
             19002,  // Gateway UDP port
             10080,  // WebSocket through HTTP Gateway
-            18443,  // Gateway HTTPS port
+            10443,  // Gateway HTTPS port
             18443,  // Gateway gRPC-HTTPS port
             Some("test.example.com".to_string()),
             Some("grpc.example.com".to_string()),

@@ -22,7 +22,7 @@ pub const EDGION_TLS_KIND: &str = "EdgionTls";
     namespaced,
     status = "EdgionTlsStatus"
 )]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct EdgionTlsSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_refs: Option<Vec<ParentReference>>,

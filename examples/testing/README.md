@@ -185,8 +185,8 @@ rm ../conf/Secret_edge_tls.yaml
 生成的资源：
 ```
 examples/conf/
-├── Secret_edge_tls.yaml       # TLS 证书 Secret（包含多个域名）
-└── EdgionTls_edge_tls.yaml    # TLS 证书配置（绑定到 HTTPS 和 gRPC-HTTPS）
+├── Secret_edge_edge-tls.yaml       # TLS 证书 Secret（包含多个域名）
+└── EdgionTls_edge_edge-tls.yaml    # TLS 证书配置（绑定到 HTTPS 和 gRPC-HTTPS）
 ```
 
 ## 日志文件

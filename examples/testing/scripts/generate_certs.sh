@@ -108,14 +108,14 @@ create_secret_yaml \
     "edge" \
     "$TEMP_DIR/edge-tls.crt" \
     "$TEMP_DIR/edge-tls.key" \
-    "$CONF_DIR/Secret_edge_tls.yaml"
+    "$CONF_DIR/Secret_edge_edge-tls.yaml"
 
 echo ""
 echo_info "=========================================="
 echo_info "Certificate generation completed!"
 echo_info "=========================================="
 echo_info "Generated Secret YAML file:"
-echo_info "  - $CONF_DIR/Secret_edge_tls.yaml"
+echo_info "  - $CONF_DIR/Secret_edge_edge-tls.yaml"
 echo_info ""
 echo_info "Certificate includes domains:"
 echo_info "  - test.example.com (HTTPS)"

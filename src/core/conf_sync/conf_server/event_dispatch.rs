@@ -358,7 +358,8 @@ impl ConfigServer {
                 }
             }
             ResourceKind::EdgionTls => {
-                if let Ok(mut resource) = serde_yaml::from_str::<EdgionTls>(&data) {
+                match serde_yaml::from_str::<EdgionTls>(&data) {
+                    Ok(mut resource) => {
                     // 检查 EdgionTls 引用的 gateway 是否存在于 base_conf 中
                     let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
                         if let Some(first_ref) = parent_refs.first() {
@@ -476,6 +477,15 @@ impl ConfigServer {
                         "Applying EdgionTls resource change"
                     );
                     Self::execute_change_on_cache::<EdgionTls>(change, &self.edgion_tls, resource);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            component = "config_server",
+                            kind = "EdgionTls",
+                            error = %e,
+                            "Failed to parse EdgionTls resource"
+                        );
+                    }
                 }
             }
             ResourceKind::EdgionPlugins => {
