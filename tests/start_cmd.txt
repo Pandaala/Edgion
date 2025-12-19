@@ -115,6 +115,17 @@ tail -f logs/edgion_access.log | grep -i grpc
 
 
 
+curl -k --resolve test.example.com:10443:127.0.0.1 \
+  https://test.example.com:10443/secure/health
+
+# 方式2：使用 openssl 手动指定 SNI
+echo -e "GET /secure/health HTTP/1.1\r\nHost: test.example.com\r\n\r\n" | \
+  openssl s_client -connect 127.0.0.1:10443 -servername test.example.com -quiet 2>/dev/null
+
+# 方式3：修改 /etc/hosts
+echo "127.0.0.1 test.example.com" | sudo tee -a /etc/hosts
+curl -k https://test.example.com:10443/secure/health
+
 
 
 

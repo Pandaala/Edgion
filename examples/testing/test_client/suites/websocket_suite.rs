@@ -44,7 +44,7 @@ impl WebSocketTestSuite {
                                     TestResult::passed(start.elapsed())
                                 } else {
                                     TestResult::failed(
-                                        start.elapsed(),
+                    start.elapsed(),
                                         format!("Echo mismatch. Expected: {}, Got: {}", expected, response)
                                     )
                                 }

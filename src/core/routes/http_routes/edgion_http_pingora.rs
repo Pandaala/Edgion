@@ -144,10 +144,17 @@ impl ProxyHttp for EdgionHttp {
     {
 
         let req_header = session.req_header();
-        match req_header.headers.get("host").and_then(|h| h.to_str().ok())
-        {
+        
+        // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback)
+        // In HTTP/2, Pingora puts the hostname in the URI, not as a separate header
+        let hostname = req_header.uri.host()
+            .map(|h| h.to_string())
+            .or_else(|| req_header.headers.get("host").and_then(|h| h.to_str().ok().map(|s| s.to_string())))
+            .or_else(|| req_header.headers.get(":authority").and_then(|h| h.to_str().ok().map(|s| s.to_string())));
+        
+        match hostname {
             Some(host) => {
-                ctx.request_info.hostname = host.to_string();
+                ctx.request_info.hostname = host;
             }
             None => {
                 ctx.add_error(EdgionStatus::HostMissing);
