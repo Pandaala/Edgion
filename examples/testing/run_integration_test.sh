@@ -97,6 +97,17 @@ sleep 1
 > "$ACCESS_LOG"
 > "$TEST_RESULT_LOG"
 
+# 0. 生成 TLS 证书
+echo_info "Generating TLS certificates..."
+"${SCRIPT_DIR}/scripts/generate_certs.sh"
+if [ $? -eq 0 ]; then
+    echo_success "TLS certificates generated"
+else
+    echo_error "Failed to generate TLS certificates"
+    exit 1
+fi
+echo ""
+
 # 1. 启动 test_server
 echo_info "Starting test_server..."
 cd "$PROJECT_DIR"
@@ -244,6 +255,24 @@ echo_info "Test 10: WebSocket Gateway mode (gateway:10080)"
 cargo run --example test_client -- -g websocket 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_WS_RESULT=$?
 
+echo ""
+echo "---"
+echo ""
+
+# Gateway 模式 HTTPS 测试
+echo_info "Test 11: HTTPS Gateway mode (gateway:18443)"
+cargo run --example test_client -- -g https 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_HTTPS_RESULT=$?
+
+echo ""
+echo "---"
+echo ""
+
+# Gateway 模式 gRPC-HTTPS 测试
+echo_info "Test 12: gRPC-HTTPS Gateway mode (gateway:18443)"
+cargo run --example test_client -- -g grpc-https 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_GRPC_HTTPS_RESULT=$?
+
 # 6. 显示结果
 echo ""
 echo "=========================================="
@@ -309,6 +338,18 @@ if [ $GATEWAY_WS_RESULT -eq 0 ]; then
     echo_success "WebSocket Gateway mode: PASSED"
 else
     echo_error "WebSocket Gateway mode: FAILED"
+fi
+
+if [ $GATEWAY_HTTPS_RESULT -eq 0 ]; then
+    echo_success "HTTPS Gateway mode: PASSED"
+else
+    echo_error "HTTPS Gateway mode: FAILED"
+fi
+
+if [ $GATEWAY_GRPC_HTTPS_RESULT -eq 0 ]; then
+    echo_success "gRPC-HTTPS Gateway mode: PASSED"
+else
+    echo_error "gRPC-HTTPS Gateway mode: FAILED"
 fi
 
 echo ""

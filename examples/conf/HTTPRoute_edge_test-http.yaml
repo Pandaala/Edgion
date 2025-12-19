@@ -66,3 +66,13 @@ spec:
         - name: test-http
           port: 30001
 
+    # 规则7: HTTPS 专用测试路径（前缀匹配）
+    # 用于区分 HTTPS 测试和普通 HTTP 测试
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /secure/
+      backendRefs:
+        - name: test-http
+          port: 30001
+

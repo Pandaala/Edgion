@@ -27,3 +27,6 @@ test_report.json
 *_report.json
 runtime/
 
+# TLS 测试 Secret（自动生成，不要提交）
+examples/conf/Secret_*.yaml
+

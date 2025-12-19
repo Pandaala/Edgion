@@ -1,0 +1,13 @@
+apiVersion: edgion.ztrace.cloud/v1
+kind: EdgionTls
+metadata:
+  name: edge-tls
+  namespace: edge
+spec:
+  hosts:
+    - test.example.com
+    - grpc.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edge
+

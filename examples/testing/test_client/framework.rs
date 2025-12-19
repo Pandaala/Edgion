@@ -14,9 +14,12 @@ pub struct TestContext {
     pub websocket_port: u16,
     pub tcp_port: u16,
     pub udp_port: u16,
+    pub https_port: u16,
+    pub grpc_https_port: u16,
     pub http_client: reqwest::Client,
     pub http_host: Option<String>,
     pub grpc_host: Option<String>,
+    pub gateway: bool,
     pub verbose: bool,
 }
 
@@ -28,12 +31,17 @@ impl TestContext {
         websocket_port: u16,
         tcp_port: u16,
         udp_port: u16,
+        https_port: u16,
+        grpc_https_port: u16,
         http_host: Option<String>,
         grpc_host: Option<String>,
+        gateway: bool,
         verbose: bool,
     ) -> Self {
+        // Configure HTTP client to accept self-signed certificates for HTTPS testing
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .danger_accept_invalid_certs(true)
             .build()
             .expect("Failed to create HTTP client");
         
@@ -44,9 +52,12 @@ impl TestContext {
             websocket_port,
             tcp_port,
             udp_port,
+            https_port,
+            grpc_https_port,
             http_client,
             http_host,
             grpc_host,
+            gateway,
             verbose,
         }
     }
@@ -69,6 +80,14 @@ impl TestContext {
     
     pub fn udp_addr(&self) -> String {
         format!("{}:{}", self.target_host, self.udp_port)
+    }
+    
+    pub fn https_url(&self) -> String {
+        format!("https://{}:{}", self.target_host, self.https_port)
+    }
+    
+    pub fn grpc_https_url(&self) -> String {
+        format!("https://{}:{}", self.target_host, self.grpc_https_port)
     }
 }
 

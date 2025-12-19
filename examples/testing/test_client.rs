@@ -42,6 +42,12 @@ struct Cli {
     #[arg(long, default_value = "30011")]
     udp_port: u16,
     
+    #[arg(long, default_value = "18443")]
+    https_port: u16,
+    
+    #[arg(long, default_value = "18443")]
+    grpc_https_port: u16,
+    
     #[arg(long)]
     json: bool,
     
@@ -55,7 +61,9 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     Http,
+    Https,
     Grpc,
+    GrpcHttps,
     Websocket,
     Tcp,
     Udp,
@@ -73,7 +81,7 @@ async fn main() -> Result<()> {
     }
     
     // Determine ports and host based on gateway flag
-    let (http_port, grpc_port, tcp_port, udp_port, websocket_port, http_host, grpc_host) = if cli.gateway {
+    let (http_port, grpc_port, tcp_port, udp_port, websocket_port, https_port, grpc_https_port, http_host, grpc_host) = if cli.gateway {
         // Gateway mode: use Gateway ports
         (
             10080,  // Gateway HTTP port
@@ -81,6 +89,8 @@ async fn main() -> Result<()> {
             19000,  // Gateway TCP port
             19002,  // Gateway UDP port
             10080,  // WebSocket through HTTP Gateway
+            18443,  // Gateway HTTPS port
+            18443,  // Gateway gRPC-HTTPS port
             Some("test.example.com".to_string()),
             Some("grpc.example.com".to_string()),
         )
@@ -92,6 +102,8 @@ async fn main() -> Result<()> {
             cli.tcp_port,
             cli.udp_port,
             cli.websocket_port,
+            cli.https_port,
+            cli.grpc_https_port,
             None,
             None,
         )
@@ -113,8 +125,11 @@ async fn main() -> Result<()> {
         websocket_port,
         tcp_port,
         udp_port,
-        http_host,
+        https_port,
+        grpc_https_port,
+        http_host.clone(),
         grpc_host,
+        cli.gateway,
         cli.verbose,
     );
     
@@ -124,8 +139,22 @@ async fn main() -> Result<()> {
         Commands::Http => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
         }
+        Commands::Https => {
+            if !cli.gateway {
+                eprintln!("Error: HTTPS tests only support Gateway mode. Use -g flag.");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HttpsTestSuite));
+        }
         Commands::Grpc => {
             runner.add_suite(Box::new(suites::GrpcTestSuite));
+        }
+        Commands::GrpcHttps => {
+            if !cli.gateway {
+                eprintln!("Error: gRPC-HTTPS tests only support Gateway mode. Use -g flag.");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcHttpsTestSuite));
         }
         Commands::Websocket => {
             runner.add_suite(Box::new(suites::WebSocketTestSuite));
@@ -142,6 +171,10 @@ async fn main() -> Result<()> {
             runner.add_suite(Box::new(suites::WebSocketTestSuite));
             runner.add_suite(Box::new(suites::TcpTestSuite));
             runner.add_suite(Box::new(suites::UdpTestSuite));
+            if cli.gateway {
+                runner.add_suite(Box::new(suites::HttpsTestSuite));
+                runner.add_suite(Box::new(suites::GrpcHttpsTestSuite));
+            }
         }
     }
     
