@@ -15,12 +15,8 @@ impl HttpsTestSuite {
             |ctx: TestContext| Box::pin(async move {
                 let start = Instant::now();
                 
-                // Build HTTPS URL with Host header
-                let url = if let Some(ref host) = ctx.http_host {
-                    format!("https://{}:{}/secure/health", host, ctx.https_port)
-                } else {
-                    format!("{}/secure/health", ctx.https_url())
-                };
+                // Build HTTPS URL - always use target_host (127.0.0.1)
+                let url = format!("https://{}:{}/secure/health", ctx.target_host, ctx.https_port);
                 
                 let mut request = ctx.http_client.get(&url);
                 
@@ -68,11 +64,7 @@ impl HttpsTestSuite {
             |ctx: TestContext| Box::pin(async move {
                 let start = Instant::now();
                 
-                let url = if let Some(ref host) = ctx.http_host {
-                    format!("https://{}:{}/secure/echo", host, ctx.https_port)
-                } else {
-                    format!("{}/secure/echo", ctx.https_url())
-                };
+                let url = format!("https://{}:{}/secure/echo", ctx.target_host, ctx.https_port);
                 
                 let mut request = ctx.http_client.post(&url)
                     .body("HTTPS Test Message");
@@ -120,11 +112,7 @@ impl HttpsTestSuite {
             |ctx: TestContext| Box::pin(async move {
                 let start = Instant::now();
                 
-                let url = if let Some(ref host) = ctx.http_host {
-                    format!("https://{}:{}/secure/status/200", host, ctx.https_port)
-                } else {
-                    format!("{}/secure/status/200", ctx.https_url())
-                };
+                let url = format!("https://{}:{}/secure/status/200", ctx.target_host, ctx.https_port);
                 
                 let mut request = ctx.http_client.get(&url);
                 
