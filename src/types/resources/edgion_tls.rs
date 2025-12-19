@@ -28,7 +28,7 @@ pub struct EdgionTlsSpec {
     pub parent_refs: Option<Vec<ParentReference>>,
     pub hosts: Vec<String>,
     pub secret_ref: SecretObjectReference,
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub secret: Option<Secret>,
 }
 
@@ -211,6 +211,210 @@ mod tests {
             },
             status: None,
         }
+    }
+
+    #[test]
+    fn test_yaml_deserialization_with_camel_case() {
+        // Test that YAML with camelCase field names can be correctly deserialized
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: test-tls
+  namespace: default
+spec:
+  parentRefs:
+    - name: example-gateway
+      namespace: default
+  hosts:
+    - example.com
+    - "*.example.com"
+  secretRef:
+    name: test-secret
+    namespace: default
+"#;
+
+        let tls: Result<EdgionTls, _> = serde_yaml::from_str(yaml);
+        assert!(tls.is_ok(), "Failed to deserialize YAML: {:?}", tls.err());
+        
+        let tls = tls.unwrap();
+        assert_eq!(tls.metadata.name, Some("test-tls".to_string()));
+        assert_eq!(tls.metadata.namespace, Some("default".to_string()));
+        
+        // Verify parentRefs
+        assert!(tls.spec.parent_refs.is_some());
+        let parent_refs = tls.spec.parent_refs.as_ref().unwrap();
+        assert_eq!(parent_refs.len(), 1);
+        assert_eq!(parent_refs[0].name, "example-gateway");
+        assert_eq!(parent_refs[0].namespace, Some("default".to_string()));
+        
+        // Verify hosts
+        assert_eq!(tls.spec.hosts.len(), 2);
+        assert_eq!(tls.spec.hosts[0], "example.com");
+        assert_eq!(tls.spec.hosts[1], "*.example.com");
+        
+        // Verify secretRef
+        assert_eq!(tls.spec.secret_ref.name, "test-secret");
+        assert_eq!(tls.spec.secret_ref.namespace, Some("default".to_string()));
+    }
+
+    #[test]
+    fn test_yaml_serialization_produces_camel_case() {
+        // Test that serialization produces camelCase field names
+        let tls = EdgionTls {
+            metadata: kube::api::ObjectMeta {
+                name: Some("test-tls".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: EdgionTlsSpec {
+                parent_refs: Some(vec![ParentReference {
+                    group: None,
+                    kind: None,
+                    name: "example-gateway".to_string(),
+                    namespace: Some("default".to_string()),
+                    section_name: None,
+                    port: None,
+                }]),
+                hosts: vec!["example.com".to_string(), "*.example.com".to_string()],
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "test-secret".to_string(),
+                    namespace: Some("default".to_string()),
+                },
+                secret: None,
+            },
+            status: None,
+        };
+
+        let yaml = serde_yaml::to_string(&tls).expect("Failed to serialize to YAML");
+        
+        // Verify camelCase field names in serialized YAML
+        assert!(yaml.contains("parentRefs:"), "Serialized YAML should contain 'parentRefs'");
+        assert!(yaml.contains("secretRef:"), "Serialized YAML should contain 'secretRef'");
+        
+        // Verify snake_case is NOT present
+        assert!(!yaml.contains("parent_refs:"), "Serialized YAML should NOT contain 'parent_refs'");
+        assert!(!yaml.contains("secret_ref:"), "Serialized YAML should NOT contain 'secret_ref'");
+    }
+
+    #[test]
+    fn test_yaml_round_trip() {
+        // Test that we can deserialize and then serialize without losing data
+        let original_yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: test-tls
+  namespace: default
+spec:
+  parentRefs:
+    - name: example-gateway
+      namespace: default
+  hosts:
+    - example.com
+    - test.com
+  secretRef:
+    name: test-secret
+    namespace: default
+"#;
+
+        let tls: EdgionTls = serde_yaml::from_str(original_yaml)
+            .expect("Failed to deserialize original YAML");
+        
+        let serialized = serde_yaml::to_string(&tls)
+            .expect("Failed to serialize back to YAML");
+        
+        let tls2: EdgionTls = serde_yaml::from_str(&serialized)
+            .expect("Failed to deserialize serialized YAML");
+        
+        // Verify data integrity
+        assert_eq!(tls.metadata.name, tls2.metadata.name);
+        assert_eq!(tls.metadata.namespace, tls2.metadata.namespace);
+        assert_eq!(tls.spec.hosts, tls2.spec.hosts);
+        assert_eq!(tls.spec.secret_ref.name, tls2.spec.secret_ref.name);
+        
+        if let (Some(pr1), Some(pr2)) = (&tls.spec.parent_refs, &tls2.spec.parent_refs) {
+            assert_eq!(pr1.len(), pr2.len());
+            assert_eq!(pr1[0].name, pr2[0].name);
+        }
+    }
+
+    #[test]
+    fn test_snake_case_fields_should_fail() {
+        // Test that YAML with snake_case field names (wrong naming) will fail or lose data
+        // This ensures we catch naming convention errors early
+        let yaml_with_snake_case = r#"
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: test-tls
+  namespace: default
+spec:
+  parent_refs:
+    - name: example-gateway
+      namespace: default
+  hosts:
+    - example.com
+  secret_ref:
+    name: test-secret
+    namespace: default
+"#;
+
+        let tls: Result<EdgionTls, _> = serde_yaml::from_str(yaml_with_snake_case);
+        
+        // Should succeed in parsing (because parent_refs and secret_ref have defaults)
+        // but the fields should be None/default because they don't match_engine the expected camelCase names
+        if let Ok(tls) = tls {
+            // With camelCase enforcement, snake_case fields are ignored
+            // parent_refs should be None (not parsed from parent_refs)
+            assert!(tls.spec.parent_refs.is_none(), 
+                "parent_refs (snake_case) should be ignored, expected None");
+            
+            // secret_ref is required, so this test would actually fail at deserialization
+            // But if it doesn't fail, the secretRef field would have a default/empty value
+        } else {
+            // Expected: deserialization should fail because secretRef is required
+            // and secret_ref (snake_case) is not recognized
+            println!("Expected failure: {:?}", tls.err());
+        }
+    }
+
+    #[test]
+    fn test_kubernetes_api_conventions_compliance() {
+        // This test documents that our API follows Kubernetes conventions:
+        // 1. All field names should be camelCase in YAML
+        // 2. First character should be lowercase
+        // 3. Acronyms should follow camelCase (e.g., secretRef not secretREF)
+        
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: convention-test
+  namespace: default
+spec:
+  parentRefs:
+    - name: my-gateway
+  hosts:
+    - "*.example.com"
+  secretRef:
+    name: my-secret
+"#;
+
+        let result: Result<EdgionTls, _> = serde_yaml::from_str(yaml);
+        assert!(result.is_ok(), 
+            "Kubernetes API convention compliant YAML should deserialize successfully");
+        
+        let tls = result.unwrap();
+        let serialized = serde_yaml::to_string(&tls).unwrap();
+        
+        // Verify all conventions are maintained in serialized output
+        assert!(serialized.contains("parentRefs:"), "Should use parentRefs (camelCase)");
+        assert!(serialized.contains("secretRef:"), "Should use secretRef (camelCase)");
+        assert!(!serialized.contains("ParentRefs:"), "Should NOT use ParentRefs (PascalCase)");
+        assert!(!serialized.contains("SecretRef:"), "Should NOT use SecretRef (PascalCase)");
     }
 
     #[test]
