@@ -237,11 +237,18 @@ grpcurl -plaintext \
 
 ```bash
 # Gateway 模式（19000）
-echo "Hello TCP" | nc localhost 19000
+(echo "Hello TCP"; sleep 0.5) | nc localhost 19000
+
+# 或使用 -q 参数（部分系统支持）
+echo "Hello TCP" | nc -q 1 localhost 19000
 
 # Direct 模式（30010）
-echo "Hello TCP" | nc localhost 30010
+(echo "Hello TCP"; sleep 0.5) | nc localhost 30010
 ```
+
+**说明：**
+- `sleep 0.5` 让连接保持打开以接收响应
+- `-q 1` 在 EOF 后等待 1 秒再关闭（GNU netcat）
 
 ### UDP 测试（nc）
 
