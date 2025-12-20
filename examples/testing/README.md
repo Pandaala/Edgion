@@ -28,7 +28,7 @@ cd examples/testing
 2. 启动 test_server（后端服务）
 3. 启动 edgion-controller（加载 `examples/conf` 配置）
 4. 启动 edgion-gateway（网关服务）
-5. 运行所有测试（Direct + Gateway 模式）
+5. 运行所有测试（Direct + Gateway 模式，包括 HTTPS）
 6. 显示结果并清理服务
 
 ---
@@ -69,7 +69,7 @@ cargo run --bin edgion-gateway
 - HTTP: `10080`
 - HTTPS: `10443`
 - gRPC (HTTP): `10080`
-- gRPC (HTTPS): `18443`
+- gRPC (HTTPS): `18443` (手动测试)
 - TCP: `19000`
 - UDP: `19002`
 
@@ -101,7 +101,6 @@ cargo run --example test_client -- [OPTIONS] <COMMAND>
   udp           # UDP 测试
   websocket     # WebSocket 测试
   https         # HTTPS 测试（仅 Gateway 模式）
-  grpc-https    # gRPC-HTTPS 测试（仅 Gateway 模式）
   all           # 运行所有测试
 ```
 
@@ -140,7 +139,6 @@ cargo run --example test_client -- -g websocket # WebSocket (10080)
 
 # HTTPS 测试（仅 Gateway 模式）
 cargo run --example test_client -- -g https     # HTTPS (10443)
-cargo run --example test_client -- -g grpc-https # gRPC-HTTPS (18443)
 
 # Gateway 模式 + 详细输出
 cargo run --example test_client -- -g --verbose http
@@ -293,7 +291,7 @@ echo "Hello WebSocket" | websocat ws://localhost:30005/ws  # Direct
 | HTTP | 10080 | HTTP 网关 |
 | HTTPS | 10443 | HTTPS 网关（TLS termination）|
 | gRPC | 10080 | gRPC 网关（HTTP/2）|
-| gRPC-HTTPS | 18443 | gRPC 网关（HTTPS/HTTP/2）|
+| gRPC-HTTPS | 18443 | gRPC 网关（HTTPS/HTTP/2，手动测试）|
 | TCP | 19000 | TCP 代理 |
 | UDP | 19002 | UDP 代理 |
 

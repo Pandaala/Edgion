@@ -63,7 +63,6 @@ enum Commands {
     Http,
     Https,
     Grpc,
-    GrpcHttps,
     Websocket,
     Tcp,
     Udp,
@@ -149,13 +148,6 @@ async fn main() -> Result<()> {
         Commands::Grpc => {
             runner.add_suite(Box::new(suites::GrpcTestSuite));
         }
-        Commands::GrpcHttps => {
-            if !cli.gateway {
-                eprintln!("Error: gRPC-HTTPS tests only support Gateway mode. Use -g flag.");
-                std::process::exit(1);
-            }
-            runner.add_suite(Box::new(suites::GrpcHttpsTestSuite));
-        }
         Commands::Websocket => {
             runner.add_suite(Box::new(suites::WebSocketTestSuite));
         }
@@ -173,7 +165,6 @@ async fn main() -> Result<()> {
             runner.add_suite(Box::new(suites::UdpTestSuite));
             if cli.gateway {
                 runner.add_suite(Box::new(suites::HttpsTestSuite));
-                runner.add_suite(Box::new(suites::GrpcHttpsTestSuite));
             }
         }
     }
