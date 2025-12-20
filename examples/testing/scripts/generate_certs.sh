@@ -37,12 +37,12 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONF_DIR="$PROJECT_ROOT/examples/conf"
 
 # Check if Secret file already exists
-if [ -f "$CONF_DIR/Secret_edge_tls.yaml" ]; then
+if [ -f "$CONF_DIR/Secret_edge_edge-tls.yaml" ]; then
     echo_info "TLS Secret file already exists, skipping generation..."
-    echo_info "  - $CONF_DIR/Secret_edge_tls.yaml"
+    echo_info "  - $CONF_DIR/Secret_edge_edge-tls.yaml"
     echo ""
     echo_warning "To regenerate certificates, delete the Secret file and run this script again:"
-    echo_warning "  rm $CONF_DIR/Secret_edge_tls.yaml"
+    echo_warning "  rm $CONF_DIR/Secret_edge_edge-tls.yaml"
     echo_warning "  ./scripts/generate_certs.sh"
     exit 0
 fi
