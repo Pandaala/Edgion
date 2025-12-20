@@ -26,8 +26,33 @@ impl GrpcTestSuite {
                 // 构建连接 URL
                 let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
                 
-                // 创建 gRPC 客户端
-                let mut client = match TestServiceClient::connect(grpc_url.clone()).await {
+                // 创建 gRPC 客户端，通过 origin 设置 :authority
+                let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
+                    Ok(mut ep) => {
+                        // Gateway 模式：设置 origin 来控制 :authority 伪头部
+                        if let Some(ref host) = ctx.grpc_host {
+                            let origin_uri = match format!("http://{}:{}", host, ctx.grpc_port).parse() {
+                                Ok(uri) => uri,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Invalid origin URI: {}", e)
+                                    );
+                                }
+                            };
+                            ep = ep.origin(origin_uri);
+                        }
+                        ep
+                    },
+                    Err(e) => {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Invalid endpoint: {}", e)
+                        );
+                    }
+                };
+                
+                let mut client = match TestServiceClient::connect(endpoint).await {
                     Ok(c) => c,
                     Err(e) => {
                         return TestResult::failed(
@@ -38,26 +63,9 @@ impl GrpcTestSuite {
                 };
                 
                 // 创建请求
-                let mut request = tonic::Request::new(HelloRequest {
+                let request = tonic::Request::new(HelloRequest {
                     name: "Edgion".to_string(),
                 });
-                
-                // Gateway 模式：使用 metadata 设置 authority
-                // 注意：这实际上不会设置 :authority pseudo-header，
-                // 但可以设置普通的 authority header
-                if let Some(ref host) = ctx.grpc_host {
-                    use tonic::metadata::AsciiMetadataValue;
-                    let authority_value = match AsciiMetadataValue::try_from(host.as_str()) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!("Invalid authority value: {}", e)
-                            );
-                        }
-                    };
-                    request.metadata_mut().insert("host", authority_value);
-                }
                 
                 match client.say_hello(request).await {
                     Ok(response) => {
