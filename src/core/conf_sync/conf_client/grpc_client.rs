@@ -5,7 +5,6 @@ use crate::core::conf_sync::proto::{
 use crate::types::prelude_resources::*;
 use crate::types::GatewayBaseConf;
 use crate::types::ResourceKind::*;
-use rand::Rng;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;
@@ -19,8 +18,8 @@ pub struct ConfigSyncClient {
 }
 
 impl ConfigSyncClient {
-    /// Create a new ConfigSync conf_client and connect to conf_server with retry
-    /// Retries connection up to 3 times with 2 second intervals
+    /// Create a new ConfigSync conf_client and connect to conf_server
+    /// Uses lazy connection to allow cold start even if the server is not available immediately.
     pub async fn new(
         grpc_server_addr: &str,
         gateway_class_key: String,
@@ -34,80 +33,51 @@ impl ConfigSyncClient {
             client_name.clone(),
         ));
 
-        // Try to connect with retry logic: 3 attempts, base 2s + jitter
-        const MAX_RETRIES: u32 = 3;
-        const RETRY_INTERVAL_BASE_MS: u64 = 2000;
+        // TODO: Currently this allows cold start (gateway starts without controller).
+        // However, without local cache persistence, the gateway will have no configuration
+        // and cannot serve traffic until it successfully connects to the controller.
+        // Future improvements should include:
+        // 1. Persisting configuration to local disk (Snapshot)
+        // 2. Loading from local disk on startup if controller is unreachable
+        tracing::info!(
+            server_addr = grpc_server_addr,
+            "Initializing gRPC client with lazy connection"
+        );
 
-        let mut last_error = None;
-        for attempt in 1..=MAX_RETRIES {
-            tracing::info!(
-                attempt = attempt,
-                max_retries = MAX_RETRIES,
-                server_addr = grpc_server_addr,
-                "Attempting to connect to gRPC conf_server"
-            );
+        // Ensure uri has scheme
+        let uri = if grpc_server_addr.starts_with("http") {
+            grpc_server_addr.to_string()
+        } else {
+            format!("http://{}", grpc_server_addr)
+        };
 
-            match Self::create_client_internal(grpc_server_addr, timeout).await {
-                Ok(client) => {
-                    tracing::info!(
-                        server_addr = grpc_server_addr,
-                        "Successfully connected to gRPC conf_server"
-                    );
-
-                    // Set gRPC conf_client for each cache
-                    config_client.routes().set_grpc_client(client.clone()).await;
-                    config_client.grpc_routes().set_grpc_client(client.clone()).await;
-                    config_client.tcp_routes().set_grpc_client(client.clone()).await;
-                    config_client.udp_routes().set_grpc_client(client.clone()).await;
-                    config_client.tls_routes().set_grpc_client(client.clone()).await;
-                    config_client.link_sys().set_grpc_client(client.clone()).await;
-                    config_client.services().set_grpc_client(client.clone()).await;
-                    config_client.endpoint_slices().set_grpc_client(client.clone()).await;
-                    config_client.edgion_tls().set_grpc_client(client.clone()).await;
-                    config_client.edgion_plugins().set_grpc_client(client.clone()).await;
-                    config_client.plugin_metadata().set_grpc_client(client.clone()).await;
-                    // config_client.secrets().set_grpc_client(client.clone()).await;
-
-                    return Ok(Self {
-                        config_client,
-                        conf_client_handle: client,
-                    });
-                }
-                Err(e) => {
-                    last_error = Some(e);
-                    if attempt < MAX_RETRIES {
-                        // Add Jitter: 0 ~ 1000ms
-                        let jitter_ms = rand::thread_rng().gen_range(0..1000);
-                        let sleep_duration = Duration::from_millis(RETRY_INTERVAL_BASE_MS + jitter_ms);
-
-                        tracing::warn!(
-                            attempt = attempt,
-                            max_retries = MAX_RETRIES,
-                            error = %last_error.as_ref().unwrap(),
-                            retry_in_millis = sleep_duration.as_millis(),
-                            "Failed to connect, will retry with jitter"
-                        );
-                        tokio::time::sleep(sleep_duration).await;
-                    }
-                }
-            }
-        }
-
-        let err = last_error.unwrap();
-        tracing::error!(server_addr = grpc_server_addr,error = %err,"Failed to connect to gRPC conf_server after {} attempts", MAX_RETRIES);
-        Err(err)
-    }
-
-    /// Internal helper to create a conf_client
-    async fn create_client_internal(
-        addr: &str,
-        timeout: Duration,
-    ) -> Result<ConfigSyncClientService<Channel>, tonic::transport::Error> {
-        let endpoint = tonic::transport::Endpoint::from_shared(addr.to_string())?
+        let endpoint = tonic::transport::Endpoint::from_shared(uri)?
             .timeout(timeout)
             .connect_timeout(timeout);
-        let channel = endpoint.connect().await?;
-        Ok(ConfigSyncClientService::new(channel))
+
+        // connect_lazy returns a Channel immediately, connection happens on first request
+        let channel = endpoint.connect_lazy();
+        let client = ConfigSyncClientService::new(channel);
+
+        // Set gRPC conf_client for each cache immediately
+        // Since it's a lazy channel, these calls won't fail due to connection issues
+        config_client.routes().set_grpc_client(client.clone()).await;
+        config_client.grpc_routes().set_grpc_client(client.clone()).await;
+        config_client.tcp_routes().set_grpc_client(client.clone()).await;
+        config_client.udp_routes().set_grpc_client(client.clone()).await;
+        config_client.tls_routes().set_grpc_client(client.clone()).await;
+        config_client.link_sys().set_grpc_client(client.clone()).await;
+        config_client.services().set_grpc_client(client.clone()).await;
+        config_client.endpoint_slices().set_grpc_client(client.clone()).await;
+        config_client.edgion_tls().set_grpc_client(client.clone()).await;
+        config_client.edgion_plugins().set_grpc_client(client.clone()).await;
+        config_client.plugin_metadata().set_grpc_client(client.clone()).await;
+        // config_client.secrets().set_grpc_client(client.clone()).await;
+
+        Ok(Self {
+            config_client,
+            conf_client_handle: client,
+        })
     }
 
     /// Get a reference to the ConfigHub
