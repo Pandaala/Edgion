@@ -1,343 +1,204 @@
-//! Cache-friendly frozen IPv6 radix tree implementation
-//!
-//! This module provides the flattened, cache-optimized tree structure for fast IPv6 lookups.
+//! Types for IP radix matching
 
-use super::builder_v6::IpV6BuildNode;
 use super::error::IpRadixError;
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 
-/// A flattened node optimized for cache performance
-///
-/// Binary radix tree node with two children (left=0, right=1).
-/// Identical structure to IPv4, but operates on 128-bit addresses.
-#[repr(C, align(8))]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct FlatIpV6Node {
-    /// Index of left child in nodes array (0 if none)
-    pub(crate) left_index: u32,
-
-    /// Index of right child in nodes array (0 if none)
-    pub(crate) right_index: u32,
-
-    /// Prefix length at this node (0 if not a terminal)
-    pub(crate) prefix_len: u8,
-
-    /// Flags: bit 0 = has_value, bit 1 = value (0=deny, 1=allow)
-    pub(crate) flags: u8,
-
-    /// Padding for alignment
-    _padding: [u8; 2],
+/// Represents a CIDR (Classless Inter-Domain Routing) notation
+/// 
+/// Supports both IPv4 and IPv6 CIDR notations:
+/// - IPv4: "192.168.1.0/24", "10.0.0.0/8"
+/// - IPv6: "2001:db8::/32", "fe80::/10"
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IpCidr {
+    /// IPv4 CIDR with 32-bit address and prefix length (0-32)
+    V4 {
+        /// The IPv4 address as u32 (network byte order)
+        addr: u32,
+        /// The prefix length (0-32)
+        prefix_len: u8,
+    },
+    /// IPv6 CIDR with 128-bit address and prefix length (0-128)
+    V6 {
+        /// The IPv6 address as u128 (network byte order)
+        addr: u128,
+        /// The prefix length (0-128)
+        prefix_len: u8,
+    },
 }
 
-impl FlatIpV6Node {
-    /// Check if this node has a value
-    #[inline]
-    fn has_value(&self) -> bool {
-        (self.flags & 0x01) != 0
-    }
-
-    /// Get the value (true=allow, false=deny)
-    /// Only valid if has_value() returns true
-    #[inline]
-    fn get_value(&self) -> bool {
-        (self.flags & 0x02) != 0
-    }
-}
-
-/// A cache-friendly, immutable IPv6 radix tree for fast IP matching
-///
-/// This structure uses contiguous memory layout for optimal cache performance.
-/// All nodes are stored in a single Vec, eliminating pointer chasing.
-#[derive(Debug, Clone)]
-pub struct FrozenIpV6RadixTree {
-    /// Flat array of all nodes (root is always at index 0)
-    nodes: Vec<FlatIpV6Node>,
-}
-
-impl FrozenIpV6RadixTree {
-    /// Creates a frozen tree from a build tree
-    pub(crate) fn from_builder(root: IpV6BuildNode) -> Result<Self, IpRadixError> {
-        // Pre-calculate node count
-        let node_count = count_nodes(&root);
-
-        // Check node count doesn't exceed u32::MAX
-        if node_count > u32::MAX as usize {
-            return Err(IpRadixError::TooManyNodes {
-                count: node_count,
-                max: u32::MAX as usize,
-            });
-        }
-
-        let mut builder = FlatTreeBuilder::with_capacity(node_count);
-        builder.flatten_node(&root)?;
-        Ok(builder.build())
-    }
-
-    /// Matches an IPv6 address and returns the matching rule (if any)
-    ///
-    /// Uses longest prefix matching: returns the most specific rule that matches.
-    ///
-    /// # Arguments
-    /// * `ip` - IPv6 address as u128 (network byte order)
-    ///
-    /// # Returns
-    /// * `Some(true)` - IP is explicitly allowed
-    /// * `Some(false)` - IP is explicitly denied
-    /// * `None` - No matching rule
-    ///
+impl IpCidr {
+    /// Parse a CIDR string into IpCidr
+    /// 
     /// # Examples
     /// ```
-    /// use edgion::core::routes::http_routes::ip_radix_match::builder_v6::IpV6RadixBuilder;
-    /// use std::net::Ipv6Addr;
-    ///
-    /// let mut builder = IpV6RadixBuilder::new();
-    /// builder.insert("2001:db8::/32", true).unwrap();
-    /// builder.insert("2001:db8::1/128", false).unwrap();
-    ///
-    /// let tree = builder.freeze().unwrap();
-    ///
-    /// let ip1: u128 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2).into();
-    /// assert_eq!(tree.match_ip(ip1), Some(true));  // Matched by /32
-    ///
-    /// let ip2: u128 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1).into();
-    /// assert_eq!(tree.match_ip(ip2), Some(false)); // Matched by /128 (more specific)
-    ///
-    /// let ip3: u128 = Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 1).into();
-    /// assert_eq!(tree.match_ip(ip3), None);        // No match
+    /// use edgion::core::routes::http_routes::ip_radix_match::types::IpCidr;
+    /// 
+    /// let cidr_v4 = IpCidr::parse("192.168.1.0/24").unwrap();
+    /// let cidr_v6 = IpCidr::parse("2001:db8::/32").unwrap();
     /// ```
-    pub fn match_ip(&self, ip: u128) -> Option<bool> {
-        if self.nodes.is_empty() {
-            return None;
-        }
-
-        let mut node_idx = 0; // Start at root
-        let mut last_match: Option<bool> = None;
-        let mut current_bit = 0;
-
-        loop {
-            let node = &self.nodes[node_idx];
-
-            // If this node has a value, record it (longest prefix so far)
-            if node.has_value() {
-                last_match = Some(node.get_value());
-            }
-
-            // Check if we've consumed all 128 bits
-            if current_bit >= 128 {
-                break;
-            }
-
-            // Get next bit (from left/MSB to right/LSB)
-            let bit = (ip >> (127 - current_bit)) & 1;
-
-            // Traverse to child based on bit value
-            let next_idx = if bit == 0 {
-                node.left_index
-            } else {
-                node.right_index
-            };
-
-            if next_idx == 0 {
-                // No child, stop here
-                break;
-            }
-
-            node_idx = next_idx as usize;
-            current_bit += 1;
-        }
-
-        last_match
-    }
-
-    /// Convenience method to match an Ipv6Addr
-    pub fn match_ipv6(&self, ip: Ipv6Addr) -> Option<bool> {
-        self.match_ip(u128::from(ip))
-    }
-
-    /// Returns the number of nodes in the tree
-    pub fn node_count(&self) -> usize {
-        self.nodes.len()
-    }
-
-    /// Returns statistics about the frozen tree
-    pub fn stats(&self) -> TreeStats {
-        TreeStats {
-            node_count: self.nodes.len(),
-            total_bytes: self.nodes.len() * std::mem::size_of::<FlatIpV6Node>(),
-        }
-    }
-}
-
-/// Statistics about a frozen tree
-#[derive(Debug, Clone, Copy)]
-pub struct TreeStats {
-    /// Number of nodes in the tree
-    pub node_count: usize,
-
-    /// Total memory usage in bytes
-    pub total_bytes: usize,
-}
-
-/// Recursively count nodes in the build tree
-fn count_nodes(node: &IpV6BuildNode) -> usize {
-    let mut count = 1;
-
-    if let Some(ref left) = node.left {
-        count += count_nodes(left);
-    }
-
-    if let Some(ref right) = node.right {
-        count += count_nodes(right);
-    }
-
-    count
-}
-
-/// Helper for building a flat tree from a build tree
-struct FlatTreeBuilder {
-    nodes: Vec<FlatIpV6Node>,
-}
-
-impl FlatTreeBuilder {
-    fn with_capacity(capacity: usize) -> Self {
-        Self {
-            nodes: Vec::with_capacity(capacity),
-        }
-    }
-
-    /// Recursively flattens a build node and its children
-    /// Returns the index of the flattened node
-    fn flatten_node(&mut self, node: &IpV6BuildNode) -> Result<u32, IpRadixError> {
-        // Check node index won't overflow
-        if self.nodes.len() >= u32::MAX as usize {
-            return Err(IpRadixError::TooManyNodes {
-                count: self.nodes.len() + 1,
-                max: u32::MAX as usize,
+    pub fn parse(cidr_str: &str) -> Result<Self, IpRadixError> {
+        // Split by '/'
+        let parts: Vec<&str> = cidr_str.split('/').collect();
+        
+        if parts.len() != 2 {
+            return Err(IpRadixError::InvalidCidr {
+                input: cidr_str.to_string(),
+                reason: "CIDR must be in format 'address/prefix_len'".to_string(),
             });
         }
 
-        // Reserve space for this node
-        let node_idx = self.nodes.len();
+        let ip_str = parts[0];
+        let prefix_str = parts[1];
 
-        // Create temporary node (will be updated with child indices)
-        self.nodes.push(FlatIpV6Node {
-            left_index: 0,
-            right_index: 0,
-            prefix_len: node.prefix_len,
-            flags: encode_flags(node.value),
-            _padding: [0; 2],
-        });
+        // Parse prefix length
+        let prefix_len = prefix_str.parse::<u8>().map_err(|e| IpRadixError::InvalidCidr {
+            input: cidr_str.to_string(),
+            reason: format!("invalid prefix length: {}", e),
+        })?;
 
-        // Recursively flatten children
-        let left_idx = if let Some(ref left) = node.left {
-            self.flatten_node(left)?
-        } else {
-            0
-        };
+        // Parse IP address
+        let ip = IpAddr::from_str(ip_str).map_err(|e| IpRadixError::InvalidIpAddress {
+            input: ip_str.to_string(),
+            error: e.to_string(),
+        })?;
 
-        let right_idx = if let Some(ref right) = node.right {
-            self.flatten_node(right)?
-        } else {
-            0
-        };
-
-        // Update node with child indices
-        self.nodes[node_idx].left_index = left_idx;
-        self.nodes[node_idx].right_index = right_idx;
-
-        Ok(node_idx as u32)
+        match ip {
+            IpAddr::V4(ipv4) => {
+                if prefix_len > 32 {
+                    return Err(IpRadixError::PrefixTooLong {
+                        prefix_len,
+                        max: 32,
+                    });
+                }
+                
+                let addr = u32::from(ipv4);
+                
+                // Normalize: zero out bits beyond prefix length
+                let normalized_addr = if prefix_len == 0 {
+                    0
+                } else if prefix_len >= 32 {
+                    addr
+                } else {
+                    let mask = !0u32 << (32 - prefix_len);
+                    addr & mask
+                };
+                
+                Ok(IpCidr::V4 {
+                    addr: normalized_addr,
+                    prefix_len,
+                })
+            }
+            IpAddr::V6(ipv6) => {
+                if prefix_len > 128 {
+                    return Err(IpRadixError::PrefixTooLong {
+                        prefix_len,
+                        max: 128,
+                    });
+                }
+                
+                let addr = u128::from(ipv6);
+                
+                // Normalize: zero out bits beyond prefix length
+                let normalized_addr = if prefix_len == 0 {
+                    0
+                } else if prefix_len >= 128 {
+                    addr
+                } else {
+                    let mask = !0u128 << (128 - prefix_len);
+                    addr & mask
+                };
+                
+                Ok(IpCidr::V6 {
+                    addr: normalized_addr,
+                    prefix_len,
+                })
+            }
+        }
     }
 
-    fn build(self) -> FrozenIpV6RadixTree {
-        FrozenIpV6RadixTree { nodes: self.nodes }
+    /// Returns true if this is an IPv4 CIDR
+    pub fn is_v4(&self) -> bool {
+        matches!(self, IpCidr::V4 { .. })
+    }
+
+    /// Returns true if this is an IPv6 CIDR
+    pub fn is_v6(&self) -> bool {
+        matches!(self, IpCidr::V6 { .. })
+    }
+
+    /// Get the prefix length
+    pub fn prefix_len(&self) -> u8 {
+        match self {
+            IpCidr::V4 { prefix_len, .. } => *prefix_len,
+            IpCidr::V6 { prefix_len, .. } => *prefix_len,
+        }
     }
 }
 
-/// Encode value into flags byte
-/// Bit 0: has_value (1 if Some, 0 if None)
-/// Bit 1: value (1 if true/allow, 0 if false/deny)
-fn encode_flags(value: Option<bool>) -> u8 {
-    match value {
-        Some(true) => 0x03,  // has_value=1, value=1
-        Some(false) => 0x01, // has_value=1, value=0
-        None => 0x00,        // has_value=0
-    }
+/// Convert u32 to Ipv4Addr for display purposes
+pub fn u32_to_ipv4(addr: u32) -> Ipv4Addr {
+    Ipv4Addr::from(addr)
+}
+
+/// Convert u128 to Ipv6Addr for display purposes
+pub fn u128_to_ipv6(addr: u128) -> Ipv6Addr {
+    Ipv6Addr::from(addr)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::routes::http_routes::ip_radix_match::builder_v6::IpV6RadixBuilder;
 
     #[test]
-    fn test_encode_flags() {
-        assert_eq!(encode_flags(Some(true)), 0x03);
-        assert_eq!(encode_flags(Some(false)), 0x01);
-        assert_eq!(encode_flags(None), 0x00);
+    fn test_parse_ipv4_cidr() {
+        let cidr = IpCidr::parse("192.168.1.0/24").unwrap();
+        match cidr {
+            IpCidr::V4 { addr, prefix_len } => {
+                assert_eq!(prefix_len, 24);
+                assert_eq!(u32_to_ipv4(addr).to_string(), "192.168.1.0");
+            }
+            _ => panic!("Expected IPv4 CIDR"),
+        }
     }
 
     #[test]
-    fn test_basic_match() {
-        let mut builder = IpV6RadixBuilder::new();
-        builder.insert("2001:db8::/32", true).unwrap();
-        let tree = builder.freeze().unwrap();
-
-        let ip_match: u128 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1).into();
-        let ip_no_match: u128 = Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 1).into();
-
-        assert_eq!(tree.match_ip(ip_match), Some(true));
-        assert_eq!(tree.match_ip(ip_no_match), None);
+    fn test_parse_ipv6_cidr() {
+        let cidr = IpCidr::parse("2001:db8::/32").unwrap();
+        match cidr {
+            IpCidr::V6 { addr, prefix_len } => {
+                assert_eq!(prefix_len, 32);
+                assert_eq!(u128_to_ipv6(addr).to_string(), "2001:db8::");
+            }
+            _ => panic!("Expected IPv6 CIDR"),
+        }
     }
 
     #[test]
-    fn test_longest_prefix_match() {
-        let mut builder = IpV6RadixBuilder::new();
-        builder.insert("2001:db8::/32", true).unwrap();
-        builder.insert("2001:db8:1::/48", false).unwrap();
-        builder.insert("2001:db8:1:2::/64", true).unwrap();
-        let tree = builder.freeze().unwrap();
-
-        // Should match /64 (most specific)
-        let ip1: u128 = Ipv6Addr::new(0x2001, 0xdb8, 1, 2, 0, 0, 0, 1).into();
-        assert_eq!(tree.match_ip(ip1), Some(true));
-
-        // Should match /48
-        let ip2: u128 = Ipv6Addr::new(0x2001, 0xdb8, 1, 3, 0, 0, 0, 1).into();
-        assert_eq!(tree.match_ip(ip2), Some(false));
-
-        // Should match /32
-        let ip3: u128 = Ipv6Addr::new(0x2001, 0xdb8, 2, 0, 0, 0, 0, 1).into();
-        assert_eq!(tree.match_ip(ip3), Some(true));
-
-        // No match
-        let ip4: u128 = Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 1).into();
-        assert_eq!(tree.match_ip(ip4), None);
+    fn test_normalize_ipv4() {
+        // 192.168.1.100/24 should normalize to 192.168.1.0/24
+        let cidr = IpCidr::parse("192.168.1.100/24").unwrap();
+        match cidr {
+            IpCidr::V4 { addr, prefix_len } => {
+                assert_eq!(prefix_len, 24);
+                assert_eq!(u32_to_ipv4(addr).to_string(), "192.168.1.0");
+            }
+            _ => panic!("Expected IPv4 CIDR"),
+        }
     }
 
     #[test]
-    fn test_host_route() {
-        let mut builder = IpV6RadixBuilder::new();
-        builder.insert("2001:db8::1/128", false).unwrap();
-        let tree = builder.freeze().unwrap();
-
-        let ip_exact: u128 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1).into();
-        let ip_neighbor: u128 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2).into();
-
-        assert_eq!(tree.match_ip(ip_exact), Some(false));
-        assert_eq!(tree.match_ip(ip_neighbor), None);
+    fn test_invalid_cidr_format() {
+        let result = IpCidr::parse("192.168.1.0");
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_default_route() {
-        let mut builder = IpV6RadixBuilder::new();
-        builder.insert("::/0", true).unwrap();
-        let tree = builder.freeze().unwrap();
-
-        // Should match any IPv6
-        let ip1: u128 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1).into();
-        let ip2: u128 = Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff).into();
-
-        assert_eq!(tree.match_ip(ip1), Some(true));
-        assert_eq!(tree.match_ip(ip2), Some(true));
+    fn test_prefix_too_long() {
+        let result = IpCidr::parse("192.168.1.0/33");
+        assert!(matches!(
+            result,
+            Err(IpRadixError::PrefixTooLong { prefix_len: 33, max: 32 })
+        ));
     }
 }
