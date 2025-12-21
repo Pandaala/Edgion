@@ -29,7 +29,7 @@ impl GrpcTlsTestSuite {
                 let grpc_url = format!("https://127.0.0.1:{}", ctx.grpc_https_port);
                 
                 // 读取 CA 证书
-                let ca_pem = match std::fs::read_to_string("examples/testing/runtime/certs/ca.pem") {
+                let ca_pem = match std::fs::read_to_string("examples/testing/certs/ca.pem") {
                     Ok(pem) => pem,
                     Err(e) => {
                         return TestResult::failed(
@@ -41,7 +41,7 @@ impl GrpcTlsTestSuite {
                 
                 let ca = Certificate::from_pem(ca_pem);
                 
-                // 配置 TLS - 使用 grpc_host 作为 domain_name
+                // 配置 TLS - 使用 CA 证书和 domain_name
                 let domain_name = ctx.grpc_host.as_deref().unwrap_or("localhost");
                 let tls = ClientTlsConfig::new()
                     .ca_certificate(ca)
@@ -49,7 +49,21 @@ impl GrpcTlsTestSuite {
                 
                 // 创建 Channel
                 let channel = match Channel::from_shared(grpc_url.clone()) {
-                    Ok(endpoint) => {
+                    Ok(mut endpoint) => {
+                        // Gateway 模式：设置 origin 来控制 :authority 伪头部
+                        if let Some(ref host) = ctx.grpc_host {
+                            let origin_uri = match format!("https://{}:{}", host, ctx.grpc_https_port).parse() {
+                                Ok(uri) => uri,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Invalid origin URI: {}", e)
+                                    );
+                                }
+                            };
+                            endpoint = endpoint.origin(origin_uri);
+                        }
+                        
                         match endpoint.tls_config(tls) {
                             Ok(ep) => {
                                 match ep.connect().await {

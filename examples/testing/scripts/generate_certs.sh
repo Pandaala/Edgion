@@ -35,6 +35,10 @@ trap "rm -rf $TEMP_DIR; echo_info 'Temporary certificate files cleaned up'" EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONF_DIR="$PROJECT_ROOT/examples/conf"
+CERTS_DIR="$PROJECT_ROOT/examples/testing/certs"
+
+# Create certs directory
+mkdir -p "$CERTS_DIR"
 
 # Check if Secret file already exists
 if [ -f "$CONF_DIR/Secret_edge_edge-tls.yaml" ]; then
@@ -110,12 +114,25 @@ create_secret_yaml \
     "$TEMP_DIR/edge-tls.key" \
     "$CONF_DIR/Secret_edge_edge-tls.yaml"
 
+# Copy certificate to certs directory for client testing
+echo_info "Copying certificate to certs directory for client testing..."
+cp "$TEMP_DIR/edge-tls.crt" "$CERTS_DIR/ca.pem"
+if [ $? -eq 0 ]; then
+    echo_info "✓ Certificate copied to: $CERTS_DIR/ca.pem"
+else
+    echo_error "Failed to copy certificate to certs directory"
+    exit 1
+fi
+
 echo ""
 echo_info "=========================================="
 echo_info "Certificate generation completed!"
 echo_info "=========================================="
 echo_info "Generated Secret YAML file:"
 echo_info "  - $CONF_DIR/Secret_edge_edge-tls.yaml"
+echo_info ""
+echo_info "Certificate for client testing:"
+echo_info "  - $CERTS_DIR/ca.pem"
 echo_info ""
 echo_info "Certificate includes domains:"
 echo_info "  - test.example.com (HTTPS)"

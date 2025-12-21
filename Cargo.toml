@@ -76,7 +76,9 @@ k8s-openapi = { version = "0.26.0", features = ["latest", "schemars"] }
 schemars = { version = "1" }
 
 # gRPC (config sync)
-tonic = { version = "0.12", features = ["tls"] }
+tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
+# rustls 加密后端（tonic TLS 需要）
+rustls = { version = "0.23", features = ["ring"] }
 tonic-reflection = "0.12"
 prost = "0.13"
 

@@ -13,6 +13,9 @@ use clap::{Parser, Subcommand};
 use framework::{TestContext, TestRunner};
 use reporter::{ConsoleReporter, JsonReporter};
 use std::time::Instant;
+use std::sync::Once;
+
+static INIT: Once = Once::new();
 
 #[derive(Parser, Debug)]
 #[command(name = "test-client")]
@@ -72,6 +75,13 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 初始化 rustls（仅一次）
+    INIT.call_once(|| {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("Failed to install rustls crypto provider");
+    });
+    
     let cli = Cli::parse();
     
     if cli.verbose {
