@@ -2,7 +2,7 @@ pub mod lb;
 pub mod cli;
 pub mod conf_load;
 pub mod conf_sync;
-pub mod host_match;
+pub mod matcher;
 pub mod filters;
 pub mod plugins;
 pub mod routes;

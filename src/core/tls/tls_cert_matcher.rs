@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::core::host_match::HashHost;
+use crate::core::matcher::HashHost;
 use crate::types::err::EdError;
 use crate::types::EdgionTls;
 use anyhow::Result;
