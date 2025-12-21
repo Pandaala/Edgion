@@ -30,6 +30,15 @@ spec:
         - name: test-http
           port: 30001
 
+    # 规则2.5: Headers 端点（精确匹配）- 用于 Real IP 测试
+    - matches:
+        - path:
+            type: Exact
+            value: /headers
+      backendRefs:
+        - name: test-http
+          port: 30001
+
     # 规则3: Status 端点（前缀匹配）
     - matches:
         - path:

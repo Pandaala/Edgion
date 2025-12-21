@@ -63,6 +63,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    // proto test
     Http,
     Https,
     Grpc,
@@ -70,6 +71,9 @@ enum Commands {
     Websocket,
     Tcp,
     Udp,
+
+    // function test
+    RealIp,
     All,
 }
 
@@ -175,6 +179,13 @@ async fn main() -> Result<()> {
         Commands::Udp => {
             runner.add_suite(Box::new(suites::UdpTestSuite));
         }
+        Commands::RealIp => {
+            if !cli.gateway {
+                eprintln!("Error: Real IP tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RealIpTestSuite));
+        }
         Commands::All => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
             runner.add_suite(Box::new(suites::GrpcTestSuite));
@@ -184,6 +195,7 @@ async fn main() -> Result<()> {
             if cli.gateway {
                 runner.add_suite(Box::new(suites::HttpsTestSuite));
                 runner.add_suite(Box::new(suites::GrpcTlsTestSuite));
+                runner.add_suite(Box::new(suites::RealIpTestSuite));
             }
         }
     }

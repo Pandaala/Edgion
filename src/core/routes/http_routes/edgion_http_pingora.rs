@@ -146,6 +146,15 @@ fn append_x_forwarded_for(session: &mut Session, ctx: &EdgionHttpContext) {
     }
 }
 
+/// Set X-Real-IP header with extracted remote_addr (inline for performance)
+///
+/// This header contains the real client IP address after trusted proxy extraction.
+#[inline]
+fn set_x_real_ip(session: &mut Session, ctx: &EdgionHttpContext) {
+    let req_header_mut = session.req_header_mut();
+    let _ = req_header_mut.insert_header("X-Real-IP", &ctx.request_info.remote_addr);
+}
+
 #[async_trait]
 impl ProxyHttp for EdgionHttp {
     type CTX = EdgionHttpContext;
@@ -263,6 +272,9 @@ impl ProxyHttp for EdgionHttp {
             }
         }
         
+        // Set X-Real-IP header with extracted remote_addr
+        set_x_real_ip(session, ctx);
+        
         // Append client_addr IP to X-Forwarded-For header
         // This is done after all plugin processing but before forwarding to upstream
         append_x_forwarded_for(session, ctx);
@@ -270,7 +282,7 @@ impl ProxyHttp for EdgionHttp {
         Ok(false)
     }
 
-    async fn early_request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<()>
+    async fn early_request_filter(&self, session: &mut Session, _ctx: &mut Self::CTX) -> pingora_core::Result<()>
     where
         Self::CTX: Send + Sync,
     {

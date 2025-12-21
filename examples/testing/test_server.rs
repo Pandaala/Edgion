@@ -124,6 +124,7 @@ async fn start_http_server(port: u16) -> Result<()> {
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/echo", get(echo_handler).post(echo_post_handler))
+        .route("/headers", get(headers_handler))
         .route("/status/{code}", get(status_handler))
         .route("/delay/{seconds}", get(delay_handler))
         .route("/{*path}", get(catch_all_handler))
@@ -166,6 +167,44 @@ async fn echo_post_handler(
     body: String,
 ) -> impl IntoResponse {
     format!("Server: {}\nEcho: {}", server_addr, body)
+}
+
+async fn headers_handler(
+    req: AxumRequest<Body>,
+) -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+    
+    let headers = req.headers();
+    let mut headers_map = serde_json::Map::new();
+    
+    // X-Real-IP
+    if let Some(real_ip) = headers.get("x-real-ip") {
+        if let Ok(val) = real_ip.to_str() {
+            headers_map.insert("x-real-ip".to_string(), json!(val));
+        }
+    }
+    
+    // X-Forwarded-For
+    if let Some(xff) = headers.get("x-forwarded-for") {
+        if let Ok(val) = xff.to_str() {
+            headers_map.insert("x-forwarded-for".to_string(), json!(val));
+        }
+    }
+    
+    // X-Trace-ID
+    if let Some(trace_id) = headers.get("x-trace-id") {
+        if let Ok(val) = trace_id.to_str() {
+            headers_map.insert("x-trace-id".to_string(), json!(val));
+        }
+    }
+    
+    let response = json!({
+        "headers": headers_map
+    });
+    
+    (StatusCode::OK, Json(response))
 }
 
 async fn status_handler(
