@@ -54,14 +54,14 @@ fi
 echo_info "Generating TLS certificates for Edgion Gateway testing..."
 echo_info "Temporary directory: $TEMP_DIR"
 
-# Generate single certificate with multiple SANs (test.example.com + grpc.example.com)
-echo_info "Generating certificate with multiple domains (test.example.com, grpc.example.com)..."
+# Generate single certificate with multiple SANs
+echo_info "Generating certificate with multiple domains (test.example.com, grpc.example.com, tcp.example.com)..."
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout "$TEMP_DIR/edge-tls.key" \
   -out "$TEMP_DIR/edge-tls.crt" \
   -days 365 \
   -subj "/CN=test.example.com" \
-  -addext "subjectAltName=DNS:test.example.com,DNS:grpc.example.com" \
+  -addext "subjectAltName=DNS:test.example.com,DNS:grpc.example.com,DNS:tcp.example.com" \
   2>/dev/null
 
 if [ $? -eq 0 ]; then
@@ -137,6 +137,7 @@ echo_info ""
 echo_info "Certificate includes domains:"
 echo_info "  - test.example.com (HTTPS)"
 echo_info "  - grpc.example.com (gRPC-HTTPS)"
+echo_info "  - tcp.example.com (TLS Terminate to TCP)"
 echo ""
 echo_warning "Note: Secret file is gitignored and should not be committed."
 echo_info "Temporary certificates in $TEMP_DIR will be automatically cleaned up."

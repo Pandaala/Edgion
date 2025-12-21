@@ -97,10 +97,12 @@ cargo run --example test_client -- [OPTIONS] <COMMAND>
 # 命令
   http          # HTTP 测试
   grpc          # gRPC 测试
+  grpc-tls      # gRPC-TLS 测试（仅 Gateway 模式）
   tcp           # TCP 测试
   udp           # UDP 测试
   websocket     # WebSocket 测试
   https         # HTTPS 测试（仅 Gateway 模式）
+  tls-tcp       # TLS Terminate to TCP 测试（仅 Gateway 模式）
   all           # 运行所有测试
 ```
 
@@ -139,6 +141,12 @@ cargo run --example test_client -- -g websocket # WebSocket (10080)
 
 # HTTPS 测试（仅 Gateway 模式）
 cargo run --example test_client -- -g https     # HTTPS (10443)
+
+# gRPC-TLS 测试（仅 Gateway 模式）
+cargo run --example test_client -- -g grpc-tls  # gRPC over TLS (18443)
+
+# TLS Terminate to TCP 测试（仅 Gateway 模式）
+cargo run --example test_client -- -g tls-tcp   # TLS terminate (19001)
 
 # Gateway 模式 + 详细输出
 cargo run --example test_client -- -g --verbose http
@@ -289,11 +297,12 @@ echo "Hello WebSocket" | websocat ws://localhost:30005/ws  # Direct
 | 协议 | 端口 | 说明 |
 |------|------|------|
 | HTTP | 10080 | HTTP 网关 |
-| HTTPS | 10443 | HTTPS 网关（TLS termination）|
-| gRPC | 10080 | gRPC 网关（HTTP/2）|
-| gRPC-HTTPS | 18443 | gRPC 网关（HTTPS/HTTP/2，手动测试）|
+| HTTPS | 10443 | HTTPS 网关（需要 TLS 证书）|
+| gRPC (HTTP) | 10080 | gRPC over HTTP/2 |
+| gRPC (HTTPS) | 18443 | gRPC over TLS |
 | TCP | 19000 | TCP 代理 |
 | UDP | 19002 | UDP 代理 |
+| TLS Terminate | 19001 | TLS 终结到 TCP 后端 |
 
 ### Controller 端口
 
@@ -330,8 +339,10 @@ cd examples/testing
 - 支持多个域名（SAN）：
   - `test.example.com`（HTTPS 测试）
   - `grpc.example.com`（gRPC-HTTPS 测试）
+  - `tcp.example.com`（TLS Terminate to TCP 测试）
 - 临时文件自动清理（`/tmp/edgion-certs-$$`）
 - Secret YAML 被 `.gitignore` 忽略
+- 客户端测试证书：`examples/testing/certs/ca.pem`（自动生成）
 
 ### 生成的资源
 
@@ -339,7 +350,85 @@ cd examples/testing
 examples/conf/
 ├── Secret_edge_edge-tls.yaml     # TLS 证书 Secret
 └── EdgionTls_edge_edge-tls.yaml  # TLS 证书配置
+
+examples/testing/certs/
+└── ca.pem                         # 客户端测试用 CA 证书
 ```
+
+---
+
+## TLS Terminate to TCP 测试
+
+这是一个特殊的测试场景，用于验证 Gateway 的 TLS 终结功能：
+
+**流程**：客户端 TLS → Gateway（终结 TLS）→ 后端 TCP（明文）
+
+### 配置文件
+
+```yaml
+# Gateway 配置（使用 annotation 扩展）
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tls-terminate-gateway
+  namespace: edge
+  annotations:
+    edgion.io/backend-protocol: tcp  # 指示后端使用 TCP
+spec:
+  listeners:
+    - name: tls-terminate-tcp
+      protocol: TLS
+      port: 19001
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+
+# TLSRoute 配置（基于 SNI 路由）
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: test-tls-tcp
+  namespace: edge
+spec:
+  parentRefs:
+    - name: tls-terminate-gateway
+      sectionName: tls-terminate-tcp
+  hostnames:
+    - "tcp.example.com"  # SNI hostname
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+```
+
+### 测试命令
+
+```bash
+# 使用 test_client（推荐）
+cargo run --example test_client -- -g tls-tcp
+
+# 手动测试（使用 openssl）
+(echo "TLS-TCP-TEST"; sleep 0.5) | \
+  openssl s_client -connect 127.0.0.1:19001 \
+  -servername tcp.example.com \
+  -CAfile examples/testing/certs/ca.pem \
+  -quiet 2>/dev/null
+```
+
+### 验证点
+
+1. ✅ TLS 握手成功（使用正确的 SNI: tcp.example.com）
+2. ✅ Gateway 正确终结 TLS
+3. ✅ 后端收到明文 TCP 数据
+4. ✅ Echo 响应能正确返回到客户端（通过 TLS 加密）
+
+### 使用场景
+
+- 数据库代理（如 MySQL、PostgreSQL）
+- Redis TLS 前端
+- 自定义协议的 TLS offloading
+- 需要在 Gateway 层检查/修改流量的场景
 
 ---
 
