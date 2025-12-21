@@ -121,6 +121,11 @@ impl GatewayBase {
             let gateway_namespace = gateway.metadata.namespace.clone();
             let gateway_name = gateway.name_any();
 
+            // Extract gateway annotations (convert BTreeMap to HashMap)
+            let gateway_annotations = gateway.metadata.annotations.clone()
+                .map(|btree| btree.into_iter().collect::<std::collections::HashMap<_, _>>())
+                .unwrap_or_default();
+
             // Process listeners
             if let Some(listeners) = &gateway.spec.listeners {
                 tracing::info!(
@@ -162,6 +167,7 @@ impl GatewayBase {
                         edgion_gateway_config: Arc::new(self.base_conf.edgion_gateway_config().clone()),
                         server_conf: server_conf.clone(),
                         enable_http2,
+                        gateway_annotations: gateway_annotations.clone(),
                     };
                     
                     // Dispatch to appropriate listener builder based on protocol

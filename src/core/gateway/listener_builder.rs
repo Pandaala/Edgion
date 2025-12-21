@@ -22,6 +22,10 @@ use crate::types::resources::gateway::Listener;
 /// Default: "true" (enabled)
 pub const ANNOTATION_ENABLE_HTTP2: &str = "edgion.com/enable-http2";
 
+/// Annotation key to specify backend protocol for TLS listeners
+/// Set to "tcp" for TLS terminate to TCP backend
+pub const ANNOTATION_BACKEND_PROTOCOL: &str = "edgion.io/backend-protocol";
+
 /// Context passed to listener builders containing gateway-level information and listener config
 #[derive(Clone)]
 pub struct ListenerContext {
@@ -35,6 +39,8 @@ pub struct ListenerContext {
     pub server_conf: Arc<ServerConf>,
     /// Whether to enable HTTP/2 support (from Gateway annotation)
     pub enable_http2: bool,
+    /// Gateway annotations
+    pub gateway_annotations: std::collections::HashMap<String, String>,
 }
 
 /// Add an HTTP or HTTPS listener to the Pingora server
@@ -252,6 +258,72 @@ pub fn add_udp_listener(
     Ok(())
 }
 
+/// Add a TLS terminate to TCP listener to the Pingora server
+///
+/// This function creates a TLS listener that terminates TLS and forwards
+/// plain TCP traffic to backend services based on SNI routing.
+pub fn add_tls_terminate_to_tcp_listener(
+    server: &mut Server,
+    context: &ListenerContext,
+) -> Result<()> {
+    use pingora_core::services::listening::Service;
+    use pingora_core::listeners::Listeners;
+    use pingora_core::connectors::TransportConnector;
+    use crate::core::routes::tls_routes::EdgionTls;
+    use crate::core::routes::tls_routes::get_global_tls_route_manager;
+    use crate::core::tls::tls_pingora::TlsCallback;
+    
+    let listener_name = context.listener.name.clone();
+    let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
+    let addr = format!("{}:{}", host, context.listener.port);
+    let port = context.listener.port as u16;
+    
+    // Get TLS routes for this gateway
+    let tls_route_manager = get_global_tls_route_manager();
+    let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
+    let gateway_tls_routes = tls_route_manager.get_or_create_gateway_tls_routes(
+        namespace_str,
+        &context.gateway_name
+    );
+    
+    // Create EdgionTls service
+    let edgion_tls = EdgionTls {
+        gateway_name: context.gateway_name.clone(),
+        gateway_namespace: context.gateway_namespace.clone(),
+        listener_port: port,
+        gateway_tls_routes,
+        access_logger: context.access_logger.clone(),
+        edgion_gateway_config: context.edgion_gateway_config.clone(),
+        connector: TransportConnector::new(None),
+    };
+    
+    // Create TLS settings with callback for certificate loading
+    let tls_settings = TlsCallback::new_tls_settings_with_callback(false)?;
+    
+    // Create TLS service with Listeners
+    let mut tls_service = Service::with_listeners(
+        format!("TLS-TCP-{}", listener_name),
+        Listeners::tcp(&addr),
+        edgion_tls,
+    );
+    
+    // Add TLS settings to the service
+    tls_service.add_tls_with_settings(&addr, None, tls_settings);
+    
+    // Add to server
+    server.add_service(tls_service);
+    
+    tracing::info!(
+        gateway=%context.gateway_key,
+        listener=%listener_name,
+        addr=%addr,
+        protocol="TLS-TCP",
+        "Adding TLS terminate to TCP listener"
+    );
+    
+    Ok(())
+}
+
 /// Main entry point for adding a listener to the server
 ///
 /// This function dispatches to the appropriate listener builder based on the
@@ -272,6 +344,20 @@ pub fn add_listener(
         }
         "UDP" => {
             add_udp_listener(server, &context)
+        }
+        "TLS" => {
+            // Check Gateway annotation for backend protocol
+            let backend_protocol = context.gateway_annotations
+                .get(ANNOTATION_BACKEND_PROTOCOL)
+                .map(|s| s.as_str());
+            
+            match backend_protocol {
+                Some("tcp") => add_tls_terminate_to_tcp_listener(server, &context),
+                _ => anyhow::bail!(
+                    "TLS protocol requires '{}' annotation set to 'tcp'",
+                    ANNOTATION_BACKEND_PROTOCOL
+                ),
+            }
         }
         "GRPC" | "GRPCWeb"=> {
             // GRPC always requires HTTP/2

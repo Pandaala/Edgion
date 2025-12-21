@@ -66,6 +66,11 @@ impl ConfigClient {
         let grpc_route_handler = crate::core::routes::grpc_routes::create_grpc_route_handler();
         grpc_routes_cache.set_conf_processor(grpc_route_handler);
         
+        // Register TlsRouteManager as the handler for TLSRoute resources
+        let tls_routes_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let tls_route_handler = crate::core::routes::tls_routes::create_tls_route_handler();
+        tls_routes_cache.set_conf_processor(tls_route_handler);
+        
         // Register TlsStore as the handler for EdgionTls resources
         let edgion_tls_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
         let tls_handler = crate::core::tls::create_tls_handler();
@@ -78,7 +83,7 @@ impl ConfigClient {
             grpc_routes: grpc_routes_cache,
             tcp_routes: tcp_routes_cache,
             udp_routes: udp_routes_cache,
-            tls_routes: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            tls_routes: tls_routes_cache,
             link_sys: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,

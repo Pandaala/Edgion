@@ -2,6 +2,7 @@ pub mod http_routes;
 pub mod tcp_routes;
 pub mod udp_routes;
 pub mod grpc_routes;
+pub mod tls_routes;
 
 // Re-export commonly used types for convenience
 pub use http_routes::{
@@ -31,4 +32,11 @@ pub use grpc_routes::{
     get_global_grpc_route_manager,
     GrpcRouteManager,
     create_grpc_route_handler,
+};
+
+pub use tls_routes::{
+    get_global_tls_route_manager,
+    TlsRouteManager,
+    create_tls_route_handler,
+    EdgionTls,  // TLS proxy type
 };
