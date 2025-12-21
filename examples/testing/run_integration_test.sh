@@ -51,6 +51,60 @@ echo_error() {
     echo -e "${RED}[✗]${NC} $1"
 }
 
+# Wait for a service to be ready by checking if it's listening on a port
+# Usage: wait_for_port <port> <service_name> <pid_file> [timeout_seconds]
+wait_for_port() {
+    local port=$1
+    local service_name=$2
+    local pid_file=$3
+    local timeout=${4:-30}  # default 30s timeout
+    local elapsed=0
+    
+    echo_info "Waiting for $service_name (port $port)..."
+    while [ $elapsed -lt $timeout ]; do
+        # Check if process is still alive
+        if [ -f "$pid_file" ]; then
+            if ! kill -0 $(cat "$pid_file") 2>/dev/null; then
+                echo_error "$service_name process died unexpectedly"
+                return 1
+            fi
+        fi
+        
+        # Check if port is open
+        if nc -z 127.0.0.1 $port 2>/dev/null; then
+            echo_success "$service_name is ready (port $port)"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    
+    echo_error "$service_name failed to start within ${timeout}s"
+    return 1
+}
+
+# Check if HTTP endpoint is responding
+# Usage: wait_for_http <url> <service_name> [timeout_seconds]
+wait_for_http() {
+    local url=$1
+    local service_name=$2
+    local timeout=${3:-30}
+    local elapsed=0
+    
+    echo_info "Waiting for $service_name (HTTP check: $url)..."
+    while [ $elapsed -lt $timeout ]; do
+        if curl -sf -o /dev/null "$url" 2>/dev/null; then
+            echo_success "$service_name is ready (HTTP responding)"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    
+    echo_error "$service_name failed to start within ${timeout}s"
+    return 1
+}
+
 # 清理函数
 cleanup() {
     echo ""
@@ -83,6 +137,11 @@ echo "  Edgion Integration Test"
 echo "=========================================="
 echo ""
 
+# Check required tools
+if ! command -v nc &> /dev/null; then
+    echo_warn "netcat (nc) not found, will use alternative port checking"
+fi
+
 # 清理旧进程
 echo_info "Cleaning up old processes..."
 pkill -f edgion-controller 2>/dev/null && echo "         Stopped old controller" || true
@@ -113,54 +172,43 @@ echo_info "Starting test_server..."
 cd "$PROJECT_DIR"
 cargo run --example test_server > "$TEST_SERVER_LOG" 2>&1 &
 echo $! > "${PID_DIR}/test_server.pid"
-sleep 1
 
-if kill -0 $(cat "${PID_DIR}/test_server.pid") 2>/dev/null; then
-    echo_success "test_server started (PID: $(cat ${PID_DIR}/test_server.pid), ports: 30001-30004)"
-else
+# Wait for HTTP server (30001) to be ready
+wait_for_port 30001 "test_server HTTP" "${PID_DIR}/test_server.pid" 30 || {
     echo_error "Failed to start test_server"
     echo "         Log: $TEST_SERVER_LOG"
     echo "         Manual: cd $PROJECT_DIR && cargo run --example test_server"
     exit 1
-fi
+}
 
 # 2. 启动 edgion-controller
 echo_info "Starting edgion-controller (using default config)..."
 cargo run --bin edgion-controller > "$CONTROLLER_LOG" 2>&1 &
 echo $! > "${PID_DIR}/controller.pid"
-sleep 1
 
-if kill -0 $(cat "${PID_DIR}/controller.pid") 2>/dev/null; then
-    echo_success "edgion-controller started (PID: $(cat ${PID_DIR}/controller.pid))"
-else
-    echo_error "Failed to start controller"
+# Wait briefly and check if process is still alive
+sleep 2
+if ! kill -0 $(cat "${PID_DIR}/controller.pid") 2>/dev/null; then
+    echo_error "Controller process died immediately"
     echo "         Log: $CONTROLLER_LOG"
     echo "         Manual: cd $PROJECT_DIR && cargo run --bin edgion-controller"
     exit 1
 fi
+echo_success "edgion-controller started (PID: $(cat ${PID_DIR}/controller.pid))"
 
 # 3. 启动 edgion-gateway
 echo_info "Starting edgion-gateway (using default config)..."
 EDGION_ACCESS_LOG="$ACCESS_LOG" \
 cargo run --bin edgion-gateway > "$GATEWAY_LOG" 2>&1 &
 echo $! > "${PID_DIR}/gateway.pid"
-sleep 1
 
-if kill -0 $(cat "${PID_DIR}/gateway.pid") 2>/dev/null; then
-    echo_success "edgion-gateway started (PID: $(cat ${PID_DIR}/gateway.pid), port: 10080)"
-else
+# Wait for gateway to be ready
+wait_for_port 10080 "edgion-gateway" "${PID_DIR}/gateway.pid" 30 || {
     echo_error "Failed to start gateway"
     echo "         Log: $GATEWAY_LOG"
     echo "         Manual: cd $PROJECT_DIR && EDGION_ACCESS_LOG=$ACCESS_LOG cargo run --bin edgion-gateway"
     exit 1
-fi
-
-# 4. 等待服务完全启动
-echo ""
-echo_info "Waiting for services to be ready..."
-echo "         Sleeping 10 seconds..."
-sleep 10
-echo_success "Services are ready"
+}
 
 # 5. 运行测试
 echo ""
@@ -264,6 +312,15 @@ echo_info "Test 11: HTTPS Gateway mode (gateway:18443)"
 cargo run --example test_client -- -g https 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_HTTPS_RESULT=$?
 
+echo ""
+echo "---"
+echo ""
+
+# Gateway 模式 gRPC-TLS 测试
+echo_info "Test 12: gRPC-TLS Gateway mode (gateway:18443)"
+cargo run --example test_client -- -g grpc-tls 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_GRPC_TLS_RESULT=$?
+
 # 6. 显示结果
 echo ""
 echo "=========================================="
@@ -337,6 +394,12 @@ else
     echo_error "HTTPS Gateway mode: FAILED"
 fi
 
+if [ $GATEWAY_GRPC_TLS_RESULT -eq 0 ]; then
+    echo_success "gRPC-TLS Gateway mode: PASSED"
+else
+    echo_error "gRPC-TLS Gateway mode: FAILED"
+fi
+
 echo ""
 echo "=========================================="
 echo "  Logs"
@@ -364,7 +427,7 @@ if [ $DIRECT_HTTP_RESULT -eq 0 ] && [ $GATEWAY_HTTP_RESULT -eq 0 ] && \
    [ $DIRECT_TCP_RESULT -eq 0 ] && [ $GATEWAY_TCP_RESULT -eq 0 ] && \
    [ $DIRECT_UDP_RESULT -eq 0 ] && [ $GATEWAY_UDP_RESULT -eq 0 ] && \
    [ $DIRECT_WS_RESULT -eq 0 ] && [ $GATEWAY_WS_RESULT -eq 0 ] && \
-   [ $GATEWAY_HTTPS_RESULT -eq 0 ]; then
+   [ $GATEWAY_HTTPS_RESULT -eq 0 ] && [ $GATEWAY_GRPC_TLS_RESULT -eq 0 ]; then
     echo_success "All tests PASSED! ✨"
     exit 0
 else
