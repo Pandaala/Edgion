@@ -44,7 +44,7 @@ impl IpRadixMatcher {
     ///
     /// # Examples
     /// ```
-    /// use edgion::core::routes::http_routes::ip_radix_match::IpRadixMatcher;
+    /// use edgion::core::matcher::ip_radix_tree::IpRadixMatcher;
     /// use std::net::IpAddr;
     ///
     /// let mut builder = IpRadixMatcher::builder();
@@ -140,7 +140,7 @@ impl IpRadixMatcherBuilder {
     ///
     /// # Examples
     /// ```
-    /// use edgion::core::routes::http_routes::ip_radix_match::IpRadixMatcher;
+    /// use edgion::core::matcher::ip_radix_tree::IpRadixMatcher;
     ///
     /// let mut builder = IpRadixMatcher::builder();
     /// builder.insert("192.168.0.0/16", true).unwrap();

@@ -18,7 +18,7 @@
 //! For a unified matcher supporting both IPv4 and IPv6:
 //!
 //! ```
-//! use edgion::core::routes::http_routes::ip_radix_match::IpRadixMatcher;
+//! use edgion::core::matcher::ip_radix_tree::IpRadixMatcher;
 //! use std::net::IpAddr;
 //!
 //! let mut builder = IpRadixMatcher::builder();
@@ -46,7 +46,7 @@
 //! For IPv4-only matching:
 //!
 //! ```
-//! use edgion::core::routes::http_routes::ip_radix_match::IpV4RadixBuilder;
+//! use edgion::core::matcher::ip_radix_tree::IpV4RadixBuilder;
 //! use std::net::Ipv4Addr;
 //!
 //! let mut builder = IpV4RadixBuilder::new();
@@ -74,7 +74,7 @@
 //! When multiple rules match, the most specific (longest prefix) rule wins:
 //!
 //! ```
-//! use edgion::core::routes::http_routes::ip_radix_match::IpV4RadixBuilder;
+//! use edgion::core::matcher::ip_radix_tree::IpV4RadixBuilder;
 //! use std::net::Ipv4Addr;
 //!
 //! let mut builder = IpV4RadixBuilder::new();

@@ -87,7 +87,7 @@ impl FrozenIpV4RadixTree {
     ///
     /// # Examples
     /// ```
-    /// use edgion::core::routes::http_routes::ip_radix_match::builder_v4::IpV4RadixBuilder;
+    /// use edgion::core::matcher::ip_radix_tree::builder_v4::IpV4RadixBuilder;
     /// use std::net::Ipv4Addr;
     ///
     /// let mut builder = IpV4RadixBuilder::new();

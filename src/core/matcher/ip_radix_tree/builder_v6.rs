@@ -68,7 +68,7 @@ impl IpV6RadixBuilder {
     ///
     /// # Examples
     /// ```
-    /// use edgion::core::routes::http_routes::ip_radix_match::builder_v6::IpV6RadixBuilder;
+    /// use edgion::core::matcher::ip_radix_tree::builder_v6::IpV6RadixBuilder;
     ///
     /// let mut builder = IpV6RadixBuilder::new();
     /// builder.insert("2001:db8::/32", true).unwrap();
