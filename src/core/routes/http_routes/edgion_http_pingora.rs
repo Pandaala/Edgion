@@ -24,11 +24,38 @@ use crate::core::routes::grpc_routes::{
     run_grpc_route_plugins,
     handle_grpc_upstream,
 };
+use crate::core::routes::http_routes::extract_ip_string;
 
-/// Extract or generate trace_id and detect protocol from request headers (inline for performance)
+/// Build request metadata: client addresses, hostname, path, trace_id, and protocol detection (inline for performance)
 #[inline]
-fn extract_request_metadata(session: &Session, ctx: &mut EdgionHttpContext) {
+fn build_request_metadata(edgion_http: &EdgionHttp, session: &Session, ctx: &mut EdgionHttpContext) {
     let req_header = session.req_header();
+
+    // Extract client_addr (TCP connection address)
+    let client_addr_str = session.client_addr().map(|addr| addr.to_string()).unwrap_or_default();
+    ctx.request_info.client_addr = client_addr_str.clone();
+    
+    // Extract remote_addr (real client IP, considering trusted proxies)
+    ctx.request_info.remote_addr = if let Some(extractor) = &edgion_http.real_ip_extractor {
+        extractor.extract_real_ip(&client_addr_str, req_header)
+    } else {
+        // No extractor configured, use client_addr IP (without port)
+        extract_ip_string(&client_addr_str)
+    };
+
+    // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback)
+    // In HTTP/2, Pingora puts the hostname in the URI, not as a separate header
+    let hostname = req_header.uri.host()
+        .map(|h| h.to_string())
+        .or_else(|| req_header.headers.get("host").and_then(|h| h.to_str().ok().map(|s| s.to_string())))
+        .or_else(|| req_header.headers.get(":authority").and_then(|h| h.to_str().ok().map(|s| s.to_string())));
+    
+    if let Some(host) = hostname {
+        ctx.request_info.hostname = host;
+    }
+    
+    // Extract request path
+    ctx.request_info.path = req_header.uri.path().to_string();
 
     // Try to get X-Trace-Id from request headers, generate if not present
     ctx.request_info.x_trace_id = req_header
@@ -98,6 +125,27 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
     Ok(())
 }
 
+/// Append client IP to X-Forwarded-For header (inline for performance)
+///
+/// This function always appends the client IP to maintain the proxy chain,
+/// regardless of trusted proxy configuration.
+#[inline]
+fn append_x_forwarded_for(session: &mut Session, ctx: &EdgionHttpContext) {
+    let client_ip = extract_ip_string(&ctx.request_info.client_addr);
+    let req_header_mut = session.req_header_mut();
+    
+    if let Some(existing_xff) = req_header_mut.headers.get("X-Forwarded-For") {
+        // X-Forwarded-For exists, append client IP
+        if let Ok(existing_str) = existing_xff.to_str() {
+            let new_xff = format!("{}, {}", existing_str, client_ip);
+            let _ = req_header_mut.insert_header("X-Forwarded-For", &new_xff);
+        }
+    } else {
+        // X-Forwarded-For doesn't exist, create new
+        let _ = req_header_mut.insert_header("X-Forwarded-For", &client_ip);
+    }
+}
+
 #[async_trait]
 impl ProxyHttp for EdgionHttp {
     type CTX = EdgionHttpContext;
@@ -132,9 +180,7 @@ impl ProxyHttp for EdgionHttp {
         // gRPC-Web requires HTTP/2 support
         if self.enable_http2 {
             modules.add_module(Box::new(GrpcWeb));
-            tracing::debug!(gateway=%self.gateway_name, listener=%self.listener.name, "GrpcWeb module enabled");
-        } else {
-            tracing::debug!(gateway=%self.gateway_name, listener=%self.listener.name, "GrpcWeb module disabled (HTTP/2 not enabled)");
+            tracing::info!(gateway=%self.gateway_name, listener=%self.listener.name, "GrpcWeb module enabled");
         }
     }
 
@@ -142,27 +188,15 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
-
-        let req_header = session.req_header();
+        // Build request metadata (addresses, hostname, path, trace_id, protocol)
+        build_request_metadata(self, session, ctx);
         
-        // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback)
-        // In HTTP/2, Pingora puts the hostname in the URI, not as a separate header
-        let hostname = req_header.uri.host()
-            .map(|h| h.to_string())
-            .or_else(|| req_header.headers.get("host").and_then(|h| h.to_str().ok().map(|s| s.to_string())))
-            .or_else(|| req_header.headers.get(":authority").and_then(|h| h.to_str().ok().map(|s| s.to_string())));
-        
-        match hostname {
-            Some(host) => {
-                ctx.request_info.hostname = host;
-            }
-            None => {
-                ctx.add_error(EdgionStatus::HostMissing);
-                end_response_400(session, ctx, &self.server_header_opts).await?;
-                return Ok(true);
-            }
+        // Validate hostname is present
+        if ctx.request_info.hostname.is_empty() {
+            ctx.add_error(EdgionStatus::HostMissing);
+            end_response_400(session, ctx, &self.server_header_opts).await?;
+            return Ok(true);
         }
-        ctx.request_info.path = req_header.uri.path().to_string();
 
         // Step 1: Route matching - try gRPC first if applicable, then HTTP
         let is_grpc_request = ctx.request_info.discover_protocol.as_deref() == Some("grpc") 
@@ -229,6 +263,10 @@ impl ProxyHttp for EdgionHttp {
             }
         }
         
+        // Append client_addr IP to X-Forwarded-For header
+        // This is done after all plugin processing but before forwarding to upstream
+        append_x_forwarded_for(session, ctx);
+        
         Ok(false)
     }
 
@@ -247,9 +285,6 @@ impl ProxyHttp for EdgionHttp {
         
         // Set keepalive timeout (pre-parsed, no runtime overhead)
         session.set_keepalive(Some(client_timeout.keepalive_timeout));
-        
-        // Extract request metadata (trace_id and protocol detection)
-        extract_request_metadata(session, ctx);
 
         Ok(())
     }

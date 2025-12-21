@@ -84,6 +84,28 @@ pub fn add_http_listener(
         &context.edgion_gateway_config
     );
 
+    // Initialize RealIpExtractor from configuration
+    let real_ip_extractor = if let Some(real_ip_config) = &context.edgion_gateway_config.spec.real_ip {
+        match crate::core::routes::http_routes::RealIpExtractor::new(
+            &real_ip_config.trusted_proxies,
+            real_ip_config.real_ip_header.clone()
+        ) {
+            Ok(extractor) => Some(Arc::new(extractor)),
+            Err(e) => {
+                // Should rarely happen (only if builder.build() fails after all CIDRs are skipped)
+                tracing::warn!(
+                    gateway = %context.gateway_name,
+                    listener = %listener_name,
+                    error = ?e,
+                    "Failed to build RealIpExtractor, real IP extraction disabled"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Create EdgionHttp proxy handler
     let edgion_http = EdgionHttp {
         gateway_class_name: context.gateway_class_name.clone(),
@@ -98,6 +120,7 @@ pub fn add_http_listener(
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         parsed_timeouts,
         enable_http2: context.enable_http2,
+        real_ip_extractor,
     };
 
     // Create HTTP proxy service

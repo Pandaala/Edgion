@@ -9,6 +9,25 @@ spec:
     allowInsecure: true
     sniMatchingPolicy: Strict
 
+  # Server 配置（Pingora 服务器参数）
+  # todo 等待实现
+  server:
+    threads: 4                          # 工作线程数（默认: CPU 核心数）
+    work_stealing: true                 # 启用工作窃取（默认: true）
+    grace_period_seconds: 30            # 优雅关闭等待时间（秒）
+    graceful_shutdown_timeout_s: 10     # 优雅关闭超时（秒）
+    upstream_keepalive_pool_size: 128   # 上游连接池大小
+
+  # Real IP 提取配置（用于 CDN/LB 后的真实 IP 提取）
+  realIp:
+    # 受信任的代理 CIDR 列表
+    trustedProxies:
+      - "10.0.0.0/8"          # 私有网络 A
+      - "172.16.0.0/12"       # 私有网络 B
+      - "192.168.0.0/16"      # 私有网络 C
+    # 提取真实 IP 的 header（默认: X-Forwarded-For）
+    realIpHeader: "X-Forwarded-For"
+
   # HTTP 超时配置
   httpTimeout:
     client:

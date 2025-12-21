@@ -169,5 +169,8 @@ pub struct EdgionHttp {
     
     /// Whether HTTP/2 is enabled for this listener
     pub enable_http2: bool,
+    
+    /// Real IP extractor for trusted proxy support
+    pub real_ip_extractor: Option<Arc<crate::core::routes::http_routes::RealIpExtractor>>,
 }
 

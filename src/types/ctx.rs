@@ -43,6 +43,12 @@ impl fmt::Display for MatchInfo {
 /// Request information extracted from the incoming request
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {
+    /// TCP client address (direct connection, immutable)
+    #[serde(rename = "client-addr")]
+    pub client_addr: String,
+    /// Real client address (extracted from headers if behind trusted proxy)
+    #[serde(rename = "remote-addr")]
+    pub remote_addr: String,
     /// Trace ID from x-trace-id header
     #[serde(rename = "x-trace-id")]
     pub x_trace_id: Option<String>,

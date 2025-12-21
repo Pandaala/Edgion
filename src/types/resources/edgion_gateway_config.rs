@@ -32,6 +32,10 @@ pub struct EdgionGatewayConfigSpec {
     /// Maximum number of retries for upstream connections (default: 3)
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+
+    /// Real IP extraction configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub real_ip: Option<RealIpConfig>,
 }
 
 // ============================================
@@ -181,6 +185,29 @@ fn default_backend_max_retries() -> u32 {
 // Global configuration defaults
 fn default_max_retries() -> u32 {
     3
+}
+
+// ============================================
+// Real IP Configuration
+// ============================================
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RealIpConfig {
+    /// Trusted proxy CIDRs (e.g., ["10.0.0.0/8", "172.16.0.0/12"])
+    /// When client_addr matches one of these CIDRs, we extract real IP from the header
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
+    
+    /// Header to extract real IP from (default: "X-Forwarded-For")
+    /// Supports comma-separated list (e.g., "ip1, ip2, ip3")
+    /// Extraction uses Nginx-style logic: traverse from right to left, find first non-trusted IP
+    #[serde(default = "default_real_ip_header")]
+    pub real_ip_header: String,
+}
+
+fn default_real_ip_header() -> String {
+    "X-Forwarded-For".to_string()
 }
 
 impl Default for ClientTimeout {
