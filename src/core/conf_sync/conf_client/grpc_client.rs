@@ -1,10 +1,11 @@
-use crate::types::GatewayBaseConf;
 use crate::core::conf_sync::conf_client::ConfigClient;
 use crate::core::conf_sync::proto::{
     config_sync_client::ConfigSyncClient as ConfigSyncClientService, GetBaseConfRequest,
 };
 use crate::types::prelude_resources::*;
+use crate::types::GatewayBaseConf;
 use crate::types::ResourceKind::*;
+use rand::Rng;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;
@@ -33,9 +34,9 @@ impl ConfigSyncClient {
             client_name.clone(),
         ));
 
-        // Try to connect with retry logic: 3 attempts, 2 seconds apart
+        // Try to connect with retry logic: 3 attempts, base 2s + jitter
         const MAX_RETRIES: u32 = 3;
-        const RETRY_INTERVAL_SECS: u64 = 2;
+        const RETRY_INTERVAL_BASE_MS: u64 = 2000;
 
         let mut last_error = None;
         for attempt in 1..=MAX_RETRIES {
@@ -48,7 +49,10 @@ impl ConfigSyncClient {
 
             match Self::create_client_internal(grpc_server_addr, timeout).await {
                 Ok(client) => {
-                    tracing::info!(server_addr = grpc_server_addr, "Successfully connected to gRPC conf_server");
+                    tracing::info!(
+                        server_addr = grpc_server_addr,
+                        "Successfully connected to gRPC conf_server"
+                    );
 
                     // Set gRPC conf_client for each cache
                     config_client.routes().set_grpc_client(client.clone()).await;
@@ -72,9 +76,18 @@ impl ConfigSyncClient {
                 Err(e) => {
                     last_error = Some(e);
                     if attempt < MAX_RETRIES {
-                        tracing::warn!(attempt = attempt,max_retries = MAX_RETRIES,error = %last_error.as_ref().unwrap(),
-                            retry_in_secs = RETRY_INTERVAL_SECS,"Failed to connect, will retry");
-                        tokio::time::sleep(Duration::from_secs(RETRY_INTERVAL_SECS)).await;
+                        // Add Jitter: 0 ~ 1000ms
+                        let jitter_ms = rand::thread_rng().gen_range(0..1000);
+                        let sleep_duration = Duration::from_millis(RETRY_INTERVAL_BASE_MS + jitter_ms);
+
+                        tracing::warn!(
+                            attempt = attempt,
+                            max_retries = MAX_RETRIES,
+                            error = %last_error.as_ref().unwrap(),
+                            retry_in_millis = sleep_duration.as_millis(),
+                            "Failed to connect, will retry with jitter"
+                        );
+                        tokio::time::sleep(sleep_duration).await;
                     }
                 }
             }
@@ -111,10 +124,7 @@ impl ConfigSyncClient {
         let response = self.conf_client_handle.get_base_conf(request).await?;
         let base_conf_response = response.into_inner();
 
-        tracing::info!(
-            base_conf_bytes = base_conf_response.base_conf.len(),
-            "Init base_conf"
-        );
+        tracing::info!(base_conf_bytes = base_conf_response.base_conf.len(), "Init base_conf");
 
         // Parse GatewayBaseConf
         if !base_conf_response.base_conf.is_empty() {
@@ -122,7 +132,7 @@ impl ConfigSyncClient {
                 Ok(mut base_conf) => {
                     // Rebuild gateway_map after deserialization
                     base_conf.rebuild_gateway_map();
-                    
+
                     println!("[ConfigClient] Parsed GatewayBaseConf");
                     self.config_client.init_base_conf(base_conf);
                     tracing::info!("Base configuration initialized");
@@ -143,7 +153,7 @@ impl ConfigSyncClient {
         let key = self.config_client.get_gateway_class_key().clone();
         self.fetch_and_init_base_conf(&key).await?;
         tracing::info!("Base Conf Initialized.");
-        
+
         // Print base_conf as pretty JSON for debugging
         if let Some(base_conf) = self.config_client.get_base_conf() {
             match serde_json::to_string_pretty(&base_conf) {
@@ -155,7 +165,7 @@ impl ConfigSyncClient {
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -211,10 +221,9 @@ impl ConfigSyncClient {
                 return Err(tonic::Status::invalid_argument(
                     "Secret resources are not watched separately",
                 ));
-            }
-            // Secret => {
-            //     self.config_client.secrets().start_watch().await?;
-            // }
+            } // Secret => {
+              //     self.config_client.secrets().start_watch().await?;
+              // }
         }
 
         Ok(())
@@ -240,7 +249,7 @@ impl ConfigSyncClient {
             PluginMetaData,
             Secret,
         ];
-        
+
         for kind in resource_kinds {
             if let Err(e) = self.start_watch_sync(key.clone(), kind).await {
                 tracing::error!(kind = ?kind, error = %e, "Failed to start watch");
