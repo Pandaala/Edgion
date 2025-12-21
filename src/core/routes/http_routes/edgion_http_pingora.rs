@@ -129,10 +129,32 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
 ///
 /// This function always appends the client IP to maintain the proxy chain,
 /// regardless of trusted proxy configuration.
+/// 
+/// Also validates the XFF header length against security_protect configuration.
+/// Returns true if response has been sent (due to validation failure).
 #[inline]
-fn append_x_forwarded_for(session: &mut Session, ctx: &EdgionHttpContext) {
+async fn append_x_forwarded_for(
+    edgion_http: &EdgionHttp,
+    session: &mut Session, 
+    ctx: &mut EdgionHttpContext
+) -> pingora_core::Result<bool> {
     let client_ip = extract_ip_string(&ctx.request_info.client_addr);
     let req_header_mut = session.req_header_mut();
+    
+    // Check existing X-Forwarded-For length before appending
+    if let Some(security_config) = &edgion_http.edgion_gateway_config.spec.security_protect {
+        if let Some(existing_xff) = req_header_mut.headers.get("X-Forwarded-For") {
+            if let Ok(existing_str) = existing_xff.to_str() {
+                let xff_len = existing_str.len();
+                if xff_len > security_config.x_forwarded_for_limit {
+                    // XFF header too long, send 400 response directly
+                    ctx.add_error(EdgionStatus::XffHeaderTooLong);
+                    end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
+                    return Ok(true); // Response sent
+                }
+            }
+        }
+    }
     
     if let Some(existing_xff) = req_header_mut.headers.get("X-Forwarded-For") {
         // X-Forwarded-For exists, append client IP
@@ -144,6 +166,8 @@ fn append_x_forwarded_for(session: &mut Session, ctx: &EdgionHttpContext) {
         // X-Forwarded-For doesn't exist, create new
         let _ = req_header_mut.insert_header("X-Forwarded-For", &client_ip);
     }
+    
+    Ok(false) // No response sent
 }
 
 /// Set X-Real-IP header with extracted remote_addr (inline for performance)
@@ -275,9 +299,12 @@ impl ProxyHttp for EdgionHttp {
         // Set X-Real-IP header with extracted remote_addr
         set_x_real_ip(session, ctx);
         
-        // Append client_addr IP to X-Forwarded-For header
+        // Append client_addr IP to X-Forwarded-For header (with length validation)
         // This is done after all plugin processing but before forwarding to upstream
-        append_x_forwarded_for(session, ctx);
+        // Returns true if response was already sent (due to validation failure)
+        if append_x_forwarded_for(self, session, ctx).await? {
+            return Ok(true);
+        }
         
         Ok(false)
     }

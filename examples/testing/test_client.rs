@@ -74,6 +74,7 @@ enum Commands {
 
     // function test
     RealIp,
+    Security,
     All,
 }
 
@@ -186,6 +187,13 @@ async fn main() -> Result<()> {
             }
             runner.add_suite(Box::new(suites::RealIpTestSuite));
         }
+        Commands::Security => {
+            if !cli.gateway {
+                eprintln!("Error: Security tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::SecurityTestSuite));
+        }
         Commands::All => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
             runner.add_suite(Box::new(suites::GrpcTestSuite));
@@ -196,6 +204,7 @@ async fn main() -> Result<()> {
                 runner.add_suite(Box::new(suites::HttpsTestSuite));
                 runner.add_suite(Box::new(suites::GrpcTlsTestSuite));
                 runner.add_suite(Box::new(suites::RealIpTestSuite));
+                runner.add_suite(Box::new(suites::SecurityTestSuite));
             }
         }
     }

@@ -30,6 +30,10 @@ spec:
     # 提取真实 IP 的 header（默认: X-Forwarded-For）
     realIpHeader: "X-Forwarded-For"
 
+  # 安全防护配置
+  securityProtect:
+    xForwardedForLimit: 200  # X-Forwarded-For header 最大长度（字节），超过则返回 400
+
   # HTTP 超时配置
   httpTimeout:
     client:

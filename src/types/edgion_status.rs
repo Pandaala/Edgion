@@ -8,6 +8,9 @@ pub enum EdgionStatus {
     /// Missing Host header (HTTP 400)
     HostMissing = 400_01,
 
+    /// X-Forwarded-For header too long (HTTP 400)
+    XffHeaderTooLong = 400_02,
+
     /// Route Not Found
     RouteNotFound = 404_01,
 

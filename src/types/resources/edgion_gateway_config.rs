@@ -36,6 +36,10 @@ pub struct EdgionGatewayConfigSpec {
     /// Real IP extraction configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub real_ip: Option<RealIpConfig>,
+
+    /// Security protection configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_protect: Option<SecurityProtectConfig>,
 }
 
 // ============================================
@@ -255,6 +259,24 @@ pub struct StatusCondition {
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_transition_time: Option<String>,
+}
+
+// ============================================
+// Security Protection Configuration
+// ============================================
+
+/// Security protection configuration for the gateway
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityProtectConfig {
+    /// Maximum length of X-Forwarded-For header in bytes (default: 200)
+    /// Requests with X-Forwarded-For headers exceeding this limit will be rejected with 400 Bad Request
+    #[serde(default = "default_xff_limit")]
+    pub x_forwarded_for_limit: usize,
+}
+
+fn default_xff_limit() -> usize {
+    200
 }
 
 #[cfg(test)]

@@ -330,6 +330,15 @@ echo_info "Test 13: Real IP Gateway mode (gateway:10080)"
 cargo run --example test_client -- -g real-ip 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_REAL_IP_RESULT=$?
 
+echo ""
+echo "---"
+echo ""
+
+# Gateway 模式 Security 测试
+echo_info "Test 14: Security Protection Gateway mode (gateway:10080)"
+cargo run --example test_client -- -g security 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_SECURITY_RESULT=$?
+
 # 6. 显示结果
 echo ""
 echo "=========================================="
@@ -415,6 +424,12 @@ else
     echo_error "Real IP Gateway mode: FAILED"
 fi
 
+if [ $GATEWAY_SECURITY_RESULT -eq 0 ]; then
+    echo_success "Security Protection Gateway mode: PASSED"
+else
+    echo_error "Security Protection Gateway mode: FAILED"
+fi
+
 echo ""
 echo "=========================================="
 echo "  Logs"
@@ -443,7 +458,7 @@ if [ $DIRECT_HTTP_RESULT -eq 0 ] && [ $GATEWAY_HTTP_RESULT -eq 0 ] && \
    [ $DIRECT_UDP_RESULT -eq 0 ] && [ $GATEWAY_UDP_RESULT -eq 0 ] && \
    [ $DIRECT_WS_RESULT -eq 0 ] && [ $GATEWAY_WS_RESULT -eq 0 ] && \
    [ $GATEWAY_HTTPS_RESULT -eq 0 ] && [ $GATEWAY_GRPC_TLS_RESULT -eq 0 ] && \
-   [ $GATEWAY_REAL_IP_RESULT -eq 0 ]; then
+   [ $GATEWAY_REAL_IP_RESULT -eq 0 ] && [ $GATEWAY_SECURITY_RESULT -eq 0 ]; then
     echo_success "All tests PASSED! ✨"
     exit 0
 else
