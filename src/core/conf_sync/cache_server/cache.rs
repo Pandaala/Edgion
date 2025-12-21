@@ -6,8 +6,8 @@ use tokio::sync::{mpsc, Notify};
 use super::store::EventStore;
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
-use crate::types::ResourceMeta;
 use crate::core::utils;
+use crate::types::ResourceMeta;
 
 pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
     // wait for init complete
@@ -101,7 +101,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
                             let response = WatchResponse::new(events, current_version);
 
                             if sender.send(response).await.is_err() {
-                                println!("CenterCache receiver dropped, conf_client disconnected");
+                                tracing::info!("CenterCache receiver dropped, conf_client disconnected");
                                 break;
                             }
 
@@ -150,13 +150,14 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             let watchers = self.watchers.read().unwrap();
             watchers.len()
         };
-        println!(
-            "[CenterCache] new watch request client_id={} client_name={} from_version={} ready={} pending_watchers={}",
-            client_id,
-            client_name,
-            from_version,
-            *self.ready.read().unwrap(),
-            watchers_len
+        tracing::info!(
+            component = "cache_server",
+            client_id = %client_id,
+            client_name = %client_name,
+            from_version = from_version,
+            ready = *self.ready.read().unwrap(),
+            pending_watchers = watchers_len,
+            "New watch request"
         );
         // Use bounded channel for data to provide backpressure
         let (data_tx, data_rx) = mpsc::channel(100);
@@ -178,16 +179,34 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         let watcher_clone = watcher.clone();
         {
             let mut watchers = self.watchers.write().unwrap();
+
+            // Lazy cleanup: remove watchers whose receivers have been dropped
+            // TODO: need more check on this lazy cleanup logic
+            let len_before = watchers.len();
+            watchers.retain(|w| !w.sender.is_closed());
+            let len_after = watchers.len();
+
+            if len_before > len_after {
+                tracing::info!(
+                    component = "cache_server",
+                    cleaned_count = len_before - len_after,
+                    len_before = len_before,
+                    len_after = len_after,
+                    "Cleaned up disconnected watchers"
+                );
+            }
+
             watchers.push(watcher_clone.clone());
         }
 
-        println!(
-            "[CenterCache] watcher registered client_id={} total_watchers={}",
-            watcher.client_id,
-            {
+        tracing::info!(
+            component = "cache_server",
+            client_id = %watcher.client_id,
+            total_watchers = {
                 let watchers = self.watchers.read().unwrap();
                 watchers.len()
-            }
+            },
+            "Watcher registered"
         );
 
         // Start the watcher task - only needs store
@@ -202,7 +221,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         T: Clone + Send + 'static,
     {
         if !self.is_ready() {
-            println!("trying push event when not ready!");
+            tracing::warn!("Trying push event when not ready!");
         }
 
         match tokio::runtime::Handle::try_current() {
@@ -234,7 +253,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
         T: Resource + Send + 'static,
     {
         let mut version = resource.get_version();
-        
+
         let last_version = {
             let store_guard = self.store.read().unwrap();
             store_guard.get_last_resource_version()
@@ -334,11 +353,11 @@ mod tests {
         fn get_version(&self) -> u64 {
             self.version
         }
-        
+
         fn resource_kind() -> ResourceKind {
             ResourceKind::Unspecified
         }
-        
+
         fn kind_name() -> &'static str {
             "TestResource"
         }
@@ -347,7 +366,6 @@ mod tests {
             "test".to_string()
         }
     }
-
 
     impl kube::Resource for TestResource {
         type DynamicType = ();
@@ -420,7 +438,7 @@ mod tests {
         };
         let updated = TestResource {
             name: "foo-updated".to_string(),
-            version: 2,  // version must be greater than original
+            version: 2, // version must be greater than original
             metadata: ObjectMeta {
                 name: Some("test-resource".to_string()),
                 namespace: Some("default".to_string()),
@@ -455,10 +473,10 @@ mod tests {
                 ..Default::default()
             },
         };
-        
+
         let resource_delete = TestResource {
             name: "foo".to_string(),
-            version: 43,  // version must be greater than the added resource
+            version: 43, // version must be greater than the added resource
             metadata: ObjectMeta {
                 name: Some("test-resource".to_string()),
                 namespace: Some("default".to_string()),
