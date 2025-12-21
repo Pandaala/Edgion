@@ -267,7 +267,7 @@ fn encode_flags(value: Option<bool>) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::routes::http_routes::ip_radix_match::builder_v6::IpV6RadixBuilder;
+    use crate::core::matcher::ip_radix_tree::builder_v6::IpV6RadixBuilder;
 
     #[test]
     fn test_encode_flags() {
