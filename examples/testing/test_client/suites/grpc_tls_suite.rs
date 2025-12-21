@@ -1,0 +1,130 @@
+// gRPC TLS 测试套件
+// 测试通过 HTTPS (TLS) 的 gRPC 连接
+
+use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use async_trait::async_trait;
+use std::time::Instant;
+
+// 引入 proto 生成的代码
+pub mod test {
+    tonic::include_proto!("test");
+}
+
+use test::test_service_client::TestServiceClient;
+use test::HelloRequest;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig};
+
+pub struct GrpcTlsTestSuite;
+
+impl GrpcTlsTestSuite {
+    /// 测试 gRPC over TLS SayHello RPC
+    fn test_grpc_tls_say_hello() -> TestCase {
+        TestCase::new(
+            "grpc_tls_say_hello",
+            "gRPC TLS SayHello 测试",
+            |ctx: TestContext| Box::pin(async move {
+                let start = Instant::now();
+                
+                // 构建 HTTPS 连接 URL
+                let grpc_url = format!("https://127.0.0.1:{}", ctx.grpc_https_port);
+                
+                // 读取 CA 证书
+                let ca_pem = match std::fs::read_to_string("examples/testing/runtime/certs/ca.pem") {
+                    Ok(pem) => pem,
+                    Err(e) => {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Failed to read CA certificate: {}", e)
+                        );
+                    }
+                };
+                
+                let ca = Certificate::from_pem(ca_pem);
+                
+                // 配置 TLS - 使用 grpc_host 作为 domain_name
+                let domain_name = ctx.grpc_host.as_deref().unwrap_or("localhost");
+                let tls = ClientTlsConfig::new()
+                    .ca_certificate(ca)
+                    .domain_name(domain_name);
+                
+                // 创建 Channel
+                let channel = match Channel::from_shared(grpc_url.clone()) {
+                    Ok(endpoint) => {
+                        match endpoint.tls_config(tls) {
+                            Ok(ep) => {
+                                match ep.connect().await {
+                                    Ok(ch) => ch,
+                                    Err(e) => {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            format!("Failed to connect to {}: {}", grpc_url, e)
+                                        );
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Failed to configure TLS: {}", e)
+                                );
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Invalid endpoint: {}", e)
+                        );
+                    }
+                };
+                
+                let mut client = TestServiceClient::new(channel);
+                
+                // 创建请求 - 与 grpc_suite 完全一致
+                let request = tonic::Request::new(HelloRequest {
+                    name: "Edgion".to_string(),
+                });
+                
+                match client.say_hello(request).await {
+                    Ok(response) => {
+                        let reply = response.into_inner();
+                        if reply.message.contains("Hello, Edgion!") {
+                            let msg = if ctx.grpc_host.is_some() {
+                                format!("Response: {}", reply.message)
+                            } else {
+                                format!("Response: {}, Server: {}", reply.message, reply.server_addr)
+                            };
+                            TestResult::passed_with_message(start.elapsed(), msg)
+                        } else {
+                            TestResult::failed(
+                                start.elapsed(),
+                                format!("Unexpected response: {}", reply.message)
+                            )
+                        }
+                    },
+                    Err(e) => {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("RPC failed: {} (status: {:?})", e.message(), e.code())
+                        )
+                    }
+                }
+            })
+        )
+    }
+}
+
+#[async_trait]
+impl TestSuite for GrpcTlsTestSuite {
+    fn name(&self) -> &str {
+        "gRPC-TLS"
+    }
+    
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![
+            Self::test_grpc_tls_say_hello(),
+        ]
+    }
+}
+
+
