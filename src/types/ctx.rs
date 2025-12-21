@@ -59,6 +59,9 @@ pub struct RequestInfo {
     pub path: String,
     /// Response status code (e.g., 200, 400, 404, 500)
     pub status: u16,
+    /// Original X-Forwarded-For header value (before appending client IP)
+    #[serde(rename = "x-forwarded-for", skip_serializing_if = "Option::is_none")]
+    pub x_forwarded_for: Option<String>,
     /// Auto-discovered protocol (e.g., "grpc", "grpc-web", "websocket")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discover_protocol: Option<String>,

@@ -26,9 +26,15 @@ use crate::core::routes::grpc_routes::{
 };
 use crate::core::routes::http_routes::extract_ip_string;
 
-/// Build request metadata: client addresses, hostname, path, trace_id, and protocol detection (inline for performance)
+/// Build request metadata: client addresses, hostname, path, trace_id, x-forwarded-for, and protocol detection (inline for performance)
+/// Also validates X-Forwarded-For header length against security_protect configuration.
+/// Returns Ok(true) if response has been sent (due to validation failure), Ok(false) to continue.
 #[inline]
-fn build_request_metadata(edgion_http: &EdgionHttp, session: &Session, ctx: &mut EdgionHttpContext) {
+async fn build_request_metadata(
+    edgion_http: &EdgionHttp,
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext
+) -> pingora_core::Result<bool> {
     let req_header = session.req_header();
 
     // Extract client_addr (TCP connection address)
@@ -68,6 +74,26 @@ fn build_request_metadata(edgion_http: &EdgionHttp, session: &Session, ctx: &mut
             Some(uuid::Uuid::new_v4().to_string())
         });
 
+    // Extract X-Forwarded-For header (before we append to it)
+    ctx.request_info.x_forwarded_for = req_header
+        .headers
+        .get("X-Forwarded-For")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    // Validate X-Forwarded-For length against security configuration
+    if let Some(security_config) = &edgion_http.edgion_gateway_config.spec.security_protect {
+        if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
+            let xff_len = existing_xff.len();
+            if xff_len > security_config.x_forwarded_for_limit {
+                // XFF header too long, send 400 response directly
+                ctx.add_error(EdgionStatus::XffHeaderTooLong);
+                end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
+                return Ok(true); // Response sent
+            }
+        }
+    }
+
     // Protocol detection: check for WebSocket, gRPC-Web, and gRPC
     if ctx.request_info.discover_protocol.is_none() {
         // Check for WebSocket
@@ -92,6 +118,8 @@ fn build_request_metadata(edgion_http: &EdgionHttp, session: &Session, ctx: &mut
             }
         }
     }
+    
+    Ok(false) // Continue processing
 }
 
 /// Initialize backend context if not yet initialized (inline for performance)
@@ -129,45 +157,23 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
 ///
 /// This function always appends the client IP to maintain the proxy chain,
 /// regardless of trusted proxy configuration.
-/// 
-/// Also validates the XFF header length against security_protect configuration.
-/// Returns true if response has been sent (due to validation failure).
 #[inline]
-async fn append_x_forwarded_for(
-    edgion_http: &EdgionHttp,
+fn append_x_forwarded_for(
     session: &mut Session, 
-    ctx: &mut EdgionHttpContext
-) -> pingora_core::Result<bool> {
+    ctx: &EdgionHttpContext
+) {
     let client_ip = extract_ip_string(&ctx.request_info.client_addr);
+    
+    // Append client IP to X-Forwarded-For (using pre-extracted value)
     let req_header_mut = session.req_header_mut();
-    
-    // Check existing X-Forwarded-For length before appending
-    if let Some(security_config) = &edgion_http.edgion_gateway_config.spec.security_protect {
-        if let Some(existing_xff) = req_header_mut.headers.get("X-Forwarded-For") {
-            if let Ok(existing_str) = existing_xff.to_str() {
-                let xff_len = existing_str.len();
-                if xff_len > security_config.x_forwarded_for_limit {
-                    // XFF header too long, send 400 response directly
-                    ctx.add_error(EdgionStatus::XffHeaderTooLong);
-                    end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
-                    return Ok(true); // Response sent
-                }
-            }
-        }
-    }
-    
-    if let Some(existing_xff) = req_header_mut.headers.get("X-Forwarded-For") {
+    if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
         // X-Forwarded-For exists, append client IP
-        if let Ok(existing_str) = existing_xff.to_str() {
-            let new_xff = format!("{}, {}", existing_str, client_ip);
-            let _ = req_header_mut.insert_header("X-Forwarded-For", &new_xff);
-        }
+        let new_xff = format!("{}, {}", existing_xff, client_ip);
+        let _ = req_header_mut.insert_header("X-Forwarded-For", &new_xff);
     } else {
         // X-Forwarded-For doesn't exist, create new
         let _ = req_header_mut.insert_header("X-Forwarded-For", &client_ip);
     }
-    
-    Ok(false) // No response sent
 }
 
 /// Set X-Real-IP header with extracted remote_addr (inline for performance)
@@ -221,8 +227,10 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
-        // Build request metadata (addresses, hostname, path, trace_id, protocol)
-        build_request_metadata(self, session, ctx);
+        // Build request metadata (addresses, hostname, path, trace_id, protocol) and validate XFF length
+        if build_request_metadata(self, session, ctx).await? {
+            return Ok(true); // Response already sent (XFF too long)
+        }
         
         // Validate hostname is present
         if ctx.request_info.hostname.is_empty() {
@@ -299,12 +307,9 @@ impl ProxyHttp for EdgionHttp {
         // Set X-Real-IP header with extracted remote_addr
         set_x_real_ip(session, ctx);
         
-        // Append client_addr IP to X-Forwarded-For header (with length validation)
+        // Append client_addr IP to X-Forwarded-For header
         // This is done after all plugin processing but before forwarding to upstream
-        // Returns true if response was already sent (due to validation failure)
-        if append_x_forwarded_for(self, session, ctx).await? {
-            return Ok(true);
-        }
+        append_x_forwarded_for(session, ctx);
         
         Ok(false)
     }
