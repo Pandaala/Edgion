@@ -3,8 +3,8 @@
 //! This module provides the flexible tree structure used during route insertion.
 
 use std::collections::BTreeMap;
-use crate::core::routes::http_routes::radix_match::frozen::FrozenRadixTree;
-use crate::core::routes::http_routes::radix_match::error::RouterError;
+use crate::core::matcher::radix_tree::frozen::FrozenRadixTree;
+use crate::core::matcher::radix_tree::error::RouterError;
 
 /// A radix tree node used during the build phase.
 ///

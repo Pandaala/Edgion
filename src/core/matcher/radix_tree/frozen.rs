@@ -2,8 +2,8 @@
 //!
 //! This module provides the flattened, cache-optimized tree structure for fast lookups.
 
-use crate::core::routes::http_routes::radix_match::builder::BuildNode;
-use crate::core::routes::http_routes::radix_match::error::RouterError;
+use crate::core::matcher::radix_tree::builder::BuildNode;
+use crate::core::matcher::radix_tree::error::RouterError;
 
 /// A flattened node optimized for cache performance.
 ///
@@ -257,7 +257,7 @@ impl FrozenRadixTree {
     ///
     /// # Example
     /// ```
-    /// use edgion::core::routes::http_routes::radix_match::RadixTreeBuilder;
+    /// use edgion::core::matcher::radix_tree::RadixTreeBuilder;
     ///
     /// let mut builder = RadixTreeBuilder::new();
     /// builder.insert("/api", 1).unwrap();
@@ -297,7 +297,7 @@ impl FrozenRadixTree {
     ///
     /// # Example
     /// ```
-    /// use edgion::core::routes::http_routes::radix_match::RadixTreeBuilder;
+    /// use edgion::core::matcher::radix_tree::RadixTreeBuilder;
     ///
     /// let mut builder = RadixTreeBuilder::new();
     /// builder.insert("/api", 1).unwrap();
@@ -339,7 +339,7 @@ impl FrozenRadixTree {
     ///
     /// # Example
     /// ```
-    /// use edgion::core::routes::http_routes::radix_match::RadixTreeBuilder;
+    /// use edgion::core::matcher::radix_tree::RadixTreeBuilder;
     ///
     /// let mut builder = RadixTreeBuilder::new();
     /// builder.insert("/api/users", 1).unwrap();

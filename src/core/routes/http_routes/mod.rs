@@ -16,7 +16,6 @@ mod conf_handler_impl;
 
 #[cfg(test)]
 mod tests;
-pub mod radix_match;
 
 // HTTP 代理模块
 pub mod edgion_http;
