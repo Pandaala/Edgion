@@ -302,6 +302,11 @@ impl ProxyHttp for EdgionHttp {
         // This catches all responses, including framework-generated error responses (e.g., 502)
         self.server_header_opts.apply_to_response(upstream_response);
         
+        // Add x-trace-id to response headers
+        if let Some(trace_id) = &ctx.request_info.x_trace_id {
+            let _ = upstream_response.insert_header("x-trace-id", trace_id.as_str());
+        }
+        
         // Run rule-level response plugins (async)
         if let Some(route_unit) = ctx.route_unit.clone() {
             route_unit.rule.plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
