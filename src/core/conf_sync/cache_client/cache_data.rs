@@ -28,7 +28,8 @@ impl<T: ResourceMeta> CacheData<T> {
     /// Uses resource.key_name() (namespace/name) as the key for each resource
     pub(crate) fn reset(&mut self, resources: Vec<T>, resource_version: u64) {
         // Build new HashMap directly from resources
-        self.data = resources.into_iter()
+        self.data = resources
+            .into_iter()
             .map(|resource| (resource.key_name(), resource))
             .collect();
         self.resource_version = resource_version;
@@ -122,12 +123,15 @@ impl<T: ResourceMeta> CacheData<T> {
         T: Clone + ResourceMeta,
     {
         let mut cache = cache_data.write().unwrap();
-        
+
         // Get handler reference at the beginning
         let handler = match cache.handler.as_mut() {
             Some(h) => h,
             None => {
-                tracing::error!(component = "cache_client", "Handler was removed, stopping compressed events processing task");
+                tracing::error!(
+                    component = "cache_client",
+                    "Handler was removed, stopping compressed events processing task"
+                );
                 return false; // Handler removed, stop the task
             }
         };
@@ -138,23 +142,28 @@ impl<T: ResourceMeta> CacheData<T> {
         }
 
         // Collect event keys and their event types first (to avoid borrowing conflicts)
-        let event_infos: Vec<(String, Vec<ResourceChange>)> = handler.compressed_events.events.iter()
+        let event_infos: Vec<(String, Vec<ResourceChange>)> = handler
+            .compressed_events
+            .events
+            .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        
+
         // The mutable borrow of handler ends here, allowing us to access cache.data below
 
         // Classify events based on ResourceChange type and current state in cache.data
         let mut add = HashMap::new();
         let mut update = HashMap::new();
         let mut remove = HashSet::new();
-        
+
         for (key, events) in event_infos {
             if let Some(resource) = cache.data.get(&key).cloned() {
                 // Resource exists in cache - check event history to determine if it's add or update
                 // Check if any event in the history is InitAdd or EventAdd
-                let is_add = events.iter().any(|e| matches!(e, ResourceChange::InitAdd | ResourceChange::EventAdd));
-                
+                let is_add = events
+                    .iter()
+                    .any(|e| matches!(e, ResourceChange::InitAdd | ResourceChange::EventAdd));
+
                 if is_add {
                     add.insert(key.clone(), resource);
                     tracing::info!(key = %key, "Processed compressed event: add");
@@ -180,15 +189,18 @@ impl<T: ResourceMeta> CacheData<T> {
                 remove_keys = ?remove_keys,
                 "Processing compressed events"
             );
-            
+
             // Process events with immutable borrow
             if let Some(handler) = cache.handler.as_ref() {
                 handler.processor.partial_update(add, update, remove);
             } else {
-                tracing::error!(component = "cache_client", "Handler was removed before processing events");
+                tracing::error!(
+                    component = "cache_client",
+                    "Handler was removed before processing events"
+                );
                 return false;
             }
-            
+
             // Clear events with mutable borrow
             if let Some(handler) = cache.handler.as_mut() {
                 handler.compressed_events.clear();
@@ -209,26 +221,18 @@ impl<T: ResourceMeta> CacheData<T> {
     }
 }
 
-
 pub struct CompressEvent {
     events: HashMap<String, Vec<ResourceChange>>,
 }
 
 impl CompressEvent {
     pub fn new() -> Self {
-        Self {
-            events: HashMap::new(),
-        }
+        Self { events: HashMap::new() }
     }
 
     /// Add an event for a resource key
     pub fn add_event(&mut self, key: String, change: crate::core::conf_sync::traits::ResourceChange) {
         self.events.entry(key).or_insert_with(Vec::new).push(change);
-    }
-
-    /// Get events for a resource key
-    pub fn get_events(&self, key: &str) -> Option<&Vec<ResourceChange>> {
-        self.events.get(key)
     }
 
     /// Clear all events
@@ -252,4 +256,3 @@ impl<T> ConfHandlerData<T> {
         }
     }
 }
-

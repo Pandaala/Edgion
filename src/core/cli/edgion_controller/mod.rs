@@ -64,24 +64,19 @@ impl EdgionControllerCli {
         let loader = Loader::from_args(&loader_args)?;
 
         // Get gateway_class_name from config
-        let gateway_class_name = config.gateway_class()
+        let gateway_class_name = config
+            .gateway_class()
             .ok_or_else(|| anyhow!("gateway_class must be specified in configuration"))?;
 
         // Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
-        tracing::info!(
-            "Loading base configuration for gateway_class: {}",
-            gateway_class_name
-        );
+        tracing::info!("Loading base configuration for gateway_class: {}", gateway_class_name);
         let base_conf = loader.load_base(&gateway_class_name).await?;
-        
+
         // Print base configuration as pretty JSON
         if let Ok(json) = serde_json::to_string_pretty(&base_conf) {
-            tracing::info!(
-                "Base configuration loaded successfully:\n{}",
-                json
-            );
+            tracing::info!("Base configuration loaded successfully:\n{}", json);
         }
-        
+
         // Validate base configuration schema
         if let Err(e) = base_conf.validate_schema() {
             tracing::error!(
@@ -95,11 +90,13 @@ impl EdgionControllerCli {
             std::process::exit(1);
         }
 
-        let config_server = Arc::new(ConfigServer::new(base_conf));
+        let config_server = Arc::new(ConfigServer::new(base_conf, &config.conf_sync));
         let sync_server = ConfigSyncServer::new(config_server.clone());
 
         // Register dispatcher before using the loader
-        loader.register_dispatcher(config_server.clone() as Arc<dyn ConfigServerEventDispatcher>).await;
+        loader
+            .register_dispatcher(config_server.clone() as Arc<dyn ConfigServerEventDispatcher>)
+            .await;
 
         let addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
 
@@ -115,7 +112,7 @@ impl EdgionControllerCli {
 
         // Admin API port
         let admin_port = 5800;
-        
+
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
             event = "admin_api_starting",

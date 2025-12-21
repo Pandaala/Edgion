@@ -1,8 +1,8 @@
+use crate::types::DEFAULT_PREFIX_DIR;
 use anyhow::{Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use crate::types::DEFAULT_PREFIX_DIR;
 
 /// Edgion Controller configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
@@ -14,7 +14,12 @@ pub struct EdgionControllerConfig {
     pub prefix_dir: PathBuf,
 
     /// Configuration file path (TOML format)
-    #[arg(short = 'c', long, value_name = "FILE", default_value = "config/edgion-controller.toml")]
+    #[arg(
+        short = 'c',
+        long,
+        value_name = "FILE",
+        default_value = "config/edgion-controller.toml"
+    )]
     #[serde(skip)]
     pub config_file: Option<String>,
 
@@ -33,6 +38,10 @@ pub struct EdgionControllerConfig {
     #[command(flatten)]
     #[serde(default)]
     pub debug: DebugConfig,
+
+    #[command(flatten)]
+    #[serde(default)]
+    pub conf_sync: ConfSyncConfig,
 }
 
 fn default_prefix_dir() -> PathBuf {
@@ -117,6 +126,70 @@ pub struct DebugConfig {
     pub enabled: bool,
 }
 
+/// Configuration synchronization configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Args)]
+pub struct ConfSyncConfig {
+    /// EventStore capacity for HTTPRoute resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub routes_capacity: u32,
+
+    /// EventStore capacity for GRPCRoute resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub grpc_routes_capacity: u32,
+
+    /// EventStore capacity for TCPRoute resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub tcp_routes_capacity: u32,
+
+    /// EventStore capacity for UDPRoute resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub udp_routes_capacity: u32,
+
+    /// EventStore capacity for TLSRoute resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub tls_routes_capacity: u32,
+
+    /// EventStore capacity for LinkSys resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub link_sys_capacity: u32,
+
+    /// EventStore capacity for Service resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub services_capacity: u32,
+
+    /// EventStore capacity for EndpointSlice resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub endpoint_slices_capacity: u32,
+
+    /// EventStore capacity for EdgionTls resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub edgion_tls_capacity: u32,
+
+    /// EventStore capacity for EdgionPlugins resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub edgion_plugins_capacity: u32,
+
+    /// EventStore capacity for PluginMetadata resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub plugin_metadata_capacity: u32,
+
+    /// EventStore capacity for Secret resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub secrets_capacity: u32,
+}
+
 // Default values
 fn default_grpc_listen() -> String {
     "0.0.0.0:50051".to_string()
@@ -148,6 +221,11 @@ fn default_loader_type() -> String {
 
 fn default_debug_enabled() -> bool {
     true
+}
+
+// Default capacity value for EventStore
+fn default_capacity() -> u32 {
+    200
 }
 
 impl Default for ServerConfig {
@@ -191,6 +269,25 @@ impl Default for DebugConfig {
     }
 }
 
+impl Default for ConfSyncConfig {
+    fn default() -> Self {
+        Self {
+            routes_capacity: default_capacity(),
+            grpc_routes_capacity: default_capacity(),
+            tcp_routes_capacity: default_capacity(),
+            udp_routes_capacity: default_capacity(),
+            tls_routes_capacity: default_capacity(),
+            link_sys_capacity: default_capacity(),
+            services_capacity: default_capacity(),
+            endpoint_slices_capacity: default_capacity(),
+            edgion_tls_capacity: default_capacity(),
+            edgion_plugins_capacity: default_capacity(),
+            plugin_metadata_capacity: default_capacity(),
+            secrets_capacity: default_capacity(),
+        }
+    }
+}
+
 // Default implementation is now derived
 
 impl EdgionControllerConfig {
@@ -221,7 +318,7 @@ impl EdgionControllerConfig {
         if cli.prefix_dir != PathBuf::from(DEFAULT_PREFIX_DIR) {
             base.prefix_dir = cli.prefix_dir.clone();
         }
-        
+
         // Server config
         if cli.server.grpc_listen.is_some() {
             base.server.grpc_listen = cli.server.grpc_listen.clone();

@@ -82,3 +82,25 @@ dir = "examples/conf"
 # 生产环境建议设置为 false
 enabled = true
 
+[conf_sync]
+# EventStore 环形缓冲区容量配置
+# 每种资源类型可以独立配置容量
+# 控制每种资源类型保留多少历史事件
+# 较高的值允许客户端从更长时间的断开连接中恢复而无需完全重新列出
+# 但会占用更多内存
+
+# Route 资源容量
+routes_capacity = 200      # HTTPRoute
+grpc_routes_capacity = 200 # GRPCRoute
+tcp_routes_capacity = 200  # TCPRoute
+udp_routes_capacity = 200  # UDPRoute
+tls_routes_capacity = 200  # TLSRoute
+
+# 其他资源容量
+link_sys_capacity = 200        # LinkSys
+services_capacity = 200        # Service
+endpoint_slices_capacity = 200 # EndpointSlice
+edgion_tls_capacity = 200      # EdgionTls
+edgion_plugins_capacity = 200  # EdgionPlugins
+plugin_metadata_capacity = 200 # PluginMetadata
+secrets_capacity = 200         # Secret

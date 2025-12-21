@@ -3,12 +3,12 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
-use crate::types::GatewayBaseConf;
+use super::secret_ref::SecretRefManager;
 use crate::core::conf_sync::cache_server::ServerCache;
 use crate::core::conf_sync::types::{ListData, WatchResponse};
 use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
-use super::secret_ref::SecretRefManager;
+use crate::types::GatewayBaseConf;
 use anyhow::Result;
 
 // internal key
@@ -68,21 +68,21 @@ pub struct BaseConfData {
 }
 
 impl ConfigServer {
-    pub fn new(base_conf: GatewayBaseConf) -> Self {
+    pub fn new(base_conf: GatewayBaseConf, conf_sync_config: &crate::core::cli::config::ConfSyncConfig) -> Self {
         Self {
             base_conf: RwLock::new(base_conf),
-            routes: ServerCache::new(200),
-            grpc_routes: ServerCache::new(200),
-            tcp_routes: ServerCache::new(200),
-            udp_routes: ServerCache::new(200),
-            tls_routes: ServerCache::new(200),
-            link_sys: ServerCache::new(50),
-            services: ServerCache::new(200),
-            endpoint_slices: ServerCache::new(200),
-            edgion_tls: ServerCache::new(200),
-            edgion_plugins: ServerCache::new(200),
-            plugin_metadata: ServerCache::new(200),
-            secrets: ServerCache::new(200),
+            routes: ServerCache::new(conf_sync_config.routes_capacity),
+            grpc_routes: ServerCache::new(conf_sync_config.grpc_routes_capacity),
+            tcp_routes: ServerCache::new(conf_sync_config.tcp_routes_capacity),
+            udp_routes: ServerCache::new(conf_sync_config.udp_routes_capacity),
+            tls_routes: ServerCache::new(conf_sync_config.tls_routes_capacity),
+            link_sys: ServerCache::new(conf_sync_config.link_sys_capacity),
+            services: ServerCache::new(conf_sync_config.services_capacity),
+            endpoint_slices: ServerCache::new(conf_sync_config.endpoint_slices_capacity),
+            edgion_tls: ServerCache::new(conf_sync_config.edgion_tls_capacity),
+            edgion_plugins: ServerCache::new(conf_sync_config.edgion_plugins_capacity),
+            plugin_metadata: ServerCache::new(conf_sync_config.plugin_metadata_capacity),
+            secrets: ServerCache::new(conf_sync_config.secrets_capacity),
             secret_ref_manager: Arc::new(SecretRefManager::new()),
         }
     }
@@ -115,7 +115,7 @@ impl ConfigServer {
     /// Returns the base conf data as JSON string
     pub fn get_base_conf(&self, gateway_class: &str) -> Result<BaseConfData, String> {
         let base_conf_guard = self.base_conf.read().unwrap();
-        
+
         // Verify gateway class matches if configured
         if let Some(configured_gc) = base_conf_guard.gateway_class_name() {
             if configured_gc != gateway_class {
@@ -126,8 +126,8 @@ impl ConfigServer {
             }
         }
 
-        let base_conf_json = serde_json::to_string(&*base_conf_guard)
-            .map_err(|e| format!("Failed to serialize base conf: {}", e))?;
+        let base_conf_json =
+            serde_json::to_string(&*base_conf_guard).map_err(|e| format!("Failed to serialize base conf: {}", e))?;
 
         Ok(BaseConfData {
             base_conf: base_conf_json,
@@ -764,27 +764,39 @@ impl ConfigServer {
 
         // Base conf resources are stored in base_conf
         let base_conf_guard = self.base_conf.read().unwrap();
-            println!("GatewayClass:");
+        println!("GatewayClass:");
         println!("  [0] {}", format_resource_info(base_conf_guard.gateway_class()));
 
-            println!("EdgionGatewayConfig:");
-        println!("  [0] {}", format_resource_info(base_conf_guard.edgion_gateway_config()));
+        println!("EdgionGatewayConfig:");
+        println!(
+            "  [0] {}",
+            format_resource_info(base_conf_guard.edgion_gateway_config())
+        );
 
         let gateways = base_conf_guard.gateways();
-            if !gateways.is_empty() {
-                println!("Gateways (count: {}):", gateways.len());
-                for (idx, gw) in gateways.iter().enumerate() {
-                    println!("  [{}] {}", idx, format_resource_info(gw));
-                }
+        if !gateways.is_empty() {
+            println!("Gateways (count: {}):", gateways.len());
+            for (idx, gw) in gateways.iter().enumerate() {
+                println!("  [{}] {}", idx, format_resource_info(gw));
+            }
         }
         drop(base_conf_guard);
 
         println!(""); // Empty line before user conf resources
-        
+
         // HTTP Routes
-        tracing::debug!(component = "config_server", event = "listing_routes", "About to call list_routes");
+        tracing::debug!(
+            component = "config_server",
+            event = "listing_routes",
+            "About to call list_routes"
+        );
         let list_data = self.list_routes();
-        tracing::debug!(component = "config_server", event = "listed_routes", count = list_data.data.len(), "list_routes returned");
+        tracing::debug!(
+            component = "config_server",
+            event = "listed_routes",
+            count = list_data.data.len(),
+            "list_routes returned"
+        );
         println!(
             "HTTPRoutes (count: {}, version: {}):",
             list_data.data.len(),
@@ -914,7 +926,7 @@ impl ConfigServer {
         for (idx, secret) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(secret));
         }
-        
+
         println!("==========================\n");
     }
 }
