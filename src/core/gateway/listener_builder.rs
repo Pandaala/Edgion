@@ -5,14 +5,23 @@
 //! from the main gateway bootstrap process.
 
 use anyhow::Result;
+use pingora_core::apps::HttpServerOptions;
+use pingora_core::connectors::TransportConnector;
+use pingora_core::listeners::Listeners;
 use pingora_core::server::configuration::ServerConf;
 use pingora_core::server::Server;
+use pingora_core::services::listening::Service;
 use pingora_proxy::http_proxy_service;
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::net::UdpSocket;
 
-use crate::core::routes::http_routes::EdgionHttp;
 use crate::core::observe::AccessLogger;
+use crate::core::routes::get_global_route_manager;
+use crate::core::routes::http_routes::EdgionHttp;
+use crate::core::routes::tcp_routes::{EdgionTcp, get_global_tcp_route_manager};
+use crate::core::routes::tls_routes::{EdgionTls, get_global_tls_route_manager};
+use crate::core::routes::udp_routes::{EdgionUdp, get_global_udp_route_manager};
 use crate::core::tls::tls_pingora::TlsCallback;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::gateway::Listener;
@@ -57,8 +66,6 @@ pub fn add_http_listener(
     enable_tls: bool,
     enable_http2: bool,
 ) -> Result<()> {
-    use crate::core::routes::get_global_route_manager;
-    
     let listener_name = context.listener.name.clone();
     let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
     let addr = format!("{}:{}", host, context.listener.port);
@@ -99,7 +106,6 @@ pub fn add_http_listener(
     // Enable h2c (HTTP/2 Cleartext) for non-TLS listeners if enable_http2 is true
     if !enable_tls && enable_http2 {
         if let Some(http_logic) = http_service.app_logic_mut() {
-            use pingora_core::apps::HttpServerOptions;
             let mut http_server_options = HttpServerOptions::default();
             http_server_options.h2c = true;  // Enable HTTP/2 without TLS
             http_logic.server_options = Some(http_server_options);
@@ -151,12 +157,6 @@ pub fn add_tcp_listener(
     server: &mut Server,
     context: &ListenerContext,
 ) -> Result<()> {
-    use pingora_core::services::listening::Service;
-    use pingora_core::listeners::Listeners;
-    use pingora_core::connectors::TransportConnector;
-    use crate::core::routes::tcp_routes::EdgionTcp;
-    use crate::core::routes::tcp_routes::get_global_tcp_route_manager;
-    
     let listener_name = context.listener.name.clone();
     let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
     let addr = format!("{}:{}", host, context.listener.port);
@@ -210,9 +210,6 @@ pub fn add_udp_listener(
     _server: &mut Server,
     context: &ListenerContext,
 ) -> Result<()> {
-    use crate::core::routes::udp_routes::{EdgionUdp, get_global_udp_route_manager};
-    use tokio::net::UdpSocket;
-    
     let listener_name = context.listener.name.clone();
     let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
     let addr = format!("{}:{}", host, context.listener.port);
@@ -266,13 +263,6 @@ pub fn add_tls_terminate_to_tcp_listener(
     server: &mut Server,
     context: &ListenerContext,
 ) -> Result<()> {
-    use pingora_core::services::listening::Service;
-    use pingora_core::listeners::Listeners;
-    use pingora_core::connectors::TransportConnector;
-    use crate::core::routes::tls_routes::EdgionTls;
-    use crate::core::routes::tls_routes::get_global_tls_route_manager;
-    use crate::core::tls::tls_pingora::TlsCallback;
-    
     let listener_name = context.listener.name.clone();
     let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
     let addr = format!("{}:{}", host, context.listener.port);
