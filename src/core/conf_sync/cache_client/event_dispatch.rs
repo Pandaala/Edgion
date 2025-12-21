@@ -3,6 +3,7 @@ use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as Confi
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::{ResourceMeta, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 use kube::{Resource, ResourceExt};
+use rand::Rng;
 use std::sync::{Arc, RwLock};
 use tonic::transport::Channel;
 
@@ -61,7 +62,13 @@ where
         let response = client.list(list_request).await?;
         let list_data = response.into_inner();
 
-        tracing::info!(kind = T::kind_name(), bytes = list_data.data.len(), version = list_data.resource_version, context = log_context, "Listing resources");
+        tracing::info!(
+            kind = T::kind_name(),
+            bytes = list_data.data.len(),
+            version = list_data.resource_version,
+            context = log_context,
+            "Listing resources"
+        );
 
         // Parse JSON array directly to concrete type
         let mut resources: Vec<T> = serde_json::from_str(&list_data.data).map_err(|e| {
@@ -113,7 +120,9 @@ where
                     None => {
                         tracing::error!(kind = T::kind_name(), "gRPC conf_client not initialized");
                         drop(client_guard);
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        // Add Jitter: 0 ~ 1000ms
+                        let jitter_ms = rand::thread_rng().gen_range(0..1000);
+                        tokio::time::sleep(std::time::Duration::from_millis(2000 + jitter_ms)).await;
                         continue;
                     }
                 };
@@ -125,8 +134,13 @@ where
                             let cache = cache_data.read().unwrap();
                             cache.len()
                         };
-                        tracing::info!(kind = T::kind_name(), count = count, version = resource_version, "List completed, starting watch");
-                        
+                        tracing::info!(
+                            kind = T::kind_name(),
+                            count = count,
+                            version = resource_version,
+                            "List completed, starting watch"
+                        );
+
                         // Set ready after first successful list
                         if !is_ready {
                             let mut cache = cache_data.write().unwrap();
@@ -134,13 +148,15 @@ where
                             is_ready = true;
                             tracing::info!(kind = T::kind_name(), "Cache is ready");
                         }
-                        
+
                         resource_version
                     }
                     Err(e) => {
                         tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
                         drop(client_guard);
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        // Add Jitter: 0 ~ 1000ms
+                        let jitter_ms = rand::thread_rng().gen_range(0..1000);
+                        tokio::time::sleep(std::time::Duration::from_millis(2000 + jitter_ms)).await;
                         continue;
                     }
                 };
@@ -202,7 +218,7 @@ where
                                                 Ok(mut resource) => {
                                                     // Pre-parse to populate runtime-only fields
                                                     resource.pre_parse();
-                                                    
+
                                                     tracing::info!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), version = resource.get_version(), "Received resource from watch event");
                                                     let change = match event_type {
                                                         "add" => ResourceChange::EventAdd,
@@ -261,4 +277,3 @@ where
         Ok(())
     }
 }
-
