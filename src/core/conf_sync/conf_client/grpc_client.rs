@@ -5,6 +5,7 @@ use crate::core::conf_sync::proto::{
 use crate::types::prelude_resources::*;
 use crate::types::GatewayBaseConf;
 use crate::types::ResourceKind::*;
+use rand::Rng;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;
@@ -86,37 +87,59 @@ impl ConfigSyncClient {
     }
 
     /// Fetch and initialize base configuration from conf_server
+    /// This method will block and retry infinitely until the base configuration is successfully fetched.
     async fn fetch_and_init_base_conf(&mut self, gateway_class_key: &str) -> Result<(), tonic::Status> {
-        let request = tonic::Request::new(GetBaseConfRequest {
-            gateway_class: gateway_class_key.to_string(),
-        });
+        // Loop until success
+        loop {
+            // Clone request for potential retries (Request is consumed by call)
+            // Note: In tonic, Request cannot be easily cloned if it contains metadata/extensions that are not cloneable.
+            // But here GetBaseConfRequest is a simple proto struct, so we can just recreate it.
+            let req = tonic::Request::new(GetBaseConfRequest {
+                gateway_class: gateway_class_key.to_string(),
+            });
 
-        let response = self.conf_client_handle.get_base_conf(request).await?;
-        let base_conf_response = response.into_inner();
+            match self.conf_client_handle.get_base_conf(req).await {
+                Ok(response) => {
+                    let base_conf_response = response.into_inner();
+                    tracing::info!(base_conf_bytes = base_conf_response.base_conf.len(), "Init base_conf");
 
-        tracing::info!(base_conf_bytes = base_conf_response.base_conf.len(), "Init base_conf");
+                    // Parse GatewayBaseConf
+                    if !base_conf_response.base_conf.is_empty() {
+                        match serde_json::from_str::<GatewayBaseConf>(&base_conf_response.base_conf) {
+                            Ok(mut base_conf) => {
+                                // Rebuild gateway_map after deserialization
+                                base_conf.rebuild_gateway_map();
 
-        // Parse GatewayBaseConf
-        if !base_conf_response.base_conf.is_empty() {
-            match serde_json::from_str::<GatewayBaseConf>(&base_conf_response.base_conf) {
-                Ok(mut base_conf) => {
-                    // Rebuild gateway_map after deserialization
-                    base_conf.rebuild_gateway_map();
-
-                    println!("[ConfigClient] Parsed GatewayBaseConf");
-                    self.config_client.init_base_conf(base_conf);
-                    tracing::info!("Base configuration initialized");
+                                println!("[ConfigClient] Parsed GatewayBaseConf");
+                                self.config_client.init_base_conf(base_conf);
+                                tracing::info!("Base configuration initialized");
+                                return Ok(());
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "Failed to parse base conf, will retry");
+                                // If parsing fails, it might be a data issue, but we still retry in case it's transient
+                                // or if we want to wait for a fix on the server side.
+                            }
+                        }
+                    } else {
+                        tracing::warn!("Received empty base configuration, will retry");
+                    }
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "Failed to parse base conf");
-                    return Err(tonic::Status::internal(format!("Failed to parse base conf: {}", e)));
+                    tracing::warn!(error = %e, "Failed to fetch base conf, will retry");
                 }
             }
-        } else {
-            tracing::warn!("Received empty base configuration");
-        }
 
-        Ok(())
+            // Wait before retrying: 2s + Jitter
+            let jitter_ms = rand::thread_rng().gen_range(0..1000);
+            let sleep_duration = Duration::from_millis(2000 + jitter_ms);
+
+            tracing::info!(
+                retry_in_ms = sleep_duration.as_millis(),
+                "Waiting for controller to become available..."
+            );
+            tokio::time::sleep(sleep_duration).await;
+        }
     }
 
     pub async fn init_base_conf(&mut self) -> Result<(), tonic::Status> {
