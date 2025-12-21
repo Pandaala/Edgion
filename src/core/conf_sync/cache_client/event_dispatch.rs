@@ -201,6 +201,16 @@ where
                     loop {
                         match stream.message().await {
                             Ok(Some(watch_response)) => {
+                                // Check for server-side protocol errors first
+                                if !watch_response.err.is_empty() {
+                                    tracing::warn!(
+                                        kind = T::kind_name(),
+                                        error = watch_response.err,
+                                        "Received error signal from server, re-listing"
+                                    );
+                                    break 'watch_loop;
+                                }
+
                                 let _ = watch_response.resource_version; // Track version from response
 
                                 let events: Vec<serde_json::Value> = match serde_json::from_str(&watch_response.data) {
