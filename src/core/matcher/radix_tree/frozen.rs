@@ -4,6 +4,7 @@
 
 use crate::core::matcher::radix_tree::builder::BuildNode;
 use crate::core::matcher::radix_tree::error::RouterError;
+use smallvec::SmallVec;
 
 /// A flattened node optimized for cache performance.
 ///
@@ -307,14 +308,14 @@ impl FrozenRadixTree {
     /// let tree = builder.freeze().unwrap();
     ///
     /// // Returns all matching prefixes
-    /// assert_eq!(tree.match_all_prefixes("/api/users/active/123"), vec![1, 2, 3]);
-    /// assert_eq!(tree.match_all_prefixes("/api/users"), vec![1, 2]);
-    /// assert_eq!(tree.match_all_prefixes("/api"), vec![1]);
-    /// assert_eq!(tree.match_all_prefixes("/home"), Vec::<u32>::new());
+    /// assert_eq!(tree.match_all_prefixes("/api/users/active/123").as_slice(), &[1, 2, 3]);
+    /// assert_eq!(tree.match_all_prefixes("/api/users").as_slice(), &[1, 2]);
+    /// assert_eq!(tree.match_all_prefixes("/api").as_slice(), &[1]);
+    /// assert_eq!(tree.match_all_prefixes("/home").as_slice(), &[] as &[u32]);
     /// ```
-    pub fn match_all_prefixes(&self, path: &str) -> Vec<u32> {
+    pub fn match_all_prefixes(&self, path: &str) -> SmallVec<[u32; 8]> {
         let mut iter = PrefixMatchIter::new(self, path.as_bytes());
-        let mut results = Vec::with_capacity(8);  // Pre-allocate for typical nesting depth
+        let mut results = SmallVec::<[u32; 8]>::new();
 
         while let Some((node_idx, has_values)) = iter.next_match() {
             if has_values {
