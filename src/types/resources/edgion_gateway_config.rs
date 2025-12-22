@@ -273,10 +273,20 @@ pub struct SecurityProtectConfig {
     /// Requests with X-Forwarded-For headers exceeding this limit will be rejected with 400 Bad Request
     #[serde(default = "default_xff_limit")]
     pub x_forwarded_for_limit: usize,
+    
+    /// Require SNI and Host header to match for HTTPS requests (default: true)
+    /// When enabled, HTTPS requests with mismatched SNI and Host will be rejected with 421 Misdirected Request
+    /// HTTP requests (no SNI) are not affected by this validation
+    #[serde(default = "default_require_sni_host_match")]
+    pub require_sni_host_match: bool,
 }
 
 fn default_xff_limit() -> usize {
     200
+}
+
+fn default_require_sni_host_match() -> bool {
+    true
 }
 
 #[cfg(test)]

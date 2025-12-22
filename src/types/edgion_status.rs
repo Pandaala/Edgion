@@ -14,6 +14,9 @@ pub enum EdgionStatus {
     /// Route Not Found
     RouteNotFound = 404_01,
 
+    /// SNI and Host header mismatch (HTTP 421)
+    SniHostMismatch = 421_01,
+
     /// Upstream route not matched
     UpstreamNotRouteMatched = 500_01,
 

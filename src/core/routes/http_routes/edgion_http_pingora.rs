@@ -13,7 +13,7 @@ use tracing::log::error;
 use super::edgion_http::EdgionHttp;
 use crate::types::EdgionHttpContext;
 use crate::types::filters::PluginRunningResult;
-use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
+use crate::core::gateway::{end_response_400, end_response_421, end_response_404, end_response_500};
 use crate::core::backends::get_peer;
 use crate::types::EdgionStatus;
 use crate::types::err::EdError;
@@ -91,6 +91,30 @@ async fn build_request_metadata(
                 end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
                 return Ok(true); // Response sent
             }
+        }
+    }
+
+    // Extract SNI from TLS connection (if present)
+    // Note: In Pingora's ProxyHttp architecture, SNI is handled at TLS layer before HTTP processing.
+    // At HTTP layer (Session), we don't have direct access to SNI from the TLS handshake.
+    // For now, we leave SNI as None. If SNI validation is critical, consider:
+    // 1. Capturing SNI at listener/TLS layer and passing it through context
+    // 2. Using a custom Session wrapper that exposes SNI
+    // For HTTPS connections, Host header should match the original SNI anyway (RFC requirement)
+    ctx.request_info.sni = None;  // TODO: Find way to extract SNI from Pingora Session
+
+    // Validate SNI matches Host header (for HTTPS only)
+    if let Some(security_config) = &edgion_http.edgion_gateway_config.spec.security_protect {
+        if security_config.require_sni_host_match {
+            if let Some(ref sni) = ctx.request_info.sni {
+                // HTTPS request: validate SNI matches hostname
+                if !sni.eq_ignore_ascii_case(&ctx.request_info.hostname) {
+                    ctx.add_error(EdgionStatus::SniHostMismatch);
+                    end_response_421(session, ctx, &edgion_http.server_header_opts).await?;
+                    return Ok(true); // Response sent
+                }
+            }
+            // HTTP request (no SNI): skip validation
         }
     }
 

@@ -3,12 +3,6 @@ kind: EdgionGatewayConfig
 metadata:
   name: example-gateway
 spec:
-  # 监听器默认配置
-  listenerDefaults:
-    defaultTLSMode: Terminate
-    allowInsecure: true
-    sniMatchingPolicy: Strict
-
   # Server 配置（Pingora 服务器参数）
   # todo 等待实现
   server:
@@ -32,7 +26,8 @@ spec:
 
   # 安全防护配置
   securityProtect:
-    xForwardedForLimit: 200  # X-Forwarded-For header 最大长度（字节），超过则返回 400
+    xForwardedForLimit: 200     # X-Forwarded-For header 最大长度（字节），超过则返回 400
+    requireSniHostMatch: true   # 要求 SNI 和 Host header 必须匹配（HTTPS），不匹配返回 421
 
   # HTTP 超时配置
   httpTimeout:

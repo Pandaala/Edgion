@@ -62,6 +62,10 @@ pub struct RequestInfo {
     /// Original X-Forwarded-For header value (before appending client IP)
     #[serde(rename = "x-forwarded-for", skip_serializing_if = "Option::is_none")]
     pub x_forwarded_for: Option<String>,
+    /// SNI (Server Name Indication) from TLS handshake
+    /// Only present for HTTPS connections; HTTP connections will have None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sni: Option<String>,
     /// Auto-discovered protocol (e.g., "grpc", "grpc-web", "websocket")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discover_protocol: Option<String>,
