@@ -16,6 +16,10 @@ path = "src/bin/edgion_gateway.rs"
 name = "edgion-controller"
 path = "src/bin/edgion_controller.rs"
 
+[[bin]]
+name = "edgion-ctl"
+path = "src/bin/edgion_ctl.rs"
+
 [[example]]
 name = "test_server"
 path = "examples/testing/test_server.rs"
@@ -126,6 +130,13 @@ mockall = "0.14.0"
 # Test client dependencies
 reqwest = { version = "0.12", features = ["json"] }
 console = "0.15"
+
+# CLI table formatting
+tabled = "0.15"
+
+# Unix Socket support for HTTP
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
+tower = "0.5"
 
 [build-dependencies]
 tonic-build = "0.12"
