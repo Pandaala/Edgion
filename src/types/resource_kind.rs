@@ -41,23 +41,24 @@ impl ResourceKind {
     }
 
     pub fn from_kind_name(kind_str: &str) -> Option<Self> {
-        match kind_str {
-            "Unspecified" => Some(ResourceKind::Unspecified),
-            "GatewayClass" => Some(ResourceKind::GatewayClass),
-            "EdgionGatewayConfig" | "ZtraceGatewayConfig" => Some(ResourceKind::EdgionGatewayConfig),
-            "Gateway" => Some(ResourceKind::Gateway),
-            "HTTPRoute" => Some(ResourceKind::HTTPRoute),
-            "Service" => Some(ResourceKind::Service),
-            "EndpointSlice" => Some(ResourceKind::EndpointSlice),
-            "EdgionTls" | "ZtraceTls" => Some(ResourceKind::EdgionTls),
-            "Secret" => Some(ResourceKind::Secret),
-            "EdgionPlugins" => Some(ResourceKind::EdgionPlugins),
-            "GRPCRoute" => Some(ResourceKind::GRPCRoute),
-            "TCPRoute" => Some(ResourceKind::TCPRoute),
-            "UDPRoute" => Some(ResourceKind::UDPRoute),
-            "PluginMetaData" => Some(ResourceKind::PluginMetaData),
-            "TLSRoute" => Some(ResourceKind::TLSRoute),
-            "LinkSys" => Some(ResourceKind::LinkSys),
+        // Case-insensitive matching for API convenience
+        match kind_str.to_lowercase().as_str() {
+            "unspecified" => Some(ResourceKind::Unspecified),
+            "gatewayclass" => Some(ResourceKind::GatewayClass),
+            "edgiongwconfig" | "edgiongatewayconfig" | "ztracegatewayconfig" => Some(ResourceKind::EdgionGatewayConfig),
+            "gateway" => Some(ResourceKind::Gateway),
+            "httproute" => Some(ResourceKind::HTTPRoute),
+            "service" => Some(ResourceKind::Service),
+            "endpointslice" => Some(ResourceKind::EndpointSlice),
+            "edgiontls" | "ztracetls" => Some(ResourceKind::EdgionTls),
+            "secret" => Some(ResourceKind::Secret),
+            "edgionplugins" => Some(ResourceKind::EdgionPlugins),
+            "grpcroute" => Some(ResourceKind::GRPCRoute),
+            "tcproute" => Some(ResourceKind::TCPRoute),
+            "udproute" => Some(ResourceKind::UDPRoute),
+            "pluginmetadata" => Some(ResourceKind::PluginMetaData),
+            "tlsroute" => Some(ResourceKind::TLSRoute),
+            "linksys" => Some(ResourceKind::LinkSys),
             _ => None,
         }
     }

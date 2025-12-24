@@ -64,6 +64,36 @@ pub fn is_cluster_scoped(kind: &ResourceKind) -> bool {
     matches!(kind, ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig)
 }
 
+/// Update resource_version for a resource in non-k8s mode
+pub fn update_resource_version<T>(resource: &mut T)
+where
+    T: kube::ResourceExt,
+{
+    let version = crate::core::utils::next_resource_version();
+    resource.meta_mut().resource_version = Some(version.to_string());
+}
+
+/// Parse resource and optionally update resource_version
+/// 
+/// If `update_version` is true, automatically updates the resource_version
+/// by calling next_resource_version(). This should be true in non-k8s mode
+/// for create/update operations.
+pub fn parse_resource_and_update_version<T>(
+    body: &str,
+    update_version: bool,
+) -> Result<T, StatusCode>
+where
+    T: serde::de::DeserializeOwned + kube::ResourceExt,
+{
+    let mut resource = parse_resource(body)?;
+    
+    if update_version {
+        update_resource_version(&mut resource);
+    }
+    
+    Ok(resource)
+}
+
 /// Helper macro to convert list data to JSON Value Vec
 #[macro_export]
 macro_rules! list_to_json {

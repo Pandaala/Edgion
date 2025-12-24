@@ -17,6 +17,7 @@ impl EdgionClient {
     pub fn new(server: Option<String>, socket: Option<PathBuf>) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
+            .pool_max_idle_per_host(0)  // Disable connection pooling
             .build()
             .context("Failed to create HTTP client")?;
         

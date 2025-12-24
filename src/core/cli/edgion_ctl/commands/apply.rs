@@ -65,6 +65,9 @@ async fn apply_file(client: &EdgionClient, file: &Path, dry_run: bool) -> Result
     
     let kind = metadata.kind.as_ref()
         .context("Missing 'kind' field in resource")?;
+    // Convert kind to lowercase for API compatibility
+    let kind = kind.to_lowercase();
+    let kind = kind.as_str();
     let name = metadata.name.as_ref()
         .context("Missing 'metadata.name' field in resource")?;
     let namespace = metadata.namespace.as_deref();

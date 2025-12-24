@@ -279,7 +279,10 @@ pub async fn create_namespaced(
     // Parse, persist, and update cache in one step
     match kind {
         crate::types::ResourceKind::HTTPRoute => {
-            let route: HTTPRoute = parse_resource(&content)?;
+            let route: HTTPRoute = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -288,7 +291,10 @@ pub async fn create_namespaced(
             state.config_server.routes.apply_change(ResourceChange::EventAdd, route);
         }
         crate::types::ResourceKind::GRPCRoute => {
-            let route: GRPCRoute = parse_resource(&content)?;
+            let route: GRPCRoute = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -297,7 +303,10 @@ pub async fn create_namespaced(
             state.config_server.grpc_routes.apply_change(ResourceChange::EventAdd, route);
         }
         crate::types::ResourceKind::TCPRoute => {
-            let route: TCPRoute = parse_resource(&content)?;
+            let route: TCPRoute = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -306,7 +315,10 @@ pub async fn create_namespaced(
             state.config_server.tcp_routes.apply_change(ResourceChange::EventAdd, route);
         }
         crate::types::ResourceKind::UDPRoute => {
-            let route: UDPRoute = parse_resource(&content)?;
+            let route: UDPRoute = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -315,7 +327,10 @@ pub async fn create_namespaced(
             state.config_server.udp_routes.apply_change(ResourceChange::EventAdd, route);
         }
         crate::types::ResourceKind::TLSRoute => {
-            let route: TLSRoute = parse_resource(&content)?;
+            let route: TLSRoute = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -324,7 +339,10 @@ pub async fn create_namespaced(
             state.config_server.tls_routes.apply_change(ResourceChange::EventAdd, route);
         }
         crate::types::ResourceKind::Service => {
-            let service: Service = parse_resource(&content)?;
+            let service: Service = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &service)?;
             let json_content = serde_json::to_string(&service)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -333,7 +351,10 @@ pub async fn create_namespaced(
             state.config_server.services.apply_change(ResourceChange::EventAdd, service);
         }
         crate::types::ResourceKind::EndpointSlice => {
-            let ep: EndpointSlice = parse_resource(&content)?;
+            let ep: EndpointSlice = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &ep)?;
             let json_content = serde_json::to_string(&ep)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -342,7 +363,10 @@ pub async fn create_namespaced(
             state.config_server.endpoint_slices.apply_change(ResourceChange::EventAdd, ep);
         }
         crate::types::ResourceKind::EdgionTls => {
-            let tls: EdgionTls = parse_resource(&content)?;
+            let tls: EdgionTls = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &tls)?;
             let json_content = serde_json::to_string(&tls)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -351,7 +375,10 @@ pub async fn create_namespaced(
             state.config_server.apply_edgion_tls_change(ResourceChange::EventAdd, tls);
         }
         crate::types::ResourceKind::EdgionPlugins => {
-            let plugins: EdgionPlugins = parse_resource(&content)?;
+            let plugins: EdgionPlugins = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &plugins)?;
             let json_content = serde_json::to_string(&plugins)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -360,7 +387,10 @@ pub async fn create_namespaced(
             state.config_server.edgion_plugins.apply_change(ResourceChange::EventAdd, plugins);
         }
         crate::types::ResourceKind::PluginMetaData => {
-            let metadata: PluginMetaData = parse_resource(&content)?;
+            let metadata: PluginMetaData = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &metadata)?;
             let json_content = serde_json::to_string(&metadata)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -369,7 +399,10 @@ pub async fn create_namespaced(
             state.config_server.plugin_metadata.apply_change(ResourceChange::EventAdd, metadata);
         }
         crate::types::ResourceKind::LinkSys => {
-            let linksys: LinkSys = parse_resource(&content)?;
+            let linksys: LinkSys = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &linksys)?;
             let json_content = serde_json::to_string(&linksys)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -378,7 +411,10 @@ pub async fn create_namespaced(
             state.config_server.link_sys.apply_change(ResourceChange::EventAdd, linksys);
         }
         crate::types::ResourceKind::Secret => {
-            let secret: Secret = parse_resource(&content)?;
+            let secret: Secret = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &secret)?;
             let json_content = serde_json::to_string(&secret)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -415,7 +451,10 @@ pub async fn update_namespaced(
     // Parse, validate, persist, and update cache in one step
     match kind {
         crate::types::ResourceKind::HTTPRoute => {
-            let route: HTTPRoute = parse_resource(&content)?;
+            let route: HTTPRoute = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -424,7 +463,10 @@ pub async fn update_namespaced(
             state.config_server.routes.apply_change(ResourceChange::EventUpdate, route);
         }
         crate::types::ResourceKind::GRPCRoute => {
-            let route: GRPCRoute = parse_resource(&content)?;
+            let route: GRPCRoute = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -433,7 +475,10 @@ pub async fn update_namespaced(
             state.config_server.grpc_routes.apply_change(ResourceChange::EventUpdate, route);
         }
         crate::types::ResourceKind::TCPRoute => {
-            let route: TCPRoute = parse_resource(&content)?;
+            let route: TCPRoute = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -442,7 +487,10 @@ pub async fn update_namespaced(
             state.config_server.tcp_routes.apply_change(ResourceChange::EventUpdate, route);
         }
         crate::types::ResourceKind::UDPRoute => {
-            let route: UDPRoute = parse_resource(&content)?;
+            let route: UDPRoute = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -451,7 +499,10 @@ pub async fn update_namespaced(
             state.config_server.udp_routes.apply_change(ResourceChange::EventUpdate, route);
         }
         crate::types::ResourceKind::TLSRoute => {
-            let route: TLSRoute = parse_resource(&content)?;
+            let route: TLSRoute = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -460,7 +511,10 @@ pub async fn update_namespaced(
             state.config_server.tls_routes.apply_change(ResourceChange::EventUpdate, route);
         }
         crate::types::ResourceKind::Service => {
-            let service: Service = parse_resource(&content)?;
+            let service: Service = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &service)?;
             let json_content = serde_json::to_string(&service)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -469,7 +523,10 @@ pub async fn update_namespaced(
             state.config_server.services.apply_change(ResourceChange::EventUpdate, service);
         }
         crate::types::ResourceKind::EndpointSlice => {
-            let ep: EndpointSlice = parse_resource(&content)?;
+            let ep: EndpointSlice = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &ep)?;
             let json_content = serde_json::to_string(&ep)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -478,7 +535,10 @@ pub async fn update_namespaced(
             state.config_server.endpoint_slices.apply_change(ResourceChange::EventUpdate, ep);
         }
         crate::types::ResourceKind::EdgionTls => {
-            let tls: EdgionTls = parse_resource(&content)?;
+            let tls: EdgionTls = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &tls)?;
             let json_content = serde_json::to_string(&tls)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -487,7 +547,10 @@ pub async fn update_namespaced(
             state.config_server.apply_edgion_tls_change(ResourceChange::EventUpdate, tls);
         }
         crate::types::ResourceKind::EdgionPlugins => {
-            let plugins: EdgionPlugins = parse_resource(&content)?;
+            let plugins: EdgionPlugins = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &plugins)?;
             let json_content = serde_json::to_string(&plugins)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -496,7 +559,10 @@ pub async fn update_namespaced(
             state.config_server.edgion_plugins.apply_change(ResourceChange::EventUpdate, plugins);
         }
         crate::types::ResourceKind::PluginMetaData => {
-            let metadata: PluginMetaData = parse_resource(&content)?;
+            let metadata: PluginMetaData = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &metadata)?;
             let json_content = serde_json::to_string(&metadata)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -505,7 +571,10 @@ pub async fn update_namespaced(
             state.config_server.plugin_metadata.apply_change(ResourceChange::EventUpdate, metadata);
         }
         crate::types::ResourceKind::LinkSys => {
-            let linksys: LinkSys = parse_resource(&content)?;
+            let linksys: LinkSys = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &linksys)?;
             let json_content = serde_json::to_string(&linksys)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -514,7 +583,10 @@ pub async fn update_namespaced(
             state.config_server.link_sys.apply_change(ResourceChange::EventUpdate, linksys);
         }
         crate::types::ResourceKind::Secret => {
-            let secret: Secret = parse_resource(&content)?;
+            let secret: Secret = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &secret)?;
             let json_content = serde_json::to_string(&secret)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

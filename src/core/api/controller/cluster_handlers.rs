@@ -61,7 +61,10 @@ pub async fn create_cluster(
     // Parse, validate, and persist
     match kind {
         crate::types::ResourceKind::GatewayClass => {
-            let gc: GatewayClass = parse_resource(&content)?;
+            let gc: GatewayClass = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &gc)?;
             let json_content = serde_json::to_string(&gc)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -69,7 +72,10 @@ pub async fn create_cluster(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         crate::types::ResourceKind::EdgionGatewayConfig => {
-            let cfg: EdgionGatewayConfig = parse_resource(&content)?;
+            let cfg: EdgionGatewayConfig = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &cfg)?;
             let json_content = serde_json::to_string(&cfg)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -108,7 +114,10 @@ pub async fn update_cluster(
     // Parse, validate, and persist
     match kind {
         crate::types::ResourceKind::GatewayClass => {
-            let gc: GatewayClass = parse_resource(&content)?;
+            let gc: GatewayClass = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &gc)?;
             let json_content = serde_json::to_string(&gc)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -116,7 +125,10 @@ pub async fn update_cluster(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         crate::types::ResourceKind::EdgionGatewayConfig => {
-            let cfg: EdgionGatewayConfig = parse_resource(&content)?;
+            let cfg: EdgionGatewayConfig = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
             validate_resource(&state.schema_validator, kind, &cfg)?;
             let json_content = serde_json::to_string(&cfg)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
