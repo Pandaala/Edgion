@@ -1,6 +1,7 @@
 use crate::core::cli::config::EdgionControllerConfig;
 use crate::core::conf_load::Loader;
 use crate::core::conf_sync::{ConfigServer, ConfigServerEventDispatcher, ConfigSyncServer};
+use crate::core::conf_mgr::{FileSystemStore, load_all_resources_from_store, ResourceMgrAPI};
 use crate::core::observe::init_logging;
 use crate::core::utils;
 use crate::types::{prefix_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
@@ -93,6 +94,39 @@ impl EdgionControllerCli {
         let config_server = Arc::new(ConfigServer::new(base_conf, &config.conf_sync));
         let sync_server = ConfigSyncServer::new(config_server.clone());
 
+        // Create FileSystemStore for conf_store system
+        let conf_dir = loader_args.dir.clone().unwrap_or_else(|| "./conf".to_string());
+        let file_store = FileSystemStore::new(conf_dir);
+        
+        // Create ResourceMgrAPI and register filesystem backend
+        let resource_mgr = Arc::new(ResourceMgrAPI::new());
+        resource_mgr.register_backend("filesystem".to_string(), file_store.clone());
+        if let Err(e) = resource_mgr.set_default_backend("filesystem".to_string()) {
+            tracing::error!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                event = "resource_mgr_init_error",
+                error = %e,
+                "Failed to set default backend"
+            );
+            return Err(anyhow!("Failed to initialize resource manager: {}", e));
+        }
+        
+        // Load all user resources from storage into ConfigServer
+        tracing::info!(
+            component = COMPONENT_EDGION_CONTROLLER,
+            event = "loading_user_conf",
+            "Loading all user resources from storage"
+        );
+        if let Err(e) = load_all_resources_from_store(file_store.clone(), config_server.clone()).await {
+            tracing::error!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                event = "user_conf_load_error",
+                error = %e,
+                "Failed to load user resources from storage"
+            );
+            return Err(anyhow!("Failed to load user configuration: {}", e));
+        }
+        
         // Register dispatcher before using the loader
         loader
             .register_dispatcher(config_server.clone() as Arc<dyn ConfigServerEventDispatcher>)
@@ -120,11 +154,11 @@ impl EdgionControllerCli {
             "Starting Admin API server"
         );
 
-        // Run all three services concurrently using tokio::join!
-        let (sync_result, loader_result, admin_result) = tokio::join!(
+        // Run both services concurrently using tokio::join!
+        // Note: loader.run() is intentionally removed as we're using conf_store instead of file watcher
+        let (sync_result, admin_result) = tokio::join!(
             sync_server.serve(addr),
-            loader.run(),
-            crate::core::api::controller::serve(config_server.clone(), admin_port)
+            crate::core::api::controller::serve(config_server.clone(), Some(resource_mgr.clone()), admin_port)
         );
 
         // Check results - if any service fails, return error
@@ -134,15 +168,6 @@ impl EdgionControllerCli {
                 event = "grpc_server_error",
                 error = %e,
                 "gRPC conf_server failed"
-            );
-        }
-
-        if let Err(e) = &loader_result {
-            tracing::error!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                event = "loader_error",
-                error = %e,
-                "Configuration loader failed"
             );
         }
 
@@ -156,7 +181,6 @@ impl EdgionControllerCli {
         }
 
         sync_result.map_err(|e| anyhow!("gRPC conf_server error: {}", e))?;
-        loader_result?;
         admin_result?;
 
         tracing::info!(
