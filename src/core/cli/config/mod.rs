@@ -42,6 +42,11 @@ pub struct EdgionControllerConfig {
     #[command(flatten)]
     #[serde(default)]
     pub conf_sync: ConfSyncConfig,
+
+    /// K8s mode (explicit CLI override)
+    #[arg(long)]
+    #[serde(default)]
+    pub k8s_mode: Option<bool>,
 }
 
 fn default_prefix_dir() -> PathBuf {

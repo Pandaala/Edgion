@@ -19,6 +19,11 @@
 # 开发环境建议使用相对路径，生产环境使用绝对路径
 prefix_dir = "runtime"
 
+# K8s mode (optional, can also use CLI --k8s-mode or auto-detect via env)
+# K8s 模式（可选，也可使用 CLI --k8s-mode 或通过环境变量自动检测）
+# 优先级: CLI 参数 > 环境变量 (KUBERNETES_SERVICE_HOST) > 配置文件 > 默认值(false)
+# k8s_mode = false
+
 [server]
 # gRPC 服务器监听地址
 # 用于接收来自 Gateway 的配置同步请求

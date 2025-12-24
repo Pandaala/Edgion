@@ -7,6 +7,9 @@ pub use net::*;
 pub mod duration;
 pub use duration::parse_duration;
 
+pub mod global_state;
+pub use global_state::{detect_k8s_mode, set_k8s_mode, is_k8s_mode};
+
 /// Get the number of available CPU cores on the system
 /// 
 /// Returns the number of logical CPU cores available to the current process.

@@ -42,6 +42,10 @@ impl EdgionControllerCli {
         // Load and merge configuration
         let config = EdgionControllerConfig::load(self.config.clone())?;
 
+        // Detect and set K8s mode (must be done early)
+        let k8s_mode = utils::detect_k8s_mode(self.config.k8s_mode, config.k8s_mode);
+        utils::set_k8s_mode(k8s_mode);
+
         // Initialize prefix directory (LazyLock auto-initializes on first access)
         let _ = prefix_dir();
 
@@ -55,6 +59,7 @@ impl EdgionControllerCli {
             event = "system_start",
             version = VERSION,
             allocator = crate::allocator_name(),
+            k8s_mode = k8s_mode,
             grpc_addr = %config.grpc_listen(),
             admin_addr = %config.admin_listen(),
             log_level = %config.log_level(),
