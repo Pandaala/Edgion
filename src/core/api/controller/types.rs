@@ -1,12 +1,13 @@
 use serde::Serialize;
 use std::sync::Arc;
 use crate::core::conf_sync::ConfigServer;
-use crate::core::conf_mgr::ResourceMgrAPI;
+use crate::core::conf_mgr::{ResourceMgrAPI, SchemaValidator};
 
-/// Admin state containing both ConfigServer and optional ResourceMgrAPI
+/// Admin state containing ConfigServer, optional ResourceMgrAPI, and SchemaValidator
 pub struct AdminState {
     pub config_server: Arc<ConfigServer>,
     pub resource_mgr: Option<Arc<ResourceMgrAPI>>,
+    pub schema_validator: Arc<SchemaValidator>,
 }
 
 /// Standard API response format

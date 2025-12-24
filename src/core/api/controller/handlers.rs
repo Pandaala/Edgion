@@ -15,6 +15,36 @@ use kube::ResourceExt;
 
 use super::types::*;
 
+/// Helper function to validate a resource against its schema
+fn validate_resource<T: serde::Serialize>(
+    validator: &crate::core::conf_mgr::SchemaValidator,
+    kind: ResourceKind,
+    resource: &T,
+) -> Result<(), StatusCode> {
+    let json_value = serde_json::to_value(resource)
+        .map_err(|e| {
+            tracing::warn!(
+                component = "unified_api",
+                error = %e,
+                "Failed to convert resource to JSON for validation"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    validator.validate(kind, &json_value)
+        .map_err(|e| {
+            tracing::warn!(
+                component = "unified_api",
+                kind = ?kind,
+                error = %e,
+                "Schema validation failed"
+            );
+            StatusCode::BAD_REQUEST
+        })?;
+    
+    Ok(())
+}
+
 /// Parse request body as either JSON or YAML
 /// Tries JSON first, falls back to YAML if JSON parsing fails
 fn parse_resource<T>(body: &str) -> Result<T, StatusCode>
@@ -175,6 +205,7 @@ pub async fn create_cluster(
     match kind {
         ResourceKind::GatewayClass => {
             let gc: GatewayClass = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &gc)?;
             let json_content = serde_json::to_string(&gc)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, None, &name, json_content).await
@@ -182,6 +213,7 @@ pub async fn create_cluster(
         }
         ResourceKind::EdgionGatewayConfig => {
             let cfg: EdgionGatewayConfig = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &cfg)?;
             let json_content = serde_json::to_string(&cfg)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, None, &name, json_content).await
@@ -220,6 +252,7 @@ pub async fn update_cluster(
     match kind {
         ResourceKind::GatewayClass => {
             let gc: GatewayClass = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &gc)?;
             let json_content = serde_json::to_string(&gc)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, None, &name, json_content).await
@@ -227,6 +260,7 @@ pub async fn update_cluster(
         }
         ResourceKind::EdgionGatewayConfig => {
             let cfg: EdgionGatewayConfig = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &cfg)?;
             let json_content = serde_json::to_string(&cfg)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, None, &name, json_content).await
@@ -494,6 +528,7 @@ pub async fn create_namespaced(
     match kind {
         ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -502,6 +537,7 @@ pub async fn create_namespaced(
         }
         ResourceKind::GRPCRoute => {
             let route: GRPCRoute = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -510,6 +546,7 @@ pub async fn create_namespaced(
         }
         ResourceKind::TCPRoute => {
             let route: TCPRoute = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -518,6 +555,7 @@ pub async fn create_namespaced(
         }
         ResourceKind::UDPRoute => {
             let route: UDPRoute = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -526,6 +564,7 @@ pub async fn create_namespaced(
         }
         ResourceKind::TLSRoute => {
             let route: TLSRoute = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -534,6 +573,7 @@ pub async fn create_namespaced(
         }
         ResourceKind::Service => {
             let service: Service = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &service)?;
             let json_content = serde_json::to_string(&service)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -542,6 +582,7 @@ pub async fn create_namespaced(
         }
         ResourceKind::EndpointSlice => {
             let ep: EndpointSlice = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &ep)?;
             let json_content = serde_json::to_string(&ep)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -550,6 +591,7 @@ pub async fn create_namespaced(
         }
         ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &tls)?;
             let json_content = serde_json::to_string(&tls)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -558,6 +600,7 @@ pub async fn create_namespaced(
         }
         ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &plugins)?;
             let json_content = serde_json::to_string(&plugins)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -566,6 +609,7 @@ pub async fn create_namespaced(
         }
         ResourceKind::PluginMetaData => {
             let metadata: PluginMetaData = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &metadata)?;
             let json_content = serde_json::to_string(&metadata)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -574,6 +618,7 @@ pub async fn create_namespaced(
         }
         ResourceKind::LinkSys => {
             let linksys: LinkSys = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &linksys)?;
             let json_content = serde_json::to_string(&linksys)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -582,6 +627,7 @@ pub async fn create_namespaced(
         }
         ResourceKind::Secret => {
             let secret: Secret = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &secret)?;
             let json_content = serde_json::to_string(&secret)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -614,10 +660,11 @@ pub async fn update_namespaced(
     
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
     
-    // Parse, persist, and update cache in one step
+    // Parse, validate, persist, and update cache in one step
     match kind {
         ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -626,6 +673,7 @@ pub async fn update_namespaced(
         }
         ResourceKind::GRPCRoute => {
             let route: GRPCRoute = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -634,6 +682,7 @@ pub async fn update_namespaced(
         }
         ResourceKind::TCPRoute => {
             let route: TCPRoute = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -642,6 +691,7 @@ pub async fn update_namespaced(
         }
         ResourceKind::UDPRoute => {
             let route: UDPRoute = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -650,6 +700,7 @@ pub async fn update_namespaced(
         }
         ResourceKind::TLSRoute => {
             let route: TLSRoute = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &route)?;
             let json_content = serde_json::to_string(&route)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -658,6 +709,7 @@ pub async fn update_namespaced(
         }
         ResourceKind::Service => {
             let service: Service = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &service)?;
             let json_content = serde_json::to_string(&service)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -666,6 +718,7 @@ pub async fn update_namespaced(
         }
         ResourceKind::EndpointSlice => {
             let ep: EndpointSlice = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &ep)?;
             let json_content = serde_json::to_string(&ep)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -674,6 +727,7 @@ pub async fn update_namespaced(
         }
         ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &tls)?;
             let json_content = serde_json::to_string(&tls)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -682,6 +736,7 @@ pub async fn update_namespaced(
         }
         ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &plugins)?;
             let json_content = serde_json::to_string(&plugins)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -690,6 +745,7 @@ pub async fn update_namespaced(
         }
         ResourceKind::PluginMetaData => {
             let metadata: PluginMetaData = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &metadata)?;
             let json_content = serde_json::to_string(&metadata)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -698,6 +754,7 @@ pub async fn update_namespaced(
         }
         ResourceKind::LinkSys => {
             let linksys: LinkSys = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &linksys)?;
             let json_content = serde_json::to_string(&linksys)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
@@ -706,6 +763,7 @@ pub async fn update_namespaced(
         }
         ResourceKind::Secret => {
             let secret: Secret = parse_resource(&content)?;
+            validate_resource(&state.schema_validator, kind, &secret)?;
             let json_content = serde_json::to_string(&secret)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await

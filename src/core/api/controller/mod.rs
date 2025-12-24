@@ -11,7 +11,7 @@ use axum::{
 use serde::Serialize;
 use std::sync::Arc;
 use crate::core::conf_sync::ConfigServer;
-use crate::core::conf_mgr::{ResourceMgrAPI, load_all_resources_from_store};
+use crate::core::conf_mgr::{ResourceMgrAPI, SchemaValidator, load_all_resources_from_store};
 use types::AdminState;
 
 /// Standard API response format
@@ -69,10 +69,12 @@ async fn reload_all_resources(
 pub fn create_admin_router(
     config_server: Arc<ConfigServer>,
     resource_mgr: Option<Arc<ResourceMgrAPI>>,
+    schema_validator: Arc<SchemaValidator>,
 ) -> Router {
     let admin_state = Arc::new(AdminState {
         config_server,
         resource_mgr,
+        schema_validator,
     });
     
     Router::new()
@@ -105,9 +107,10 @@ pub fn create_admin_router(
 pub async fn serve(
     config_server: Arc<ConfigServer>,
     resource_mgr: Option<Arc<ResourceMgrAPI>>,
+    schema_validator: Arc<SchemaValidator>,
     port: u16,
 ) -> anyhow::Result<()> {
-    let app = create_admin_router(config_server, resource_mgr);
+    let app = create_admin_router(config_server, resource_mgr, schema_validator);
     let addr_str = format!("0.0.0.0:{}", port);
     let addr: std::net::SocketAddr = addr_str.parse()?;
     

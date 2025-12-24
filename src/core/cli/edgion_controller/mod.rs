@@ -1,13 +1,14 @@
 use crate::core::cli::config::EdgionControllerConfig;
 use crate::core::conf_load::Loader;
 use crate::core::conf_sync::{ConfigServer, ConfigSyncServer};
-use crate::core::conf_mgr::{FileSystemStore, load_all_resources_from_store, ResourceMgrAPI};
+use crate::core::conf_mgr::{FileSystemStore, load_all_resources_from_store, ResourceMgrAPI, SchemaValidator};
 use crate::core::observe::init_logging;
 use crate::core::utils;
 use crate::types::{prefix_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::sync::Arc;
+use std::path::Path;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -127,6 +128,33 @@ impl EdgionControllerCli {
             return Err(anyhow!("Failed to load user configuration: {}", e));
         }
         
+        // Load CRD schemas for validation
+        tracing::info!(
+            component = COMPONENT_EDGION_CONTROLLER,
+            event = "loading_schemas",
+            "Loading CRD schemas for validation"
+        );
+        let schema_validator = Arc::new(
+            SchemaValidator::from_crd_dir(Path::new("config/crd"))
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        event = "schema_load_warning",
+                        error = %e,
+                        "Failed to load CRD schemas, validation will be skipped"
+                    );
+                    // Create an empty validator if CRD loading fails
+                    // This allows the system to continue without validation
+                    SchemaValidator::empty()
+                })
+        );
+        tracing::info!(
+            component = COMPONENT_EDGION_CONTROLLER,
+            event = "schemas_loaded",
+            schema_count = schema_validator.schema_count(),
+            "CRD schemas loaded"
+        );
+        
         // Register dispatcher before using the loader
         loader
             .register_dispatcher(config_server.clone())
@@ -158,7 +186,7 @@ impl EdgionControllerCli {
         // Note: loader.run() is intentionally removed as we're using conf_store instead of file watcher
         let (sync_result, admin_result) = tokio::join!(
             sync_server.serve(addr),
-            crate::core::api::controller::serve(config_server.clone(), Some(resource_mgr.clone()), admin_port)
+            crate::core::api::controller::serve(config_server.clone(), Some(resource_mgr.clone()), schema_validator, admin_port)
         );
 
         // Check results - if any service fails, return error
