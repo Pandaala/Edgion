@@ -596,7 +596,7 @@ pub async fn create_namespaced(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            state.config_server.edgion_tls.apply_change(ResourceChange::EventAdd, tls);
+            state.config_server.apply_edgion_tls_change(ResourceChange::EventAdd, tls);
         }
         ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource(&content)?;
@@ -632,7 +632,7 @@ pub async fn create_namespaced(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            state.config_server.secrets.apply_change(ResourceChange::EventAdd, secret);
+            state.config_server.apply_secret_change(ResourceChange::EventAdd, secret);
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
     }
@@ -732,7 +732,7 @@ pub async fn update_namespaced(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            state.config_server.edgion_tls.apply_change(ResourceChange::EventUpdate, tls);
+            state.config_server.apply_edgion_tls_change(ResourceChange::EventUpdate, tls);
         }
         ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource(&content)?;
@@ -768,7 +768,7 @@ pub async fn update_namespaced(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            state.config_server.secrets.apply_change(ResourceChange::EventUpdate, secret);
+            state.config_server.apply_secret_change(ResourceChange::EventUpdate, secret);
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
     }
@@ -846,7 +846,7 @@ pub async fn delete_namespaced(
             let tls: EdgionTls = parse_resource(&content)?;
             resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            state.config_server.edgion_tls.apply_change(ResourceChange::EventDelete, tls);
+            state.config_server.apply_edgion_tls_change(ResourceChange::EventDelete, tls);
         }
         ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource(&content)?;
@@ -870,7 +870,7 @@ pub async fn delete_namespaced(
             let secret: Secret = parse_resource(&content)?;
             resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            state.config_server.secrets.apply_change(ResourceChange::EventDelete, secret);
+            state.config_server.apply_secret_change(ResourceChange::EventDelete, secret);
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
     }

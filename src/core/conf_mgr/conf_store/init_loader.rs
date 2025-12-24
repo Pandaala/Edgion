@@ -108,7 +108,7 @@ pub async fn load_all_resources_from_store(
             Some(ResourceKind::EdgionTls) => {
                 match serde_yaml::from_str::<EdgionTls>(&resource.content) {
                     Ok(tls) => {
-                        config_server.edgion_tls.apply_change(ResourceChange::InitAdd, tls);
+                        config_server.apply_edgion_tls_change(ResourceChange::InitAdd, tls);
                         Ok::<(), anyhow::Error>(())
                     }
                     Err(e) => Err(e.into()),
@@ -144,7 +144,7 @@ pub async fn load_all_resources_from_store(
             Some(ResourceKind::Secret) => {
                 match serde_yaml::from_str::<Secret>(&resource.content) {
                     Ok(secret) => {
-                        config_server.secrets.apply_change(ResourceChange::InitAdd, secret);
+                        config_server.apply_secret_change(ResourceChange::InitAdd, secret);
                         Ok::<(), anyhow::Error>(())
                     }
                     Err(e) => Err(e.into()),
