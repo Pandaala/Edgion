@@ -11,7 +11,7 @@ pub use cache_client::ClientCache;
 pub use cache_server::ServerCache;
 pub use conf_client::{ConfigClient, ConfigSyncClient};
 pub use conf_server::{ConfigServer, ConfigSyncServer};
-pub use traits::{CacheEventDispatch, ConfHandler, ConfigServerEventDispatcher};
+pub use traits::{CacheEventDispatch, ConfHandler};
 pub use crate::types::{GatewayBaseConf, ResourceMeta};
 
 use std::sync::{Arc, OnceLock};

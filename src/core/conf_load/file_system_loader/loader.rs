@@ -9,16 +9,17 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 
-use crate::core::conf_sync::traits::ResourceChange;
-use crate::core::conf_sync::ConfigServerEventDispatcher;
+use crate::core::conf_sync::{traits::ResourceChange, ConfigServer};
 use crate::core::utils::{extract_resource_metadata, ResourceMetadata};
-use crate::types::ResourceKind;
+use crate::types::{ResourceKind, prelude_resources::*};
+use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::discovery::v1::EndpointSlice;
 
-use super::types::FileInfo;
+use super::types::{FileInfo, ParsedResource};
 
 pub struct LocalPathLoader {
     root: PathBuf,
-    registered_dispatcher: RwLock<Option<Arc<dyn ConfigServerEventDispatcher>>>,
+    registered_dispatcher: RwLock<Option<Arc<ConfigServer>>>,
     // Track resource metadata to file paths mapping for duplicate detection
     // Key: ResourceMetadata (kind/namespace/name), Value: Vec<PathBuf> (file paths)
     resource_to_files: Arc<Mutex<HashMap<ResourceMetadata, Vec<PathBuf>>>>,
@@ -89,7 +90,7 @@ impl LocalPathLoader {
     }
 
     /// Register a dispatcher for handling configuration events
-    pub async fn register_dispatcher(&self, dispatcher: Arc<dyn ConfigServerEventDispatcher>) {
+    pub async fn register_dispatcher(&self, dispatcher: Arc<ConfigServer>) {
         let mut registered = self.registered_dispatcher.write().await;
         *registered = Some(dispatcher);
         tracing::info!(
@@ -101,9 +102,106 @@ impl LocalPathLoader {
     }
 
     /// Get the registered dispatcher if available
-    pub async fn dispatcher(&self) -> Option<Arc<dyn ConfigServerEventDispatcher>> {
+    pub async fn dispatcher(&self) -> Option<Arc<ConfigServer>> {
         let registered = self.registered_dispatcher.read().await;
         registered.clone()
+    }
+    
+    /// Parse resource content into typed object based on kind
+    fn parse_resource_by_kind(content: &str, kind: ResourceKind) -> Result<ParsedResource> {
+        match kind {
+            ResourceKind::HTTPRoute => {
+                let resource: HTTPRoute = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse HTTPRoute")?;
+                Ok(ParsedResource::HTTPRoute(resource))
+            }
+            ResourceKind::GRPCRoute => {
+                let resource: GRPCRoute = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse GRPCRoute")?;
+                Ok(ParsedResource::GRPCRoute(resource))
+            }
+            ResourceKind::TCPRoute => {
+                let resource: TCPRoute = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse TCPRoute")?;
+                Ok(ParsedResource::TCPRoute(resource))
+            }
+            ResourceKind::UDPRoute => {
+                let resource: UDPRoute = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse UDPRoute")?;
+                Ok(ParsedResource::UDPRoute(resource))
+            }
+            ResourceKind::TLSRoute => {
+                let resource: TLSRoute = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse TLSRoute")?;
+                Ok(ParsedResource::TLSRoute(resource))
+            }
+            ResourceKind::Service => {
+                let resource: Service = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse Service")?;
+                Ok(ParsedResource::Service(resource))
+            }
+            ResourceKind::EndpointSlice => {
+                let resource: EndpointSlice = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse EndpointSlice")?;
+                Ok(ParsedResource::EndpointSlice(resource))
+            }
+            ResourceKind::EdgionTls => {
+                let resource: EdgionTls = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse EdgionTls")?;
+                Ok(ParsedResource::EdgionTls(resource))
+            }
+            ResourceKind::EdgionPlugins => {
+                let resource: EdgionPlugins = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse EdgionPlugins")?;
+                Ok(ParsedResource::EdgionPlugins(resource))
+            }
+            ResourceKind::PluginMetaData => {
+                let resource: PluginMetaData = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse PluginMetaData")?;
+                Ok(ParsedResource::PluginMetaData(resource))
+            }
+            ResourceKind::LinkSys => {
+                let resource: LinkSys = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse LinkSys")?;
+                Ok(ParsedResource::LinkSys(resource))
+            }
+            ResourceKind::Secret => {
+                let resource: Secret = serde_json::from_str(content)
+                    .or_else(|_| serde_yaml::from_str(content))
+                    .with_context(|| "Failed to parse Secret")?;
+                Ok(ParsedResource::Secret(resource))
+            }
+            _ => Err(anyhow!("Unsupported resource kind: {:?}", kind)),
+        }
+    }
+    
+    /// Dispatch parsed resource to ConfigServer
+    fn dispatch_resource(dispatcher: &Arc<ConfigServer>, change: ResourceChange, resource: ParsedResource) {
+        match resource {
+            ParsedResource::HTTPRoute(r) => dispatcher.apply_http_route_change(change, r),
+            ParsedResource::GRPCRoute(r) => dispatcher.apply_grpc_route_change(change, r),
+            ParsedResource::TCPRoute(r) => dispatcher.apply_tcp_route_change(change, r),
+            ParsedResource::UDPRoute(r) => dispatcher.apply_udp_route_change(change, r),
+            ParsedResource::TLSRoute(r) => dispatcher.apply_tls_route_change(change, r),
+            ParsedResource::Service(r) => dispatcher.apply_service_change(change, r),
+            ParsedResource::EndpointSlice(r) => dispatcher.apply_endpoint_slice_change(change, r),
+            ParsedResource::EdgionTls(r) => dispatcher.apply_edgion_tls_change(change, r),
+            ParsedResource::EdgionPlugins(r) => dispatcher.apply_edgion_plugins_change(change, r),
+            ParsedResource::PluginMetaData(r) => dispatcher.apply_plugin_metadata_change(change, r),
+            ParsedResource::LinkSys(r) => dispatcher.apply_link_sys_change(change, r),
+            ParsedResource::Secret(r) => dispatcher.apply_secret_change(change, r),
+        }
     }
 
     pub async fn read_file(path: &Path) -> Result<String> {
@@ -273,7 +371,8 @@ impl LocalPathLoader {
         // 使用 InitAdd
         // Determine if this is a base conf resource
         // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are loaded via load_base, not through file watching
-        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
+        let resource_kind = ResourceKind::from_content(&content);
+        let is_base_conf = if let Some(kind) = resource_kind {
             matches!(
                 kind,
                 ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
@@ -285,7 +384,30 @@ impl LocalPathLoader {
         // Skip base conf resources as they are handled by load_base
         if !is_base_conf {
             if let Some(dispatcher) = self.dispatcher().await {
-                dispatcher.apply_resource_change(ResourceChange::InitAdd, None, content);
+                if let Some(kind) = resource_kind {
+                    match Self::parse_resource_by_kind(&content, kind) {
+                        Ok(parsed_resource) => {
+                            Self::dispatch_resource(&dispatcher, ResourceChange::InitAdd, parsed_resource);
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                component = "file_system_loader",
+                                event = "parse_error",
+                                path = ?path,
+                                kind = ?kind,
+                                error = %e,
+                                "Failed to parse resource"
+                            );
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        component = "file_system_loader",
+                        event = "unknown_kind",
+                        path = ?path,
+                        "Could not determine resource kind from content"
+                    );
+                }
             } else {
                 tracing::warn!(
                     component = "file_system_loader",
@@ -352,7 +474,8 @@ impl LocalPathLoader {
                         // 触发 delete 事件
                         // Determine if this is a base conf resource
                         // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are loaded via load_base, not through file watching
-                        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
+                        let resource_kind = ResourceKind::from_content(&content);
+                        let is_base_conf = if let Some(kind) = resource_kind {
                             matches!(
                                 kind,
                                 ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
@@ -364,7 +487,23 @@ impl LocalPathLoader {
                         // Skip base conf resources as they are handled by load_base
                         if !is_base_conf {
                             if let Some(dispatcher) = self.dispatcher().await {
-                                dispatcher.apply_resource_change(ResourceChange::EventDelete, None, content);
+                                if let Some(kind) = resource_kind {
+                                    match Self::parse_resource_by_kind(&content, kind) {
+                                        Ok(parsed_resource) => {
+                                            Self::dispatch_resource(&dispatcher, ResourceChange::EventDelete, parsed_resource);
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                component = "file_system_loader",
+                                                event = "parse_error_on_delete",
+                                                path = ?path,
+                                                kind = ?kind,
+                                                error = %e,
+                                                "Failed to parse resource for deletion"
+                                            );
+                                        }
+                                    }
+                                }
                             } else {
                                 tracing::warn!(
                                     component = "file_system_loader",
@@ -439,7 +578,8 @@ impl LocalPathLoader {
 
         // Determine if this is a base conf resource
         // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are loaded via load_base, not through file watching
-        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&content) {
+        let resource_kind = ResourceKind::from_content(&content);
+        let is_base_conf = if let Some(kind) = resource_kind {
             matches!(
                 kind,
                 ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
@@ -451,7 +591,32 @@ impl LocalPathLoader {
         // Skip base conf resources as they are handled by load_base
         if !is_base_conf {
             if let Some(dispatcher) = self.dispatcher().await {
-                dispatcher.apply_resource_change(change, None, content);
+                if let Some(kind) = resource_kind {
+                    match Self::parse_resource_by_kind(&content, kind) {
+                        Ok(parsed_resource) => {
+                            Self::dispatch_resource(&dispatcher, change, parsed_resource);
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                component = "file_system_loader",
+                                event = "parse_error",
+                                path = ?path,
+                                kind = ?kind,
+                                change = ?change,
+                                error = %e,
+                                "Failed to parse resource"
+                            );
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        component = "file_system_loader",
+                        event = "unknown_kind",
+                        path = ?path,
+                        change = ?change,
+                        "Could not determine resource kind from content"
+                    );
+                }
             } else {
                 tracing::warn!(
                     component = "file_system_loader",

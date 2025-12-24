@@ -1,6 +1,6 @@
 use crate::core::cli::config::EdgionControllerConfig;
 use crate::core::conf_load::Loader;
-use crate::core::conf_sync::{ConfigServer, ConfigServerEventDispatcher, ConfigSyncServer};
+use crate::core::conf_sync::{ConfigServer, ConfigSyncServer};
 use crate::core::conf_mgr::{FileSystemStore, load_all_resources_from_store, ResourceMgrAPI};
 use crate::core::observe::init_logging;
 use crate::core::utils;
@@ -129,7 +129,7 @@ impl EdgionControllerCli {
         
         // Register dispatcher before using the loader
         loader
-            .register_dispatcher(config_server.clone() as Arc<dyn ConfigServerEventDispatcher>)
+            .register_dispatcher(config_server.clone())
             .await;
 
         let addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::core::conf_sync::traits::ConfigServerEventDispatcher;
+use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use std::path::PathBuf;
@@ -63,7 +63,7 @@ impl Loader {
     }
 
     /// Register a dispatcher for handling configuration events
-    pub async fn register_dispatcher(&self, dispatcher: Arc<dyn ConfigServerEventDispatcher>) {
+    pub async fn register_dispatcher(&self, dispatcher: Arc<ConfigServer>) {
         self.inner.register_dispatcher(dispatcher).await;
     }
 

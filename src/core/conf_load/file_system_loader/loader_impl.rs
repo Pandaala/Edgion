@@ -3,7 +3,7 @@ use tokio::fs;
 use std::sync::Arc;
 
 use crate::core::conf_load::ConfigLoader;
-use crate::core::conf_sync::traits::ConfigServerEventDispatcher;
+use crate::core::conf_sync::ConfigServer;
 use crate::types::ResourceKind;
 
 use super::loader::LocalPathLoader;
@@ -11,7 +11,7 @@ use super::loader::LocalPathLoader;
 #[async_trait::async_trait]
 impl ConfigLoader for LocalPathLoader {
     /// Register a dispatcher for handling configuration events
-    async fn register_dispatcher(&self, dispatcher: Arc<dyn ConfigServerEventDispatcher>) {
+    async fn register_dispatcher(&self, dispatcher: Arc<ConfigServer>) {
         self.register_dispatcher(dispatcher).await;
     }
 

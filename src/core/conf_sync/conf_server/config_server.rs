@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 
 use super::secret_ref::SecretRefManager;
 use crate::core::conf_sync::cache_server::ServerCache;
+use crate::core::conf_sync::traits::CacheEventDispatch;
 use crate::core::conf_sync::types::{ListData, WatchResponse};
 use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
@@ -928,5 +929,37 @@ impl ConfigServer {
         }
 
         println!("==========================\n");
+    }
+
+    /// Enable version fix mode for all caches
+    pub fn enable_version_fix_mode(&self) {
+        self.routes.enable_version_fix_mode();
+        self.grpc_routes.enable_version_fix_mode();
+        self.tcp_routes.enable_version_fix_mode();
+        self.udp_routes.enable_version_fix_mode();
+        self.tls_routes.enable_version_fix_mode();
+        self.link_sys.enable_version_fix_mode();
+        self.services.enable_version_fix_mode();
+        self.endpoint_slices.enable_version_fix_mode();
+        self.edgion_tls.enable_version_fix_mode();
+        self.edgion_plugins.enable_version_fix_mode();
+        self.plugin_metadata.enable_version_fix_mode();
+        self.secrets.enable_version_fix_mode();
+    }
+
+    /// Set all caches to ready state
+    pub fn set_ready(&self) {
+        self.routes.set_ready();
+        self.grpc_routes.set_ready();
+        self.tcp_routes.set_ready();
+        self.udp_routes.set_ready();
+        self.tls_routes.set_ready();
+        self.link_sys.set_ready();
+        self.services.set_ready();
+        self.endpoint_slices.set_ready();
+        self.edgion_tls.set_ready();
+        self.edgion_plugins.set_ready();
+        self.plugin_metadata.set_ready();
+        self.secrets.set_ready();
     }
 }

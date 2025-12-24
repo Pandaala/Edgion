@@ -8,14 +8,16 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::core::conf_load::ConfigLoader;
-use crate::core::conf_sync::traits::{ConfigServerEventDispatcher, ResourceChange};
-use crate::types::ResourceKind;
+use crate::core::conf_sync::{ConfigServer, traits::ResourceChange};
+use crate::types::{ResourceKind, prelude_resources::*};
+use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::discovery::v1::EndpointSlice;
 
 #[derive(Clone)]
 pub struct EtcdConfigLoader {
     endpoints: Vec<String>,
     prefix: String,
-    dispatcher: Arc<dyn ConfigServerEventDispatcher>,
+    dispatcher: Arc<ConfigServer>,
     resource_kind: Option<ResourceKind>,
     cache: Arc<Mutex<HashMap<String, String>>>,
     client: Arc<Mutex<Option<Client>>>,
@@ -25,7 +27,7 @@ impl EtcdConfigLoader {
     pub fn new(
         endpoints: Vec<String>,
         prefix: impl Into<String>,
-        dispatcher: Arc<dyn ConfigServerEventDispatcher>,
+        dispatcher: Arc<ConfigServer>,
         resource_kind: Option<ResourceKind>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -46,11 +48,91 @@ impl EtcdConfigLoader {
             }
         })
     }
+    
+    /// Parse resource content and dispatch to ConfigServer
+    fn parse_and_dispatch(&self, change: ResourceChange, content: &str, kind: ResourceKind) {
+        match kind {
+            ResourceKind::HTTPRoute => {
+                if let Ok(resource) = serde_json::from_str::<HTTPRoute>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_http_route_change(change, resource);
+                }
+            }
+            ResourceKind::GRPCRoute => {
+                if let Ok(resource) = serde_json::from_str::<GRPCRoute>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_grpc_route_change(change, resource);
+                }
+            }
+            ResourceKind::TCPRoute => {
+                if let Ok(resource) = serde_json::from_str::<TCPRoute>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_tcp_route_change(change, resource);
+                }
+            }
+            ResourceKind::UDPRoute => {
+                if let Ok(resource) = serde_json::from_str::<UDPRoute>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_udp_route_change(change, resource);
+                }
+            }
+            ResourceKind::TLSRoute => {
+                if let Ok(resource) = serde_json::from_str::<TLSRoute>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_tls_route_change(change, resource);
+                }
+            }
+            ResourceKind::Service => {
+                if let Ok(resource) = serde_json::from_str::<Service>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_service_change(change, resource);
+                }
+            }
+            ResourceKind::EndpointSlice => {
+                if let Ok(resource) = serde_json::from_str::<EndpointSlice>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_endpoint_slice_change(change, resource);
+                }
+            }
+            ResourceKind::EdgionTls => {
+                if let Ok(resource) = serde_json::from_str::<EdgionTls>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_edgion_tls_change(change, resource);
+                }
+            }
+            ResourceKind::EdgionPlugins => {
+                if let Ok(resource) = serde_json::from_str::<EdgionPlugins>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_edgion_plugins_change(change, resource);
+                }
+            }
+            ResourceKind::PluginMetaData => {
+                if let Ok(resource) = serde_json::from_str::<PluginMetaData>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_plugin_metadata_change(change, resource);
+                }
+            }
+            ResourceKind::LinkSys => {
+                if let Ok(resource) = serde_json::from_str::<LinkSys>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_link_sys_change(change, resource);
+                }
+            }
+            ResourceKind::Secret => {
+                if let Ok(resource) = serde_json::from_str::<Secret>(content)
+                    .or_else(|_| serde_yaml::from_str(content)) {
+                    self.dispatcher.apply_secret_change(change, resource);
+                }
+            }
+            _ => {}
+        }
+    }
 
     async fn handle_put(&self, key: String, value: String) {
         // Determine if this is a base conf resource
         // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are loaded via load_base, not through watch
-        let is_base_conf = if let Some(kind) = ResourceKind::from_content(&value) {
+        let resource_kind = ResourceKind::from_content(&value);
+        let is_base_conf = if let Some(kind) = resource_kind {
             matches!(
                 kind,
                 ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
@@ -67,15 +149,19 @@ impl EtcdConfigLoader {
         let mut cache = self.cache.lock().await;
         if let Some(old) = cache.remove(&key) {
             drop(cache);
-            self.dispatcher
-                .apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old);
+            // Delete old version
+            if let Some(kind) = ResourceKind::from_content(&old).or(self.resource_kind) {
+                self.parse_and_dispatch(ResourceChange::EventDelete, &old, kind);
+            }
             cache = self.cache.lock().await;
         }
         cache.insert(key, value.clone());
         drop(cache);
 
-        self.dispatcher
-            .apply_resource_change(ResourceChange::EventAdd, self.resource_kind, value);
+        // Add new version
+        if let Some(kind) = resource_kind.or(self.resource_kind) {
+            self.parse_and_dispatch(ResourceChange::EventAdd, &value, kind);
+        }
     }
 
     async fn handle_delete(&self, key: String) {
@@ -83,7 +169,8 @@ impl EtcdConfigLoader {
         if let Some(old) = cache.remove(&key) {
             // Determine if this is a base conf resource
             // Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are loaded via load_base, not through watch
-            let is_base_conf = if let Some(kind) = ResourceKind::from_content(&old) {
+            let resource_kind = ResourceKind::from_content(&old);
+            let is_base_conf = if let Some(kind) = resource_kind {
                 matches!(
                     kind,
                     ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
@@ -96,8 +183,9 @@ impl EtcdConfigLoader {
             
             // Skip base conf resources as they are handled by load_base
             if !is_base_conf {
-                self.dispatcher
-                    .apply_resource_change(ResourceChange::EventDelete, self.resource_kind, old);
+                if let Some(kind) = resource_kind.or(self.resource_kind) {
+                    self.parse_and_dispatch(ResourceChange::EventDelete, &old, kind);
+                }
             }
         }
     }
@@ -107,7 +195,7 @@ impl EtcdConfigLoader {
 impl ConfigLoader for EtcdConfigLoader {
     /// Register a dispatcher for handling configuration events
     /// Note: EtcdConfigLoader currently requires dispatcher at construction time
-    async fn register_dispatcher(&self, _dispatcher: Arc<dyn ConfigServerEventDispatcher>) {
+    async fn register_dispatcher(&self, _dispatcher: Arc<ConfigServer>) {
         tracing::warn!(
             component = "etcd_loader",
             "EtcdConfigLoader does not support late dispatcher registration. Dispatcher must be provided at construction."
@@ -145,7 +233,8 @@ impl ConfigLoader for EtcdConfigLoader {
         for kv in resp.kvs() {
             if let Ok(value) = String::from_utf8(kv.value().to_vec()) {
                 // Only process non-base-conf resources
-                let is_base_conf = if let Some(kind) = ResourceKind::from_content(&value) {
+                let resource_kind = ResourceKind::from_content(&value);
+                let is_base_conf = if let Some(kind) = resource_kind {
                     matches!(
                         kind,
                         ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway
@@ -159,8 +248,9 @@ impl ConfigLoader for EtcdConfigLoader {
                     cache_guard.insert(key, value.clone());
                     drop(cache_guard);
                     // Use InitAdd for bootstrap phase
-                    self.dispatcher
-                        .apply_resource_change(ResourceChange::InitAdd, None, value);
+                    if let Some(kind) = resource_kind.or(self.resource_kind) {
+                        self.parse_and_dispatch(ResourceChange::InitAdd, &value, kind);
+                    }
                     cache_guard = self.cache.lock().await;
                 }
             }

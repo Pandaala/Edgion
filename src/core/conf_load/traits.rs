@@ -1,12 +1,12 @@
 use crate::types::GatewayBaseConf;
-use crate::core::conf_sync::traits::ConfigServerEventDispatcher;
+use crate::core::conf_sync::ConfigServer;
 use async_trait::async_trait;
 use std::sync::Arc;
 
 #[async_trait]
 pub trait ConfigLoader: Send + Sync {
     /// Register a dispatcher for handling configuration events
-    async fn register_dispatcher(&self, dispatcher: Arc<dyn ConfigServerEventDispatcher>);
+    async fn register_dispatcher(&self, dispatcher: Arc<ConfigServer>);
 
     /// Connect to the configuration source (e.g., etcd cluster, localpath)
     async fn connect(&self) -> anyhow::Result<()>;
