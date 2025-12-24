@@ -1,7 +1,6 @@
 use crate::core::cli::config::EdgionControllerConfig;
-use crate::core::conf_load::Loader;
 use crate::core::conf_sync::{ConfigServer, ConfigSyncServer};
-use crate::core::conf_mgr::{FileSystemStore, load_all_resources_from_store, ResourceMgrAPI, SchemaValidator};
+use crate::core::conf_mgr::{FileSystemStore, load_all_resources_from_store, load_base_conf_from_store, ResourceMgrAPI, SchemaValidator};
 use crate::core::observe::init_logging;
 use crate::core::utils;
 use crate::types::{prefix_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
@@ -62,17 +61,25 @@ impl EdgionControllerCli {
             "Edgion Controller starting"
         );
 
-        let loader_args = config.to_loader_args();
-        let loader = Loader::from_args(&loader_args)?;
-
         // Get gateway_class_name from config
         let gateway_class_name = config
             .gateway_class()
             .ok_or_else(|| anyhow!("gateway_class must be specified in configuration"))?;
 
+        // Get configuration directory
+        let conf_dir = config.conf_dir();
+        
         // Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
-        tracing::info!("Loading base configuration for gateway_class: {}", gateway_class_name);
-        let base_conf = loader.load_base(&gateway_class_name).await?;
+        tracing::info!(
+            component = COMPONENT_EDGION_CONTROLLER,
+            event = "load_base_start",
+            gateway_class = gateway_class_name,
+            conf_dir = %conf_dir,
+            "Loading base configuration"
+        );
+        
+        let file_store = FileSystemStore::new(&conf_dir);
+        let base_conf = load_base_conf_from_store(file_store.clone() as Arc<dyn crate::core::conf_mgr::ConfStore>, &gateway_class_name).await?;
 
         // Print base configuration as pretty JSON
         if let Ok(json) = serde_json::to_string_pretty(&base_conf) {
@@ -94,14 +101,10 @@ impl EdgionControllerCli {
 
         let config_server = Arc::new(ConfigServer::new(base_conf, &config.conf_sync));
         let sync_server = ConfigSyncServer::new(config_server.clone());
-
-        // Create FileSystemStore for conf_store system
-        let conf_dir = loader_args.dir.clone().unwrap_or_else(|| "./conf".to_string());
-        let file_store = FileSystemStore::new(conf_dir);
         
         // Create ResourceMgrAPI and register filesystem backend
         let resource_mgr = Arc::new(ResourceMgrAPI::new());
-        resource_mgr.register_backend("filesystem".to_string(), file_store.clone());
+        resource_mgr.register_backend("filesystem".to_string(), file_store.clone() as Arc<dyn crate::core::conf_mgr::ConfStore>);
         if let Err(e) = resource_mgr.set_default_backend("filesystem".to_string()) {
             tracing::error!(
                 component = COMPONENT_EDGION_CONTROLLER,
@@ -118,7 +121,7 @@ impl EdgionControllerCli {
             event = "loading_user_conf",
             "Loading all user resources from storage"
         );
-        if let Err(e) = load_all_resources_from_store(file_store.clone(), config_server.clone()).await {
+        if let Err(e) = load_all_resources_from_store(file_store.clone() as Arc<dyn crate::core::conf_mgr::ConfStore>, config_server.clone()).await {
             tracing::error!(
                 component = COMPONENT_EDGION_CONTROLLER,
                 event = "user_conf_load_error",
@@ -154,11 +157,6 @@ impl EdgionControllerCli {
             schema_count = schema_validator.schema_count(),
             "CRD schemas loaded"
         );
-        
-        // Register dispatcher before using the loader
-        loader
-            .register_dispatcher(config_server.clone())
-            .await;
 
         let addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
 

@@ -1,6 +1,5 @@
 pub mod lb;
 pub mod cli;
-pub mod conf_load;
 pub mod conf_sync;
 pub mod conf_mgr;
 pub mod matcher;

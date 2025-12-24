@@ -33,7 +33,7 @@ pub struct EdgionControllerConfig {
 
     #[command(flatten)]
     #[serde(default)]
-    pub loader: LoaderConfig,
+    pub conf: ConfConfig,
 
     #[command(flatten)]
     #[serde(default)]
@@ -94,28 +94,13 @@ pub struct LoggingConfig {
     pub buffer_size: usize,
 }
 
-/// Loader configuration
+/// Configuration directory settings
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
-pub struct LoaderConfig {
-    /// Loader type: localpath or etcd
-    #[arg(long = "loader-type", value_name = "TYPE")]
-    #[serde(rename = "type", default)]
-    pub loader_type: Option<String>,
-
-    /// Configuration directory for localpath loader
-    #[arg(long = "loader-dir", value_name = "DIR")]
+pub struct ConfConfig {
+    /// Configuration directory path
+    #[arg(long = "conf-dir", value_name = "DIR")]
     #[serde(default)]
     pub dir: Option<String>,
-
-    /// Etcd endpoints
-    #[arg(long = "etcd-endpoint", value_name = "URL")]
-    #[serde(default)]
-    pub etcd_endpoints: Vec<String>,
-
-    /// Etcd key prefix
-    #[arg(long = "etcd-prefix", value_name = "PREFIX")]
-    #[serde(default)]
-    pub etcd_prefix: Option<String>,
 }
 
 /// Debug configuration
@@ -215,9 +200,6 @@ fn default_buffer_size() -> usize {
     10_000
 }
 
-fn default_loader_type() -> String {
-    "localpath".to_string()
-}
 
 fn default_debug_enabled() -> bool {
     true
@@ -250,13 +232,10 @@ impl Default for LoggingConfig {
     }
 }
 
-impl Default for LoaderConfig {
+impl Default for ConfConfig {
     fn default() -> Self {
         Self {
-            loader_type: None,
             dir: None,
-            etcd_endpoints: Vec::new(),
-            etcd_prefix: None,
         }
     }
 }
@@ -341,18 +320,9 @@ impl EdgionControllerConfig {
             base.logging.json_format = cli.logging.json_format;
         }
 
-        // Loader config
-        if cli.loader.loader_type.is_some() {
-            base.loader.loader_type = cli.loader.loader_type.clone();
-        }
-        if cli.loader.dir.is_some() {
-            base.loader.dir = cli.loader.dir.clone();
-        }
-        if !cli.loader.etcd_endpoints.is_empty() {
-            base.loader.etcd_endpoints = cli.loader.etcd_endpoints.clone();
-        }
-        if cli.loader.etcd_prefix.is_some() {
-            base.loader.etcd_prefix = cli.loader.etcd_prefix.clone();
+        // Conf config
+        if cli.conf.dir.is_some() {
+            base.conf.dir = cli.conf.dir.clone();
         }
     }
 
@@ -386,28 +356,9 @@ impl EdgionControllerConfig {
         self.logging.json_format.unwrap_or(false)
     }
 
-    /// Get loader_type with default fallback
-    pub fn loader_type(&self) -> String {
-        self.loader.loader_type.clone().unwrap_or_else(default_loader_type)
-    }
-
-    /// Convert to LoaderArgs
-    pub fn to_loader_args(&self) -> crate::core::conf_load::LoaderArgs {
-        use crate::core::conf_load::{LoaderArgs, LoaderKind};
-
-        let loader = match self.loader_type().as_str() {
-            "etcd" => LoaderKind::Etcd,
-            "localpath" => LoaderKind::LocalPath,
-            "local_path" => LoaderKind::LocalPath,
-            _ => LoaderKind::NotSupport,
-        };
-
-        LoaderArgs {
-            loader,
-            dir: self.loader.dir.clone(),
-            etcd_endpoint: self.loader.etcd_endpoints.clone(),
-            etcd_prefix: self.loader.etcd_prefix.clone(),
-        }
+    /// Get configuration directory with default fallback
+    pub fn conf_dir(&self) -> String {
+        self.conf.dir.clone().unwrap_or_else(|| "examples/conf".to_string())
     }
 
     /// Convert to LogConfig
