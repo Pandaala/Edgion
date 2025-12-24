@@ -47,48 +47,6 @@ fn parse_kind(kind_str: &str) -> Result<ResourceKind, String> {
 fn is_cluster_scoped(kind: &ResourceKind) -> bool {
     matches!(kind, ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig)
 }
-
-/// Enum to hold validated resource objects
-/// Used in three-phase update flow: Validate → Persist → Update Memory
-enum ValidatedResource {
-    GatewayClass(GatewayClass),
-    EdgionGatewayConfig(EdgionGatewayConfig),
-    HTTPRoute(HTTPRoute),
-    GRPCRoute(GRPCRoute),
-    TCPRoute(TCPRoute),
-    UDPRoute(UDPRoute),
-    TLSRoute(TLSRoute),
-    Service(Service),
-    EndpointSlice(EndpointSlice),
-    EdgionTls(EdgionTls),
-    EdgionPlugins(EdgionPlugins),
-    PluginMetaData(PluginMetaData),
-    LinkSys(LinkSys),
-    Secret(Secret),
-}
-
-impl ValidatedResource {
-    /// Convert the validated resource to JSON string for storage
-    fn to_json_string(&self) -> Result<String, serde_json::Error> {
-        match self {
-            ValidatedResource::GatewayClass(r) => serde_json::to_string(r),
-            ValidatedResource::EdgionGatewayConfig(r) => serde_json::to_string(r),
-            ValidatedResource::HTTPRoute(r) => serde_json::to_string(r),
-            ValidatedResource::GRPCRoute(r) => serde_json::to_string(r),
-            ValidatedResource::TCPRoute(r) => serde_json::to_string(r),
-            ValidatedResource::UDPRoute(r) => serde_json::to_string(r),
-            ValidatedResource::TLSRoute(r) => serde_json::to_string(r),
-            ValidatedResource::Service(r) => serde_json::to_string(r),
-            ValidatedResource::EndpointSlice(r) => serde_json::to_string(r),
-            ValidatedResource::EdgionTls(r) => serde_json::to_string(r),
-            ValidatedResource::EdgionPlugins(r) => serde_json::to_string(r),
-            ValidatedResource::PluginMetaData(r) => serde_json::to_string(r),
-            ValidatedResource::LinkSys(r) => serde_json::to_string(r),
-            ValidatedResource::Secret(r) => serde_json::to_string(r),
-        }
-    }
-}
-
 // ============= Cross-namespace Query =============
 
 /// Helper macro to convert list data to JSON Value Vec
@@ -213,30 +171,24 @@ pub async fn create_cluster(
     let metadata = extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
     let name = metadata.name.ok_or(StatusCode::BAD_REQUEST)?;
     
-    // ========== Phase 1: Parse and Validate (JSON/YAML) ==========
-    // Parse and validate before persisting
-    let _validated = match kind {
+    // Parse, validate, and persist
+    match kind {
         ResourceKind::GatewayClass => {
             let gc: GatewayClass = parse_resource(&content)?;
-            ValidatedResource::GatewayClass(gc)
+            let json_content = serde_json::to_string(&gc)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, None, &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         ResourceKind::EdgionGatewayConfig => {
             let cfg: EdgionGatewayConfig = parse_resource(&content)?;
-            ValidatedResource::EdgionGatewayConfig(cfg)
+            let json_content = serde_json::to_string(&cfg)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, None, &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         _ => return Err(StatusCode::BAD_REQUEST),
-    };
-    
-    // ========== Phase 2: Persist to Store ==========
-    // Store as JSON for consistency with gRPC
-    let json_content = _validated.to_json_string()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    resource_mgr
-        .set_one(&kind_str, None, &name, json_content)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // Phase 3: Update ConfigServer (not needed for cluster-scoped resources)
+    }
     
     tracing::info!(
         component = "unified_api",
@@ -264,29 +216,24 @@ pub async fn update_cluster(
     let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
     
-    // ========== Phase 1: Parse and Validate (JSON/YAML) ==========
-    let _validated = match kind {
+    // Parse, validate, and persist
+    match kind {
         ResourceKind::GatewayClass => {
             let gc: GatewayClass = parse_resource(&content)?;
-            ValidatedResource::GatewayClass(gc)
+            let json_content = serde_json::to_string(&gc)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, None, &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         ResourceKind::EdgionGatewayConfig => {
             let cfg: EdgionGatewayConfig = parse_resource(&content)?;
-            ValidatedResource::EdgionGatewayConfig(cfg)
+            let json_content = serde_json::to_string(&cfg)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, None, &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         _ => return Err(StatusCode::BAD_REQUEST),
-    };
-    
-    // ========== Phase 2: Persist to Store ==========
-    // Store as JSON for consistency with gRPC
-    let json_content = _validated.to_json_string()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    resource_mgr
-        .set_one(&kind_str, None, &name, json_content)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // Phase 3: Update ConfigServer (not needed for cluster-scoped resources)
+    }
     
     tracing::info!(
         component = "unified_api",
@@ -312,31 +259,25 @@ pub async fn delete_cluster(
     
     let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     
-    // ========== Phase 1: Read and Validate ==========
+    // Read, validate, and delete
     let content = resource_mgr
         .get_one(&kind_str, None, &name)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
     
-    let _validated = match kind {
+    match kind {
         ResourceKind::GatewayClass => {
-            let gc: GatewayClass = parse_resource(&content)?;
-            ValidatedResource::GatewayClass(gc)
+            let _: GatewayClass = parse_resource(&content)?;
+            resource_mgr.delete_one(&kind_str, None, &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         ResourceKind::EdgionGatewayConfig => {
-            let cfg: EdgionGatewayConfig = parse_resource(&content)?;
-            ValidatedResource::EdgionGatewayConfig(cfg)
+            let _: EdgionGatewayConfig = parse_resource(&content)?;
+            resource_mgr.delete_one(&kind_str, None, &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         _ => return Err(StatusCode::BAD_REQUEST),
-    };
-    
-    // ========== Phase 2: Delete from Store ==========
-    resource_mgr
-        .delete_one(&kind_str, None, &name)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // Phase 3: Remove from ConfigServer (not needed for cluster-scoped resources)
+    }
     
     tracing::info!(
         component = "unified_api",
@@ -549,105 +490,102 @@ pub async fn create_namespaced(
     let metadata = extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
     let name = metadata.name.ok_or(StatusCode::BAD_REQUEST)?;
     
-    // ========== Phase 1: Parse and Validate (JSON/YAML) ==========
-    // Parse and validate before persisting
-    let validated = match kind {
+    // Parse, persist, and update cache in one step
+    match kind {
         ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource(&content)?;
-            ValidatedResource::HTTPRoute(route)
+            let json_content = serde_json::to_string(&route)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.routes.apply_change(ResourceChange::EventAdd, route);
         }
         ResourceKind::GRPCRoute => {
             let route: GRPCRoute = parse_resource(&content)?;
-            ValidatedResource::GRPCRoute(route)
+            let json_content = serde_json::to_string(&route)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.grpc_routes.apply_change(ResourceChange::EventAdd, route);
         }
         ResourceKind::TCPRoute => {
             let route: TCPRoute = parse_resource(&content)?;
-            ValidatedResource::TCPRoute(route)
+            let json_content = serde_json::to_string(&route)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.tcp_routes.apply_change(ResourceChange::EventAdd, route);
         }
         ResourceKind::UDPRoute => {
             let route: UDPRoute = parse_resource(&content)?;
-            ValidatedResource::UDPRoute(route)
+            let json_content = serde_json::to_string(&route)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.udp_routes.apply_change(ResourceChange::EventAdd, route);
         }
         ResourceKind::TLSRoute => {
             let route: TLSRoute = parse_resource(&content)?;
-            ValidatedResource::TLSRoute(route)
+            let json_content = serde_json::to_string(&route)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.tls_routes.apply_change(ResourceChange::EventAdd, route);
         }
         ResourceKind::Service => {
             let service: Service = parse_resource(&content)?;
-            ValidatedResource::Service(service)
+            let json_content = serde_json::to_string(&service)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.services.apply_change(ResourceChange::EventAdd, service);
         }
         ResourceKind::EndpointSlice => {
             let ep: EndpointSlice = parse_resource(&content)?;
-            ValidatedResource::EndpointSlice(ep)
+            let json_content = serde_json::to_string(&ep)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.endpoint_slices.apply_change(ResourceChange::EventAdd, ep);
         }
         ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource(&content)?;
-            ValidatedResource::EdgionTls(tls)
+            let json_content = serde_json::to_string(&tls)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.edgion_tls.apply_change(ResourceChange::EventAdd, tls);
         }
         ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource(&content)?;
-            ValidatedResource::EdgionPlugins(plugins)
+            let json_content = serde_json::to_string(&plugins)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.edgion_plugins.apply_change(ResourceChange::EventAdd, plugins);
         }
         ResourceKind::PluginMetaData => {
             let metadata: PluginMetaData = parse_resource(&content)?;
-            ValidatedResource::PluginMetaData(metadata)
+            let json_content = serde_json::to_string(&metadata)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.plugin_metadata.apply_change(ResourceChange::EventAdd, metadata);
         }
         ResourceKind::LinkSys => {
             let linksys: LinkSys = parse_resource(&content)?;
-            ValidatedResource::LinkSys(linksys)
+            let json_content = serde_json::to_string(&linksys)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.link_sys.apply_change(ResourceChange::EventAdd, linksys);
         }
         ResourceKind::Secret => {
             let secret: Secret = parse_resource(&content)?;
-            ValidatedResource::Secret(secret)
-        }
-        _ => return Err(StatusCode::NOT_IMPLEMENTED),
-    };
-    
-    // ========== Phase 2: Persist to Store ==========
-    // Store as JSON for consistency with gRPC
-    let json_content = validated.to_json_string()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    resource_mgr
-        .set_one(&kind_str, Some(&ns), &name, json_content)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // ========== Phase 3: Update ConfigServer Memory ==========
-    match validated {
-        ValidatedResource::HTTPRoute(route) => {
-            state.config_server.routes.apply_change(ResourceChange::EventAdd, route);
-        }
-        ValidatedResource::GRPCRoute(route) => {
-            state.config_server.grpc_routes.apply_change(ResourceChange::EventAdd, route);
-        }
-        ValidatedResource::TCPRoute(route) => {
-            state.config_server.tcp_routes.apply_change(ResourceChange::EventAdd, route);
-        }
-        ValidatedResource::UDPRoute(route) => {
-            state.config_server.udp_routes.apply_change(ResourceChange::EventAdd, route);
-        }
-        ValidatedResource::TLSRoute(route) => {
-            state.config_server.tls_routes.apply_change(ResourceChange::EventAdd, route);
-        }
-        ValidatedResource::Service(service) => {
-            state.config_server.services.apply_change(ResourceChange::EventAdd, service);
-        }
-        ValidatedResource::EndpointSlice(ep) => {
-            state.config_server.endpoint_slices.apply_change(ResourceChange::EventAdd, ep);
-        }
-        ValidatedResource::EdgionTls(tls) => {
-            state.config_server.edgion_tls.apply_change(ResourceChange::EventAdd, tls);
-        }
-        ValidatedResource::EdgionPlugins(plugins) => {
-            state.config_server.edgion_plugins.apply_change(ResourceChange::EventAdd, plugins);
-        }
-        ValidatedResource::PluginMetaData(metadata) => {
-            state.config_server.plugin_metadata.apply_change(ResourceChange::EventAdd, metadata);
-        }
-        ValidatedResource::LinkSys(linksys) => {
-            state.config_server.link_sys.apply_change(ResourceChange::EventAdd, linksys);
-        }
-        ValidatedResource::Secret(secret) => {
+            let json_content = serde_json::to_string(&secret)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             state.config_server.secrets.apply_change(ResourceChange::EventAdd, secret);
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
@@ -676,104 +614,102 @@ pub async fn update_namespaced(
     
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
     
-    // ========== Phase 1: Parse and Validate (JSON/YAML) ==========
-    let validated = match kind {
+    // Parse, persist, and update cache in one step
+    match kind {
         ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource(&content)?;
-            ValidatedResource::HTTPRoute(route)
+            let json_content = serde_json::to_string(&route)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.routes.apply_change(ResourceChange::EventUpdate, route);
         }
         ResourceKind::GRPCRoute => {
             let route: GRPCRoute = parse_resource(&content)?;
-            ValidatedResource::GRPCRoute(route)
+            let json_content = serde_json::to_string(&route)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.grpc_routes.apply_change(ResourceChange::EventUpdate, route);
         }
         ResourceKind::TCPRoute => {
             let route: TCPRoute = parse_resource(&content)?;
-            ValidatedResource::TCPRoute(route)
+            let json_content = serde_json::to_string(&route)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.tcp_routes.apply_change(ResourceChange::EventUpdate, route);
         }
         ResourceKind::UDPRoute => {
             let route: UDPRoute = parse_resource(&content)?;
-            ValidatedResource::UDPRoute(route)
+            let json_content = serde_json::to_string(&route)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.udp_routes.apply_change(ResourceChange::EventUpdate, route);
         }
         ResourceKind::TLSRoute => {
             let route: TLSRoute = parse_resource(&content)?;
-            ValidatedResource::TLSRoute(route)
+            let json_content = serde_json::to_string(&route)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.tls_routes.apply_change(ResourceChange::EventUpdate, route);
         }
         ResourceKind::Service => {
             let service: Service = parse_resource(&content)?;
-            ValidatedResource::Service(service)
+            let json_content = serde_json::to_string(&service)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.services.apply_change(ResourceChange::EventUpdate, service);
         }
         ResourceKind::EndpointSlice => {
             let ep: EndpointSlice = parse_resource(&content)?;
-            ValidatedResource::EndpointSlice(ep)
+            let json_content = serde_json::to_string(&ep)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.endpoint_slices.apply_change(ResourceChange::EventUpdate, ep);
         }
         ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource(&content)?;
-            ValidatedResource::EdgionTls(tls)
+            let json_content = serde_json::to_string(&tls)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.edgion_tls.apply_change(ResourceChange::EventUpdate, tls);
         }
         ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource(&content)?;
-            ValidatedResource::EdgionPlugins(plugins)
+            let json_content = serde_json::to_string(&plugins)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.edgion_plugins.apply_change(ResourceChange::EventUpdate, plugins);
         }
         ResourceKind::PluginMetaData => {
             let metadata: PluginMetaData = parse_resource(&content)?;
-            ValidatedResource::PluginMetaData(metadata)
+            let json_content = serde_json::to_string(&metadata)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.plugin_metadata.apply_change(ResourceChange::EventUpdate, metadata);
         }
         ResourceKind::LinkSys => {
             let linksys: LinkSys = parse_resource(&content)?;
-            ValidatedResource::LinkSys(linksys)
+            let json_content = serde_json::to_string(&linksys)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.link_sys.apply_change(ResourceChange::EventUpdate, linksys);
         }
         ResourceKind::Secret => {
             let secret: Secret = parse_resource(&content)?;
-            ValidatedResource::Secret(secret)
-        }
-        _ => return Err(StatusCode::NOT_IMPLEMENTED),
-    };
-    
-    // ========== Phase 2: Persist to Store ==========
-    // Store as JSON for consistency with gRPC
-    let json_content = validated.to_json_string()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    resource_mgr
-        .set_one(&kind_str, Some(&ns), &name, json_content)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // ========== Phase 3: Update ConfigServer Memory ==========
-    match validated {
-        ValidatedResource::HTTPRoute(route) => {
-            state.config_server.routes.apply_change(ResourceChange::EventUpdate, route);
-        }
-        ValidatedResource::GRPCRoute(route) => {
-            state.config_server.grpc_routes.apply_change(ResourceChange::EventUpdate, route);
-        }
-        ValidatedResource::TCPRoute(route) => {
-            state.config_server.tcp_routes.apply_change(ResourceChange::EventUpdate, route);
-        }
-        ValidatedResource::UDPRoute(route) => {
-            state.config_server.udp_routes.apply_change(ResourceChange::EventUpdate, route);
-        }
-        ValidatedResource::TLSRoute(route) => {
-            state.config_server.tls_routes.apply_change(ResourceChange::EventUpdate, route);
-        }
-        ValidatedResource::Service(service) => {
-            state.config_server.services.apply_change(ResourceChange::EventUpdate, service);
-        }
-        ValidatedResource::EndpointSlice(ep) => {
-            state.config_server.endpoint_slices.apply_change(ResourceChange::EventUpdate, ep);
-        }
-        ValidatedResource::EdgionTls(tls) => {
-            state.config_server.edgion_tls.apply_change(ResourceChange::EventUpdate, tls);
-        }
-        ValidatedResource::EdgionPlugins(plugins) => {
-            state.config_server.edgion_plugins.apply_change(ResourceChange::EventUpdate, plugins);
-        }
-        ValidatedResource::PluginMetaData(metadata) => {
-            state.config_server.plugin_metadata.apply_change(ResourceChange::EventUpdate, metadata);
-        }
-        ValidatedResource::LinkSys(linksys) => {
-            state.config_server.link_sys.apply_change(ResourceChange::EventUpdate, linksys);
-        }
-        ValidatedResource::Secret(secret) => {
+            let json_content = serde_json::to_string(&secret)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             state.config_server.secrets.apply_change(ResourceChange::EventUpdate, secret);
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
@@ -799,106 +735,83 @@ pub async fn delete_namespaced(
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
     let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     
-    // ========== Phase 1: Read and Validate ==========
+    // Read, validate, delete, and remove from cache in one step
     let content = resource_mgr
         .get_one(&kind_str, Some(&ns), &name)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
     
-    let validated = match kind {
+    match kind {
         ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource(&content)?;
-            ValidatedResource::HTTPRoute(route)
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.routes.apply_change(ResourceChange::EventDelete, route);
         }
         ResourceKind::GRPCRoute => {
             let route: GRPCRoute = parse_resource(&content)?;
-            ValidatedResource::GRPCRoute(route)
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.grpc_routes.apply_change(ResourceChange::EventDelete, route);
         }
         ResourceKind::TCPRoute => {
             let route: TCPRoute = parse_resource(&content)?;
-            ValidatedResource::TCPRoute(route)
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.tcp_routes.apply_change(ResourceChange::EventDelete, route);
         }
         ResourceKind::UDPRoute => {
             let route: UDPRoute = parse_resource(&content)?;
-            ValidatedResource::UDPRoute(route)
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.udp_routes.apply_change(ResourceChange::EventDelete, route);
         }
         ResourceKind::TLSRoute => {
             let route: TLSRoute = parse_resource(&content)?;
-            ValidatedResource::TLSRoute(route)
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.tls_routes.apply_change(ResourceChange::EventDelete, route);
         }
         ResourceKind::Service => {
             let service: Service = parse_resource(&content)?;
-            ValidatedResource::Service(service)
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.services.apply_change(ResourceChange::EventDelete, service);
         }
         ResourceKind::EndpointSlice => {
             let ep: EndpointSlice = parse_resource(&content)?;
-            ValidatedResource::EndpointSlice(ep)
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.endpoint_slices.apply_change(ResourceChange::EventDelete, ep);
         }
         ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource(&content)?;
-            ValidatedResource::EdgionTls(tls)
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.edgion_tls.apply_change(ResourceChange::EventDelete, tls);
         }
         ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource(&content)?;
-            ValidatedResource::EdgionPlugins(plugins)
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.edgion_plugins.apply_change(ResourceChange::EventDelete, plugins);
         }
         ResourceKind::PluginMetaData => {
             let metadata: PluginMetaData = parse_resource(&content)?;
-            ValidatedResource::PluginMetaData(metadata)
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.plugin_metadata.apply_change(ResourceChange::EventDelete, metadata);
         }
         ResourceKind::LinkSys => {
             let linksys: LinkSys = parse_resource(&content)?;
-            ValidatedResource::LinkSys(linksys)
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.link_sys.apply_change(ResourceChange::EventDelete, linksys);
         }
         ResourceKind::Secret => {
             let secret: Secret = parse_resource(&content)?;
-            ValidatedResource::Secret(secret)
-        }
-        _ => return Err(StatusCode::NOT_IMPLEMENTED),
-    };
-    
-    // ========== Phase 2: Delete from Store ==========
-    resource_mgr
-        .delete_one(&kind_str, Some(&ns), &name)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // ========== Phase 3: Remove from ConfigServer Memory ==========
-    match validated {
-        ValidatedResource::HTTPRoute(route) => {
-            state.config_server.routes.apply_change(ResourceChange::EventDelete, route);
-        }
-        ValidatedResource::GRPCRoute(route) => {
-            state.config_server.grpc_routes.apply_change(ResourceChange::EventDelete, route);
-        }
-        ValidatedResource::TCPRoute(route) => {
-            state.config_server.tcp_routes.apply_change(ResourceChange::EventDelete, route);
-        }
-        ValidatedResource::UDPRoute(route) => {
-            state.config_server.udp_routes.apply_change(ResourceChange::EventDelete, route);
-        }
-        ValidatedResource::TLSRoute(route) => {
-            state.config_server.tls_routes.apply_change(ResourceChange::EventDelete, route);
-        }
-        ValidatedResource::Service(service) => {
-            state.config_server.services.apply_change(ResourceChange::EventDelete, service);
-        }
-        ValidatedResource::EndpointSlice(ep) => {
-            state.config_server.endpoint_slices.apply_change(ResourceChange::EventDelete, ep);
-        }
-        ValidatedResource::EdgionTls(tls) => {
-            state.config_server.edgion_tls.apply_change(ResourceChange::EventDelete, tls);
-        }
-        ValidatedResource::EdgionPlugins(plugins) => {
-            state.config_server.edgion_plugins.apply_change(ResourceChange::EventDelete, plugins);
-        }
-        ValidatedResource::PluginMetaData(metadata) => {
-            state.config_server.plugin_metadata.apply_change(ResourceChange::EventDelete, metadata);
-        }
-        ValidatedResource::LinkSys(linksys) => {
-            state.config_server.link_sys.apply_change(ResourceChange::EventDelete, linksys);
-        }
-        ValidatedResource::Secret(secret) => {
+            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             state.config_server.secrets.apply_change(ResourceChange::EventDelete, secret);
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
