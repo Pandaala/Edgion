@@ -30,8 +30,8 @@ prefix_dir = "runtime"
 grpc_listen = "0.0.0.0:50051"
 
 # Admin HTTP 服务器监听地址
-# 用于管理和健康检查端点
-admin_listen = "0.0.0.0:8080"
+# 用于管理和健康检查端点，同时提供 Web Dashboard
+admin_listen = "0.0.0.0:5800"
 
 # Gateway class name that this operator instance will handle
 # 指定此 operator 实例将处理的 gateway class 名称
