@@ -171,3 +171,115 @@ impl Plugin for Csrf {
         // Schema validation can be implemented here if needed
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::plugins::plugin_runtime::traits::MockPluginSession;
+
+    fn create_csrf_config() -> CsrfConfig {
+        CsrfConfig {
+            name: "X-CSRF-Token".to_string(),
+            key: "test-secret-key-32-bytes-long!".to_string(),
+            expires: 7200,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_safe_method_sets_cookie() {
+        let config = create_csrf_config();
+        let csrf = Csrf::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("Csrf");
+
+        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session
+            .expect_set_response_header()
+            .returning(|_, _| Ok(()));
+
+        let result = csrf.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(plugin_log.log.as_ref().unwrap().contains("Safe method"));
+    }
+
+    #[tokio::test]
+    async fn test_missing_header_token() {
+        let config = create_csrf_config();
+        let csrf = Csrf::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("Csrf");
+
+        mock_session.expect_method().returning(|| "POST".to_string());
+        mock_session
+            .expect_header_value()
+            .with(mockall::predicate::eq("X-CSRF-Token"))
+            .returning(|_| None);
+
+        let result = csrf.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+
+        match result {
+            PluginRunningResult::ErrResponse { status, .. } => {
+                assert_eq!(status, 401);
+            }
+            _ => panic!("Expected ErrResponse"),
+        }
+        assert!(plugin_log.log.as_ref().unwrap().contains("No token in headers"));
+    }
+
+    #[tokio::test]
+    async fn test_missing_cookie_token() {
+        let config = create_csrf_config();
+        let csrf = Csrf::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("Csrf");
+
+        mock_session.expect_method().returning(|| "POST".to_string());
+        mock_session
+            .expect_header_value()
+            .with(mockall::predicate::eq("X-CSRF-Token"))
+            .returning(|_| Some("some-token".to_string()));
+        mock_session
+            .expect_header_value()
+            .with(mockall::predicate::eq("cookie"))
+            .returning(|_| None);
+
+        let result = csrf.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+
+        match result {
+            PluginRunningResult::ErrResponse { status, .. } => {
+                assert_eq!(status, 401);
+            }
+            _ => panic!("Expected ErrResponse"),
+        }
+        assert!(plugin_log.log.as_ref().unwrap().contains("No csrf cookie"));
+    }
+
+    #[tokio::test]
+    async fn test_token_mismatch() {
+        let config = create_csrf_config();
+        let csrf = Csrf::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("Csrf");
+
+        mock_session.expect_method().returning(|| "POST".to_string());
+        mock_session
+            .expect_header_value()
+            .with(mockall::predicate::eq("X-CSRF-Token"))
+            .returning(|_| Some("token1".to_string()));
+        mock_session
+            .expect_header_value()
+            .with(mockall::predicate::eq("cookie"))
+            .returning(|_| Some("X-CSRF-Token=token2".to_string()));
+
+        let result = csrf.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+
+        match result {
+            PluginRunningResult::ErrResponse { status, .. } => {
+                assert_eq!(status, 401);
+            }
+            _ => panic!("Expected ErrResponse"),
+        }
+        assert!(plugin_log.log.as_ref().unwrap().contains("Token mismatch"));
+    }
+}

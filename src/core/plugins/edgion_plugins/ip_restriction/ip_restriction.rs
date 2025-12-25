@@ -141,3 +141,134 @@ impl Plugin for IpRestriction {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::plugins::plugin_runtime::traits::MockPluginSession;
+    use crate::types::resources::edgion_plugins::DefaultAction;
+
+    fn create_ip_config_allow_list() -> IpRestrictionConfig {
+        let config = IpRestrictionConfig {
+            allow: Some(vec!["192.168.1.0/24".to_string()]),
+            deny: None,
+            default_action: DefaultAction::Deny,
+            ip_source: IpSource::ClientIp,
+            message: None,
+            status: 403,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        IpRestrictionConfig::new(config).unwrap()
+    }
+
+    fn create_ip_config_deny_list() -> IpRestrictionConfig {
+        let config = IpRestrictionConfig {
+            allow: None,
+            deny: Some(vec!["10.0.0.100".to_string()]),
+            default_action: DefaultAction::Allow,
+            ip_source: IpSource::ClientIp,
+            message: None,
+            status: 403,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        IpRestrictionConfig::new(config).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_allowed_ip_passes() {
+        let config = create_ip_config_allow_list();
+        let plugin = IpRestriction::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("IpRestriction");
+
+        mock_session
+            .expect_remote_addr()
+            .return_const("192.168.1.50".to_string());
+
+        let result = plugin.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(plugin_log.log.as_ref().unwrap().contains("ALLOWED"));
+    }
+
+    #[tokio::test]
+    async fn test_denied_ip_blocked() {
+        let config = create_ip_config_allow_list();
+        let plugin = IpRestriction::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("IpRestriction");
+
+        mock_session
+            .expect_remote_addr()
+            .return_const("10.0.0.50".to_string());
+        mock_session
+            .expect_write_response_header()
+            .returning(|_, _| Ok(()));
+        mock_session
+            .expect_write_response_body()
+            .returning(|_, _| Ok(()));
+
+        let result = plugin.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(plugin_log.log.as_ref().unwrap().contains("DENIED"));
+    }
+
+    #[tokio::test]
+    async fn test_blacklist_blocks_specific_ip() {
+        let config = create_ip_config_deny_list();
+        let plugin = IpRestriction::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("IpRestriction");
+
+        mock_session
+            .expect_remote_addr()
+            .return_const("10.0.0.100".to_string());
+        mock_session
+            .expect_write_response_header()
+            .returning(|_, _| Ok(()));
+        mock_session
+            .expect_write_response_body()
+            .returning(|_, _| Ok(()));
+
+        let result = plugin.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(plugin_log.log.as_ref().unwrap().contains("DENIED"));
+    }
+
+    #[tokio::test]
+    async fn test_default_action_allow() {
+        let config = create_ip_config_deny_list();
+        let plugin = IpRestriction::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("IpRestriction");
+
+        mock_session
+            .expect_remote_addr()
+            .return_const("172.16.0.1".to_string());
+
+        let result = plugin.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(plugin_log.log.as_ref().unwrap().contains("ALLOWED"));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_ip_continues() {
+        let config = create_ip_config_allow_list();
+        let plugin = IpRestriction::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("IpRestriction");
+
+        mock_session
+            .expect_remote_addr()
+            .return_const("".to_string());
+
+        let result = plugin.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(plugin_log.log.as_ref().unwrap().contains("Failed to get client IP"));
+    }
+}

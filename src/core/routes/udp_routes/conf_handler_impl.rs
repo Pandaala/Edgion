@@ -197,6 +197,7 @@ mod tests {
                     stream_plugin_runtime: Default::default(),
                     backend_finder: Default::default(),
                     plugin_runtime: Default::default(),
+                    stream_plugin_runtime: Default::default(),
                 }]),
             },
         }
