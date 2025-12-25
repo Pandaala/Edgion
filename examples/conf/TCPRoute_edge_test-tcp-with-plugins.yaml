@@ -3,19 +3,16 @@ kind: TCPRoute
 metadata:
   name: test-tcp-with-plugins
   namespace: edge
+  annotations:
+    # Reference EdgionStreamPlugins using annotation
+    edgion.io/stream-plugins: example-stream-ip
 spec:
   parentRefs:
     - name: example-gateway
       namespace: edge
       sectionName: tcp-8080
   rules:
-    - filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionStreamPlugins
-            name: example-stream-ip
-      backendRefs:
+    - backendRefs:
         - name: test-tcp
           port: 8080
           weight: 100

@@ -73,17 +73,13 @@ pub struct TCPRouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_refs: Option<Vec<TCPBackendRef>>,
 
-    /// Filters define the plugins that are applied to TCP connections
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filters: Option<Vec<TCPRouteFilter>>,
-
     /// Backend finder for load balancing (not serialized/deserialized)
     #[serde(skip)]
     #[schemars(skip)]
     pub backend_finder: BackendSelector<TCPBackendRef>,
 
     /// Stream plugin runtime (runtime only, not serialized)
-    /// This is computed from filters at runtime
+    /// This is populated from route annotations during pre-processing
     #[serde(skip)]
     #[schemars(skip)]
     pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
@@ -93,7 +89,6 @@ impl Clone for TCPRouteRule {
     fn clone(&self) -> Self {
         Self {
             backend_refs: self.backend_refs.clone(),
-            filters: self.filters.clone(),
             backend_finder: BackendSelector::new(),
             stream_plugin_runtime: self.stream_plugin_runtime.clone(),
         }
@@ -104,7 +99,6 @@ impl fmt::Debug for TCPRouteRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TCPRouteRule")
             .field("backend_refs", &self.backend_refs)
-            .field("filters", &self.filters)
             .field("backend_finder", &"<skipped>")
             .field("stream_plugin_runtime", &self.stream_plugin_runtime)
             .finish()
@@ -138,27 +132,4 @@ pub struct TCPBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
 }
-
-/// TCPRouteFilter defines processing steps for TCP connections
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TCPRouteFilter {
-    /// Type identifies the type of filter to apply
-    #[serde(rename = "type")]
-    pub filter_type: TCPRouteFilterType,
-
-    /// ExtensionRef is an optional, implementation-specific extension to the "filter" behavior
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extension_ref: Option<TCPLocalObjectReference>,
-}
-
-/// TCPRouteFilterType identifies a type of TCPRoute filter
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
-pub enum TCPRouteFilterType {
-    /// ExtensionRef is used for configuring custom TCP plugins
-    ExtensionRef,
-}
-
-/// TCPLocalObjectReference identifies an API object within the namespace of the referrer
-pub type TCPLocalObjectReference = crate::types::resources::http_route::LocalObjectReference;
 

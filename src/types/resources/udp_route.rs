@@ -74,10 +74,6 @@ pub struct UDPRouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_refs: Option<Vec<UDPBackendRef>>,
 
-    /// Filters define the plugins that are applied to UDP connections
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filters: Option<Vec<UDPRouteFilter>>,
-
     /// Backend finder for load balancing (not serialized/deserialized)
     #[serde(skip)]
     #[schemars(skip)]
@@ -89,7 +85,7 @@ pub struct UDPRouteRule {
     pub plugin_runtime: Arc<PluginRuntime>,
 
     /// Stream plugin runtime (runtime only, not serialized)
-    /// This is computed from filters at runtime
+    /// This is populated from route annotations during pre-processing
     #[serde(skip)]
     #[schemars(skip)]
     pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
@@ -99,7 +95,6 @@ impl Clone for UDPRouteRule {
     fn clone(&self) -> Self {
         Self {
             backend_refs: self.backend_refs.clone(),
-            filters: self.filters.clone(),
             backend_finder: BackendSelector::new(),
             plugin_runtime: self.plugin_runtime.clone(),
             stream_plugin_runtime: self.stream_plugin_runtime.clone(),
@@ -111,7 +106,6 @@ impl fmt::Debug for UDPRouteRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UDPRouteRule")
             .field("backend_refs", &self.backend_refs)
-            .field("filters", &self.filters)
             .field("backend_finder", &"<skipped>")
             .field("plugin_runtime", &self.plugin_runtime)
             .field("stream_plugin_runtime", &self.stream_plugin_runtime)
@@ -156,27 +150,4 @@ pub struct UDPBackendRef {
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
 }
-
-/// UDPRouteFilter defines processing steps for UDP connections
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct UDPRouteFilter {
-    /// Type identifies the type of filter to apply
-    #[serde(rename = "type")]
-    pub filter_type: UDPRouteFilterType,
-
-    /// ExtensionRef is an optional, implementation-specific extension to the "filter" behavior
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extension_ref: Option<UDPLocalObjectReference>,
-}
-
-/// UDPRouteFilterType identifies a type of UDPRoute filter
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
-pub enum UDPRouteFilterType {
-    /// ExtensionRef is used for configuring custom UDP plugins
-    ExtensionRef,
-}
-
-/// UDPLocalObjectReference identifies an API object within the namespace of the referrer
-pub type UDPLocalObjectReference = crate::types::resources::http_route::LocalObjectReference;
 
