@@ -202,6 +202,10 @@ impl EdgionTls {
         
         // 6. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx).await;
+        
+        // Note: TLS routes currently use RoundRobin only
+        // When LeastConnection support is added, increment/decrement should be called here
+        // based on the selected LB policy
     }
     
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)

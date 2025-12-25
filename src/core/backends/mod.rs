@@ -182,6 +182,14 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 addr.set_port(port as u16);
             }
             
+            // Store backend address and LB policy in context for connection counting
+            let addr_clone = addr.clone();
+            let lb_policy_clone = lb_policy.clone();
+            if let Some(upstream) = ctx.get_current_upstream_mut() {
+                upstream.backend_addr = Some(addr_clone);
+                upstream.lb_policy = lb_policy_clone;
+            }
+            
             Ok(Box::new(HttpPeer::new(addr, false, String::new())))
         }
         

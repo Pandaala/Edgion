@@ -149,6 +149,10 @@ impl EdgionTcp {
         
         // 6. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx).await;
+        
+        // Note: TCP routes currently use RoundRobin only
+        // When LeastConnection support is added, increment/decrement should be called here
+        // based on the selected LB policy
     }
     
     /// Bidirectional data transfer

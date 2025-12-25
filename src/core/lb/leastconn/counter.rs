@@ -39,6 +39,12 @@ pub fn get_count(addr: &SocketAddr) -> usize {
         .unwrap_or(0)
 }
 
+/// Remove counter entry for a backend address.
+/// Used by the cleaner task to cleanup fully drained backends.
+pub fn remove(addr: &SocketAddr) {
+    CONNECTION_COUNTS.remove(addr);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

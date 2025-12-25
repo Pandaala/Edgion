@@ -4,8 +4,10 @@ use std::fmt;
 use serde::Serialize;
 use crate::types::{EdgionStatus, HTTPBackendRef, GRPCBackendRef, HTTPRouteMatch};
 use crate::types::filters::{PluginRunningResult};
+use crate::types::resources::http_route_preparse::ParsedLBPolicy;
 use crate::core::plugins::PluginLog;
 use crate::core::routes::HttpRouteRuleUnit;
+use pingora_core::protocols::l4::socket::SocketAddr;
 
 #[derive(Clone, Serialize)]
 pub struct MatchInfo {
@@ -107,6 +109,12 @@ pub struct UpstreamInfo {
     /// Error messages collected during upstream attempts
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub err: Vec<String>,
+    /// Backend socket address for connection counting (used by LeastConnection LB)
+    #[serde(skip)]
+    pub backend_addr: Option<SocketAddr>,
+    /// LB policy used for this upstream selection
+    #[serde(skip)]
+    pub lb_policy: Option<ParsedLBPolicy>,
 }
 
 /// Backend context containing service info and upstream attempt history
@@ -213,6 +221,8 @@ impl EdgionHttpContext {
                 et: None,
                 start_time: std::time::Instant::now(),
                 err: Vec::new(),
+                backend_addr: None,
+                lb_policy: None,
             });
             bc.current_upstream_id = Some(bc.upstreams.len() - 1);
         }

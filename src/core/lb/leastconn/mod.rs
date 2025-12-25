@@ -21,9 +21,13 @@
 //! decrement(&peer_addr);
 //! ```
 
+pub mod backend_state;
+mod cleaner;
 mod counter;
 mod selection;
 
-pub use counter::{decrement, get_count, increment};
+pub use backend_state::{is_active, mark_draining, reactivate, get_state, BackendState};
+pub use cleaner::BackendCleaner;
+pub use counter::{decrement, get_count, increment, remove};
 pub use selection::LeastConnection;
 

@@ -446,6 +446,15 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
+        // Decrement connection count for LeastConnection LB before logging
+        if let Some(upstream) = ctx.get_current_upstream() {
+            if let (Some(addr), Some(crate::types::ParsedLBPolicy::LeastConn)) = 
+                (&upstream.backend_addr, &upstream.lb_policy) 
+            {
+                crate::core::lb::leastconn::decrement(addr);
+            }
+        }
+        
         // Update response status from session
         if let Some(resp_header) = session.response_written() {
             ctx.request_info.status = resp_header.status.as_u16();
@@ -598,6 +607,13 @@ impl ProxyHttp for EdgionHttp {
         if let Some(upstream) = ctx.get_current_upstream_mut() {
             let ct = upstream.start_time.elapsed().as_millis() as u64;
             upstream.ct = Some(ct);
+            
+            // Increment connection count for LeastConnection LB
+            if let (Some(addr), Some(crate::types::ParsedLBPolicy::LeastConn)) = 
+                (&upstream.backend_addr, &upstream.lb_policy) 
+            {
+                crate::core::lb::leastconn::increment(addr);
+            }
         }
         
         // For gRPC-Web or WebSocket, log connection establishment immediately

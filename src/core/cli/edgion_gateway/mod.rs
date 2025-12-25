@@ -112,6 +112,11 @@ impl EdgionGatewayCli {
 
         Self::spawn_config_printer(config_client.clone());
 
+        // Start backend cleaner for LeastConnection load balancing
+        let cleaner = crate::core::lb::leastconn::BackendCleaner::new();
+        cleaner.start();
+        tracing::info!("Backend cleaner task started for LeastConnection LB");
+
         // Spawn Admin API server in background
         let config_client_for_admin = config_client.clone();
         tokio::spawn(async move {

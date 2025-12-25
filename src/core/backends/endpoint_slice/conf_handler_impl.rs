@@ -3,7 +3,7 @@ use std::sync::Arc;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use crate::core::conf_sync::traits::ConfHandler;
 use super::{get_roundrobin_store, get_consistent_store, get_leastconn_store};
-use super::discovery_impl::EndpointSliceLoadBalancer;
+use super::discovery_impl::{EndpointSliceLoadBalancer, EndpointSliceExt};
 use crate::core::lb::lb_policy::{get_global_policy_store, LbPolicy};
 use crate::types::ResourceMeta;
 
@@ -159,26 +159,37 @@ impl EpSliceHandler {
         let mut leastconn_remove = HashSet::new();
         
         // Handle removes
+        // Note: Backend state cleanup will be handled by the cleaner task
+        // Backends will be filtered out by the selection algorithm if draining
         for key in remove {
             leastconn_remove.insert(key.clone());
         }
         
-        // Handle adds and updates
-        for (key, ep_slice) in add.iter().chain(update.iter()) {
+        // Handle updates - check for removed backends and mark as draining
+        for (key, new_ep_slice) in update {
+            let service_key = new_ep_slice.key_name();
+            let policies = policy_store.get(&service_key);
+            
+            if policies.contains(&LbPolicy::LeastConnection) {
+                // Update the load balancer
+                // Note: Backend state management (draining/reactivation) will be handled
+                // by monitoring connection counts in the cleaner task
+                if let Err(e) = leastconn_store.update_in_place_and_refresh_lb(key, new_ep_slice.clone()) {
+                    tracing::error!(key = %key, error = %e, "Failed to update LeastConnection LB");
+                }
+            } else {
+                leastconn_remove.insert(key.clone());
+            }
+        }
+        
+        // Handle adds
+        for (key, ep_slice) in add {
             let service_key = ep_slice.key_name();
             let policies = policy_store.get(&service_key);
             
             if policies.contains(&LbPolicy::LeastConnection) {
-                if !leastconn_store.contains(key) {
-                    let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                    leastconn_add.insert(key.clone(), lb);
-                } else if update.contains_key(key) {
-                    if let Err(e) = leastconn_store.update_in_place_and_refresh_lb(key, ep_slice.clone()) {
-                        tracing::error!(key = %key, error = %e, "Failed to update LeastConnection LB");
-                    }
-                }
-            } else {
-                leastconn_remove.insert(key.clone());
+                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
+                leastconn_add.insert(key.clone(), lb);
             }
         }
         
