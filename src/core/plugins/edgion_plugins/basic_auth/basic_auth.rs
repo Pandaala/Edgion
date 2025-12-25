@@ -222,3 +222,147 @@ impl Plugin for BasicAuth {
         // Schema validation can be implemented here if needed
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::plugins::plugin_runtime::traits::MockPluginSession;
+    use base64::engine::general_purpose;
+
+    fn create_basic_auth_with_users() -> BasicAuth {
+        let config = BasicAuthConfig {
+            secret_refs: None,
+            realm: "Test Realm".to_string(),
+            hide_credentials: false,
+            anonymous: None,
+        };
+        let mut auth = BasicAuth::new(&config);
+        
+        let mut users = HashMap::new();
+        users.insert("testuser".to_string(), "testpass".to_string());
+        auth.load_users(users).unwrap();
+        
+        auth
+    }
+
+    fn encode_credentials(username: &str, password: &str) -> String {
+        let credentials = format!("{}:{}", username, password);
+        format!("Basic {}", general_purpose::STANDARD.encode(credentials.as_bytes()))
+    }
+
+    #[tokio::test]
+    async fn test_successful_auth() {
+        let auth = create_basic_auth_with_users();
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("BasicAuth");
+        
+        let auth_header = encode_credentials("testuser", "testpass");
+        
+        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session
+            .expect_header_value()
+            .with(mockall::predicate::eq("authorization"))
+            .returning(move |_| Some(auth_header.clone()));
+        mock_session
+            .expect_set_request_header()
+            .returning(|_, _| Ok(()));
+        
+        let result = auth.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(plugin_log.log.as_ref().unwrap().contains("Auth successful"));
+    }
+
+    #[tokio::test]
+    async fn test_auth_failed_returns_401() {
+        let auth = create_basic_auth_with_users();
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("BasicAuth");
+        
+        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session
+            .expect_header_value()
+            .returning(|_| None);
+        mock_session
+            .expect_write_response_header()
+            .returning(|_, _| Ok(()));
+        mock_session
+            .expect_write_response_body()
+            .returning(|_, _| Ok(()));
+        mock_session
+            .expect_shutdown()
+            .returning(|| {});
+        
+        let result = auth.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    }
+
+    #[tokio::test]
+    async fn test_anonymous_access() {
+        let config = BasicAuthConfig {
+            secret_refs: None,
+            realm: "Test".to_string(),
+            hide_credentials: false,
+            anonymous: Some("anonymous-user".to_string()),
+        };
+        let auth = BasicAuth::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("BasicAuth");
+        
+        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session.expect_header_value().returning(|_| None);
+        mock_session.expect_set_request_header().returning(|_, _| Ok(()));
+        
+        let result = auth.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(plugin_log.log.as_ref().unwrap().contains("anonymous"));
+    }
+
+    #[tokio::test]
+    async fn test_hide_credentials() {
+        let config = BasicAuthConfig {
+            secret_refs: None,
+            realm: "Test".to_string(),
+            hide_credentials: true,
+            anonymous: None,
+        };
+        let mut auth = BasicAuth::new(&config);
+        let mut users = HashMap::new();
+        users.insert("testuser".to_string(), "testpass".to_string());
+        auth.load_users(users).unwrap();
+        
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("BasicAuth");
+        let auth_header = encode_credentials("testuser", "testpass");
+        
+        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session
+            .expect_header_value()
+            .returning(move |_| Some(auth_header.clone()));
+        mock_session.expect_set_request_header().returning(|_, _| Ok(()));
+        mock_session
+            .expect_remove_request_header()
+            .with(mockall::predicate::eq("authorization"))
+            .times(1)
+            .returning(|_| Ok(()));
+        
+        let result = auth.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    #[tokio::test]
+    async fn test_options_method_skip() {
+        let auth = create_basic_auth_with_users();
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("BasicAuth");
+        
+        mock_session.expect_method().returning(|| "OPTIONS".to_string());
+        
+        let result = auth.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+}
