@@ -58,6 +58,33 @@ pub async fn create_cluster(
     let metadata = crate::core::utils::extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
     let name = metadata.name.ok_or(StatusCode::BAD_REQUEST)?;
     
+    // Check if resource already exists in ConfigServer base_conf
+    let exists = {
+        let base_conf_guard = state.config_server.base_conf.read().unwrap();
+        match kind {
+            crate::types::ResourceKind::GatewayClass => {
+                use kube::ResourceExt;
+                base_conf_guard.gateway_class().name_any() == name
+            }
+            crate::types::ResourceKind::EdgionGatewayConfig => {
+                use kube::ResourceExt;
+                base_conf_guard.edgion_gateway_config().name_any() == name
+            }
+            _ => return Err(StatusCode::BAD_REQUEST),
+        }
+    };
+    
+    if exists {
+        tracing::warn!(
+            component = "unified_api",
+            event = "resource_already_exists",
+            kind = %kind_str,
+            name = %name,
+            "Cluster resource already exists"
+        );
+        return Err(StatusCode::CONFLICT);
+    }
+    
     // Parse, validate, and persist
     match kind {
         crate::types::ResourceKind::GatewayClass => {
@@ -162,32 +189,46 @@ pub async fn delete_cluster(
     
     let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     
-    // Read, validate, and delete
-    let content = resource_mgr
-        .get_one(&kind_str, None, &name)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+    // Check if resource exists in ConfigServer base_conf
+    let exists = {
+        let base_conf_guard = state.config_server.base_conf.read().unwrap();
+        match kind {
+            crate::types::ResourceKind::GatewayClass => {
+                use kube::ResourceExt;
+                base_conf_guard.gateway_class().name_any() == name
+            }
+            crate::types::ResourceKind::EdgionGatewayConfig => {
+                use kube::ResourceExt;
+                base_conf_guard.edgion_gateway_config().name_any() == name
+            }
+            _ => return Err(StatusCode::BAD_REQUEST),
+        }
+    };
     
-    match kind {
-        crate::types::ResourceKind::GatewayClass => {
-            let _: GatewayClass = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, None, &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        crate::types::ResourceKind::EdgionGatewayConfig => {
-            let _: EdgionGatewayConfig = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, None, &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        _ => return Err(StatusCode::BAD_REQUEST),
+    if !exists {
+        tracing::warn!(
+            component = "unified_api",
+            event = "resource_not_found",
+            kind = %kind_str,
+            name = %name,
+            "Cluster resource not found"
+        );
+        return Err(StatusCode::NOT_FOUND);
     }
+    
+    // Delete from persistence (ignore error if not in filesystem)
+    let _ = resource_mgr.delete_one(&kind_str, None, &name).await;
+    
+    // Note: Cluster-scoped resources in base_conf cannot be removed from cache
+    // as they are loaded from configuration files at startup.
+    // This is a design limitation - cluster resources should be managed via config files.
     
     tracing::info!(
         component = "unified_api",
         event = "cluster_resource_deleted",
         kind = %kind_str,
         name = %name,
-        "Cluster resource deleted"
+        "Cluster resource deleted from persistence (cache unchanged)"
     );
     
     Ok(Json(ApiResponse::success(format!("{} deleted", kind_str))))

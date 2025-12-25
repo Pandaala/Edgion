@@ -81,7 +81,7 @@ pub async fn list_all_namespaces(
 /// List namespace-scoped resources
 pub async fn list_namespaced(
     State(state): State<Arc<AdminState>>,
-    Path((ns, kind_str)): Path<(String, String)>,
+    Path((kind_str, ns)): Path<(String, String)>,
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
     
@@ -179,7 +179,7 @@ pub async fn list_namespaced(
 /// Get a namespace-scoped resource
 pub async fn get_namespaced(
     State(state): State<Arc<AdminState>>,
-    Path((ns, kind_str, name)): Path<(String, String, String)>,
+    Path((kind_str, ns, name)): Path<(String, String, String)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
     
@@ -265,16 +265,111 @@ pub async fn get_namespaced(
 /// Create a namespace-scoped resource
 pub async fn create_namespaced(
     State(state): State<Arc<AdminState>>,
-    Path((ns, kind_str)): Path<(String, String)>,
+    Path((kind_str, ns)): Path<(String, String)>,
     body: Bytes,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
-    let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    tracing::info!(
+        component = "unified_api",
+        event = "create_request",
+        kind = %kind_str,
+        namespace = %ns,
+        body_len = body.len(),
+        "Received create request"
+    );
     
-    let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let kind = parse_kind(&kind_str).map_err(|e| {
+        tracing::warn!("Failed to parse kind: {}", e);
+        StatusCode::BAD_REQUEST
+    })?;
     
-    let metadata = crate::core::utils::extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
-    let name = metadata.name.ok_or(StatusCode::BAD_REQUEST)?;
+    let resource_mgr = state.resource_mgr.as_ref().ok_or_else(|| {
+        tracing::error!("Resource manager not available");
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
+    
+    let content = String::from_utf8(body.to_vec()).map_err(|e| {
+        tracing::warn!("Failed to parse body as UTF-8: {}", e);
+        StatusCode::BAD_REQUEST
+    })?;
+    
+    tracing::debug!("Request body: {}", content);
+    
+    let metadata = crate::core::utils::extract_resource_metadata(&content).ok_or_else(|| {
+        tracing::warn!("Failed to extract metadata from request body");
+        StatusCode::BAD_REQUEST
+    })?;
+    
+    let name = metadata.name.ok_or_else(|| {
+        tracing::warn!("Resource name is missing in metadata");
+        StatusCode::BAD_REQUEST
+    })?;
+    
+    tracing::info!("Extracted resource name: {}", name);
+    
+    // Check if resource already exists in ConfigServer (memory cache)
+    let exists = match kind {
+        crate::types::ResourceKind::HTTPRoute => {
+            let list_data = state.config_server.routes.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        crate::types::ResourceKind::GRPCRoute => {
+            let list_data = state.config_server.grpc_routes.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        crate::types::ResourceKind::TCPRoute => {
+            let list_data = state.config_server.tcp_routes.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        crate::types::ResourceKind::UDPRoute => {
+            let list_data = state.config_server.udp_routes.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        crate::types::ResourceKind::TLSRoute => {
+            let list_data = state.config_server.tls_routes.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        crate::types::ResourceKind::Service => {
+            let list_data = state.config_server.services.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        crate::types::ResourceKind::EndpointSlice => {
+            let list_data = state.config_server.endpoint_slices.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        crate::types::ResourceKind::EdgionTls => {
+            let list_data = state.config_server.edgion_tls.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        crate::types::ResourceKind::EdgionPlugins => {
+            let list_data = state.config_server.edgion_plugins.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        crate::types::ResourceKind::PluginMetaData => {
+            let list_data = state.config_server.plugin_metadata.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        crate::types::ResourceKind::LinkSys => {
+            let list_data = state.config_server.link_sys.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        crate::types::ResourceKind::Secret => {
+            let list_data = state.config_server.secrets.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
+        _ => return Err(StatusCode::NOT_IMPLEMENTED),
+    };
+    
+    if exists {
+        tracing::warn!(
+            component = "unified_api",
+            event = "resource_already_exists",
+            kind = %kind_str,
+            namespace = %ns,
+            name = %name,
+            "Resource already exists in ConfigServer"
+        );
+        return Err(StatusCode::CONFLICT);
+    }
     
     // Parse, persist, and update cache in one step
     match kind {
@@ -440,7 +535,7 @@ pub async fn create_namespaced(
 /// Update a namespace-scoped resource
 pub async fn update_namespaced(
     State(state): State<Arc<AdminState>>,
-    Path((ns, kind_str, name)): Path<(String, String, String)>,
+    Path((kind_str, ns, name)): Path<(String, String, String)>,
     body: Bytes,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -612,88 +707,119 @@ pub async fn update_namespaced(
 /// Delete a namespace-scoped resource
 pub async fn delete_namespaced(
     State(state): State<Arc<AdminState>>,
-    Path((ns, kind_str, name)): Path<(String, String, String)>,
+    Path((kind_str, ns, name)): Path<(String, String, String)>,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
     let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     
-    // Read, validate, delete, and remove from cache in one step
-    let content = resource_mgr
-        .get_one(&kind_str, Some(&ns), &name)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-    
+    // Find and delete resource from ConfigServer (memory cache) and persistence
     match kind {
         crate::types::ResourceKind::HTTPRoute => {
-            let route: HTTPRoute = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.routes.list();
+            let mut route = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut route); // Update version for EventDelete
             state.config_server.routes.apply_change(ResourceChange::EventDelete, route);
         }
         crate::types::ResourceKind::GRPCRoute => {
-            let route: GRPCRoute = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.grpc_routes.list();
+            let mut route = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut route);
             state.config_server.grpc_routes.apply_change(ResourceChange::EventDelete, route);
         }
         crate::types::ResourceKind::TCPRoute => {
-            let route: TCPRoute = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.tcp_routes.list();
+            let mut route = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut route);
             state.config_server.tcp_routes.apply_change(ResourceChange::EventDelete, route);
         }
         crate::types::ResourceKind::UDPRoute => {
-            let route: UDPRoute = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.udp_routes.list();
+            let mut route = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut route);
             state.config_server.udp_routes.apply_change(ResourceChange::EventDelete, route);
         }
         crate::types::ResourceKind::TLSRoute => {
-            let route: TLSRoute = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.tls_routes.list();
+            let mut route = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut route);
             state.config_server.tls_routes.apply_change(ResourceChange::EventDelete, route);
         }
         crate::types::ResourceKind::Service => {
-            let service: Service = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.services.list();
+            let mut service = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut service);
             state.config_server.services.apply_change(ResourceChange::EventDelete, service);
         }
         crate::types::ResourceKind::EndpointSlice => {
-            let ep: EndpointSlice = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.endpoint_slices.list();
+            let mut ep = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut ep);
             state.config_server.endpoint_slices.apply_change(ResourceChange::EventDelete, ep);
         }
         crate::types::ResourceKind::EdgionTls => {
-            let tls: EdgionTls = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.edgion_tls.list();
+            let mut tls = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut tls);
             state.config_server.apply_edgion_tls_change(ResourceChange::EventDelete, tls);
         }
         crate::types::ResourceKind::EdgionPlugins => {
-            let plugins: EdgionPlugins = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.edgion_plugins.list();
+            let mut plugins = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut plugins);
             state.config_server.edgion_plugins.apply_change(ResourceChange::EventDelete, plugins);
         }
         crate::types::ResourceKind::PluginMetaData => {
-            let metadata: PluginMetaData = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.plugin_metadata.list();
+            let mut metadata = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut metadata);
             state.config_server.plugin_metadata.apply_change(ResourceChange::EventDelete, metadata);
         }
         crate::types::ResourceKind::LinkSys => {
-            let linksys: LinkSys = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.link_sys.list();
+            let mut linksys = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut linksys);
             state.config_server.link_sys.apply_change(ResourceChange::EventDelete, linksys);
         }
         crate::types::ResourceKind::Secret => {
-            let secret: Secret = parse_resource(&content)?;
-            resource_mgr.delete_one(&kind_str, Some(&ns), &name).await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let list_data = state.config_server.secrets.list();
+            let mut secret = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut secret);
             state.config_server.apply_secret_change(ResourceChange::EventDelete, secret);
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
