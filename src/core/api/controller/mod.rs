@@ -84,24 +84,24 @@ pub fn create_admin_router(
         .route("/health", get(health_check))
         
         // Cross-namespace query - List all resources of a kind
-        .route("/api/{kind}", get(namespaced_handlers::list_all_namespaces))
+        .route("/api/v1/namespaced/{kind}", get(namespaced_handlers::list_all_namespaces))
         
         // Cluster-scoped resources
-        .route("/api/cluster/{kind}", get(cluster_handlers::list_cluster))
-        .route("/api/cluster/{kind}", post(cluster_handlers::create_cluster))
-        .route("/api/cluster/{kind}/{name}", get(cluster_handlers::get_cluster))
-        .route("/api/cluster/{kind}/{name}", put(cluster_handlers::update_cluster))
-        .route("/api/cluster/{kind}/{name}", delete(cluster_handlers::delete_cluster))
+        .route("/api/v1/cluster/{kind}", get(cluster_handlers::list_cluster))
+        .route("/api/v1/cluster/{kind}", post(cluster_handlers::create_cluster))
+        .route("/api/v1/cluster/{kind}/{name}", get(cluster_handlers::get_cluster))
+        .route("/api/v1/cluster/{kind}/{name}", put(cluster_handlers::update_cluster))
+        .route("/api/v1/cluster/{kind}/{name}", delete(cluster_handlers::delete_cluster))
         
         // Namespace-scoped resources
-        .route("/api/namespaces/{ns}/{kind}", get(namespaced_handlers::list_namespaced))
-        .route("/api/namespaces/{ns}/{kind}", post(namespaced_handlers::create_namespaced))
-        .route("/api/namespaces/{ns}/{kind}/{name}", get(namespaced_handlers::get_namespaced))
-        .route("/api/namespaces/{ns}/{kind}/{name}", put(namespaced_handlers::update_namespaced))
-        .route("/api/namespaces/{ns}/{kind}/{name}", delete(namespaced_handlers::delete_namespaced))
+        .route("/api/v1/namespaced/{kind}/{namespace}", get(namespaced_handlers::list_namespaced))
+        .route("/api/v1/namespaced/{kind}/{namespace}", post(namespaced_handlers::create_namespaced))
+        .route("/api/v1/namespaced/{kind}/{namespace}/{name}", get(namespaced_handlers::get_namespaced))
+        .route("/api/v1/namespaced/{kind}/{namespace}/{name}", put(namespaced_handlers::update_namespaced))
+        .route("/api/v1/namespaced/{kind}/{namespace}/{name}", delete(namespaced_handlers::delete_namespaced))
         
         // Special operations
-        .route("/api/reload", post(reload_all_resources))
+        .route("/api/v1/reload", post(reload_all_resources))
         .with_state(admin_state)
 }
 

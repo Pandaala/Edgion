@@ -95,6 +95,9 @@ futures = "0.3.31"
 
 # HTTP server
 axum = { version = "0.8.4", features = ["macros", "ws"] }
+tower-http = { version = "0.6", features = ["fs"] }  # Only for static files
+rust-embed = { version = "8.5" }  # For embedding frontend
+mime_guess = "2.0"
 
 # Utilities
 bytes = "1.0"
