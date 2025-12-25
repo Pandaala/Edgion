@@ -40,6 +40,11 @@ pub struct EdgionGatewayConfigSpec {
     /// Security protection configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security_protect: Option<SecurityProtectConfig>,
+
+    /// Global plugins references that apply to all routes using this GatewayClass
+    /// These plugins are executed before route-level plugins
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_plugins_ref: Option<Vec<PluginReference>>,
 }
 
 // ============================================
@@ -292,6 +297,22 @@ fn default_xff_limit() -> usize {
 
 fn default_require_sni_host_match() -> bool {
     true
+}
+
+// ============================================
+// Plugin Reference
+// ============================================
+
+/// Plugin reference for referencing EdgionPlugins resources
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginReference {
+    /// Name of the EdgionPlugins resource
+    pub name: String,
+    
+    /// Namespace of the EdgionPlugins resource (defaults to "default")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }
 
 #[cfg(test)]

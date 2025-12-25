@@ -307,21 +307,46 @@ impl ProxyHttp for EdgionHttp {
             }
         }
         
-        // Step 2: Run edgion_plugins based on matched route type
+        // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
+        if let Some(ref plugin_refs) = self.edgion_gateway_config.spec.global_plugins_ref {
+            for plugin_ref in plugin_refs {
+                // Construct plugin key: namespace/name
+                let plugin_key = format!("{}/{}", 
+                    plugin_ref.namespace.as_deref().unwrap_or("default"),
+                    plugin_ref.name
+                );
+                
+                // Get plugin from global store
+                if let Some(edgion_plugin) = crate::core::plugins::edgion_plugins::get_global_plugin_store().get(&plugin_key) {
+                    // Execute plugin runtime
+                    edgion_plugin.spec.plugin_runtime.run_request_plugins(session, ctx).await;
+                    
+                    // Check if plugin terminated the request
+                    if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+                        tracing::debug!(plugin=%plugin_key, "Request terminated by global plugin");
+                        return Ok(true);
+                    }
+                } else {
+                    tracing::warn!(plugin=%plugin_key, "Global plugin not found in store");
+                }
+            }
+        }
+        
+        // Step 3: Run route-level plugins based on matched route type
         if ctx.is_grpc_route {
-            // Run gRPC route edgion_plugins
+            // Run gRPC route plugins
             match run_grpc_route_plugins(session, ctx).await {
                 Ok(true) => return Ok(true), // Plugin terminated request
                 Ok(false) => return Ok(false), // Continue processing
                 Err(e) => {
-                    tracing::error!("Error running gRPC route edgion_plugins: {:?}", e);
+                    tracing::error!("Error running gRPC route plugins: {:?}", e);
                     ctx.add_error(EdgionStatus::Unknown);
                     end_response_500(session, ctx, &self.server_header_opts).await?;
                     return Ok(true);
                 }
             }
         } else if let Some(route_unit) = ctx.route_unit.clone() {
-            // Run HTTP route edgion_plugins
+            // Run HTTP route plugins
             route_unit.rule.plugin_runtime.run_request_plugins(session, ctx).await;
             if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
                 return Ok(true);
