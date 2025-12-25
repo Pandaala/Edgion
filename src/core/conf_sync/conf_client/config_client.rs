@@ -25,6 +25,7 @@ pub struct ConfigClient {
     endpoint_slices: ClientCache<EndpointSlice>,
     edgion_tls: ClientCache<EdgionTls>,
     edgion_plugins: ClientCache<EdgionPlugins>,
+    edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
     plugin_metadata: ClientCache<PluginMetaData>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
 }
@@ -89,6 +90,7 @@ impl ConfigClient {
             endpoint_slices: endpoint_slices_cache,
             edgion_tls: edgion_tls_cache,
             edgion_plugins: plugins_cache,
+            edgion_stream_plugins: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             plugin_metadata: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             // secrets: ClientCache::new(gateway_class_key, client_id, client_name),
         }
@@ -142,6 +144,11 @@ impl ConfigClient {
     /// Get edgion_plugins cache for direct access
     pub fn edgion_plugins(&self) -> &ClientCache<EdgionPlugins> {
         &self.edgion_plugins
+    }
+
+    /// Get edgion_stream_plugins cache for direct access
+    pub fn edgion_stream_plugins(&self) -> &ClientCache<EdgionStreamPlugins> {
+        &self.edgion_stream_plugins
     }
 
     /// Get plugin_metadata cache for direct access
@@ -332,6 +339,12 @@ impl ConfigClient {
                 let list_data = self.edgion_plugins.list();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EdgionPlugins data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::EdgionStreamPlugins => {
+                let list_data = self.edgion_stream_plugins.list();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize EdgionStreamPlugins data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::PluginMetaData => {
@@ -688,6 +701,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     Self::apply_change_to_cache(&self.edgion_plugins, change, resource);
                 }
                 Err(e) => log_error("EdgionPlugins", &e),
+            },
+            ResourceKind::EdgionStreamPlugins => match serde_yaml::from_str::<EdgionStreamPlugins>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.edgion_stream_plugins, change, resource);
+                }
+                Err(e) => log_error("EdgionStreamPlugins", &e),
             },
             ResourceKind::PluginMetaData => match serde_yaml::from_str::<PluginMetaData>(&data) {
                 Ok(resource) => {

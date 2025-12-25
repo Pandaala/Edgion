@@ -18,6 +18,7 @@ pub enum ResourceKind {
     PluginMetaData = 13,
     TLSRoute = 14,
     LinkSys = 15,
+    EdgionStreamPlugins = 16,
 }
 
 impl ResourceKind {
@@ -59,6 +60,7 @@ impl ResourceKind {
             "pluginmetadata" => Some(ResourceKind::PluginMetaData),
             "tlsroute" => Some(ResourceKind::TLSRoute),
             "linksys" => Some(ResourceKind::LinkSys),
+            "edgionstreamplugins" => Some(ResourceKind::EdgionStreamPlugins),
             _ => None,
         }
     }

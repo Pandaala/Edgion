@@ -123,6 +123,15 @@ pub async fn load_all_resources_from_store(
                     Err(e) => Err(e.into()),
                 }
             }
+            Some(ResourceKind::EdgionStreamPlugins) => {
+                match serde_yaml::from_str::<EdgionStreamPlugins>(&resource.content) {
+                    Ok(stream_plugins) => {
+                        config_server.edgion_stream_plugins.apply_change(ResourceChange::InitAdd, stream_plugins);
+                        Ok::<(), anyhow::Error>(())
+                    }
+                    Err(e) => Err(e.into()),
+                }
+            }
             Some(ResourceKind::PluginMetaData) => {
                 match serde_yaml::from_str::<PluginMetaData>(&resource.content) {
                     Ok(metadata) => {

@@ -14,6 +14,7 @@ use crate::core::observe::AccessLogger;
 use crate::core::routes::tcp_routes::GatewayTcpRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::core::backends::endpoint_slice::get_roundrobin_store;
+use crate::core::plugins::{StreamContext, StreamPluginResult};
 
 /// TCP connection context
 pub struct TcpContext {
@@ -91,26 +92,50 @@ impl EdgionTcp {
             }
         };
         
-        // 2. Select backend
-        let backend_ref = match tcp_route.spec.rules.as_ref()
-            .and_then(|rules| rules.first())
-        {
-            Some(rule) => {
-                match rule.backend_finder.select() {
-                    Ok(backend) => backend,
-                    Err(_) => {
-                        ctx.status = TcpStatus::UpstreamConnectionFailed;
-                        return;
-                    }
-                }
-            }
+        // 2. Get the first rule
+        let rule = match tcp_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
+            Some(rule) => rule,
             None => {
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
                 return;
             }
         };
         
-        // 3. Resolve backend address via EndpointSlice
+        // 3. Execute stream plugins (NEW)
+        if !rule.stream_plugin_runtime.is_empty() {
+            // Extract client IP from downstream connection
+            // TODO: Properly extract IP from Stream - for now use placeholder
+            if let Ok(client_ip) = "0.0.0.0".parse() {
+                let stream_ctx = StreamContext::new(client_ip, self.listener_port);
+                
+                match rule.stream_plugin_runtime.run(&stream_ctx).await {
+                    StreamPluginResult::Allow => {
+                        // Continue processing
+                        tracing::debug!("Stream plugins allowed connection");
+                    }
+                    StreamPluginResult::Deny(reason) => {
+                        tracing::info!(
+                            listener_port = self.listener_port,
+                            reason = %reason,
+                            "Connection denied by stream plugin"
+                        );
+                        ctx.status = TcpStatus::UpstreamConnectionFailed;
+                        return;
+                    }
+                }
+            }
+        }
+        
+        // 4. Select backend
+        let backend_ref = match rule.backend_finder.select() {
+            Ok(backend) => backend,
+            Err(_) => {
+                ctx.status = TcpStatus::UpstreamConnectionFailed;
+                return;
+            }
+        };
+        
+        // 5. Resolve backend address via EndpointSlice
         let namespace = backend_ref.namespace.as_deref()
             .or_else(|| tcp_route.metadata.namespace.as_deref())
             .unwrap_or("default");
@@ -126,7 +151,7 @@ impl EdgionTcp {
             }
         };
         
-        // 4. Build upstream address (using actual IP address)
+        // 6. Build upstream address (using actual IP address)
         let mut upstream_addr = backend.addr;
         if let Some(port) = backend_ref.port {
             upstream_addr.set_port(port as u16);
@@ -134,7 +159,7 @@ impl EdgionTcp {
         let upstream_addr_str = upstream_addr.to_string();
         ctx.upstream_addr = Some(upstream_addr_str.clone());
         
-        // 5. Connect to upstream
+        // 7. Connect to upstream
         let peer = BasicPeer::new(&upstream_addr_str);
         let upstream = match self.connector.new_stream(&peer).await {
             Ok(stream) => stream,
@@ -147,7 +172,7 @@ impl EdgionTcp {
         // Mark connection as established
         ctx.connection_established = true;
         
-        // 6. Bidirectional data forwarding
+        // 8. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx).await;
         
         // Note: TCP routes currently use RoundRobin only

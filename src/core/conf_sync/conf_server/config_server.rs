@@ -29,6 +29,7 @@ pub enum ResourceItem {
     EndpointSlice(EndpointSlice),
     EdgionTls(EdgionTls),
     EdgionPlugins(EdgionPlugins),
+    EdgionStreamPlugins(EdgionStreamPlugins),
     PluginMetaData(PluginMetaData),
     Secret(Secret),
 }
@@ -48,6 +49,7 @@ pub struct ConfigServer {
     pub endpoint_slices: ServerCache<EndpointSlice>,
     pub edgion_tls: ServerCache<EdgionTls>,
     pub edgion_plugins: ServerCache<EdgionPlugins>,
+    pub edgion_stream_plugins: ServerCache<EdgionStreamPlugins>,
     pub plugin_metadata: ServerCache<PluginMetaData>,
     pub secrets: ServerCache<Secret>,
     pub secret_ref_manager: Arc<SecretRefManager>,
@@ -82,6 +84,7 @@ impl ConfigServer {
             endpoint_slices: ServerCache::new(conf_sync_config.endpoint_slices_capacity),
             edgion_tls: ServerCache::new(conf_sync_config.edgion_tls_capacity),
             edgion_plugins: ServerCache::new(conf_sync_config.edgion_plugins_capacity),
+            edgion_stream_plugins: ServerCache::new(conf_sync_config.edgion_stream_plugins_capacity),
             plugin_metadata: ServerCache::new(conf_sync_config.plugin_metadata_capacity),
             secrets: ServerCache::new(conf_sync_config.secrets_capacity),
             secret_ref_manager: Arc::new(SecretRefManager::new()),
@@ -207,6 +210,24 @@ impl ConfigServer {
                 let list_data = self.list_edgion_plugins();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EdgionPlugins data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::EdgionStreamPlugins => {
+                let list_data = self.list_edgion_stream_plugins();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize EdgionStreamPlugins data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::PluginMetaData => {
+                let list_data = self.list_plugin_metadata();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize PluginMetaData data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::LinkSys => {
+                let list_data = self.list_link_sys();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize LinkSys data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::Secret => {
@@ -552,6 +573,90 @@ impl ConfigServer {
                     }
                 });
             }
+            ResourceKind::EdgionStreamPlugins => {
+                let mut receiver = self.watch_edgion_stream_plugins(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize EdgionStreamPlugins events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::PluginMetaData => {
+                let mut receiver = self.watch_plugin_metadata(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize PluginMetaData events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::LinkSys => {
+                let mut receiver = self.watch_link_sys(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize LinkSys events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
             ResourceKind::Secret => {
                 let mut receiver = self.watch_secrets(client_id, client_name, from_version);
                 tokio::spawn(async move {
@@ -632,6 +737,10 @@ impl ConfigServer {
     /// List Edgion Plugins
     pub fn list_edgion_plugins(&self) -> ListData<EdgionPlugins> {
         self.edgion_plugins.list_owned()
+    }
+
+    pub fn list_edgion_stream_plugins(&self) -> ListData<EdgionStreamPlugins> {
+        self.edgion_stream_plugins.list_owned()
     }
 
     /// List secrets
@@ -747,6 +856,15 @@ impl ConfigServer {
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<EdgionPlugins>> {
         self.edgion_plugins.watch(client_id, client_name, from_version)
+    }
+
+    pub fn watch_edgion_stream_plugins(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<EdgionStreamPlugins>> {
+        self.edgion_stream_plugins.watch(client_id, client_name, from_version)
     }
 
     /// Watch secrets
