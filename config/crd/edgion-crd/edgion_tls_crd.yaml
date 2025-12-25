@@ -68,6 +68,40 @@ spec:
                     namespace:
                       type: string
                       description: "Namespace of the Secret. If not specified, defaults to the same namespace as ZtraceTls"
+                client_auth:
+                  type: object
+                  description: "mTLS client certificate authentication configuration (optional)"
+                  properties:
+                    mode:
+                      type: string
+                      description: "TLS authentication mode"
+                      enum: ["Terminate", "Mutual", "OptionalMutual"]
+                      default: "Terminate"
+                    ca_secret_ref:
+                      type: object
+                      description: "Reference to CA certificate Secret (required when mode is Mutual or OptionalMutual)"
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                        namespace:
+                          type: string
+                    verify_depth:
+                      type: integer
+                      description: "Certificate chain verification depth (1-9, default: 1)"
+                      minimum: 1
+                      maximum: 9
+                      default: 1
+                    allowed_sans:
+                      type: array
+                      description: "Optional Subject Alternative Names whitelist"
+                      items:
+                        type: string
+                    allowed_cns:
+                      type: array
+                      description: "Optional Common Name whitelist"
+                      items:
+                        type: string
             status:
               type: object
               properties:
