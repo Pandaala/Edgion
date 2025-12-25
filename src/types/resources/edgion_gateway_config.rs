@@ -279,6 +279,11 @@ pub struct SecurityProtectConfig {
     /// HTTP requests (no SNI) are not affected by this validation
     #[serde(default = "default_require_sni_host_match")]
     pub require_sni_host_match: bool,
+    
+    /// Fallback SNI hostname to use when client doesn't provide SNI in TLS handshake
+    /// If not set, requests without SNI will fail with certificate error
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_sni: Option<String>,
 }
 
 fn default_xff_limit() -> usize {

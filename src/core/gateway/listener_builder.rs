@@ -142,7 +142,10 @@ pub fn add_http_listener(
 
     // Add listener with or without TLS
     if enable_tls {
-        let mut tls_settings = TlsCallback::new_tls_settings_with_callback(true)?;
+        let mut tls_settings = TlsCallback::new_tls_settings_with_callback(
+            context.edgion_gateway_config.clone(),
+            true
+        )?;
         // Enable HTTP/2 for HTTPS if enable_http2 is true
         if enable_http2 {
             tls_settings.enable_h2();
@@ -311,7 +314,10 @@ pub fn add_tls_terminate_to_tcp_listener(
     };
     
     // Create TLS settings with callback for certificate loading
-    let tls_settings = TlsCallback::new_tls_settings_with_callback(false)?;
+    let tls_settings = TlsCallback::new_tls_settings_with_callback(
+        context.edgion_gateway_config.clone(),
+        false
+    )?;
     
     // Create TLS service with Listeners
     let mut tls_service = Service::with_listeners(
