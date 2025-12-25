@@ -155,4 +155,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     async fn shutdown(&mut self) {
         self.inner.shutdown().await;
     }
+
+    fn client_addr(&self) -> &str { &self.ctx.request_info.client_addr }
+    fn remote_addr(&self) -> &str { &self.ctx.request_info.remote_addr }
 }

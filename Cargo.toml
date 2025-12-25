@@ -110,6 +110,9 @@ dashmap = "5.5"
 regex = "1.0"
 rand = "0.8"
 smallvec = "1.13"
+bcrypt = "0.15"
+sha2 = "0.10"
+hex = "0.4"
 
 # Pingora
 pingora-core = { version = "0.6" }

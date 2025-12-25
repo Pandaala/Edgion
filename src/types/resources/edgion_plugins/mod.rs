@@ -15,12 +15,23 @@ pub mod entry;
 pub mod gateway_api_plugins;
 pub mod custom_plugins;
 
+pub mod plugin_configs;
+
 #[cfg(test)]
 mod tests;
 
 // Re-exports
 pub use entry::{ConditionEnable, PluginEntry};
 pub use gateway_api_plugins::EdgionPlugin;
+pub use plugin_configs::{
+    BasicAuthConfig,
+    CorsConfig,
+    CsrfConfig,
+    IpRestrictionConfig,
+    IpSource,
+    DefaultAction,
+    MockConfig,
+};
 
 /// API group for EdgionPlugins
 pub const EDGION_PLUGINS_GROUP: &str = "edgion.io";

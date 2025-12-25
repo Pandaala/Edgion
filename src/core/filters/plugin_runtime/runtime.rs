@@ -10,6 +10,11 @@ use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, GRPCRouteFil
 
 use super::log::PluginLog;
 use crate::core::filters::gapi_filters::{ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
+use crate::core::plugins::basic_auth::BasicAuth;
+use crate::core::plugins::cors::Cors;
+use crate::core::plugins::csrf::Csrf;
+use crate::core::plugins::ip_restriction::IpRestriction;
+use crate::core::plugins::mock::Mock;
 use super::session_adapter::PingoraSessionAdapter;
 use super::traits::Plugin;
 
@@ -111,6 +116,21 @@ impl PluginRuntime {
             }
             EdgionPlugin::RequestRedirect(config) => {
                 Some(Box::new(RequestRedirectFilter::new(config.clone())) as Box<dyn Plugin>)
+            }
+            EdgionPlugin::BasicAuth(config) => {
+                Some(Box::new(BasicAuth::new(config)) as Box<dyn Plugin>)
+            }
+            EdgionPlugin::Cors(config) => {
+                Some(Box::new(Cors::new(config)) as Box<dyn Plugin>)
+            }
+            EdgionPlugin::Csrf(config) => {
+                Some(Box::new(Csrf::new(config)) as Box<dyn Plugin>)
+            }
+            EdgionPlugin::IpRestriction(config) => {
+                Some(IpRestriction::new(config))
+            }
+            EdgionPlugin::Mock(config) => {
+                Some(Box::new(Mock::new(config)) as Box<dyn Plugin>)
             }
             // TODO: Add other plugin types (UrlRewrite, RequestMirror, ExtensionRef)
             _ => None,

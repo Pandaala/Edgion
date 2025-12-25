@@ -1,0 +1,820 @@
+# Mock Plugin User Guide
+
+## 什么是 Mock？
+
+Mock 插件返回预定义的响应，而不将请求转发给上游服务。这对 API 开发、测试和原型设计非常有用。
+
+**使用场景**：
+- API 原型设计：在后端开发完成前提供模拟数据
+- 前端开发：无需等待后端，使用模拟响应开发前端
+- 测试错误处理：模拟各种错误响应（404, 500 等）
+- 性能测试：模拟慢速网络或服务延迟
+- 演示和展示：提供稳定的演示环境
+
+## 快速开始
+
+### 最简单的配置
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 200
+      body: '{"message": "Hello, World!"}'
+```
+
+**效果**：所有请求返回 200 状态码和 JSON 响应，不访问上游服务。
+
+### 模拟 404 错误
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 404
+      body: '{"error": "Resource not found"}'
+```
+
+---
+
+## 配置参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `statusCode` | Integer | `200` | HTTP 状态码（100-599）|
+| `body` | String | 无 | 响应体内容。可以是 JSON、XML、HTML 或纯文本 |
+| `contentType` | String | `"application/json"` | Content-Type 响应头 |
+| `headers` | Object | 无 | 自定义响应头。键值对格式 |
+| `delay` | Integer | 无 | 延迟响应时间（毫秒）。用于模拟慢速网络 |
+
+---
+
+## 常见配置场景
+
+### 1. 成功响应（JSON）
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 200
+      body: |
+        {
+          "users": [
+            {"id": 1, "name": "Alice"},
+            {"id": 2, "name": "Bob"}
+          ],
+          "total": 2
+        }
+      contentType: "application/json"
+```
+
+### 2. 创建资源响应（201 Created）
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 201
+      body: '{"id": 12345, "status": "created"}'
+      headers:
+        Location: "/api/resources/12345"
+        X-Request-ID: "abc-123-def"
+```
+
+### 3. 客户端错误（400 Bad Request）
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 400
+      body: |
+        {
+          "error": "Bad Request",
+          "message": "Invalid input parameters",
+          "fields": {
+            "email": "Invalid email format"
+          }
+        }
+```
+
+### 4. 认证失败（401 Unauthorized）
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 401
+      body: '{"error": "Unauthorized", "message": "Authentication required"}'
+      headers:
+        WWW-Authenticate: 'Bearer realm="API"'
+```
+
+### 5. 资源不存在（404 Not Found）
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 404
+      body: '{"error": "Not Found", "message": "The requested resource does not exist"}'
+```
+
+### 6. 服务器错误（500 Internal Server Error）
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 500
+      body: '{"error": "Internal Server Error", "message": "An unexpected error occurred"}'
+```
+
+### 7. 服务不可用（503 Service Unavailable）
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 503
+      body: '{"error": "Service Unavailable", "message": "Service is temporarily unavailable"}'
+      headers:
+        Retry-After: "120"
+```
+
+### 8. HTML 响应
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 200
+      contentType: "text/html"
+      body: |
+        <!DOCTYPE html>
+        <html>
+        <head><title>Maintenance</title></head>
+        <body>
+          <h1>Under Maintenance</h1>
+          <p>We'll be back soon!</p>
+        </body>
+        </html>
+```
+
+### 9. XML 响应
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 200
+      contentType: "application/xml"
+      body: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <response>
+          <status>success</status>
+          <data>
+            <item id="1">Product A</item>
+            <item id="2">Product B</item>
+          </data>
+        </response>
+```
+
+### 10. 纯文本响应
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 200
+      contentType: "text/plain"
+      body: "Service is healthy and running"
+```
+
+### 11. 空响应（204 No Content）
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 204
+      # 无 body
+```
+
+### 12. 模拟慢速网络
+
+模拟 2 秒延迟，用于测试超时处理：
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 200
+      body: '{"message": "Delayed response"}'
+      delay: 2000  # 2 秒延迟
+```
+
+### 13. 带自定义头的响应
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 200
+      body: '{"data": "example"}'
+      headers:
+        X-API-Version: "v2"
+        X-Rate-Limit-Limit: "1000"
+        X-Rate-Limit-Remaining: "999"
+        X-Request-ID: "req-12345"
+        Cache-Control: "no-cache"
+```
+
+---
+
+## 高级使用场景
+
+### 1. 不同路径返回不同响应
+
+使用多个 HTTPRoute 为不同路径配置不同的 mock 响应：
+
+```yaml
+# 用户列表 - 返回成功
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mock-users-list
+spec:
+  parentRefs:
+    - name: my-gateway
+  hostnames:
+    - "api.example.com"
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /api/users
+          method: GET
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: mock-users-success
+---
+# 用户详情 - 返回 404
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mock-user-notfound
+spec:
+  parentRefs:
+    - name: my-gateway
+  hostnames:
+    - "api.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/users/999
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: mock-notfound
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mock-users-success
+spec:
+  plugins:
+    - enable: true
+      plugin:
+        type: Mock
+        config:
+          statusCode: 200
+          body: '{"users": [{"id": 1, "name": "Alice"}]}'
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mock-notfound
+spec:
+  plugins:
+    - enable: true
+      plugin:
+        type: Mock
+        config:
+          statusCode: 404
+          body: '{"error": "User not found"}'
+```
+
+### 2. 模拟分页响应
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 200
+      body: |
+        {
+          "data": [
+            {"id": 1, "title": "Item 1"},
+            {"id": 2, "title": "Item 2"},
+            {"id": 3, "title": "Item 3"}
+          ],
+          "pagination": {
+            "page": 1,
+            "per_page": 10,
+            "total": 100,
+            "total_pages": 10
+          }
+        }
+      headers:
+        X-Total-Count: "100"
+        Link: '<https://api.example.com/items?page=2>; rel="next"'
+```
+
+### 3. 模拟认证流程
+
+```yaml
+# 登录成功
+filters:
+  - type: Mock
+    config:
+      statusCode: 200
+      body: |
+        {
+          "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+          "user": {
+            "id": 123,
+            "username": "testuser"
+          },
+          "expires_in": 3600
+        }
+      headers:
+        X-Auth-Token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+### 4. 模拟文件上传响应
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 201
+      body: |
+        {
+          "file_id": "f12345",
+          "filename": "document.pdf",
+          "size": 1048576,
+          "url": "https://storage.example.com/files/f12345"
+        }
+      headers:
+        Location: "/api/files/f12345"
+```
+
+### 5. 开发环境：维护模式
+
+在维护期间返回友好消息：
+
+```yaml
+filters:
+  - type: Mock
+    config:
+      statusCode: 503
+      contentType: "application/json"
+      body: |
+        {
+          "status": "maintenance",
+          "message": "System is under maintenance",
+          "estimated_completion": "2024-03-15T10:00:00Z"
+        }
+      headers:
+        Retry-After: "3600"
+```
+
+---
+
+## 与其他插件配合
+
+### 1. 与 CORS 配合
+
+允许跨域访问 mock 端点：
+
+```yaml
+filters:
+  - type: Cors
+    config:
+      allowOrigins: "*"
+      allowMethods: "GET,POST,PUT,DELETE"
+
+  - type: Mock
+    config:
+      statusCode: 200
+      body: '{"message": "Mock response with CORS"}'
+```
+
+### 2. 与认证插件配合
+
+需要认证才能访问 mock 端点：
+
+```yaml
+filters:
+  # 先验证身份
+  - type: BasicAuth
+    config:
+      secretRefs:
+        - name: test-users
+
+  # 再返回 mock 响应
+  - type: Mock
+    config:
+      statusCode: 200
+      body: '{"message": "Authenticated mock response"}'
+```
+
+### 3. 部分路径使用 Mock
+
+生产环境中部分功能使用 mock（渐进式开发）：
+
+```yaml
+rules:
+  # 已完成的功能 - 转发到真实服务
+  - matches:
+      - path:
+          type: PathPrefix
+          value: /api/v1
+    backendRefs:
+      - name: real-backend
+        port: 8080
+
+  # 开发中的功能 - 使用 mock
+  - matches:
+      - path:
+          type: PathPrefix
+          value: /api/v2
+    filters:
+      - type: ExtensionRef
+        extensionRef:
+          group: edgion.io
+          kind: EdgionPlugins
+          name: mock-v2
+```
+
+---
+
+## 最佳实践
+
+### ✅ 推荐做法
+
+1. **使用有意义的响应**
+   ```yaml
+   # ✅ 好：提供完整的响应结构
+   body: |
+     {
+       "status": "success",
+       "data": {...},
+       "timestamp": "2024-03-15T10:00:00Z"
+     }
+
+   # ❌ 差：过于简单
+   body: "ok"
+   ```
+
+2. **正确设置 Content-Type**
+   ```yaml
+   # JSON 响应
+   contentType: "application/json"
+
+   # XML 响应
+   contentType: "application/xml"
+
+   # HTML 响应
+   contentType: "text/html"
+   ```
+
+3. **模拟真实的错误响应**
+   ```yaml
+   statusCode: 400
+   body: |
+     {
+       "error": "ValidationError",
+       "message": "Invalid input",
+       "details": [...]
+     }
+   ```
+
+4. **添加有用的响应头**
+   ```yaml
+   headers:
+     X-Request-ID: "mock-12345"
+     X-API-Version: "v1"
+     Cache-Control: "no-cache"
+   ```
+
+5. **环境隔离**
+   - 开发环境：使用 mock
+   - 测试环境：部分 mock + 部分真实服务
+   - 生产环境：不使用 mock
+
+### ❌ 避免做法
+
+1. **不要在生产环境长期使用 mock**
+   ```yaml
+   # ❌ Mock 只应用于开发/测试
+   # 生产环境应该使用真实服务
+   ```
+
+2. **不要忘记设置正确的状态码**
+   ```yaml
+   # ❌ 错误响应使用 200
+   statusCode: 200
+   body: '{"error": "Something went wrong"}'
+
+   # ✅ 使用正确的错误码
+   statusCode: 500
+   body: '{"error": "Something went wrong"}'
+   ```
+
+3. **不要返回敏感信息**
+   ```yaml
+   # ❌ 不要在 mock 响应中包含真实密钥/密码
+   body: '{"api_key": "real-production-key"}'
+   ```
+
+---
+
+## 性能考虑
+
+- **零上游延迟**：Mock 插件不调用上游服务，响应速度极快
+- **延迟模拟**：使用 `delay` 参数模拟慢速网络，不影响实际性能
+- **内存占用**：响应体存储在内存中，避免配置超大响应（> 10MB）
+
+---
+
+## 故障排除
+
+### 问题 1：响应不符合预期
+
+**原因**：配置错误或被其他插件修改
+
+**解决方案**：
+```bash
+# 检查插件配置
+kubectl get edgionplugins mock-test -o yaml
+
+# 查看日志
+kubectl logs -n edgion-system <gateway-pod> | grep Mock
+```
+
+### 问题 2：响应被缓存
+
+**原因**：浏览器或 CDN 缓存了响应
+
+**解决方案**：
+```yaml
+headers:
+  Cache-Control: "no-cache, no-store, must-revalidate"
+  Pragma: "no-cache"
+  Expires: "0"
+```
+
+### 问题 3：CORS 错误
+
+**原因**：跨域请求未配置 CORS
+
+**解决方案**：
+```yaml
+filters:
+  - type: Cors
+    config:
+      allowOrigins: "*"
+  - type: Mock
+    config:
+      statusCode: 200
+      body: '{"data": "test"}'
+```
+
+---
+
+## 测试示例
+
+### 使用 cURL 测试
+
+```bash
+# 基本请求
+curl https://api.example.com/mock/test
+
+# 查看响应头
+curl -v https://api.example.com/mock/test
+
+# 测试延迟
+time curl https://api.example.com/mock/slow
+# 应该看到 2 秒延迟
+```
+
+### 使用 JavaScript 测试
+
+```javascript
+fetch('https://api.example.com/mock/test')
+  .then(response => response.json())
+  .then(data => console.log('Mock response:', data))
+  .catch(error => console.error('Error:', error));
+```
+
+---
+
+## 完整示例
+
+### 开发环境 API 原型
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api-prototype
+  namespace: default
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "api-dev.example.com"
+  rules:
+    # GET /api/users - 用户列表
+    - matches:
+        - path:
+            type: Exact
+            value: /api/users
+          method: GET
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: mock-users-list
+
+    # POST /api/users - 创建用户
+    - matches:
+        - path:
+            type: Exact
+            value: /api/users
+          method: POST
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: mock-user-create
+
+    # GET /api/users/:id - 用户详情
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/users/
+          method: GET
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: mock-user-detail
+
+    # DELETE /api/users/:id - 删除用户
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/users/
+          method: DELETE
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: mock-user-delete
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mock-users-list
+spec:
+  plugins:
+    - enable: true
+      plugin:
+        type: Mock
+        config:
+          statusCode: 200
+          body: |
+            {
+              "users": [
+                {"id": 1, "name": "Alice", "email": "alice@example.com"},
+                {"id": 2, "name": "Bob", "email": "bob@example.com"}
+              ],
+              "total": 2
+            }
+          headers:
+            X-Total-Count: "2"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mock-user-create
+spec:
+  plugins:
+    - enable: true
+      plugin:
+        type: Mock
+        config:
+          statusCode: 201
+          body: |
+            {
+              "id": 3,
+              "name": "Charlie",
+              "email": "charlie@example.com",
+              "created_at": "2024-03-15T10:00:00Z"
+            }
+          headers:
+            Location: "/api/users/3"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mock-user-detail
+spec:
+  plugins:
+    - enable: true
+      plugin:
+        type: Mock
+        config:
+          statusCode: 200
+          body: |
+            {
+              "id": 1,
+              "name": "Alice",
+              "email": "alice@example.com",
+              "created_at": "2024-01-01T00:00:00Z",
+              "updated_at": "2024-03-15T10:00:00Z"
+            }
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mock-user-delete
+spec:
+  plugins:
+    - enable: true
+      plugin:
+        type: Mock
+        config:
+          statusCode: 204
+```
+
+**测试命令**：
+
+```bash
+# 获取用户列表
+curl https://api-dev.example.com/api/users
+
+# 创建用户
+curl -X POST https://api-dev.example.com/api/users \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Charlie","email":"charlie@example.com"}'
+
+# 获取用户详情
+curl https://api-dev.example.com/api/users/1
+
+# 删除用户
+curl -X DELETE https://api-dev.example.com/api/users/1
+```
+
+---
+
+## 从 Mock 迁移到真实服务
+
+当后端开发完成后，平滑迁移到真实服务：
+
+```yaml
+# 第一步：移除 Mock 插件 filter
+rules:
+  - matches:
+      - path:
+          type: PathPrefix
+          value: /api
+    # 移除 filters 部分
+    # filters:
+    #   - type: ExtensionRef
+    #     extensionRef:
+    #       kind: EdgionPlugins
+    #       name: mock-response
+
+    # 添加真实后端
+    backendRefs:
+      - name: real-backend-service
+        port: 8080
+```
+
+**渐进式迁移**：保留部分 mock，逐步替换为真实服务。

@@ -76,7 +76,7 @@ pub struct GatewayTLSConfig {
     pub options: Option<serde_json::Value>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SecretObjectReference {
     /// Group is the group of the referent

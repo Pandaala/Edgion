@@ -7,6 +7,7 @@ use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter,
     HTTPURLRewriteFilter, LocalObjectReference,
 };
+use super::plugin_configs::{BasicAuthConfig, CorsConfig, CsrfConfig, IpRestrictionConfig, MockConfig};
 
 /// Plugin enum for all supported plugin types
 ///
@@ -31,10 +32,19 @@ pub enum EdgionPlugin {
     ExtensionRef(LocalObjectReference),
 
     // ========== Custom Edgion filters ==========
-    // TODO: Add custom Edgion filters here
+    /// Basic Authentication filter
+    BasicAuth(BasicAuthConfig),
+    /// CORS (Cross-Origin Resource Sharing) filter
+    Cors(CorsConfig),
+    /// CSRF (Cross-Site Request Forgery) protection filter
+    Csrf(CsrfConfig),
+    /// IP Restriction filter (allow/deny based on IP address or CIDR)
+    IpRestriction(IpRestrictionConfig),
+    /// Mock filter (return predefined responses for testing/prototyping)
+    Mock(MockConfig),
+    // TODO: Add more custom Edgion filters here
     // EdgionRateLimit(RateLimitConfig),
     // EdgionCircuitBreaker(CircuitBreakerConfig),
-    // EdgionAuth(AuthConfig),
     // EdgionWaf(WafConfig),
     // EdgionCache(CacheConfig),
     // EdgionTransform(TransformConfig),
@@ -51,7 +61,11 @@ impl EdgionPlugin {
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
             EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
+            EdgionPlugin::BasicAuth(_) => "BasicAuth",
+            EdgionPlugin::Cors(_) => "Cors",
+            EdgionPlugin::Csrf(_) => "Csrf",
+            EdgionPlugin::IpRestriction(_) => "IpRestriction",
+            EdgionPlugin::Mock(_) => "Mock",
         }
     }
 }
-

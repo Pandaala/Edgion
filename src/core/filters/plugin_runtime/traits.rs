@@ -58,6 +58,12 @@ pub trait PluginSession: Send {
     ) -> PluginSessionResult<()>;
 
     async fn shutdown(&mut self);
+
+    /// Get client address (TCP direct connection address)
+    fn client_addr(&self) -> &str;
+
+    /// Get remote address (real client IP, extracted from proxy headers)
+    fn remote_addr(&self) -> &str;
 }
 
 #[async_trait]
