@@ -86,6 +86,7 @@ tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
 rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2.0"
+x509-parser = "0.16"  # Certificate parsing and validation
 tonic-reflection = "0.12"
 prost = "0.13"
 
