@@ -3,7 +3,6 @@ use std::sync::Arc;
 use crate::core::conf_sync::traits::ConfHandler;
 use crate::core::routes::udp_routes::{UdpRouteManager, get_global_udp_route_manager};
 use crate::types::{UDPRoute, ResourceMeta};
-use crate::core::plugins::edgion_stream_plugins::get_global_stream_plugin_store;
 
 /// Implement ConfHandler for Arc<UdpRouteManager>
 impl ConfHandler<UDPRoute> for Arc<UdpRouteManager> {
@@ -130,12 +129,9 @@ impl ConfHandler<UDPRoute> for UdpRouteManager {
 }
 
 impl UdpRouteManager {
-    /// Initialize a UDPRoute by setting up BackendSelector and stream plugins
+    /// Initialize a UDPRoute by setting up BackendSelector
     fn initialize_route(&self, mut route: UDPRoute) -> Result<Arc<UDPRoute>, String> {
         let route_key = route.key_name();
-        
-        // Initialize stream plugins from annotation
-        Self::init_stream_plugins(&mut route);
         
         // Initialize rules
         if let Some(rules) = route.spec.rules.as_mut() {
@@ -161,59 +157,12 @@ impl UdpRouteManager {
         
         Ok(Arc::new(route))
     }
-    
-    /// Initialize stream plugins from annotations
-    fn init_stream_plugins(route: &mut UDPRoute) {
-        // Check for stream-plugins annotation
-        if let Some(annotations) = &route.metadata.annotations {
-            if let Some(plugin_ref) = annotations.get("edgion.io/stream-plugins") {
-                let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-                
-                // Parse plugin reference: support "name" or "namespace/name"
-                let (plugin_namespace, plugin_name) = if plugin_ref.contains('/') {
-                    let parts: Vec<&str> = plugin_ref.splitn(2, '/').collect();
-                    (parts[0], parts[1])
-                } else {
-                    // If no namespace specified, use the route's namespace
-                    (route_namespace, plugin_ref.as_str())
-                };
-                
-                // Get the stream plugin store
-                let store = get_global_stream_plugin_store();
-                
-                // Look up the plugin
-                if let Some(plugins) = store.get_by_ns_name(plugin_namespace, plugin_name) {
-                    tracing::info!(
-                        route = %route.key_name(),
-                        plugin_ref = %plugin_ref,
-                        plugin_namespace = %plugin_namespace,
-                        plugin_name = %plugin_name,
-                        "Applied EdgionStreamPlugins to UDPRoute"
-                    );
-                    
-                    // Apply plugin runtime to all rules
-                    if let Some(rules) = route.spec.rules.as_mut() {
-                        for rule in rules.iter_mut() {
-                            rule.stream_plugin_runtime = plugins.spec.stream_plugin_runtime.clone();
-                        }
-                    }
-                } else {
-                    tracing::warn!(
-                        route = %route.key_name(),
-                        plugin_ref = %plugin_ref,
-                        plugin_namespace = %plugin_namespace,
-                        plugin_name = %plugin_name,
-                        "EdgionStreamPlugins not found - plugin will not be applied"
-                    );
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ResourceMeta;
     
     fn create_test_udp_route(namespace: &str, name: &str, gateway: &str, port: i32) -> UDPRoute {
         use crate::types::resources::udp_route::*;
@@ -244,10 +193,10 @@ mod tests {
                         extension_info: Default::default(),
                         plugin_runtime: Default::default(),
                     }]),
+                    filters: None,
                     stream_plugin_runtime: Default::default(),
                     backend_finder: Default::default(),
                     plugin_runtime: Default::default(),
-                    stream_plugin_runtime: Default::default(),
                 }]),
             },
         }

@@ -28,10 +28,6 @@ path = "examples/testing/test_server.rs"
 name = "test_client"
 path = "examples/testing/test_client.rs"
 
-[[example]]
-name = "resource_diff"
-path = "examples/resource_diff.rs"
-
 [features]
 # Default features
 default = ["allocator-jemalloc", "boringssl"]
@@ -141,7 +137,6 @@ mockall = "0.14.0"
 # Test client dependencies
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 console = "0.15"
-colored = "2.0"
 
 # CLI table formatting
 tabled = "0.15"

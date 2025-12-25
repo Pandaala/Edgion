@@ -76,7 +76,6 @@ enum Commands {
     RealIp,
     Security,
     Mtls,  // mTLS tests
-    StreamPlugins,
     All,
 }
 
@@ -203,13 +202,6 @@ async fn main() -> Result<()> {
             }
             runner.add_suite(Box::new(suites::MtlsTestSuite));
         }
-        Commands::StreamPlugins => {
-            if !cli.gateway {
-                eprintln!("Error: Stream Plugins tests require --gateway flag");
-                std::process::exit(1);
-            }
-            runner.add_suite(Box::new(suites::StreamPluginsTestSuite));
-        }
         Commands::All => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
             runner.add_suite(Box::new(suites::GrpcTestSuite));
@@ -221,8 +213,6 @@ async fn main() -> Result<()> {
                 runner.add_suite(Box::new(suites::GrpcTlsTestSuite));
                 runner.add_suite(Box::new(suites::RealIpTestSuite));
                 runner.add_suite(Box::new(suites::SecurityTestSuite));
-                runner.add_suite(Box::new(suites::MtlsTestSuite));
-                runner.add_suite(Box::new(suites::StreamPluginsTestSuite));
             }
         }
     }

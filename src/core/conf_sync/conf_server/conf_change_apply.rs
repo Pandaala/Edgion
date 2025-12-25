@@ -359,14 +359,14 @@ impl ConfigServer {
                 
                 // Try to resolve Secret immediately from cache
                 let secret_list = self.secrets.list_owned();
-                let secret_data = secret_list.data.into_iter().find(|s| {
+                let secret_data = secret_list.data.iter().find(|s| {
                     let s_namespace = s.metadata.namespace.as_deref();
                     let s_name = s.metadata.name.as_deref().unwrap_or("");
                     s_namespace == secret_namespace.map(|s| s.as_str()) && s_name == resource.spec.secret_ref.name
                 });
                 
                 if let Some(secret) = secret_data {
-                    resource.spec.secret = Some(secret);
+                    resource.spec.secret = Some(secret.clone());
                     tracing::debug!(
                         edgion_tls = %resource_ref.key(),
                         secret_key = %secret_key,
@@ -378,6 +378,43 @@ impl ConfigServer {
                         secret_key = %secret_key,
                         "Secret not found, EdgionTls will be sent without Secret data"
                     );
+                }
+                
+                // Also load CA Secret if mTLS is configured
+                if let Some(ref mut client_auth) = resource.spec.client_auth {
+                    if let Some(ref ca_secret_ref) = client_auth.ca_secret_ref {
+                        let ca_secret_namespace = ca_secret_ref.namespace.as_ref()
+                            .or(resource.metadata.namespace.as_ref());
+                        
+                        let ca_secret_data = secret_list.data.iter().find(|s| {
+                            let s_namespace = s.metadata.namespace.as_deref();
+                            let s_name = s.metadata.name.as_deref().unwrap_or("");
+                            s_namespace == ca_secret_namespace.map(|s| s.as_str()) && s_name == ca_secret_ref.name
+                        });
+                        
+                        if let Some(ca_secret) = ca_secret_data {
+                            client_auth.ca_secret = Some(ca_secret.clone());
+                            tracing::debug!(
+                                edgion_tls = %resource_ref.key(),
+                                ca_secret_name = %ca_secret_ref.name,
+                                "CA Secret resolved and filled into EdgionTls.client_auth"
+                            );
+                        } else {
+                            tracing::warn!(
+                                edgion_tls = %resource_ref.key(),
+                                ca_secret_name = %ca_secret_ref.name,
+                                "CA Secret not found, mTLS will not work"
+                            );
+                        }
+                        
+                        // Register CA Secret reference
+                        let ca_secret_key = if let Some(ns) = ca_secret_namespace {
+                            format!("{}/{}", ns, ca_secret_ref.name)
+                        } else {
+                            ca_secret_ref.name.clone()
+                        };
+                        self.secret_ref_manager.add_ref(ca_secret_key, resource_ref.clone());
+                    }
                 }
             }
             ResourceChange::EventDelete => {
@@ -488,19 +525,53 @@ impl ConfigServer {
                         RK::EdgionTls => {
                             // Reload EdgionTls from cache
                             let edgion_tls_list = self.edgion_tls.list_owned();
+                            let secret_list = self.secrets.list_owned();
+                            
                             if let Some(mut edgion_tls) = edgion_tls_list.data.into_iter().find(|tls| {
                                 let tls_namespace = tls.metadata.namespace.as_deref();
                                 let tls_name = tls.metadata.name.as_deref().unwrap_or("");
                                 tls_namespace == resource_ref.namespace.as_deref() && tls_name == resource_ref.name
                             }) {
-                                // Fill in the Secret
-                                edgion_tls.spec.secret = Some(resource.clone());
+                                // Check if this Secret is the server cert or CA cert
+                                let is_server_cert = edgion_tls.spec.secret_ref.name == secret_name;
+                                let is_ca_cert = edgion_tls.spec.client_auth.as_ref()
+                                    .and_then(|ca| ca.ca_secret_ref.as_ref())
+                                    .map(|ca_ref| ca_ref.name == secret_name)
+                                    .unwrap_or(false);
                                 
-                                tracing::debug!(
-                                    edgion_tls = %resource_ref.key(),
-                                    secret_key = %secret_key,
-                                    "Updating EdgionTls with resolved Secret"
-                                );
+                                if is_server_cert {
+                                    // Fill in the server Secret
+                                    edgion_tls.spec.secret = Some(resource.clone());
+                                    tracing::debug!(
+                                        edgion_tls = %resource_ref.key(),
+                                        secret_key = %secret_key,
+                                        "Updating EdgionTls with resolved server Secret"
+                                    );
+                                }
+                                
+                                if is_ca_cert {
+                                    // Fill in the CA Secret
+                                    if let Some(ref mut client_auth) = edgion_tls.spec.client_auth {
+                                        client_auth.ca_secret = Some(resource.clone());
+                                        tracing::info!(
+                                            edgion_tls = %resource_ref.key(),
+                                            secret_key = %secret_key,
+                                            "Updating EdgionTls with resolved CA Secret (cascading update)"
+                                        );
+                                    }
+                                }
+                                
+                                // Update resource version for cascading update
+                                if is_server_cert || is_ca_cert {
+                                    use crate::core::utils;
+                                    let new_version = utils::next_resource_version();
+                                    edgion_tls.metadata.resource_version = Some(new_version.to_string());
+                                    tracing::debug!(
+                                        edgion_tls = %resource_ref.key(),
+                                        new_version = new_version,
+                                        "Updated resource version for cascading update"
+                                    );
+                                }
                                 
                                 // Trigger update event
                                 execute_change_on_cache(

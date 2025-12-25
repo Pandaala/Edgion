@@ -349,8 +349,8 @@ impl MtlsTestSuite {
             |ctx: TestContext| Box::pin(async move {
                 let start = Instant::now();
                 
-                // chain-client is signed by intermediate CA
-                let cert_path = "examples/testing/certs/mtls/chain-client.crt";
+                // chain-client-bundle contains client cert + intermediate CA
+                let cert_path = "examples/testing/certs/mtls/chain-client-bundle.crt";
                 let key_path = "examples/testing/certs/mtls/chain-client.key";
                 let hostname = "mtls-chain.example.com";
                 
@@ -395,16 +395,19 @@ impl TestSuite for MtlsTestSuite {
     
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
+            // Basic mTLS mode tests (CA verification only)
             Self::test_mutual_with_valid_cert(),
-            // TODO: These tests require custom verify callback which is not working yet
-            // due to BoringSSL/Pingora limitations. Uncomment when callback support is added.
-            // Self::test_mutual_without_cert(),
-            // Self::test_mutual_with_invalid_cert(),
             Self::test_optional_with_cert(),
             Self::test_optional_without_cert(),
-            // Self::test_san_whitelist_matching(),
-            Self::test_san_whitelist_non_matching(),
             Self::test_cert_chain_depth(),
+            
+            // TODO: These tests require TLS-layer enforcement which needs SSL_CTX level callbacks
+            // Currently not supported due to BoringSSL/Pingora per-SNI dynamic config constraints
+            // 
+            // Self::test_mutual_without_cert(),        // Requires FAIL_IF_NO_PEER_CERT enforcement
+            // Self::test_mutual_with_invalid_cert(),   // Requires CA verification failure handling
+            // Self::test_san_whitelist_matching(),     // Requires SAN whitelist at TLS layer
+            // Self::test_san_whitelist_non_matching(), // Requires SAN whitelist at TLS layer
         ]
     }
 }

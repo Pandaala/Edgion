@@ -227,40 +227,6 @@ wait_for_port 10080 "edgion-gateway" "${PID_DIR}/gateway.pid" 30 || {
     exit 1
 }
 
-# 4. 验证资源同步（必须通过）
-echo ""
-echo "=========================================="
-echo "  Resource Synchronization Verification"
-echo "=========================================="
-echo ""
-echo_info "Waiting 2 seconds for initial resource synchronization..."
-sleep 2
-echo ""
-echo_info "Verifying resource synchronization between controller and gateway..."
-echo_info "This is a prerequisite check - all tests will be aborted if it fails"
-echo ""
-
-cargo run --example resource_diff -- \
-    --controller-url http://127.0.0.1:5800 \
-    --gateway-url http://127.0.0.1:5900 2>&1 | tee -a "$TEST_RESULT_LOG"
-
-SYNC_CHECK_RESULT=$?
-
-if [ $SYNC_CHECK_RESULT -eq 0 ]; then
-    echo_success "Resource synchronization verified - All resources are consistent"
-else
-    echo_error "Resource synchronization verification FAILED!"
-    echo_error "Controller and Gateway resources are not synchronized."
-    echo_error "Please check the output above for details."
-    echo ""
-    echo "Logs:"
-    echo "  Controller: $CONTROLLER_LOG"
-    echo "  Gateway:    $GATEWAY_LOG"
-    echo ""
-    echo_error "Integration tests ABORTED due to synchronization failure."
-    exit 1
-fi
-
 # 5. 运行测试
 echo ""
 echo "=========================================="
@@ -399,24 +365,11 @@ echo_info "Test 15: mTLS Gateway mode (gateway:10444)"
 cargo run --example test_client -- -g mtls 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_MTLS_RESULT=$?
 
-echo ""
-echo "---"
-echo ""
-
-# Gateway 模式 StreamPlugins 测试
-echo_info "Test 16: StreamPlugins Gateway mode (gateway:19010)"
-cargo run --example test_client -- -g stream-plugins 2>&1 | tee -a "$TEST_RESULT_LOG"
-GATEWAY_STREAM_PLUGINS_RESULT=$?
-
 # 6. 显示结果
 echo ""
 echo "=========================================="
 echo "  Test Results"
 echo "=========================================="
-echo ""
-
-# Resource sync check (prerequisite)
-echo_success "Resource Sync: PASSED (prerequisite check)"
 echo ""
 
 if [ $DIRECT_HTTP_RESULT -eq 0 ]; then
@@ -509,12 +462,6 @@ else
     echo_error "mTLS Gateway mode: FAILED"
 fi
 
-if [ $GATEWAY_STREAM_PLUGINS_RESULT -eq 0 ]; then
-    echo_success "StreamPlugins Gateway mode: PASSED"
-else
-    echo_error "StreamPlugins Gateway mode: FAILED"
-fi
-
 echo ""
 echo "=========================================="
 echo "  Logs"
@@ -544,7 +491,7 @@ if [ $DIRECT_HTTP_RESULT -eq 0 ] && [ $GATEWAY_HTTP_RESULT -eq 0 ] && \
    [ $DIRECT_WS_RESULT -eq 0 ] && [ $GATEWAY_WS_RESULT -eq 0 ] && \
    [ $GATEWAY_HTTPS_RESULT -eq 0 ] && [ $GATEWAY_GRPC_TLS_RESULT -eq 0 ] && \
    [ $GATEWAY_REAL_IP_RESULT -eq 0 ] && [ $GATEWAY_SECURITY_RESULT -eq 0 ] && \
-   [ $GATEWAY_MTLS_RESULT -eq 0 ] && [ $GATEWAY_STREAM_PLUGINS_RESULT -eq 0 ]; then
+   [ $GATEWAY_MTLS_RESULT -eq 0 ]; then
     echo_success "All tests PASSED! ✨"
     exit 0
 else

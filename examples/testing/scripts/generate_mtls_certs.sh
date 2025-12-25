@@ -147,7 +147,11 @@ EOF
 # Create CA bundle (root + intermediate)
 cat "$TEMP_DIR/root-ca.crt" "$TEMP_DIR/intermediate-ca.crt" > "$TEMP_DIR/ca-chain.crt" 2>/dev/null || true
 
-if [ -f "$TEMP_DIR/ca-chain.crt" ] && [ -f "$TEMP_DIR/chain-client.crt" ]; then
+# Create client certificate bundle (client cert + intermediate CA)
+# This is needed for TLS clients to send the complete certificate chain
+cat "$TEMP_DIR/chain-client.crt" "$TEMP_DIR/intermediate-ca.crt" > "$TEMP_DIR/chain-client-bundle.crt" 2>/dev/null || true
+
+if [ -f "$TEMP_DIR/ca-chain.crt" ] && [ -f "$TEMP_DIR/chain-client.crt" ] && [ -f "$TEMP_DIR/chain-client-bundle.crt" ]; then
     echo_info "✓ Intermediate CA chain generated"
 else
     echo_error "Failed to generate intermediate CA chain"
@@ -193,6 +197,7 @@ cp "$TEMP_DIR/root-ca.crt" "$MTLS_CERTS_DIR/"
 cp "$TEMP_DIR/intermediate-ca.crt" "$MTLS_CERTS_DIR/"
 cp "$TEMP_DIR/ca-chain.crt" "$MTLS_CERTS_DIR/"
 cp "$TEMP_DIR/chain-client.crt" "$MTLS_CERTS_DIR/"
+cp "$TEMP_DIR/chain-client-bundle.crt" "$MTLS_CERTS_DIR/"
 cp "$TEMP_DIR/chain-client.key" "$MTLS_CERTS_DIR/"
 cp "$TEMP_DIR/nonmatching-client.crt" "$MTLS_CERTS_DIR/"
 cp "$TEMP_DIR/nonmatching-client.key" "$MTLS_CERTS_DIR/"
@@ -250,8 +255,9 @@ echo_info "  - ca.crt / ca.key                  (Client CA)"
 echo_info "  - valid-client.crt / .key          (Valid, signed by CA)"
 echo_info "  - invalid-client.crt / .key        (Invalid, self-signed)"
 echo_info "  - nonmatching-client.crt / .key    (Valid CA, non-matching SAN)"
-echo_info "  - chain-client.crt / .key          (Intermediate CA chain)"
-echo_info "  - ca-chain.crt                     (Root + Intermediate CA)"
+echo_info "  - chain-client.crt / .key          (Client cert signed by intermediate CA)"
+echo_info "  - chain-client-bundle.crt          (Client cert + intermediate CA chain)"
+echo_info "  - ca-chain.crt                     (Root + Intermediate CA bundle)"
 echo ""
 echo_warning "Note: These files are gitignored and should not be committed."
 

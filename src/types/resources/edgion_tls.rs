@@ -46,15 +46,28 @@ pub struct ClientAuthConfig {
     #[serde(default = "default_verify_depth", skip_serializing_if = "is_default_verify_depth")]
     pub verify_depth: u8,
     
-    /// Optional Subject Alternative Names whitelist
-    /// If configured, client certificate SAN must match one of these
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_sans: Option<Vec<String>>,
+    /// CA Secret data (filled by controller, not from YAML)
+    /// Note: This field is serialized for controller->gateway communication,
+    /// but should be skipped when deserializing from YAML files
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ca_secret: Option<Secret>,
     
-    /// Optional Common Name whitelist
-    /// If configured, client certificate CN must match one of these
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_cns: Option<Vec<String>>,
+    // TODO: SAN/CN whitelist validation - requires SSL_CTX level callback or application layer validation
+    // For now, only basic CA verification is supported at TLS layer
+    // Future implementation options:
+    // 1. Global SSL_CTX callback (loses per-SNI dynamic config)
+    // 2. Application layer validation in request_filter (after TLS handshake)
+    // 3. Wait for Pingora to support per-connection verify callbacks
+    //
+    // /// Optional Subject Alternative Names whitelist
+    // /// If configured, client certificate SAN must match one of these
+    // #[serde(skip_serializing_if = "Option::is_none")]
+    // pub allowed_sans: Option<Vec<String>>,
+    //
+    // /// Optional Common Name whitelist
+    // /// If configured, client certificate CN must match one of these
+    // #[serde(skip_serializing_if = "Option::is_none")]
+    // pub allowed_cns: Option<Vec<String>>,
 }
 
 fn default_verify_depth() -> u8 {
@@ -138,12 +151,17 @@ impl EdgionTls {
         let client_auth = self.spec.client_auth.as_ref()
             .ok_or_else(|| anyhow::anyhow!("clientAuth not configured"))?;
         
-        let ca_secret_ref = client_auth.ca_secret_ref.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("caSecretRef not configured"))?;
+        let ca_secret = client_auth.ca_secret.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("CA secret not loaded by controller"))?;
         
-        // For now, return error indicating the CA secret needs to be loaded separately
-        // The actual CA secret loading will be handled by the controller
-        Err(anyhow::anyhow!("CA secret {} needs to be loaded by controller", ca_secret_ref.name))
+        let data = ca_secret.data.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("CA secret data not found"))?;
+        
+        let ca_cert_pem = data.get("ca.crt")
+            .ok_or_else(|| anyhow::anyhow!("CA secret data ca.crt not found"))?;
+        
+        String::from_utf8(ca_cert_pem.0.clone())
+            .map_err(|e| anyhow::anyhow!("Failed to decode CA cert PEM: {}", e))
     }
 
     /// Get client authentication mode
@@ -703,8 +721,9 @@ spec:
         assert_eq!(client_auth.mode, ClientAuthMode::Mutual);
         assert_eq!(client_auth.ca_secret_ref.as_ref().unwrap().name, "client-ca");
         assert_eq!(client_auth.verify_depth, 2);
-        assert_eq!(client_auth.allowed_sans.as_ref().unwrap().len(), 2);
-        assert_eq!(client_auth.allowed_cns.as_ref().unwrap().len(), 1);
+        // TODO: Re-enable when SAN/CN whitelist is implemented
+        // assert_eq!(client_auth.allowed_sans.as_ref().unwrap().len(), 2);
+        // assert_eq!(client_auth.allowed_cns.as_ref().unwrap().len(), 1);
     }
 
     #[test]
@@ -786,8 +805,9 @@ spec:
         let client_auth = tls.spec.client_auth.as_ref().unwrap();
         
         assert_eq!(client_auth.mode, ClientAuthMode::OptionalMutual);
-        assert!(client_auth.allowed_sans.is_none());
-        assert!(client_auth.allowed_cns.is_none());
+        // TODO: Re-enable when SAN/CN whitelist is implemented
+        // assert!(client_auth.allowed_sans.is_none());
+        // assert!(client_auth.allowed_cns.is_none());
     }
 
     #[test]

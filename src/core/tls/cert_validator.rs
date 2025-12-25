@@ -350,23 +350,26 @@ fn validate_mtls_config(
         errors.push(CertValidationError::MtlsVerifyDepthOutOfRange(client_auth.verify_depth));
     }
 
-    // 3. Validate allowed_sans patterns (if configured)
-    if let Some(allowed_sans) = &client_auth.allowed_sans {
-        for san in allowed_sans {
-            if san.trim().is_empty() {
-                errors.push(CertValidationError::MtlsInvalidSanPattern(san.clone()));
-            }
-        }
-    }
-
-    // 4. Validate allowed_cns patterns (if configured)
-    if let Some(allowed_cns) = &client_auth.allowed_cns {
-        for cn in allowed_cns {
-            if cn.trim().is_empty() {
-                errors.push(CertValidationError::MtlsInvalidCnPattern(cn.clone()));
-            }
-        }
-    }
+    // TODO: SAN/CN whitelist validation - temporarily disabled
+    // These fields are commented out in ClientAuthConfig
+    //
+    // // 3. Validate allowed_sans patterns (if configured)
+    // if let Some(allowed_sans) = &client_auth.allowed_sans {
+    //     for san in allowed_sans {
+    //         if san.trim().is_empty() {
+    //             errors.push(CertValidationError::MtlsInvalidSanPattern(san.clone()));
+    //         }
+    //     }
+    // }
+    //
+    // // 4. Validate allowed_cns patterns (if configured)
+    // if let Some(allowed_cns) = &client_auth.allowed_cns {
+    //     for cn in allowed_cns {
+    //         if cn.trim().is_empty() {
+    //             errors.push(CertValidationError::MtlsInvalidCnPattern(cn.clone()));
+    //         }
+    //     }
+    // }
 
     // Note: CA certificate validation (ca.crt exists and is valid) will be done
     // when the CA Secret is actually loaded by the controller
