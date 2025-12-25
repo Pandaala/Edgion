@@ -57,6 +57,18 @@ pub enum CertValidationError {
     },
     /// Private key does not match certificate public key
     KeyMismatch(String),
+    /// mTLS: CA Secret reference is required when mode is Mutual/OptionalMutual
+    MtlsCaSecretRefRequired,
+    /// mTLS: CA certificate (ca.crt) not found in CA Secret
+    MtlsCaCertNotFound,
+    /// mTLS: CA certificate PEM parsing failed
+    MtlsCaCertParseError(String),
+    /// mTLS: verify_depth out of range (must be 1-9)
+    MtlsVerifyDepthOutOfRange(u8),
+    /// mTLS: allowed_sans contains invalid pattern
+    MtlsInvalidSanPattern(String),
+    /// mTLS: allowed_cns contains invalid pattern
+    MtlsInvalidCnPattern(String),
 }
 
 impl fmt::Display for CertValidationError {
@@ -82,18 +94,30 @@ impl fmt::Display for CertValidationError {
                 )
             }
             Self::KeyMismatch(msg) => write!(f, "Key mismatch: {}", msg),
+            Self::MtlsCaSecretRefRequired => write!(f, "mTLS: caSecretRef is required when mode is Mutual or OptionalMutual"),
+            Self::MtlsCaCertNotFound => write!(f, "mTLS: CA certificate (ca.crt) not found in CA Secret"),
+            Self::MtlsCaCertParseError(msg) => write!(f, "mTLS: CA certificate parse error: {}", msg),
+            Self::MtlsVerifyDepthOutOfRange(depth) => write!(f, "mTLS: verify_depth {} is out of range (must be 1-9)", depth),
+            Self::MtlsInvalidSanPattern(pattern) => write!(f, "mTLS: invalid SAN pattern: {}", pattern),
+            Self::MtlsInvalidCnPattern(pattern) => write!(f, "mTLS: invalid CN pattern: {}", pattern),
         }
     }
 }
 
 /// Validate EdgionTls certificate
 ///
-/// Performs 5 checks:
+/// Performs server certificate checks:
 /// 1. Certificate exists (tls.crt in Secret)
 /// 2. Private key exists (tls.key in Secret)
 /// 3. Certificate can be parsed (valid PEM format)
 /// 4. Certificate is not expired
 /// 5. Certificate SAN matches declared hosts
+///
+/// If mTLS is enabled (clientAuth configured), also validates:
+/// 6. CA Secret reference exists (when mode=Mutual/OptionalMutual)
+/// 7. verify_depth is in valid range (1-9)
+/// 8. allowed_sans patterns are valid (if configured)
+/// 9. allowed_cns patterns are valid (if configured)
 pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
     let mut errors = Vec::new();
 
@@ -142,6 +166,11 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
         if let Err(e) = check_key_valid(&key_pem) {
             errors.push(e);
         }
+    }
+
+    // 8. Validate mTLS configuration if present
+    if let Some(client_auth) = &tls.spec.client_auth {
+        validate_mtls_config(client_auth, &mut errors);
     }
 
     if errors.is_empty() {
@@ -297,6 +326,52 @@ fn check_key_valid(key_pem: &str) -> Result<(), CertValidationError> {
     Ok(())
 }
 
+/// Validate mTLS client authentication configuration
+fn validate_mtls_config(
+    client_auth: &crate::types::resources::edgion_tls::ClientAuthConfig,
+    errors: &mut Vec<CertValidationError>,
+) {
+    use crate::types::resources::edgion_tls::ClientAuthMode;
+
+    // 1. Check CA Secret reference when mode requires it
+    match client_auth.mode {
+        ClientAuthMode::Mutual | ClientAuthMode::OptionalMutual => {
+            if client_auth.ca_secret_ref.is_none() {
+                errors.push(CertValidationError::MtlsCaSecretRefRequired);
+            }
+        }
+        ClientAuthMode::Terminate => {
+            // CA Secret not required for Terminate mode
+        }
+    }
+
+    // 2. Validate verify_depth range (1-9)
+    if client_auth.verify_depth < 1 || client_auth.verify_depth > 9 {
+        errors.push(CertValidationError::MtlsVerifyDepthOutOfRange(client_auth.verify_depth));
+    }
+
+    // 3. Validate allowed_sans patterns (if configured)
+    if let Some(allowed_sans) = &client_auth.allowed_sans {
+        for san in allowed_sans {
+            if san.trim().is_empty() {
+                errors.push(CertValidationError::MtlsInvalidSanPattern(san.clone()));
+            }
+        }
+    }
+
+    // 4. Validate allowed_cns patterns (if configured)
+    if let Some(allowed_cns) = &client_auth.allowed_cns {
+        for cn in allowed_cns {
+            if cn.trim().is_empty() {
+                errors.push(CertValidationError::MtlsInvalidCnPattern(cn.clone()));
+            }
+        }
+    }
+
+    // Note: CA certificate validation (ca.crt exists and is valid) will be done
+    // when the CA Secret is actually loaded by the controller
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +399,7 @@ mod tests {
                     name: "test-secret".to_string(),
                     namespace: Some("default".to_string()),
                 },
+                client_auth: None,
                 secret: Some(Secret {
                     data: Some(data),
                     ..Default::default()
@@ -394,6 +470,117 @@ mod tests {
         // No match
         assert!(!is_host_covered("other.com", &san_list));
         assert!(!is_host_covered("api.example.com", &san_list)); // Wildcard doesn't cover base
+    }
+
+    #[test]
+    fn test_validate_mtls_config_mutual_no_ca() {
+        use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+
+        let config = ClientAuthConfig {
+            mode: ClientAuthMode::Mutual,
+            ca_secret_ref: None, // Missing CA Secret
+            verify_depth: 1,
+            allowed_sans: None,
+            allowed_cns: None,
+        };
+
+        let mut errors = Vec::new();
+        validate_mtls_config(&config, &mut errors);
+
+        assert!(!errors.is_empty());
+        assert!(errors.iter().any(|e| matches!(e, CertValidationError::MtlsCaSecretRefRequired)));
+    }
+
+    #[test]
+    fn test_validate_mtls_config_verify_depth_out_of_range() {
+        use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+        use crate::types::resources::gateway::SecretObjectReference;
+
+        let config = ClientAuthConfig {
+            mode: ClientAuthMode::Mutual,
+            ca_secret_ref: Some(SecretObjectReference {
+                name: "client-ca".to_string(),
+                namespace: Some("default".to_string()),
+                group: None,
+                kind: None,
+            }),
+            verify_depth: 10, // Out of range (max is 9)
+            allowed_sans: None,
+            allowed_cns: None,
+        };
+
+        let mut errors = Vec::new();
+        validate_mtls_config(&config, &mut errors);
+
+        assert!(!errors.is_empty());
+        assert!(errors.iter().any(|e| matches!(e, CertValidationError::MtlsVerifyDepthOutOfRange(10))));
+    }
+
+    #[test]
+    fn test_validate_mtls_config_invalid_san_pattern() {
+        use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+        use crate::types::resources::gateway::SecretObjectReference;
+
+        let config = ClientAuthConfig {
+            mode: ClientAuthMode::Mutual,
+            ca_secret_ref: Some(SecretObjectReference {
+                name: "client-ca".to_string(),
+                namespace: Some("default".to_string()),
+                group: None,
+                kind: None,
+            }),
+            verify_depth: 1,
+            allowed_sans: Some(vec!["".to_string(), "  ".to_string()]), // Empty patterns
+            allowed_cns: None,
+        };
+
+        let mut errors = Vec::new();
+        validate_mtls_config(&config, &mut errors);
+
+        assert!(!errors.is_empty());
+        assert!(errors.iter().any(|e| matches!(e, CertValidationError::MtlsInvalidSanPattern(_))));
+    }
+
+    #[test]
+    fn test_validate_mtls_config_valid() {
+        use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+        use crate::types::resources::gateway::SecretObjectReference;
+
+        let config = ClientAuthConfig {
+            mode: ClientAuthMode::Mutual,
+            ca_secret_ref: Some(SecretObjectReference {
+                name: "client-ca".to_string(),
+                namespace: Some("default".to_string()),
+                group: None,
+                kind: None,
+            }),
+            verify_depth: 2,
+            allowed_sans: Some(vec!["client1.example.com".to_string()]),
+            allowed_cns: Some(vec!["AdminClient".to_string()]),
+        };
+
+        let mut errors = Vec::new();
+        validate_mtls_config(&config, &mut errors);
+
+        assert!(errors.is_empty(), "Valid mTLS config should have no errors");
+    }
+
+    #[test]
+    fn test_validate_mtls_config_terminate_mode() {
+        use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+
+        let config = ClientAuthConfig {
+            mode: ClientAuthMode::Terminate,
+            ca_secret_ref: None, // CA not required for Terminate mode
+            verify_depth: 1,
+            allowed_sans: None,
+            allowed_cns: None,
+        };
+
+        let mut errors = Vec::new();
+        validate_mtls_config(&config, &mut errors);
+
+        assert!(errors.is_empty(), "Terminate mode should not require CA Secret");
     }
 }
 

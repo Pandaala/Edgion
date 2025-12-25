@@ -12,6 +12,59 @@ pub const EDGION_TLS_GROUP: &str = "edgion.io";
 /// Kind for EdgionTls
 pub const EDGION_TLS_KIND: &str = "EdgionTls";
 
+/// Client authentication mode for mTLS
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub enum ClientAuthMode {
+    /// Single-way TLS: only verify server certificate (default)
+    Terminate,
+    /// Mutual TLS: require valid client certificate
+    Mutual,
+    /// Optional mutual TLS: client certificate is optional
+    OptionalMutual,
+}
+
+impl Default for ClientAuthMode {
+    fn default() -> Self {
+        ClientAuthMode::Terminate
+    }
+}
+
+/// Client authentication configuration for mTLS
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientAuthConfig {
+    /// TLS mode (default: Terminate)
+    #[serde(default)]
+    pub mode: ClientAuthMode,
+    
+    /// CA certificate Secret reference (required when mode=Mutual/OptionalMutual)
+    /// Secret must contain ca.crt field
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_secret_ref: Option<SecretObjectReference>,
+    
+    /// Certificate chain verification depth (1-9, default: 1)
+    #[serde(default = "default_verify_depth", skip_serializing_if = "is_default_verify_depth")]
+    pub verify_depth: u8,
+    
+    /// Optional Subject Alternative Names whitelist
+    /// If configured, client certificate SAN must match one of these
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_sans: Option<Vec<String>>,
+    
+    /// Optional Common Name whitelist
+    /// If configured, client certificate CN must match one of these
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_cns: Option<Vec<String>>,
+}
+
+fn default_verify_depth() -> u8 {
+    1
+}
+
+fn is_default_verify_depth(depth: &u8) -> bool {
+    *depth == 1
+}
+
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[kube(
     group = "edgion.io",
@@ -28,6 +81,9 @@ pub struct EdgionTlsSpec {
     pub parent_refs: Option<Vec<ParentReference>>,
     pub hosts: Vec<String>,
     pub secret_ref: SecretObjectReference,
+    /// mTLS client authentication configuration (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_auth: Option<ClientAuthConfig>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub secret: Option<Secret>,
 }
@@ -75,6 +131,34 @@ impl EdgionTls {
         
         String::from_utf8(key_pem.0.clone())
             .map_err(|e| anyhow::anyhow!("Failed to decode key PEM: {}", e))
+    }
+
+    /// Extract CA certificate PEM from the CA secret (for mTLS)
+    pub fn ca_cert_pem(&self) -> anyhow::Result<String> {
+        let client_auth = self.spec.client_auth.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("clientAuth not configured"))?;
+        
+        let ca_secret_ref = client_auth.ca_secret_ref.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("caSecretRef not configured"))?;
+        
+        // For now, return error indicating the CA secret needs to be loaded separately
+        // The actual CA secret loading will be handled by the controller
+        Err(anyhow::anyhow!("CA secret {} needs to be loaded by controller", ca_secret_ref.name))
+    }
+
+    /// Get client authentication mode
+    pub fn client_auth_mode(&self) -> ClientAuthMode {
+        self.spec.client_auth.as_ref()
+            .map(|ca| ca.mode.clone())
+            .unwrap_or_default()
+    }
+
+    /// Check if mTLS is enabled (Mutual or OptionalMutual)
+    pub fn is_mtls_enabled(&self) -> bool {
+        matches!(
+            self.client_auth_mode(),
+            ClientAuthMode::Mutual | ClientAuthMode::OptionalMutual
+        )
     }
 
     pub fn matches_hostname(&self, hostname: &str) -> bool {
@@ -207,6 +291,7 @@ mod tests {
                     name: "test-secret".to_string(),
                     namespace: Some("default".to_string()),
                 },
+                client_auth: None,
                 secret: None,
             },
             status: None,
@@ -283,6 +368,7 @@ spec:
                     name: "test-secret".to_string(),
                     namespace: Some("default".to_string()),
                 },
+                client_auth: None,
                 secret: None,
             },
             status: None,
@@ -579,5 +665,175 @@ spec:
 
         // Valid match_engine - exactly two levels before example.com
         assert!(tls.matches_hostname("a.b.example.com"));
+    }
+
+    #[test]
+    fn test_client_auth_deserialization() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: mtls-test
+  namespace: default
+spec:
+  hosts:
+    - api.example.com
+  secretRef:
+    name: server-tls
+    namespace: default
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: client-ca
+      namespace: default
+    verifyDepth: 2
+    allowedSans:
+      - "client1.example.com"
+      - "*.internal.example.com"
+    allowedCns:
+      - "AdminClient"
+"#;
+
+        let tls: Result<EdgionTls, _> = serde_yaml::from_str(yaml);
+        assert!(tls.is_ok(), "Failed to deserialize mTLS YAML: {:?}", tls.err());
+        
+        let tls = tls.unwrap();
+        let client_auth = tls.spec.client_auth.as_ref().unwrap();
+        
+        assert_eq!(client_auth.mode, ClientAuthMode::Mutual);
+        assert_eq!(client_auth.ca_secret_ref.as_ref().unwrap().name, "client-ca");
+        assert_eq!(client_auth.verify_depth, 2);
+        assert_eq!(client_auth.allowed_sans.as_ref().unwrap().len(), 2);
+        assert_eq!(client_auth.allowed_cns.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_client_auth_mode_default() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: test-tls
+  namespace: default
+spec:
+  hosts:
+    - example.com
+  secretRef:
+    name: test-secret
+  clientAuth:
+    caSecretRef:
+      name: client-ca
+"#;
+
+        let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
+        let client_auth = tls.spec.client_auth.as_ref().unwrap();
+        
+        // Default mode should be Terminate
+        assert_eq!(client_auth.mode, ClientAuthMode::Terminate);
+    }
+
+    #[test]
+    fn test_client_auth_verify_depth_default() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: test-tls
+  namespace: default
+spec:
+  hosts:
+    - example.com
+  secretRef:
+    name: test-secret
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: client-ca
+"#;
+
+        let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
+        let client_auth = tls.spec.client_auth.as_ref().unwrap();
+        
+        // Default verify_depth should be 1
+        assert_eq!(client_auth.verify_depth, 1);
+        
+        // Test serialization - default verify_depth should be omitted
+        let serialized = serde_yaml::to_string(&tls).unwrap();
+        assert!(!serialized.contains("verifyDepth"), 
+            "Default verifyDepth should be omitted in serialization");
+    }
+
+    #[test]
+    fn test_client_auth_optional_fields() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: test-tls
+  namespace: default
+spec:
+  hosts:
+    - example.com
+  secretRef:
+    name: test-secret
+  clientAuth:
+    mode: OptionalMutual
+    caSecretRef:
+      name: client-ca
+"#;
+
+        let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
+        let client_auth = tls.spec.client_auth.as_ref().unwrap();
+        
+        assert_eq!(client_auth.mode, ClientAuthMode::OptionalMutual);
+        assert!(client_auth.allowed_sans.is_none());
+        assert!(client_auth.allowed_cns.is_none());
+    }
+
+    #[test]
+    fn test_client_auth_helper_methods() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: test-tls
+  namespace: default
+spec:
+  hosts:
+    - example.com
+  secretRef:
+    name: test-secret
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: client-ca
+"#;
+
+        let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
+        
+        assert_eq!(tls.client_auth_mode(), ClientAuthMode::Mutual);
+        assert!(tls.is_mtls_enabled());
+    }
+
+    #[test]
+    fn test_no_client_auth() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: test-tls
+  namespace: default
+spec:
+  hosts:
+    - example.com
+  secretRef:
+    name: test-secret
+"#;
+
+        let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
+        
+        assert!(tls.spec.client_auth.is_none());
+        assert_eq!(tls.client_auth_mode(), ClientAuthMode::Terminate);
+        assert!(!tls.is_mtls_enabled());
     }
 }

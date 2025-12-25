@@ -193,6 +193,8 @@ mod tests {
                         extension_info: Default::default(),
                         plugin_runtime: Default::default(),
                     }]),
+                    filters: None,
+                    stream_plugin_runtime: Default::default(),
                     backend_finder: Default::default(),
                     plugin_runtime: Default::default(),
                 }]),

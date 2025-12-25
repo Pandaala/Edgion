@@ -1,0 +1,23 @@
+apiVersion: edgion.ztrace.cloud/v1
+kind: EdgionTls
+metadata:
+  name: mtls-test-san
+  namespace: edge
+spec:
+  parentRefs:
+    - name: mtls-test-gateway
+      namespace: edge
+  hosts:
+    - mtls-san.example.com
+  secretRef:
+    name: mtls-server
+    namespace: edge
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: client-ca
+      namespace: edge
+    verifyDepth: 1
+    allowedSans:
+      - "client1.example.com"
+

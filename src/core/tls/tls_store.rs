@@ -230,6 +230,29 @@ impl TlsStore {
         let invalid = tls_data.values().filter(|entry| !entry.validation.is_valid).count();
         (total - invalid, invalid)
     }
+
+    /// Get mTLS configuration for a specific hostname
+    /// Returns the ClientAuthConfig if the hostname matches and mTLS is enabled
+    pub fn get_mtls_config(&self, hostname: &str) -> Option<Arc<crate::types::resources::edgion_tls::ClientAuthConfig>> {
+        let tls_data = self.tls_data.read().unwrap();
+        
+        for entry in tls_data.values() {
+            // Only return valid certificates
+            if !entry.validation.is_valid {
+                continue;
+            }
+            
+            // Check if hostname matches
+            if entry.tls.matches_hostname(hostname) {
+                // Return mTLS config if present
+                if let Some(client_auth) = &entry.tls.spec.client_auth {
+                    return Some(Arc::new(client_auth.clone()));
+                }
+            }
+        }
+        
+        None
+    }
 }
 
 impl Default for TlsStore {
@@ -329,6 +352,7 @@ mod tests {
                     group: None,
                     kind: None,
                 },
+                client_auth: None,
                 secret,
             },
             status: None,

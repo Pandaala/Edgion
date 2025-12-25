@@ -50,7 +50,7 @@ impl BackendSelection for LeastConnection {
             let count = counter::get_count(&backend.addr);
             heap.push(Reverse((count, i)));
         }
-        
+
         LeastConnectionIter {
             backend: self.clone(),
             heap,

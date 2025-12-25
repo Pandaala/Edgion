@@ -9,6 +9,7 @@ mod tcp_suite;
 mod udp_suite;
 pub mod real_ip_suite;
 pub mod security_suite;
+pub mod mtls_suite;
 
 pub use http_suite::HttpTestSuite;
 pub use https_suite::HttpsTestSuite;
@@ -19,4 +20,5 @@ pub use tcp_suite::TcpTestSuite;
 pub use udp_suite::UdpTestSuite;
 pub use real_ip_suite::RealIpTestSuite;
 pub use security_suite::SecurityTestSuite;
+pub use mtls_suite::MtlsTestSuite;
 

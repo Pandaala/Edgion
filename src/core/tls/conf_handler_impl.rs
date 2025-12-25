@@ -81,6 +81,7 @@ mod tests {
                     group: None,
                     kind: None,
                 },
+                client_auth: None,
                 secret,
             },
             status: None,

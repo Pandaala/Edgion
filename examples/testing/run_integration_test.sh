@@ -167,6 +167,23 @@ else
 fi
 echo ""
 
+# 0.5 生成 mTLS 证书
+echo_info "Generating mTLS certificates..."
+"${SCRIPT_DIR}/scripts/generate_mtls_certs.sh"
+if [ $? -eq 0 ]; then
+    echo_success "mTLS certificates generated"
+else
+    echo_error "Failed to generate mTLS certificates"
+    exit 1
+fi
+echo ""
+
+# 0.6 mTLS 配置说明
+# mTLS 测试配置（EdgionTls, Gateway, HTTPRoute）已在 examples/conf/ 中
+# 只有 Secret 文件需要动态生成（已在步骤 0.5 中完成）
+echo_info "mTLS test configs ready in examples/conf/"
+echo ""
+
 # 1. 启动 test_server
 echo_info "Starting test_server..."
 cd "$PROJECT_DIR"
@@ -339,6 +356,15 @@ echo_info "Test 14: Security Protection Gateway mode (gateway:10080)"
 cargo run --example test_client -- -g security 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_SECURITY_RESULT=$?
 
+echo ""
+echo "---"
+echo ""
+
+# Gateway 模式 mTLS 测试（配置已在启动前复制）
+echo_info "Test 15: mTLS Gateway mode (gateway:10444)"
+cargo run --example test_client -- -g mtls 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_MTLS_RESULT=$?
+
 # 6. 显示结果
 echo ""
 echo "=========================================="
@@ -430,6 +456,12 @@ else
     echo_error "Security Protection Gateway mode: FAILED"
 fi
 
+if [ $GATEWAY_MTLS_RESULT -eq 0 ]; then
+    echo_success "mTLS Gateway mode: PASSED"
+else
+    echo_error "mTLS Gateway mode: FAILED"
+fi
+
 echo ""
 echo "=========================================="
 echo "  Logs"
@@ -458,7 +490,8 @@ if [ $DIRECT_HTTP_RESULT -eq 0 ] && [ $GATEWAY_HTTP_RESULT -eq 0 ] && \
    [ $DIRECT_UDP_RESULT -eq 0 ] && [ $GATEWAY_UDP_RESULT -eq 0 ] && \
    [ $DIRECT_WS_RESULT -eq 0 ] && [ $GATEWAY_WS_RESULT -eq 0 ] && \
    [ $GATEWAY_HTTPS_RESULT -eq 0 ] && [ $GATEWAY_GRPC_TLS_RESULT -eq 0 ] && \
-   [ $GATEWAY_REAL_IP_RESULT -eq 0 ] && [ $GATEWAY_SECURITY_RESULT -eq 0 ]; then
+   [ $GATEWAY_REAL_IP_RESULT -eq 0 ] && [ $GATEWAY_SECURITY_RESULT -eq 0 ] && \
+   [ $GATEWAY_MTLS_RESULT -eq 0 ]; then
     echo_success "All tests PASSED! ✨"
     exit 0
 else

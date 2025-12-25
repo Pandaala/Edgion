@@ -75,6 +75,7 @@ enum Commands {
     // function test
     RealIp,
     Security,
+    Mtls,  // mTLS tests
     All,
 }
 
@@ -193,6 +194,13 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::SecurityTestSuite));
+        }
+        Commands::Mtls => {
+            if !cli.gateway {
+                eprintln!("Error: mTLS tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::MtlsTestSuite));
         }
         Commands::All => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
