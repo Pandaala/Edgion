@@ -399,6 +399,15 @@ echo_info "Test 15: mTLS Gateway mode (gateway:10444)"
 cargo run --example test_client -- -g mtls 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_MTLS_RESULT=$?
 
+echo ""
+echo "---"
+echo ""
+
+# Gateway 模式 StreamPlugins 测试
+echo_info "Test 16: StreamPlugins Gateway mode (gateway:19010)"
+cargo run --example test_client -- -g stream-plugins 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_STREAM_PLUGINS_RESULT=$?
+
 # 6. 显示结果
 echo ""
 echo "=========================================="
@@ -500,6 +509,12 @@ else
     echo_error "mTLS Gateway mode: FAILED"
 fi
 
+if [ $GATEWAY_STREAM_PLUGINS_RESULT -eq 0 ]; then
+    echo_success "StreamPlugins Gateway mode: PASSED"
+else
+    echo_error "StreamPlugins Gateway mode: FAILED"
+fi
+
 echo ""
 echo "=========================================="
 echo "  Logs"
@@ -529,7 +544,7 @@ if [ $DIRECT_HTTP_RESULT -eq 0 ] && [ $GATEWAY_HTTP_RESULT -eq 0 ] && \
    [ $DIRECT_WS_RESULT -eq 0 ] && [ $GATEWAY_WS_RESULT -eq 0 ] && \
    [ $GATEWAY_HTTPS_RESULT -eq 0 ] && [ $GATEWAY_GRPC_TLS_RESULT -eq 0 ] && \
    [ $GATEWAY_REAL_IP_RESULT -eq 0 ] && [ $GATEWAY_SECURITY_RESULT -eq 0 ] && \
-   [ $GATEWAY_MTLS_RESULT -eq 0 ]; then
+   [ $GATEWAY_MTLS_RESULT -eq 0 ] && [ $GATEWAY_STREAM_PLUGINS_RESULT -eq 0 ]; then
     echo_success "All tests PASSED! ✨"
     exit 0
 else

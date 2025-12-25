@@ -104,24 +104,43 @@ impl EdgionTcp {
         // 3. Execute stream plugins (NEW)
         if !rule.stream_plugin_runtime.is_empty() {
             // Extract client IP from downstream connection
-            // TODO: Properly extract IP from Stream - for now use placeholder
-            if let Ok(client_ip) = "0.0.0.0".parse() {
-                let stream_ctx = StreamContext::new(client_ip, self.listener_port);
-                
-                match rule.stream_plugin_runtime.run(&stream_ctx).await {
-                    StreamPluginResult::Allow => {
-                        // Continue processing
-                        tracing::debug!("Stream plugins allowed connection");
+            // Pingora's Stream doesn't expose peer_addr directly, so we use the socket_digest
+            let client_ip = if let Some(digest) = downstream.get_socket_digest() {
+                if let Some(addr) = digest.peer_addr() {
+                    // Parse the address string to extract IP
+                    // SocketAddr format is "ip:port"
+                    let addr_str = addr.to_string();
+                    if let Ok(std_addr) = addr_str.parse::<std::net::SocketAddr>() {
+                        std_addr.ip()
+                    } else {
+                        // Fallback to 127.0.0.1
+                        std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
                     }
-                    StreamPluginResult::Deny(reason) => {
-                        tracing::info!(
-                            listener_port = self.listener_port,
-                            reason = %reason,
-                            "Connection denied by stream plugin"
-                        );
-                        ctx.status = TcpStatus::UpstreamConnectionFailed;
-                        return;
-                    }
+                } else {
+                    // Fallback to 127.0.0.1 for local connections
+                    std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+                }
+            } else {
+                // Fallback to 127.0.0.1 if no digest available
+                std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+            };
+            
+            let stream_ctx = StreamContext::new(client_ip, self.listener_port);
+            
+            match rule.stream_plugin_runtime.run(&stream_ctx).await {
+                StreamPluginResult::Allow => {
+                    // Continue processing
+                    tracing::debug!("Stream plugins allowed connection");
+                }
+                StreamPluginResult::Deny(reason) => {
+                    tracing::info!(
+                        listener_port = self.listener_port,
+                        client_ip = %client_ip,
+                        reason = %reason,
+                        "Connection denied by stream plugin"
+                    );
+                    ctx.status = TcpStatus::UpstreamConnectionFailed;
+                    return;
                 }
             }
         }

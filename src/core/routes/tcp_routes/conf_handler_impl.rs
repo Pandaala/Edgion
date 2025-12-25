@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::core::conf_sync::traits::ConfHandler;
 use crate::core::routes::tcp_routes::{TcpRouteManager, get_global_tcp_route_manager};
 use crate::types::{TCPRoute, ResourceMeta};
+use crate::core::plugins::edgion_stream_plugins::get_global_stream_plugin_store;
 
 /// Implement ConfHandler for Arc<TcpRouteManager>
 impl ConfHandler<TCPRoute> for Arc<TcpRouteManager> {
@@ -129,9 +130,12 @@ impl ConfHandler<TCPRoute> for TcpRouteManager {
 }
 
 impl TcpRouteManager {
-    /// Initialize a TCPRoute by setting up BackendSelector
+    /// Initialize a TCPRoute by setting up BackendSelector and stream plugins
     fn initialize_route(&self, mut route: TCPRoute) -> Result<Arc<TCPRoute>, String> {
         let route_key = route.key_name();
+        
+        // Initialize stream plugins from annotation
+        Self::init_stream_plugins(&mut route);
         
         // Initialize rules
         if let Some(rules) = route.spec.rules.as_mut() {
@@ -157,12 +161,59 @@ impl TcpRouteManager {
         
         Ok(Arc::new(route))
     }
+    
+    /// Initialize stream plugins from annotations
+    fn init_stream_plugins(route: &mut TCPRoute) {
+        // Check for stream-plugins annotation
+        if let Some(annotations) = &route.metadata.annotations {
+            if let Some(plugin_ref) = annotations.get("edgion.io/stream-plugins") {
+                let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+                
+                // Parse plugin reference: support "name" or "namespace/name"
+                let (plugin_namespace, plugin_name) = if plugin_ref.contains('/') {
+                    let parts: Vec<&str> = plugin_ref.splitn(2, '/').collect();
+                    (parts[0], parts[1])
+                } else {
+                    // If no namespace specified, use the route's namespace
+                    (route_namespace, plugin_ref.as_str())
+                };
+                
+                // Get the stream plugin store
+                let store = get_global_stream_plugin_store();
+                
+                // Look up the plugin
+                if let Some(plugins) = store.get_by_ns_name(plugin_namespace, plugin_name) {
+                    tracing::info!(
+                        route = %route.key_name(),
+                        plugin_ref = %plugin_ref,
+                        plugin_namespace = %plugin_namespace,
+                        plugin_name = %plugin_name,
+                        "Applied EdgionStreamPlugins to TCPRoute"
+                    );
+                    
+                    // Apply plugin runtime to all rules
+                    if let Some(rules) = route.spec.rules.as_mut() {
+                        for rule in rules.iter_mut() {
+                            rule.stream_plugin_runtime = plugins.spec.stream_plugin_runtime.clone();
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        route = %route.key_name(),
+                        plugin_ref = %plugin_ref,
+                        plugin_namespace = %plugin_namespace,
+                        plugin_name = %plugin_name,
+                        "EdgionStreamPlugins not found - plugin will not be applied"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ResourceMeta;
     
     fn create_test_tcp_route(namespace: &str, name: &str, gateway: &str, port: i32) -> TCPRoute {
         use crate::types::resources::tcp_route::*;
@@ -191,7 +242,6 @@ mod tests {
                         group: None,
                         kind: None,
                     }]),
-                    filters: None,
                     stream_plugin_runtime: Default::default(),
                     backend_finder: Default::default(),
                     stream_plugin_runtime: Default::default(),

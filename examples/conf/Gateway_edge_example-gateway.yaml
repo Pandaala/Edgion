@@ -31,6 +31,11 @@ spec:
       protocol: UDP
       port: 19002
 
+    # TCP with stream plugins (for testing)
+    - name: tcp-filtered
+      protocol: TCP
+      port: 19010
+
     # 注意：TLS 协议暂未完全支持，暂时注释掉
     # TLS Passthrough 监听器
     # - name: tls

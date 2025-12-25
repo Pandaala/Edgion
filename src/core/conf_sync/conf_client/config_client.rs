@@ -77,6 +77,11 @@ impl ConfigClient {
         let tls_handler = crate::core::tls::create_tls_handler();
         edgion_tls_cache.set_conf_processor(tls_handler);
         
+        // Register StreamPluginStore as the handler for EdgionStreamPlugins resources
+        let stream_plugins_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let stream_plugin_handler = crate::core::plugins::edgion_stream_plugins::create_stream_plugin_handler();
+        stream_plugins_cache.set_conf_processor(stream_plugin_handler);
+        
         Self {
             gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(None),
@@ -90,7 +95,7 @@ impl ConfigClient {
             endpoint_slices: endpoint_slices_cache,
             edgion_tls: edgion_tls_cache,
             edgion_plugins: plugins_cache,
-            edgion_stream_plugins: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            edgion_stream_plugins: stream_plugins_cache,
             plugin_metadata: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             // secrets: ClientCache::new(gateway_class_key, client_id, client_name),
         }

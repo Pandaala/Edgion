@@ -257,6 +257,7 @@ const RESOURCE_TYPES: &[(&str, &str, &str)] = &[
     ("EndpointSlice", "/api/v1/namespaced/EndpointSlice", "/configclient/endpointslice/list"),
     ("EdgionTls", "/api/v1/namespaced/EdgionTls", "/configclient/edgiontls/list"),
     ("EdgionPlugins", "/api/v1/namespaced/EdgionPlugins", "/configclient/edgionplugins/list"),
+    ("EdgionStreamPlugins", "/api/v1/namespaced/EdgionStreamPlugins", "/configclient/edgionstreamplugins/list"),
     ("LinkSys", "/api/v1/namespaced/LinkSys", "/configclient/linksys/list"),
     ("PluginMetaData", "/api/v1/namespaced/PluginMetaData", "/configclient/pluginmetadata/list"),
 ];
