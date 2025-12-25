@@ -1,9 +1,9 @@
 //! Custom Edgion plugin configurations
 //!
-//! This module is reserved for future custom Edgion plugins that extend beyond
-//! the Gateway API standard filters.
+//! This module is reserved for future custom Edgion edgion_plugins that extend beyond
+//! the Gateway API standard plugins.
 //!
-//! Future custom plugins will be added here, such as:
+//! Future custom edgion_plugins will be added here, such as:
 //! - EdgionRateLimit(RateLimitConfig) - Rate limiting plugin
 //! - EdgionCircuitBreaker(CircuitBreakerConfig) - Circuit breaker plugin
 //! - EdgionAuth(AuthConfig) - Authentication plugin

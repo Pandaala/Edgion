@@ -9,12 +9,12 @@ use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
 use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, GRPCRouteFilter, GRPCRouteFilterType, EdgionPlugin, PluginEntry};
 
 use super::log::PluginLog;
-use crate::core::filters::gapi_filters::{ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
-use crate::core::plugins::basic_auth::BasicAuth;
-use crate::core::plugins::cors::Cors;
-use crate::core::plugins::csrf::Csrf;
-use crate::core::plugins::ip_restriction::IpRestriction;
-use crate::core::plugins::mock::Mock;
+use crate::core::plugins::gapi_filters::{ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
+use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
+use crate::core::plugins::edgion_plugins::cors::Cors;
+use crate::core::plugins::edgion_plugins::csrf::Csrf;
+use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
+use crate::core::plugins::edgion_plugins::mock::Mock;
 use super::session_adapter::PingoraSessionAdapter;
 use super::traits::Plugin;
 
@@ -29,7 +29,7 @@ pub struct PluginRuntime {
 
 impl Clone for PluginRuntime {
     fn clone(&self) -> Self {
-        // PluginRuntime is rebuilt from plugins during pre_parse, so clone creates empty
+        // PluginRuntime is rebuilt from edgion_plugins during pre_parse, so clone creates empty
         Self::new()
     }
 }
@@ -87,14 +87,14 @@ impl PluginRuntime {
         }
     }
 
-    /// Create from EdgionPlugins plugin entries (only enabled plugins)
+    /// Create from EdgionPlugins plugin entries (only enabled edgion_plugins)
     pub fn from_edgion_plugins(entries: &[PluginEntry]) -> Self {
         let mut runtime = Self::new();
         runtime.add_from_edgion_plugins(entries);
         runtime
     }
 
-    /// Add plugins from EdgionPlugins entries (only enabled plugins)
+    /// Add edgion_plugins from EdgionPlugins entries (only enabled edgion_plugins)
     pub fn add_from_edgion_plugins(&mut self, entries: &[PluginEntry]) {
         for entry in entries {
             if entry.is_enabled() {
@@ -209,22 +209,22 @@ impl PluginRuntime {
             + self.upstream_response_async_plugins.len()
     }
 
-    /// Iterate over request stage plugins
+    /// Iterate over request stage edgion_plugins
     pub fn request_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn Plugin>> {
         self.request_plugins.iter()
     }
 
-    /// Iterate over upstream_response_filter stage plugins (sync)
+    /// Iterate over upstream_response_filter stage edgion_plugins (sync)
     pub fn upstream_response_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn Plugin>> {
         self.upstream_response_plugins.iter()
     }
 
-    /// Iterate over response_filter stage plugins (async)
+    /// Iterate over response_filter stage edgion_plugins (async)
     pub fn upstream_response_async_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn Plugin>> {
         self.upstream_response_async_plugins.iter()
     }
 
-    /// Run request stage plugins (async)
+    /// Run request stage edgion_plugins (async)
     pub async fn run_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
@@ -245,7 +245,7 @@ impl PluginRuntime {
         }
     }
 
-    /// Run upstream_response_filter stage plugins (sync)
+    /// Run upstream_response_filter stage edgion_plugins (sync)
     pub fn run_upstream_response_plugins_sync(
         &self,
         s: &mut Session,
@@ -271,7 +271,7 @@ impl PluginRuntime {
         }
     }
 
-    /// Run response_filter stage plugins (async)
+    /// Run response_filter stage edgion_plugins (async)
     pub async fn run_upstream_response_plugins_async(
         &self,
         s: &mut Session,

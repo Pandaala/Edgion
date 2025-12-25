@@ -48,7 +48,7 @@ impl ConfigClient {
 
         // Register PluginStore as the handler for EdgionPlugins resources
         let plugins_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
-        let plugin_handler = crate::core::plugins::create_plugin_handler();
+        let plugin_handler = crate::core::plugins::edgion_plugins::create_plugin_handler();
         plugins_cache.set_conf_processor(plugin_handler);
         
         // Register TcpRouteManager as the handler for TCPRoute resources

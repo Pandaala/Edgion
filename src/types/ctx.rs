@@ -4,7 +4,7 @@ use std::fmt;
 use serde::Serialize;
 use crate::types::{EdgionStatus, HTTPBackendRef, GRPCBackendRef, HTTPRouteMatch};
 use crate::types::filters::{PluginRunningResult};
-use crate::core::filters::PluginLog;
+use crate::core::plugins::PluginLog;
 use crate::core::routes::HttpRouteRuleUnit;
 
 #[derive(Clone, Serialize)]

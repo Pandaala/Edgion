@@ -307,21 +307,21 @@ impl ProxyHttp for EdgionHttp {
             }
         }
         
-        // Step 2: Run plugins based on matched route type
+        // Step 2: Run edgion_plugins based on matched route type
         if ctx.is_grpc_route {
-            // Run gRPC route plugins
+            // Run gRPC route edgion_plugins
             match run_grpc_route_plugins(session, ctx).await {
                 Ok(true) => return Ok(true), // Plugin terminated request
                 Ok(false) => return Ok(false), // Continue processing
                 Err(e) => {
-                    tracing::error!("Error running gRPC route plugins: {:?}", e);
+                    tracing::error!("Error running gRPC route edgion_plugins: {:?}", e);
                     ctx.add_error(EdgionStatus::Unknown);
                     end_response_500(session, ctx, &self.server_header_opts).await?;
                     return Ok(true);
                 }
             }
         } else if let Some(route_unit) = ctx.route_unit.clone() {
-            // Run HTTP route plugins
+            // Run HTTP route edgion_plugins
             route_unit.rule.plugin_runtime.run_request_plugins(session, ctx).await;
             if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
                 return Ok(true);
@@ -378,12 +378,12 @@ impl ProxyHttp for EdgionHttp {
             upstream.status = Some(status_code);
         }
         
-        // Run rule-level upstream_response plugins (sync)
+        // Run rule-level upstream_response edgion_plugins (sync)
         if let Some(route_unit) = ctx.route_unit.clone() {
             route_unit.rule.plugin_runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
         }
 
-        // Run backend-level upstream_response plugins (sync)
+        // Run backend-level upstream_response edgion_plugins (sync)
         if let Some(backend) = ctx.selected_backend.clone() {
             backend.plugin_runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
         }
@@ -410,12 +410,12 @@ impl ProxyHttp for EdgionHttp {
             let _ = upstream_response.insert_header("x-trace-id", trace_id.as_str());
         }
         
-        // Run rule-level response plugins (async)
+        // Run rule-level response edgion_plugins (async)
         if let Some(route_unit) = ctx.route_unit.clone() {
             route_unit.rule.plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
         }
 
-        // Run backend-level response plugins (async)
+        // Run backend-level response edgion_plugins (async)
         if let Some(backend) = ctx.selected_backend.clone() {
             backend.plugin_runtime.run_upstream_response_plugins_async(session, ctx, upstream_response).await;
         }
@@ -711,7 +711,7 @@ impl EdgionHttp {
         
         tracing::info!("Selected HTTP backend: {:?}", backend_ref);
         
-        // Run backend-level request plugins
+        // Run backend-level request edgion_plugins
         backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
         if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
             ctx.add_error(EdgionStatus::Unknown);

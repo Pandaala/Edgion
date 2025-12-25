@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::lb::BackendSelector;
-use crate::core::filters::PluginRuntime;
+use crate::core::plugins::PluginRuntime;
 use super::http_route_preparse::BackendExtensionInfo;
 
 /// API group for TLSRoute

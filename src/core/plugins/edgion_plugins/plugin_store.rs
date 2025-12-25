@@ -49,12 +49,12 @@ impl PluginStore {
         map.get(key).map(f)
     }
 
-    /// Replace all plugins atomically
+    /// Replace all edgion_plugins atomically
     pub fn replace_all(&self, plugins: HashMap<String, EdgionPlugins>) {
         self.plugins.store(Arc::new(Arc::new(plugins)));
     }
 
-    /// Update plugins atomically (clone map + modify + swap)
+    /// Update edgion_plugins atomically (clone map + modify + swap)
     pub fn update(&self, add_or_update: HashMap<String, EdgionPlugins>, remove: &HashSet<String>) {
         let current = self.plugins.load();
         let current_map: &PluginMap = &**current;
@@ -70,7 +70,7 @@ impl PluginStore {
         self.plugins.store(Arc::new(Arc::new(new_map)));
     }
 
-    /// Get total count of plugins
+    /// Get total count of edgion_plugins
     pub fn count(&self) -> usize {
         let map = self.plugins.load();
         map.len()

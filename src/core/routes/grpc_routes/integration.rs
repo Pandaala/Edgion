@@ -67,7 +67,7 @@ pub async fn try_match_grpc_route(
     }
 }
 
-/// Run gRPC route-level request plugins
+/// Run gRPC route-level request edgion_plugins
 ///
 /// Should be called in request_filter after route is matched.
 /// Returns: Ok(true) - plugin terminated the request
@@ -82,7 +82,7 @@ pub async fn run_grpc_route_plugins(
         None => return Ok(false),
     };
     
-    // Run rule-level request plugins
+    // Run rule-level request edgion_plugins
     grpc_route_unit
         .rule
         .plugin_runtime
@@ -123,7 +123,7 @@ pub async fn handle_grpc_upstream(
 
     tracing::info!("Selected gRPC backend: {:?}", backend_ref);
 
-    // Run backend-level request plugins
+    // Run backend-level request edgion_plugins
     backend_ref
         .plugin_runtime
         .run_request_plugins(session, ctx)

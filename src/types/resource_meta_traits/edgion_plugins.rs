@@ -27,7 +27,7 @@ impl ResourceMeta for EdgionPlugins {
     }
 
     fn pre_parse(&mut self) {
-        // Initialize plugin runtime from plugins
+        // Initialize plugin runtime from edgion_plugins
         self.init_plugin_runtime();
     }
 }

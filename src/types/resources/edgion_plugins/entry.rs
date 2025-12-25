@@ -47,7 +47,7 @@ impl ConditionEnable {
 ///
 /// YAML format:
 /// ```yaml
-/// filters:
+/// plugins:
 ///   - enable: true                    # optional, defaults to true
 ///     type: requestHeaderModifier
 ///     config:

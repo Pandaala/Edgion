@@ -12,7 +12,7 @@
 use async_trait::async_trait;
 use tokio::time::{sleep, Duration};
 
-use crate::core::filters::{Plugin, PluginSession, PluginLog};
+use crate::core::plugins::{Plugin, PluginSession, PluginLog};
 use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
 use crate::types::resources::edgion_plugins::MockConfig;
 

@@ -1,7 +1,7 @@
 //! Access log entry definition
 
 use crate::types::{BackendContext, EdgionHttpContext, EdgionStatus, MatchInfo, RequestInfo};
-use crate::core::filters::PluginLog;
+use crate::core::plugins::PluginLog;
 use serde::Serialize;
 
 /// Helper function to check if a slice is empty

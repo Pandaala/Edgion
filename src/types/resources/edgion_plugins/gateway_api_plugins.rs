@@ -1,4 +1,4 @@
-//! Gateway API standard plugins and custom Edgion plugins
+//! Gateway API standard edgion_plugins and custom Edgion edgion_plugins
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -12,12 +12,12 @@ use super::plugin_configs::{BasicAuthConfig, CorsConfig, CsrfConfig, IpRestricti
 /// Plugin enum for all supported plugin types
 ///
 /// Naming convention:
-/// - Gateway API standard filters: keep original names (RequestHeaderModifier, etc.)
-/// - Custom Edgion filters: use EdgionXxx naming (EdgionRateLimit, etc.)
+/// - Gateway API standard plugins: keep original names (RequestHeaderModifier, etc.)
+/// - Custom Edgion plugins: use EdgionXxx naming (EdgionRateLimit, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "config", rename_all = "camelCase")]
 pub enum EdgionPlugin {
-    // ========== Gateway API standard filters ==========
+    // ========== Gateway API standard plugins ==========
     /// Request header modifier filter
     RequestHeaderModifier(HTTPHeaderFilter),
     /// Response header modifier filter
@@ -31,7 +31,7 @@ pub enum EdgionPlugin {
     /// Extension reference filter
     ExtensionRef(LocalObjectReference),
 
-    // ========== Custom Edgion filters ==========
+    // ========== Custom Edgion plugins ==========
     /// Basic Authentication filter
     BasicAuth(BasicAuthConfig),
     /// CORS (Cross-Origin Resource Sharing) filter
@@ -42,7 +42,7 @@ pub enum EdgionPlugin {
     IpRestriction(IpRestrictionConfig),
     /// Mock filter (return predefined responses for testing/prototyping)
     Mock(MockConfig),
-    // TODO: Add more custom Edgion filters here
+    // TODO: Add more custom Edgion plugins here
     // EdgionRateLimit(RateLimitConfig),
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),

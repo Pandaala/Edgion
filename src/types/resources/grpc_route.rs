@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::lb::BackendSelector;
-use crate::core::filters::PluginRuntime;
+use crate::core::plugins::PluginRuntime;
 use super::http_route_preparse::BackendExtensionInfo;
 use super::http_route::{ParentReference, HTTPHeader, LocalObjectReference, SessionPersistence, BackendObjectReference, Fraction, ParsedRouteTimeouts as HttpParsedRouteTimeouts};
 
@@ -50,7 +50,7 @@ pub struct GRPCRouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matches: Option<Vec<GRPCRouteMatch>>,
 
-    /// Filters define the filters that are applied to requests
+    /// Filters define the plugins that are applied to requests
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<GRPCRouteFilter>>,
 
@@ -79,7 +79,7 @@ pub struct GRPCRouteRule {
     pub backend_finder: BackendSelector<GRPCBackendRef>,
 
     /// Filter runtime (runtime only, not serialized)
-    /// This is computed from filters at runtime
+    /// This is computed from plugins at runtime
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
@@ -113,7 +113,7 @@ impl fmt::Debug for GRPCRouteRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GRPCRouteRule")
             .field("matches", &self.matches)
-            .field("filters", &self.filters)
+            .field("plugins", &self.filters)
             .field("backend_refs", &self.backend_refs)
             .field("timeouts", &self.timeouts)
             .field("retry", &self.retry)
@@ -206,13 +206,13 @@ pub struct GRPCBackendRef {
     pub filters: Option<Vec<GRPCRouteFilter>>,
     
     /// Parsed extension info (runtime only, not serialized)
-    /// This is computed from filters[].extensionRef at runtime
+    /// This is computed from plugins[].extensionRef at runtime
     #[serde(skip)]
     #[schemars(skip)]
     pub extension_info: BackendExtensionInfo,
 
     /// Filter runtime (runtime only, not serialized)
-    /// This is computed from filters at runtime
+    /// This is computed from plugins at runtime
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
@@ -252,7 +252,7 @@ pub enum GRPCRouteFilterType {
     ResponseHeaderModifier,
     /// RequestMirror can be used to mirror gRPC requests to a different backend
     RequestMirror,
-    /// ExtensionRef is used for configuring custom gRPC filters
+    /// ExtensionRef is used for configuring custom gRPC plugins
     ExtensionRef,
 }
 
@@ -363,7 +363,7 @@ impl GRPCRoute {
         let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
         
         for rule in rules.iter_mut() {
-            // Initialize rule-level plugin_runtime from rule.filters
+            // Initialize rule-level plugin_runtime from rule.plugins
             if let Some(filters) = &rule.filters {
                 rule.plugin_runtime = Arc::new(PluginRuntime::from_grpcroute_filters(filters, namespace));
             }
@@ -373,7 +373,7 @@ impl GRPCRoute {
             };
             
             for backend_ref in backend_refs.iter_mut() {
-                // Find ExtensionRef filter in backend_ref.filters
+                // Find ExtensionRef filter in backend_ref.plugins
                 let extension_info = backend_ref.filters.as_ref()
                     .and_then(|filters| {
                         filters.iter()
@@ -385,7 +385,7 @@ impl GRPCRoute {
                 
                 backend_ref.extension_info = extension_info;
 
-                // Initialize plugin_runtime from filters
+                // Initialize plugin_runtime from plugins
                 if let Some(filters) = &backend_ref.filters {
                     backend_ref.plugin_runtime = Arc::new(PluginRuntime::from_grpcroute_filters(filters, namespace));
                 }

@@ -1,6 +1,6 @@
-//! Standard Gateway API filters
+//! Standard Gateway API plugins
 //!
-//! These filters implement the gapi_filters Gateway API filter types.
+//! These plugins implement the gapi_filters Gateway API filter types.
 
 pub mod extension_ref;
 pub mod request_header_modifier;

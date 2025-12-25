@@ -4,7 +4,7 @@ use bytes::Bytes;
 use pingora_http::ResponseHeader;
 use std::collections::HashMap;
 
-use crate::core::filters::{Plugin, PluginSession, PluginLog};
+use crate::core::plugins::{Plugin, PluginSession, PluginLog};
 use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
 use crate::types::resources::edgion_plugins::BasicAuthConfig;
 

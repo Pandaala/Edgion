@@ -434,7 +434,7 @@ spec:
           extensionRef:
             group: edgion.io
             kind: EdgionPlugins
-            name: auth-plugins
+            name: auth-edgion_plugins
       backendRefs:
         - name: backend-service
           port: 8080
@@ -442,7 +442,7 @@ spec:
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: auth-plugins
+  name: auth-edgion_plugins
   namespace: default
 spec:
   plugins:

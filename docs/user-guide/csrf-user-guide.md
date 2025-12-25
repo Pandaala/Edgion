@@ -532,7 +532,7 @@ spec:
           extensionRef:
             group: edgion.io
             kind: EdgionPlugins
-            name: security-plugins
+            name: security-edgion_plugins
       backendRefs:
         - name: backend-service
           port: 8080
@@ -540,7 +540,7 @@ spec:
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: security-plugins
+  name: security-edgion_plugins
   namespace: default
 spec:
   plugins:

@@ -1,6 +1,6 @@
 //! PluginMetaData resource definition
 //!
-//! PluginMetaData defines metadata for plugins, supporting three data types:
+//! PluginMetaData defines metadata for edgion_plugins, supporting three data types:
 //! - StringList: List of strings with metadata
 //! - IpList: List of IP addresses/CIDR ranges
 //! - RegexList: List of regex patterns with metadata
@@ -15,7 +15,7 @@ pub const PLUGIN_METADATA_GROUP: &str = "edgion.io";
 /// Kind for PluginMetaData
 pub const PLUGIN_METADATA_KIND: &str = "PluginMetaData";
 
-/// PluginMetaData defines metadata for plugins
+/// PluginMetaData defines metadata for edgion_plugins
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "edgion.io",

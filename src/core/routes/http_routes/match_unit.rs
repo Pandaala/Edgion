@@ -10,7 +10,7 @@ pub struct HttpRouteRuleUnit {
     pub resource_key: String,
     /// Match info containing namespace, name and match item
     pub matched_info: MatchInfo,
-    /// Reference to the original rule (for backend_refs, filters, etc.)
+    /// Reference to the original rule (for backend_refs, plugins, etc.)
     pub rule: Arc<HTTPRouteRule>,
     /// Compiled regex for path matching (only for RegularExpression path type)
     pub path_regex: Option<Regex>,

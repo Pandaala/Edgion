@@ -6,9 +6,9 @@ use async_trait::async_trait;
 
 use crate::types::resources::LocalObjectReference;
 use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
-use crate::core::filters::plugin_runtime::traits::{Plugin, PluginSession};
-use crate::core::filters::plugin_runtime::log::PluginLog;
-use crate::core::plugins::get_global_plugin_store;
+use crate::core::plugins::plugin_runtime::traits::{Plugin, PluginSession};
+use crate::core::plugins::plugin_runtime::log::PluginLog;
+use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 
 /// Filter that handles ExtensionRef to EdgionPlugins
 pub struct ExtensionRefFilter {
@@ -61,10 +61,10 @@ impl ExtensionRefFilter {
         // Get the pre-compiled plugin runtime
         let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
 
-        // Run plugins based on stage
+        // Run edgion_plugins based on stage
         match stage {
             PluginRunningStage::Request => {
-                // For request stage, iterate through request plugins
+                // For request stage, iterate through request edgion_plugins
                 for plugin in plugin_runtime.request_plugins_iter() {
                     let mut inner_log = PluginLog::new(plugin.name());
                     let result = plugin.run_sync(stage, session, &mut inner_log);

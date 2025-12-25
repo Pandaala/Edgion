@@ -2,7 +2,7 @@
 //! These structures are not serialized, only used for runtime analysis
 
 use std::sync::Arc;
-use crate::core::filters::PluginRuntime;
+use crate::core::plugins::PluginRuntime;
 use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
 
 /// Hash source type for consistent hash LB policy
@@ -99,7 +99,7 @@ impl HTTPRoute {
         let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
         
         for rule in rules.iter_mut() {
-            // Initialize rule-level plugin_runtime from rule.filters
+            // Initialize rule-level plugin_runtime from rule.plugins
             if let Some(filters) = &rule.filters {
                 rule.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters, namespace));
             }
@@ -109,7 +109,7 @@ impl HTTPRoute {
             };
             
             for backend_ref in backend_refs.iter_mut() {
-                // Find ExtensionRef filter in backend_ref.filters
+                // Find ExtensionRef filter in backend_ref.plugins
                 let extension_info = backend_ref.filters.as_ref()
                     .and_then(|filters| {
                         filters.iter()
@@ -121,7 +121,7 @@ impl HTTPRoute {
                 
                 backend_ref.extension_info = extension_info;
 
-                // Initialize plugin_runtime from filters
+                // Initialize plugin_runtime from plugins
                 if let Some(filters) = &backend_ref.filters {
                     backend_ref.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters, namespace));
                 }

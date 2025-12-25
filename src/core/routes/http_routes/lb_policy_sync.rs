@@ -152,7 +152,7 @@ mod tests {
                         "name": service,
                         "port": 8080,
                         "kind": "Service",
-                        "filters": [{
+                        "plugins": [{
                             "type": "ExtensionRef",
                             "extensionRef": {
                                 "group": "edgion.io",

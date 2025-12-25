@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::lb::BackendSelector;
-use crate::core::filters::PluginRuntime;
+use crate::core::plugins::PluginRuntime;
 use super::http_route_preparse::BackendExtensionInfo;
 
 /// API group for HTTPRoute
@@ -76,7 +76,7 @@ pub struct HTTPRouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matches: Option<Vec<HTTPRouteMatch>>,
 
-    /// Filters define the filters that are applied to requests
+    /// Filters define the plugins that are applied to requests
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<HTTPRouteFilter>>,
 
@@ -105,7 +105,7 @@ pub struct HTTPRouteRule {
     pub backend_finder: BackendSelector<HTTPBackendRef>,
 
     /// Filter runtime (runtime only, not serialized)
-    /// This is computed from filters at runtime
+    /// This is computed from plugins at runtime
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
@@ -139,7 +139,7 @@ impl fmt::Debug for HTTPRouteRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HTTPRouteRule")
             .field("matches", &self.matches)
-            .field("filters", &self.filters)
+            .field("plugins", &self.filters)
             .field("backend_refs", &self.backend_refs)
             .field("timeouts", &self.timeouts)
             .field("retry", &self.retry)
@@ -243,13 +243,13 @@ pub struct HTTPBackendRef {
     pub filters: Option<Vec<HTTPRouteFilter>>,
     
     /// Parsed extension info (runtime only, not serialized)
-    /// This is computed from filters[].extensionRef at runtime
+    /// This is computed from plugins[].extensionRef at runtime
     #[serde(skip)]
     #[schemars(skip)]
     pub extension_info: BackendExtensionInfo,
 
     /// Filter runtime (runtime only, not serialized)
-    /// This is computed from filters at runtime
+    /// This is computed from plugins at runtime
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
@@ -301,7 +301,7 @@ pub enum HTTPRouteFilterType {
     URLRewrite,
     /// RequestMirror can be used to mirror HTTP requests to a different backend
     RequestMirror,
-    /// ExtensionRef is used for configuring custom HTTP filters
+    /// ExtensionRef is used for configuring custom HTTP plugins
     ExtensionRef,
 }
 
@@ -409,7 +409,7 @@ pub struct HTTPRequestMirrorFilter {
 }
 
 /// BackendObjectReference identifies an API object within the namespace of the referrer
-/// Used specifically for mirror backend references (without weight/filters)
+/// Used specifically for mirror backend references (without weight/plugins)
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendObjectReference {

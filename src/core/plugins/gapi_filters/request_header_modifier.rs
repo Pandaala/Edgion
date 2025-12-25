@@ -5,8 +5,8 @@
 use async_trait::async_trait;
 use crate::types::resources::{HTTPHeaderFilter, GRPCHeaderFilter};
 use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
-use crate::core::filters::plugin_runtime::traits::{Plugin, PluginSession};
-use crate::core::filters::plugin_runtime::log::PluginLog;
+use crate::core::plugins::plugin_runtime::traits::{Plugin, PluginSession};
+use crate::core::plugins::plugin_runtime::log::PluginLog;
 
 /// Filter that modifies request headers
 pub struct RequestHeaderModifierFilter {

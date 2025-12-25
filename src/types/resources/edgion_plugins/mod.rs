@@ -8,7 +8,7 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::core::filters::PluginRuntime;
+use crate::core::plugins::PluginRuntime;
 
 // Submodules
 pub mod entry;
@@ -57,7 +57,7 @@ pub struct EdgionPluginsSpec {
     pub plugins: Option<Vec<PluginEntry>>,
 
     /// Plugin runtime (runtime only, not serialized)
-    /// This is computed from plugins at runtime
+    /// This is computed from edgion_plugins at runtime
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
@@ -81,12 +81,12 @@ impl EdgionPlugins {
         self.metadata.name.as_deref().unwrap_or("")
     }
 
-    /// Check if this plugin has any filters defined
+    /// Check if this plugin has any plugins defined
     pub fn has_plugins(&self) -> bool {
         self.spec.plugins.as_ref().map_or(false, |p| !p.is_empty())
     }
 
-    /// Get the total number of filters
+    /// Get the total number of plugins
     pub fn plugin_count(&self) -> usize {
         self.spec.plugins.as_ref().map_or(0, |p| p.len())
     }
@@ -96,7 +96,7 @@ impl EdgionPlugins {
         self.spec.plugins.as_deref().unwrap_or(&[])
     }
 
-    /// Get only enabled filters
+    /// Get only enabled plugins
     pub fn enabled_plugins(&self) -> Vec<&EdgionPlugin> {
         self.spec
             .plugins
@@ -111,7 +111,7 @@ impl EdgionPlugins {
             .unwrap_or_default()
     }
 
-    /// Initialize plugin runtime from plugins
+    /// Initialize plugin runtime from edgion_plugins
     /// This should be called after deserialization to populate the runtime field
     pub fn init_plugin_runtime(&mut self) {
         if let Some(plugins) = &self.spec.plugins {

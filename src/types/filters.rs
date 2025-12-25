@@ -24,11 +24,11 @@ pub enum PluginRunningStage {
 /// Filter running result
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum PluginRunningResult {
-    /// Just nothing, continue to run other filters
+    /// Just nothing, continue to run other plugins
     Nothing,
-    /// Filter running good, and should continue to run other filters
+    /// Filter running good, and should continue to run other plugins
     GoodNext,
-    /// Filter judged that the request should be stopped here, no other filters should run
+    /// Filter judged that the request should be stopped here, no other plugins should run
     ErrTerminateRequest,
     /// Filter returns an error response with custom status and body
     ErrResponse {
