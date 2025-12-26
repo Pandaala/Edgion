@@ -12,19 +12,24 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
     // Get peer certificate (client certificate in mTLS)
     let cert = ssl.peer_certificate()?;
     
-    // Extract subject DN
-    let subject = cert.subject_name()
-        .entries()
-        .map(|entry| {
-            let key = entry.object().nid().short_name()
-                .unwrap_or("?");
-            let value = entry.data().as_utf8()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|_| "?".to_string());
-            format!("{}={}", key, value)
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
+    // Extract subject DN with efficient string building
+    let mut subject = String::with_capacity(128);
+    let mut first = true;
+    for entry in cert.subject_name().entries() {
+        if !first {
+            subject.push_str(", ");
+        }
+        first = false;
+        
+        let key = entry.object().nid().short_name().unwrap_or("?");
+        subject.push_str(key);
+        subject.push('=');
+        
+        match entry.data().as_utf8() {
+            Ok(s) => subject.push_str(&s),
+            Err(_) => subject.push('?'),
+        }
+    }
     
     // Extract Common Name (CN) from subject
     let cn = cert.subject_name()
@@ -43,14 +48,20 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
     // Extract Subject Alternative Names (SANs)
     let sans = extract_sans(&cert);
     
-    // Calculate certificate fingerprint (SHA256)
+    // Calculate certificate fingerprint (SHA256) with efficient formatting
     let fingerprint = cert.digest(pingora_core::tls::hash::MessageDigest::sha256())
         .map(|digest| {
-            digest.as_ref()
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join(":")
+            let bytes = digest.as_ref();
+            let mut result = String::with_capacity(bytes.len() * 3 - 1); // "xx:xx:xx..."
+            for (i, b) in bytes.iter().enumerate() {
+                if i > 0 {
+                    result.push(':');
+                }
+                // Use write! to avoid allocation
+                use std::fmt::Write;
+                let _ = write!(result, "{:02x}", b);
+            }
+            result
         })
         .unwrap_or_else(|_| "unknown".to_string());
     
@@ -73,11 +84,28 @@ fn extract_sans(cert: &X509Ref) -> Vec<String> {
             if let Some(dns_name) = san.dnsname() {
                 sans.push(dns_name.to_string());
             }
-            // IP addresses
-            if let Some(ip) = san.ipaddress() {
-                if let Ok(ip_str) = std::str::from_utf8(ip) {
-                    sans.push(ip_str.to_string());
-                }
+            // IP addresses - MUST handle as binary data, not UTF-8
+            if let Some(ip_bytes) = san.ipaddress() {
+                let ip_str = match ip_bytes.len() {
+                    4 => {
+                        // IPv4: 4 bytes
+                        format!(
+                            "{}.{}.{}.{}",
+                            ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
+                        )
+                    }
+                    16 => {
+                        // IPv6: 16 bytes - use std::net::Ipv6Addr for RFC-compliant formatting
+                        let mut octets = [0u8; 16];
+                        octets.copy_from_slice(ip_bytes);
+                        std::net::Ipv6Addr::from(octets).to_string()
+                    }
+                    _ => {
+                        tracing::warn!("Invalid IP address length in SAN: {}", ip_bytes.len());
+                        continue;
+                    }
+                };
+                sans.push(format!("IP:{}", ip_str));
             }
             // Email addresses
             if let Some(email) = san.email() {
@@ -95,8 +123,6 @@ fn extract_sans(cert: &X509Ref) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    
     #[test]
     fn test_extract_sans_empty() {
         // This is a placeholder test - actual testing requires SSL connection

@@ -21,9 +21,18 @@ pub struct TlsCallback {
 
 #[async_trait::async_trait]
 impl TlsAccept for TlsCallback {
-    async fn certificate_callback(&self, _ssl: &mut TlsRef) {
-        if let Err(e) = self.load_cert_from_sni(_ssl).await {
-            eprintln!("Failed to load certificate: {}", e);
+    async fn certificate_callback(&self, ssl: &mut TlsRef) {
+        if let Err(e) = self.load_cert_from_sni(ssl).await {
+            // Extract SNI for logging context
+            let sni = ssl.servername(NameType::HOST_NAME)
+                .unwrap_or("<no-sni>");
+            
+            tracing::error!(
+                component = "tls_callback",
+                sni = %sni,
+                error = %e,
+                "Failed to load certificate during TLS handshake"
+            );
         }
     }
 }
@@ -52,6 +61,9 @@ impl TlsCallback {
     }
 
     async fn load_cert_from_sni(&self, ssl: &mut SslRef) -> Result<(), Box<PingoraError>> {
+        // TODO(observability): Add metrics for:
+        // - tls_cert_load_total counter (with status label: success/failure)
+        // - tls_cert_load_duration_seconds histogram
         tracing::debug!("Loading TLS certificates");
 
         // Get SNI from SSL context, with fallback support
@@ -195,6 +207,8 @@ impl TlsCallback {
         };
 
         // Set verification depth
+        // SAFETY: verify_depth is validated to be in range 1-9 by cert_validator
+        // u8 (1-9) can always be safely converted to u32
         ssl.set_verify_depth(client_auth.verify_depth as u32);
         tracing::debug!("Set mTLS verification depth: {}", client_auth.verify_depth);
 
@@ -206,7 +220,6 @@ impl TlsCallback {
             if let Err(e) = crate::core::tls::mtls_verify_callback::set_verify_callback_with_whitelist(
                 ssl,
                 verify_mode,
-                client_auth,
                 edgion_tls,
             ) {
                 return Err(PingoraError::explain(

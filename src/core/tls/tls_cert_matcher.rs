@@ -32,14 +32,13 @@ impl TlsCertMatcher {
         let snapshot = self.matcher.load();
         let tls_list = snapshot.get(sni).cloned().unwrap_or_default();
 
-        if tls_list.is_empty() {
-            return Err(EdError::SniNotMatch(sni.to_string()));
-        }
-        if let Some(t) = tls_list.first() {
-            Ok(t.clone())
-        } else {
-            Err(EdError::SniNotMatch(sni.to_string()))
-        }
+        // Get the first certificate if available
+        // TODO(observability): Add metrics for:
+        // - sni_match_total counter (with status label: success/failure)
+        // - sni_match_duration_seconds histogram
+        tls_list.first()
+            .cloned()
+            .ok_or_else(|| EdError::SniNotMatch(sni.to_string()))
     }
 }
 
