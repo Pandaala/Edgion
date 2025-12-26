@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use crate::core::conf_sync::traits::ConfHandler;
-use super::{get_roundrobin_store, get_consistent_store, get_leastconn_store};
+use super::{get_roundrobin_store, get_consistent_store, get_leastconn_store, get_ewma_store};
 use super::discovery_impl::{EndpointSliceLoadBalancer, EndpointSliceExt};
 use crate::core::lb::lb_policy::{get_global_policy_store, LbPolicy};
 use crate::types::ResourceMeta;
@@ -70,6 +70,28 @@ impl EpSliceHandler {
         
         let count = leastconn_map.len();
         leastconn_store.replace_all(leastconn_map);
+        count
+    }
+    
+    /// Full set for EWMA store (for services with EWMA policy)
+    fn full_set_ewma(&self, data: &HashMap<String, EndpointSlice>) -> usize {
+        let ewma_store = get_ewma_store();
+        let policy_store = get_global_policy_store();
+        let mut ewma_map = HashMap::new();
+        
+        for (key, ep_slice) in data {
+            let service_key = ep_slice.key_name();
+            let policies = policy_store.get(&service_key);
+            
+            if policies.contains(&LbPolicy::Ewma) {
+                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
+                ewma_map.insert(key.clone(), lb);
+                tracing::debug!(key = %key, "Created EWMA LB");
+            }
+        }
+        
+        let count = ewma_map.len();
+        ewma_store.replace_all(ewma_map);
         count
     }
     
@@ -197,6 +219,56 @@ impl EpSliceHandler {
             leastconn_store.update(leastconn_add, &leastconn_remove);
         }
     }
+    
+    /// Partial update for EWMA store
+    fn partial_update_ewma(
+        &self,
+        add: &HashMap<String, EndpointSlice>,
+        update: &HashMap<String, EndpointSlice>,
+        remove: &HashSet<String>,
+    ) {
+        let ewma_store = get_ewma_store();
+        let policy_store = get_global_policy_store();
+        
+        let mut ewma_add = HashMap::new();
+        let mut ewma_remove = HashSet::new();
+        
+        // Handle removes
+        // EWMA metrics for removed backends will be cleaned up
+        for key in remove {
+            ewma_remove.insert(key.clone());
+        }
+        
+        // Handle updates
+        for (key, new_ep_slice) in update {
+            let service_key = new_ep_slice.key_name();
+            let policies = policy_store.get(&service_key);
+            
+            if policies.contains(&LbPolicy::Ewma) {
+                // Update the load balancer
+                if let Err(e) = ewma_store.update_in_place_and_refresh_lb(key, new_ep_slice.clone()) {
+                    tracing::error!(key = %key, error = %e, "Failed to update EWMA LB");
+                }
+            } else {
+                ewma_remove.insert(key.clone());
+            }
+        }
+        
+        // Handle adds
+        for (key, ep_slice) in add {
+            let service_key = ep_slice.key_name();
+            let policies = policy_store.get(&service_key);
+            
+            if policies.contains(&LbPolicy::Ewma) {
+                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
+                ewma_add.insert(key.clone(), lb);
+            }
+        }
+        
+        if !ewma_add.is_empty() || !ewma_remove.is_empty() {
+            ewma_store.update(ewma_add, &ewma_remove);
+        }
+    }
 }
 
 /// Create an EpSliceStore handler for registration with ConfigClient
@@ -217,11 +289,15 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         // 3. LeastConnection for services with LeastConnection policy
         let leastconn_count = self.full_set_leastconn(data);
         
+        // 4. EWMA for services with EWMA policy
+        let ewma_count = self.full_set_ewma(data);
+        
         tracing::info!(
             component = "ep_slice_handler",
             total = data.len(),
             consistent = consistent_count,
             leastconn = leastconn_count,
+            ewma = ewma_count,
             "Full set completed"
         );
     }
@@ -239,6 +315,9 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         
         // 3. LeastConnection store
         self.partial_update_leastconn(&add, &update, &remove);
+        
+        // 4. EWMA store
+        self.partial_update_ewma(&add, &update, &remove);
         
         tracing::info!(
             component = "ep_slice_handler",

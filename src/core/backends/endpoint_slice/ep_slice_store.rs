@@ -5,6 +5,7 @@ use std::sync::LazyLock;
 use pingora_load_balancing::selection::{BackendSelection, Consistent, RoundRobin};
 use pingora_load_balancing::Backend;
 use crate::core::lb::leastconn::LeastConnection;
+use crate::core::lb::ewma::Ewma;
 use super::discovery_impl::EndpointSliceLoadBalancer;
 
 /// Store for RoundRobin LoadBalancers (primary, always present)
@@ -19,6 +20,10 @@ static CONSISTENT_STORE: LazyLock<Arc<EpSliceStore<Consistent>>> =
 static LEASTCONN_STORE: LazyLock<Arc<EpSliceStore<LeastConnection>>> =
     LazyLock::new(|| Arc::new(EpSliceStore::new()));
 
+/// Store for EWMA LoadBalancers (optional)
+static EWMA_STORE: LazyLock<Arc<EpSliceStore<Ewma>>> =
+    LazyLock::new(|| Arc::new(EpSliceStore::new()));
+
 pub fn get_roundrobin_store() -> Arc<EpSliceStore<RoundRobin>> {
     ROUNDROBIN_STORE.clone()
 }
@@ -29,6 +34,10 @@ pub fn get_consistent_store() -> Arc<EpSliceStore<Consistent>> {
 
 pub fn get_leastconn_store() -> Arc<EpSliceStore<LeastConnection>> {
     LEASTCONN_STORE.clone()
+}
+
+pub fn get_ewma_store() -> Arc<EpSliceStore<Ewma>> {
+    EWMA_STORE.clone()
 }
 
 /// Generic store for endpoint slice load balancers

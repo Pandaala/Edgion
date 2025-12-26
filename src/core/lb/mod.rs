@@ -3,6 +3,7 @@
 //! This module provides weighted load balancing algorithms for lb selection.
 
 pub mod leastconn;
+pub mod ewma;
 pub mod lb_policy;
 pub mod backend_selector;
 

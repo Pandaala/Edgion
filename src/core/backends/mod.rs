@@ -2,7 +2,7 @@ pub mod services;
 pub mod endpoint_slice;
 
 pub use services::{ServiceStore, get_global_service_store, create_service_handler};
-pub use endpoint_slice::{EpSliceStore, get_roundrobin_store, get_consistent_store, get_leastconn_store, create_ep_slice_handler};
+pub use endpoint_slice::{EpSliceStore, get_roundrobin_store, get_consistent_store, get_leastconn_store, get_ewma_store, create_ep_slice_handler};
 
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_core::prelude::HttpPeer;
@@ -174,6 +174,11 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                     let ep_store = get_leastconn_store();
                     ep_store.select_peer(&service_key, b"", 256)
                         .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByLeastConn)?
+                }
+                Some(ParsedLBPolicy::Ewma) => {
+                    let ep_store = get_ewma_store();
+                    ep_store.select_peer(&service_key, b"", 256)
+                        .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByEwma)?
                 }
             };
             

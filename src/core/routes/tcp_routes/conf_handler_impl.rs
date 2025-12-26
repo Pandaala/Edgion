@@ -191,7 +191,6 @@ mod tests {
                         group: None,
                         kind: None,
                     }]),
-                    filters: None,
                     stream_plugin_runtime: Default::default(),
                     backend_finder: Default::default(),
                 }]),

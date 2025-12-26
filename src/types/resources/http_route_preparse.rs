@@ -23,6 +23,8 @@ pub enum ParsedLBPolicy {
     ConsistentHash(ConsistentHashOn),
     /// Least connection
     LeastConn,
+    /// EWMA (Exponentially Weighted Moving Average) based on response time
+    Ewma,
 }
 
 /// Parsed extension info attached to HTTPBackendRef
@@ -47,6 +49,7 @@ impl BackendExtensionInfo {
     /// - group: edgion.io, kind: LBPolicyConsistentHash, name: cookie.session-id
     /// - group: edgion.io, kind: LBPolicyConsistentHash, name: arg.user-id
     /// - group: edgion.io, kind: LBPolicyLeastConn, name: default
+    /// - group: edgion.io, kind: LBPolicyEwma, name: default
     fn parse_lb_policy(ext_ref: &LocalObjectReference) -> Option<ParsedLBPolicy> {
         // Check group (empty string means core API group, otherwise should be edgion.io)
         if !ext_ref.group.is_empty() && ext_ref.group != "edgion.io" {
@@ -60,6 +63,9 @@ impl BackendExtensionInfo {
             }
             "LBPolicyLeastConn" => {
                 Some(ParsedLBPolicy::LeastConn)
+            }
+            "LBPolicyEwma" => {
+                Some(ParsedLBPolicy::Ewma)
             }
             _ => None,
         }

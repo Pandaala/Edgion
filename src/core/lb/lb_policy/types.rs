@@ -7,6 +7,8 @@ pub enum LbPolicy {
     Consistent,
     /// Least connection selection
     LeastConnection,
+    /// Exponentially Weighted Moving Average (EWMA) based on response time
+    Ewma,
 }
 
 impl LbPolicy {
@@ -15,6 +17,7 @@ impl LbPolicy {
         match s.to_lowercase().as_str() {
             "consistent" | "consistent-hash" | "ketama" => Some(Self::Consistent),
             "leastconn" | "least-connection" | "leastconnection" | "least_connection" => Some(Self::LeastConnection),
+            "ewma" => Some(Self::Ewma),
             _ => None,
         }
     }
@@ -24,6 +27,7 @@ impl LbPolicy {
         match self {
             Self::Consistent => "consistent",
             Self::LeastConnection => "leastconn",
+            Self::Ewma => "ewma",
         }
     }
     

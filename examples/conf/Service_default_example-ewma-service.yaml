@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: example-ewma-service
+  namespace: default
+  annotations:
+    # Enable EWMA load balancing for this service
+    # EWMA tracks response latency using exponential smoothing
+    # and selects backends with lowest response time
+    edgion.io/lb-policy: "ewma"
+spec:
+  selector:
+    app: example-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+

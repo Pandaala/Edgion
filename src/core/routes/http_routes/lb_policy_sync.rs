@@ -51,6 +51,7 @@ pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
                 let lb_policy = match parsed_policy {
                     ParsedLBPolicy::ConsistentHash(_) => LbPolicy::Consistent,
                     ParsedLBPolicy::LeastConn => LbPolicy::LeastConnection,
+                    ParsedLBPolicy::Ewma => LbPolicy::Ewma,
                 };
                 
                 let service_namespace = backend_ref.namespace.as_deref()
@@ -152,7 +153,7 @@ mod tests {
                         "name": service,
                         "port": 8080,
                         "kind": "Service",
-                        "plugins": [{
+                        "filters": [{
                             "type": "ExtensionRef",
                             "extensionRef": {
                                 "group": "edgion.io",

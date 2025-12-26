@@ -43,6 +43,9 @@ pub enum EdgionStatus {
 
     BackendEndpointSliceNotFoundByRoundRobinDefault = 500_08,
 
+    /// EndpointSlice not found for service (EWMA store)
+    BackendEndpointSliceNotFoundByEwma = 500_09,
+
     /// Service not found in service store
     BackendServiceNotFound = 503_02,
 

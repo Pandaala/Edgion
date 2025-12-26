@@ -452,12 +452,21 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
-        // Decrement connection count for LeastConnection LB before logging
+        // Update LB metrics based on policy type
         if let Some(upstream) = ctx.get_current_upstream() {
-            if let (Some(addr), Some(crate::types::ParsedLBPolicy::LeastConn)) = 
-                (&upstream.backend_addr, &upstream.lb_policy) 
-            {
-                crate::core::lb::leastconn::decrement(addr);
+            if let Some(addr) = &upstream.backend_addr {
+                match &upstream.lb_policy {
+                    Some(crate::types::ParsedLBPolicy::LeastConn) => {
+                        // Decrement connection count for LeastConnection LB
+                        crate::core::lb::leastconn::decrement(addr);
+                    }
+                    Some(crate::types::ParsedLBPolicy::Ewma) => {
+                        // Update EWMA with response latency
+                        let latency_us = upstream.start_time.elapsed().as_micros() as u64;
+                        crate::core::lb::ewma::update(addr, latency_us);
+                    }
+                    _ => {}
+                }
             }
         }
         
