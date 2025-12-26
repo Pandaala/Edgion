@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![cfg(any(feature = "boringssl", feature = "openssl"))]
 
 use crate::core::tls::tls_cert_matcher::match_sni;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -231,7 +232,7 @@ impl TlsCallback {
                 // Use custom verify callback that validates SAN/CN whitelist
                 tracing::debug!("Setting custom verify callback for SAN/CN whitelist");
                 
-                if let Err(e) = crate::core::tls::mtls_verify_callback::set_verify_callback_with_whitelist(
+                if let Err(e) = crate::core::tls::boringssl::mtls_verify_callback::set_verify_callback_with_whitelist(
                     ssl,
                     verify_mode,
                     edgion_tls,
@@ -385,3 +386,4 @@ impl TlsCallback {
         Ok(())
     }
 }
+

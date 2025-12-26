@@ -9,7 +9,7 @@
 // This module requires BoringSSL for custom verify callbacks
 #![cfg(feature = "boringssl")]
 
-use crate::core::tls::cert_extractor::extract_client_cert_info;
+use crate::core::tls::backend_common::cert_extractor::extract_client_cert_info;
 use crate::core::tls::mtls_validator::{validate_cn_whitelist, validate_san_whitelist};
 use crate::types::resources::edgion_tls::{ClientAuthConfig, EdgionTls};
 use pingora_core::tls::ssl::SslRef;
@@ -334,3 +334,4 @@ pub fn set_verify_callback_with_whitelist(
         Ok(())
     }
 }
+

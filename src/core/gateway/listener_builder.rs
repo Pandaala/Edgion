@@ -22,7 +22,8 @@ use crate::core::routes::http_routes::EdgionHttp;
 use crate::core::routes::tcp_routes::{EdgionTcp, get_global_tcp_route_manager};
 use crate::core::routes::tls_routes::{EdgionTls, get_global_tls_route_manager};
 use crate::core::routes::udp_routes::{EdgionUdp, get_global_udp_route_manager};
-use crate::core::tls::tls_pingora::TlsCallback;
+#[cfg(any(feature = "boringssl", feature = "openssl"))]
+use crate::core::tls::backend_common::tls_pingora::TlsCallback;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::gateway::Listener;
 
@@ -142,23 +143,31 @@ pub fn add_http_listener(
 
     // Add listener with or without TLS
     if enable_tls {
-        let mut tls_settings = TlsCallback::new_tls_settings_with_callback(
-            context.edgion_gateway_config.clone(),
-            true
-        )?;
-        // Enable HTTP/2 for HTTPS if enable_http2 is true
-        if enable_http2 {
-            tls_settings.enable_h2();
+        #[cfg(any(feature = "boringssl", feature = "openssl"))]
+        {
+            let mut tls_settings = TlsCallback::new_tls_settings_with_callback(
+                context.edgion_gateway_config.clone(),
+                true
+            )?;
+            // Enable HTTP/2 for HTTPS if enable_http2 is true
+            if enable_http2 {
+                tls_settings.enable_h2();
+            }
+            http_service.add_tls_with_settings(&addr, None, tls_settings);
+            let protocol = if enable_http2 { "HTTPS (HTTP/2 enabled)" } else { "HTTPS" };
+            tracing::info!(
+                gateway=%context.gateway_key,
+                listener=%listener_name,
+                addr=%addr,
+                protocol=%protocol,
+                "Adding TLS listener"
+            );
         }
-        http_service.add_tls_with_settings(&addr, None, tls_settings);
-        let protocol = if enable_http2 { "HTTPS (HTTP/2 enabled)" } else { "HTTPS" };
-        tracing::info!(
-            gateway=%context.gateway_key,
-            listener=%listener_name,
-            addr=%addr,
-            protocol=%protocol,
-            "Adding TLS listener"
-        );
+        
+        #[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+        {
+            anyhow::bail!("TLS support requires either 'boringssl' or 'openssl' feature");
+        }
     } else {
         http_service.add_tcp(&addr);
         let protocol = if enable_http2 { "HTTP (h2c enabled)" } else { "HTTP" };
@@ -285,6 +294,7 @@ pub fn add_udp_listener(
 ///
 /// This function creates a TLS listener that terminates TLS and forwards
 /// plain TCP traffic to backend services based on SNI routing.
+#[cfg(any(feature = "boringssl", feature = "openssl"))]
 pub fn add_tls_terminate_to_tcp_listener(
     server: &mut Server,
     context: &ListenerContext,
@@ -365,17 +375,25 @@ pub fn add_listener(
             add_udp_listener(server, &context)
         }
         "TLS" => {
-            // Check Gateway annotation for backend protocol
-            let backend_protocol = context.gateway_annotations
-                .get(ANNOTATION_BACKEND_PROTOCOL)
-                .map(|s| s.as_str());
+            #[cfg(any(feature = "boringssl", feature = "openssl"))]
+            {
+                // Check Gateway annotation for backend protocol
+                let backend_protocol = context.gateway_annotations
+                    .get(ANNOTATION_BACKEND_PROTOCOL)
+                    .map(|s| s.as_str());
+                
+                match backend_protocol {
+                    Some("tcp") => add_tls_terminate_to_tcp_listener(server, &context),
+                    _ => anyhow::bail!(
+                        "TLS protocol requires '{}' annotation set to 'tcp'",
+                        ANNOTATION_BACKEND_PROTOCOL
+                    ),
+                }
+            }
             
-            match backend_protocol {
-                Some("tcp") => add_tls_terminate_to_tcp_listener(server, &context),
-                _ => anyhow::bail!(
-                    "TLS protocol requires '{}' annotation set to 'tcp'",
-                    ANNOTATION_BACKEND_PROTOCOL
-                ),
+            #[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+            {
+                anyhow::bail!("TLS protocol requires either 'boringssl' or 'openssl' feature")
             }
         }
         "GRPC" | "GRPCWeb"=> {

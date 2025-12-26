@@ -9,6 +9,7 @@ use pingora_core::connectors::TransportConnector;
 use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
+#[cfg(any(feature = "boringssl", feature = "openssl"))]
 use pingora_core::tls::ssl::NameType;
 
 use crate::core::observe::AccessLogger;
@@ -103,12 +104,18 @@ impl EdgionTls {
     /// 
     /// For Pingora's Stream type, if it's already TLS-terminated,
     /// we can access the SSL context to get the SNI.
-    fn extract_sni(stream: &mut Stream) -> Option<String> {
-        // Try to get SSL reference from the stream
-        if let Some(ssl_ref) = stream.get_ssl() {
-            // Get the SNI (Server Name Indication) from SSL context
-            if let Some(sni) = ssl_ref.servername(NameType::HOST_NAME) {
-                return Some(sni.to_string());
+    fn extract_sni(
+        #[allow(unused_variables)]
+        stream: &mut Stream
+    ) -> Option<String> {
+        #[cfg(any(feature = "boringssl", feature = "openssl"))]
+        {
+            // Try to get SSL reference from the stream
+            if let Some(ssl_ref) = stream.get_ssl() {
+                // Get the SNI (Server Name Indication) from SSL context
+                if let Some(sni) = ssl_ref.servername(NameType::HOST_NAME) {
+                    return Some(sni.to_string());
+                }
             }
         }
         None

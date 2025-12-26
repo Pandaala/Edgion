@@ -1,12 +1,19 @@
 pub mod cert_validator;
 pub mod tls_cert_matcher;
-pub mod tls_pingora;
 pub mod tls_store;
-pub mod cert_extractor;
 pub mod mtls_validator;
-#[cfg(feature = "boringssl")]
-pub mod mtls_verify_callback;
 mod conf_handler_impl;
+
+// Backend-specific modules
+#[cfg(feature = "boringssl")]
+pub mod boringssl;
+
+#[cfg(feature = "openssl")]
+pub mod openssl;
+
+// Common code for BoringSSL/OpenSSL backends
+#[cfg(any(feature = "boringssl", feature = "openssl"))]
+pub mod backend_common;
 
 pub use cert_validator::{validate_cert, CertValidationResult, CertValidationError};
 
