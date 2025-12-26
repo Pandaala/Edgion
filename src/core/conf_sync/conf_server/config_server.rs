@@ -626,62 +626,6 @@ impl ConfigServer {
                     }
                 });
             }
-            ResourceKind::PluginMetaData => {
-                let mut receiver = self.watch_plugin_metadata(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize PluginMetaData events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
-            ResourceKind::LinkSys => {
-                let mut receiver = self.watch_link_sys(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize LinkSys events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
             ResourceKind::Secret => {
                 let mut receiver = self.watch_secrets(client_id, client_name, from_version);
                 tokio::spawn(async move {

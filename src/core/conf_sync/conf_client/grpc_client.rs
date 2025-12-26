@@ -245,6 +245,8 @@ impl ConfigSyncClient {
             EndpointSlice,
             EdgionTls,
             EdgionPlugins,
+            EdgionStreamPlugins,
+            ReferenceGrant,
             PluginMetaData,
             Secret,
         ];
