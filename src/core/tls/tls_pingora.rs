@@ -206,29 +206,58 @@ impl TlsCallback {
             }
         };
 
-        // Set verification depth
+        // Set verification depth (BoringSSL only - OpenSSL uses different API)
         // SAFETY: verify_depth is validated to be in range 1-9 by cert_validator
         // u8 (1-9) can always be safely converted to u32
-        ssl.set_verify_depth(client_auth.verify_depth as u32);
-        tracing::debug!("Set mTLS verification depth: {}", client_auth.verify_depth);
+        #[cfg(feature = "boringssl")]
+        {
+            ssl.set_verify_depth(client_auth.verify_depth as u32);
+            tracing::debug!("Set mTLS verification depth: {}", client_auth.verify_depth);
+        }
+        #[cfg(not(feature = "boringssl"))]
+        {
+            // Note: OpenSSL/Rustls have different APIs for setting verify depth
+            // For now, we rely on the default depth which is typically sufficient
+            tracing::debug!(
+                "Verify depth configuration: {} (using backend default, explicit setting requires boringssl)",
+                client_auth.verify_depth
+            );
+        }
 
         // Set verify mode with custom callback for SAN/CN whitelist (if configured)
         if client_auth.allowed_sans.is_some() || client_auth.allowed_cns.is_some() {
-            // Use custom verify callback that validates SAN/CN whitelist
-            tracing::debug!("Setting custom verify callback for SAN/CN whitelist");
-            
-            if let Err(e) = crate::core::tls::mtls_verify_callback::set_verify_callback_with_whitelist(
-                ssl,
-                verify_mode,
-                edgion_tls,
-            ) {
-                return Err(PingoraError::explain(
-                    ErrorType::InternalError,
-                    format!("Failed to set verify callback: {}", e),
-                ));
+            #[cfg(feature = "boringssl")]
+            {
+                // Use custom verify callback that validates SAN/CN whitelist
+                tracing::debug!("Setting custom verify callback for SAN/CN whitelist");
+                
+                if let Err(e) = crate::core::tls::mtls_verify_callback::set_verify_callback_with_whitelist(
+                    ssl,
+                    verify_mode,
+                    edgion_tls,
+                ) {
+                    return Err(PingoraError::explain(
+                        ErrorType::InternalError,
+                        format!("Failed to set verify callback: {}", e),
+                    ));
+                }
+                
+                tracing::info!("Custom verify callback configured for SAN/CN whitelist");
             }
             
-            tracing::info!("Custom verify callback configured for SAN/CN whitelist");
+            #[cfg(not(feature = "boringssl"))]
+            {
+                // SAN/CN whitelist is only supported with BoringSSL backend
+                tracing::error!(
+                    "SAN/CN whitelist validation requires 'boringssl' feature, but it's not enabled. \
+                    Current TLS backend does not support custom verify callbacks."
+                );
+                return Err(PingoraError::explain(
+                    ErrorType::InternalError,
+                    "SAN/CN whitelist validation requires BoringSSL backend. \
+                    Please rebuild with --features boringssl or remove allowed_sans/allowed_cns from configuration.".to_string(),
+                ));
+            }
         } else {
             // No whitelist, use standard verify mode
             ssl.set_verify(verify_mode);

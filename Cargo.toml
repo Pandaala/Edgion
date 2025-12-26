@@ -45,6 +45,7 @@ allocator-system = []
 boringssl = [
     "pingora-core/boringssl",
     "pingora-proxy/boringssl",
+    "dep:boring-sys",
 ]
 
 openssl = [
@@ -126,8 +127,8 @@ pingora-load-balancing = "0.6"
 pingora-proxy = { version = "0.6" }
 etcd-client = "0.11"
 
-# BoringSSL bindings for custom TLS callbacks
-boring-sys = "4"
+# BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
+boring-sys = { version = "4", optional = true }
 
 # Metrics
 metrics = "0.24"

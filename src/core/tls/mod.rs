@@ -4,6 +4,7 @@ pub mod tls_pingora;
 pub mod tls_store;
 pub mod cert_extractor;
 pub mod mtls_validator;
+#[cfg(feature = "boringssl")]
 pub mod mtls_verify_callback;
 mod conf_handler_impl;
 
