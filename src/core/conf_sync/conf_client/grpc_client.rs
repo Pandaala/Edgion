@@ -212,6 +212,9 @@ impl ConfigSyncClient {
             ReferenceGrant => {
                 self.config_client.reference_grants().start_watch().await?;
             }
+            BackendTLSPolicy => {
+                self.config_client.backend_tls_policies().start_watch().await?;
+            }
             PluginMetaData => {
                 self.config_client.plugin_metadata().start_watch().await?;
             }
@@ -247,6 +250,7 @@ impl ConfigSyncClient {
             EdgionPlugins,
             EdgionStreamPlugins,
             ReferenceGrant,
+            BackendTLSPolicy,
             PluginMetaData,
             Secret,
         ];

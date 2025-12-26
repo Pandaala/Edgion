@@ -17,6 +17,7 @@ pub mod plugin_metadata;
 pub mod link_sys;
 pub mod edgion_stream_plugins;
 pub mod reference_grant;
+pub mod backend_tls_policy;
 
 // Re-export all resource types
 pub use self::edgion_gateway_config::*;
@@ -34,4 +35,5 @@ pub use self::plugin_metadata::*;
 pub use self::link_sys::*;
 pub use self::edgion_stream_plugins::*;
 pub use self::reference_grant::*;
+pub use self::backend_tls_policy::*;
 

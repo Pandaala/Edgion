@@ -179,6 +179,11 @@ pub struct ConfSyncConfig {
     #[serde(default = "default_capacity")]
     pub reference_grants_capacity: u32,
 
+    /// EventStore capacity for BackendTLSPolicy resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub backend_tls_policies_capacity: u32,
+
     /// EventStore capacity for PluginMetadata resources
     #[arg(skip)]
     #[serde(default = "default_capacity")]
@@ -278,6 +283,7 @@ impl Default for ConfSyncConfig {
             edgion_plugins_capacity: default_capacity(),
             edgion_stream_plugins_capacity: default_capacity(),
             reference_grants_capacity: default_capacity(),
+            backend_tls_policies_capacity: default_capacity(),
             plugin_metadata_capacity: default_capacity(),
             secrets_capacity: default_capacity(),
         }

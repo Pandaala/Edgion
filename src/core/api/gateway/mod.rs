@@ -424,6 +424,36 @@ async fn list_referencegrants(
     Json(ListResponse::success(list_data.data))
 }
 
+/// Get BackendTLSPolicy by namespace and name
+async fn get_backendtlspolicies(
+    State(client): State<Arc<ConfigClient>>,
+    Query(query): Query<ResourceQuery>,
+) -> Json<ApiResponse<BackendTLSPolicy>> {
+    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
+        Ok(k) => k,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    let list_data = client.backend_tls_policies().list();
+    let name = query.name.as_ref().unwrap().as_str();
+    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    
+    match list_data.data.into_iter().find(|r| {
+        r.name_any() == name && r.namespace().as_deref() == namespace
+    }) {
+        Some(resource) => Json(ApiResponse::success(resource)),
+        None => Json(ApiResponse::error(format!("BackendTLSPolicy not found: {}", key))),
+    }
+}
+
+/// List all BackendTLSPolicy resources
+async fn list_backendtlspolicies(
+    State(client): State<Arc<ConfigClient>>,
+) -> Json<ListResponse<BackendTLSPolicy>> {
+    let list_data = client.backend_tls_policies().list();
+    Json(ListResponse::success(list_data.data))
+}
+
 /// Get PluginMetaData by namespace and name
 async fn get_pluginmetadata(
     State(client): State<Arc<ConfigClient>>,
@@ -552,6 +582,9 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
         // ReferenceGrant
         .route("/configclient/referencegrants", get(get_referencegrants))
         .route("/configclient/referencegrants/list", get(list_referencegrants))
+        // BackendTLSPolicy
+        .route("/configclient/backendtlspolicies", get(get_backendtlspolicies))
+        .route("/configclient/backendtlspolicies/list", get(list_backendtlspolicies))
         // PluginMetaData
         .route("/configclient/pluginmetadata", get(get_pluginmetadata))
         .route("/configclient/pluginmetadata/list", get(list_pluginmetadata))

@@ -27,6 +27,7 @@ pub struct ConfigClient {
     edgion_plugins: ClientCache<EdgionPlugins>,
     edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
     reference_grants: ClientCache<ReferenceGrant>,
+    backend_tls_policies: ClientCache<BackendTLSPolicy>,
     plugin_metadata: ClientCache<PluginMetaData>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
 }
@@ -88,6 +89,11 @@ impl ConfigClient {
         let reference_grant_handler = crate::core::reference_grant::reference_grant_store::create_reference_grant_handler();
         reference_grants_cache.set_conf_processor(reference_grant_handler);
         
+        // Register BackendTLSPolicyStore as the handler for BackendTLSPolicy resources
+        let backend_tls_policies_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let backend_tls_policy_handler = crate::core::backend_tls::backend_tls_policy_store::create_backend_tls_policy_handler();
+        backend_tls_policies_cache.set_conf_processor(backend_tls_policy_handler);
+        
         Self {
             gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(None),
@@ -103,6 +109,7 @@ impl ConfigClient {
             edgion_plugins: plugins_cache,
             edgion_stream_plugins: stream_plugins_cache,
             reference_grants: reference_grants_cache,
+            backend_tls_policies: backend_tls_policies_cache,
             plugin_metadata: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             // secrets: ClientCache::new(gateway_class_key, client_id, client_name),
         }
@@ -166,6 +173,11 @@ impl ConfigClient {
     /// Get reference_grants cache for direct access
     pub fn reference_grants(&self) -> &ClientCache<ReferenceGrant> {
         &self.reference_grants
+    }
+
+    /// Get backend_tls_policies cache for direct access
+    pub fn backend_tls_policies(&self) -> &ClientCache<BackendTLSPolicy> {
+        &self.backend_tls_policies
     }
 
     /// Get plugin_metadata cache for direct access
@@ -368,6 +380,12 @@ impl ConfigClient {
                 let list_data = self.reference_grants.list();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize ReferenceGrant data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::BackendTLSPolicy => {
+                let list_data = self.backend_tls_policies.list();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize BackendTLSPolicy data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::PluginMetaData => {
@@ -736,6 +754,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     Self::apply_change_to_cache(&self.reference_grants, change, resource);
                 }
                 Err(e) => log_error("ReferenceGrant", &e),
+            },
+            ResourceKind::BackendTLSPolicy => match serde_yaml::from_str::<BackendTLSPolicy>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.backend_tls_policies, change, resource);
+                }
+                Err(e) => log_error("BackendTLSPolicy", &e),
             },
             ResourceKind::PluginMetaData => match serde_yaml::from_str::<PluginMetaData>(&data) {
                 Ok(resource) => {

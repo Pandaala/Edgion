@@ -141,6 +141,15 @@ pub async fn load_all_resources_from_store(
                     Err(e) => Err(e.into()),
                 }
             }
+            Some(ResourceKind::BackendTLSPolicy) => {
+                match serde_yaml::from_str::<BackendTLSPolicy>(&resource.content) {
+                    Ok(policy) => {
+                        config_server.backend_tls_policies.apply_change(ResourceChange::InitAdd, policy);
+                        Ok::<(), anyhow::Error>(())
+                    }
+                    Err(e) => Err(e.into()),
+                }
+            }
             Some(ResourceKind::PluginMetaData) => {
                 match serde_yaml::from_str::<PluginMetaData>(&resource.content) {
                     Ok(metadata) => {

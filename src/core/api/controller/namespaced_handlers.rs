@@ -68,6 +68,10 @@ pub async fn list_all_namespaces(
             let list_data = state.config_server.reference_grants.list();
             list_to_json!(list_data.data)
         }
+        crate::types::ResourceKind::BackendTLSPolicy => {
+            let list_data = state.config_server.backend_tls_policies.list();
+            list_to_json!(list_data.data)
+        }
         crate::types::ResourceKind::PluginMetaData => {
             let list_data = state.config_server.plugin_metadata.list();
             list_to_json!(list_data.data)
@@ -171,6 +175,13 @@ pub async fn list_namespaced(
                 .collect();
             list_to_json!(filtered)
         }
+        crate::types::ResourceKind::BackendTLSPolicy => {
+            let list_data = state.config_server.backend_tls_policies.list();
+            let filtered: Vec<_> = list_data.data.into_iter()
+                .filter(|r| r.namespace().as_deref() == Some(ns.as_str()))
+                .collect();
+            list_to_json!(filtered)
+        }
         crate::types::ResourceKind::PluginMetaData => {
             let list_data = state.config_server.plugin_metadata.list();
             let filtered: Vec<_> = list_data.data.into_iter()
@@ -268,6 +279,12 @@ pub async fn get_namespaced(
         }
         crate::types::ResourceKind::ReferenceGrant => {
             let list_data = state.config_server.reference_grants.list();
+            list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .and_then(|r| serde_json::to_value(r).ok())
+        }
+        crate::types::ResourceKind::BackendTLSPolicy => {
+            let list_data = state.config_server.backend_tls_policies.list();
             list_data.data.into_iter()
                 .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
                 .and_then(|r| serde_json::to_value(r).ok())

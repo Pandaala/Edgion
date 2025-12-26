@@ -20,6 +20,7 @@ pub enum ResourceKind {
     LinkSys = 15,
     EdgionStreamPlugins = 16,
     ReferenceGrant = 17,
+    BackendTLSPolicy = 18,
 }
 
 impl ResourceKind {
@@ -63,6 +64,7 @@ impl ResourceKind {
             "linksys" => Some(ResourceKind::LinkSys),
             "edgionstreamplugins" => Some(ResourceKind::EdgionStreamPlugins),
             "referencegrant" => Some(ResourceKind::ReferenceGrant),
+            "backendtlspolicy" => Some(ResourceKind::BackendTLSPolicy),
             _ => None,
         }
     }
