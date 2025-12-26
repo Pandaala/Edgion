@@ -1,6 +1,3 @@
-#![allow(dead_code)]
-#![cfg(any(feature = "boringssl", feature = "openssl"))]
-
 use crate::core::tls::tls_cert_matcher::match_sni;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
@@ -227,38 +224,21 @@ impl TlsCallback {
 
         // Set verify mode with custom callback for SAN/CN whitelist (if configured)
         if client_auth.allowed_sans.is_some() || client_auth.allowed_cns.is_some() {
-            #[cfg(feature = "boringssl")]
-            {
-                // Use custom verify callback that validates SAN/CN whitelist
-                tracing::debug!("Setting custom verify callback for SAN/CN whitelist");
-                
-                if let Err(e) = crate::core::tls::boringssl::mtls_verify_callback::set_verify_callback_with_whitelist(
-                    ssl,
-                    verify_mode,
-                    edgion_tls,
-                ) {
-                    return Err(PingoraError::explain(
-                        ErrorType::InternalError,
-                        format!("Failed to set verify callback: {}", e),
-                    ));
-                }
-                
-                tracing::info!("Custom verify callback configured for SAN/CN whitelist");
-            }
+            tracing::debug!("Setting custom verify callback for SAN/CN whitelist");
             
-            #[cfg(not(feature = "boringssl"))]
-            {
-                // SAN/CN whitelist is only supported with BoringSSL backend
+            // Use backend_api unified interface, backend differences are centrally handled
+            if let Err(e) = super::set_mtls_verify_callback(ssl, verify_mode, edgion_tls) {
                 tracing::error!(
-                    "SAN/CN whitelist validation requires 'boringssl' feature, but it's not enabled. \
-                    Current TLS backend does not support custom verify callbacks."
+                    "Failed to set mTLS verify callback: {}. \
+                    Make sure you're using a compatible TLS backend (BoringSSL).", e
                 );
                 return Err(PingoraError::explain(
                     ErrorType::InternalError,
-                    "SAN/CN whitelist validation requires BoringSSL backend. \
-                    Please rebuild with --features boringssl or remove allowed_sans/allowed_cns from configuration.".to_string(),
+                    format!("Failed to set verify callback: {}", e),
                 ));
             }
+            
+            tracing::info!("Custom verify callback configured for SAN/CN whitelist");
         } else {
             // No whitelist, use standard verify mode
             ssl.set_verify(verify_mode);

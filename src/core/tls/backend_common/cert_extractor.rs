@@ -4,8 +4,6 @@
 //!
 //! **Note**: This module requires BoringSSL or OpenSSL for X.509 certificate access.
 
-#![cfg(any(feature = "boringssl", feature = "openssl"))]
-
 use crate::types::ctx::ClientCertInfo;
 use pingora_core::tls::ssl::SslRef;
 use pingora_core::tls::x509::X509Ref;

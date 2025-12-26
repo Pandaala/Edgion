@@ -6,9 +6,6 @@
 //! **Note**: This module requires BoringSSL for custom verify callbacks.
 //! It will only be compiled when the `boringssl` feature is enabled.
 
-// This module requires BoringSSL for custom verify callbacks
-#![cfg(feature = "boringssl")]
-
 use crate::core::tls::backend_common::cert_extractor::extract_client_cert_info;
 use crate::core::tls::mtls_validator::{validate_cn_whitelist, validate_san_whitelist};
 use crate::types::resources::edgion_tls::{ClientAuthConfig, EdgionTls};
