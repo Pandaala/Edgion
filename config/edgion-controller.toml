@@ -108,5 +108,6 @@ endpoint_slices_capacity = 200 # EndpointSlice
 edgion_tls_capacity = 200              # EdgionTls
 edgion_plugins_capacity = 200          # EdgionPlugins
 edgion_stream_plugins_capacity = 200   # EdgionStreamPlugins
+reference_grants_capacity = 200        # ReferenceGrant
 plugin_metadata_capacity = 200         # PluginMetadata
 secrets_capacity = 200         # Secret

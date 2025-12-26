@@ -26,6 +26,7 @@ pub struct ConfigClient {
     edgion_tls: ClientCache<EdgionTls>,
     edgion_plugins: ClientCache<EdgionPlugins>,
     edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
+    reference_grants: ClientCache<ReferenceGrant>,
     plugin_metadata: ClientCache<PluginMetaData>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
 }
@@ -82,6 +83,11 @@ impl ConfigClient {
         let stream_plugin_handler = crate::core::plugins::edgion_stream_plugins::create_stream_plugin_handler();
         stream_plugins_cache.set_conf_processor(stream_plugin_handler);
         
+        // Register ReferenceGrantStore as the handler for ReferenceGrant resources
+        let reference_grants_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let reference_grant_handler = crate::core::reference_grant::reference_grant_store::create_reference_grant_handler();
+        reference_grants_cache.set_conf_processor(reference_grant_handler);
+        
         Self {
             gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(None),
@@ -96,6 +102,7 @@ impl ConfigClient {
             edgion_tls: edgion_tls_cache,
             edgion_plugins: plugins_cache,
             edgion_stream_plugins: stream_plugins_cache,
+            reference_grants: reference_grants_cache,
             plugin_metadata: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             // secrets: ClientCache::new(gateway_class_key, client_id, client_name),
         }
@@ -154,6 +161,11 @@ impl ConfigClient {
     /// Get edgion_stream_plugins cache for direct access
     pub fn edgion_stream_plugins(&self) -> &ClientCache<EdgionStreamPlugins> {
         &self.edgion_stream_plugins
+    }
+
+    /// Get reference_grants cache for direct access
+    pub fn reference_grants(&self) -> &ClientCache<ReferenceGrant> {
+        &self.reference_grants
     }
 
     /// Get plugin_metadata cache for direct access
@@ -350,6 +362,12 @@ impl ConfigClient {
                 let list_data = self.edgion_stream_plugins.list();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EdgionStreamPlugins data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::ReferenceGrant => {
+                let list_data = self.reference_grants.list();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize ReferenceGrant data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::PluginMetaData => {
@@ -712,6 +730,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     Self::apply_change_to_cache(&self.edgion_stream_plugins, change, resource);
                 }
                 Err(e) => log_error("EdgionStreamPlugins", &e),
+            },
+            ResourceKind::ReferenceGrant => match serde_yaml::from_str::<ReferenceGrant>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.reference_grants, change, resource);
+                }
+                Err(e) => log_error("ReferenceGrant", &e),
             },
             ResourceKind::PluginMetaData => match serde_yaml::from_str::<PluginMetaData>(&data) {
                 Ok(resource) => {

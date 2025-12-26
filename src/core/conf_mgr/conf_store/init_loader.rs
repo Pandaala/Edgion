@@ -132,6 +132,15 @@ pub async fn load_all_resources_from_store(
                     Err(e) => Err(e.into()),
                 }
             }
+            Some(ResourceKind::ReferenceGrant) => {
+                match serde_yaml::from_str::<ReferenceGrant>(&resource.content) {
+                    Ok(ref_grant) => {
+                        config_server.reference_grants.apply_change(ResourceChange::InitAdd, ref_grant);
+                        Ok::<(), anyhow::Error>(())
+                    }
+                    Err(e) => Err(e.into()),
+                }
+            }
             Some(ResourceKind::PluginMetaData) => {
                 match serde_yaml::from_str::<PluginMetaData>(&resource.content) {
                     Ok(metadata) => {

@@ -20,6 +20,7 @@ mod secret;
 mod edgion_tls;
 mod edgion_plugins;
 mod edgion_stream_plugins;
+mod reference_grant;
 
 pub use traits::ResourceMeta;
 

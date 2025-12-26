@@ -364,6 +364,66 @@ async fn list_edgionplugins(
     Json(ListResponse::success(list_data.data))
 }
 
+/// Get EdgionStreamPlugins by namespace and name
+async fn get_edgionstreamplugins(
+    State(client): State<Arc<ConfigClient>>,
+    Query(query): Query<ResourceQuery>,
+) -> Json<ApiResponse<EdgionStreamPlugins>> {
+    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
+        Ok(k) => k,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    let list_data = client.edgion_stream_plugins().list();
+    let name = query.name.as_ref().unwrap().as_str();
+    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    
+    match list_data.data.into_iter().find(|r| {
+        r.name_any() == name && r.namespace().as_deref() == namespace
+    }) {
+        Some(resource) => Json(ApiResponse::success(resource)),
+        None => Json(ApiResponse::error(format!("EdgionStreamPlugins not found: {}", key))),
+    }
+}
+
+/// List all EdgionStreamPlugins resources
+async fn list_edgionstreamplugins(
+    State(client): State<Arc<ConfigClient>>,
+) -> Json<ListResponse<EdgionStreamPlugins>> {
+    let list_data = client.edgion_stream_plugins().list();
+    Json(ListResponse::success(list_data.data))
+}
+
+/// Get ReferenceGrant by namespace and name
+async fn get_referencegrants(
+    State(client): State<Arc<ConfigClient>>,
+    Query(query): Query<ResourceQuery>,
+) -> Json<ApiResponse<ReferenceGrant>> {
+    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
+        Ok(k) => k,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    let list_data = client.reference_grants().list();
+    let name = query.name.as_ref().unwrap().as_str();
+    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    
+    match list_data.data.into_iter().find(|r| {
+        r.name_any() == name && r.namespace().as_deref() == namespace
+    }) {
+        Some(resource) => Json(ApiResponse::success(resource)),
+        None => Json(ApiResponse::error(format!("ReferenceGrant not found: {}", key))),
+    }
+}
+
+/// List all ReferenceGrant resources
+async fn list_referencegrants(
+    State(client): State<Arc<ConfigClient>>,
+) -> Json<ListResponse<ReferenceGrant>> {
+    let list_data = client.reference_grants().list();
+    Json(ListResponse::success(list_data.data))
+}
+
 /// Get PluginMetaData by namespace and name
 async fn get_pluginmetadata(
     State(client): State<Arc<ConfigClient>>,
@@ -486,6 +546,12 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
         // EdgionPlugins
         .route("/configclient/edgionplugins", get(get_edgionplugins))
         .route("/configclient/edgionplugins/list", get(list_edgionplugins))
+        // EdgionStreamPlugins
+        .route("/configclient/edgionstreamplugins", get(get_edgionstreamplugins))
+        .route("/configclient/edgionstreamplugins/list", get(list_edgionstreamplugins))
+        // ReferenceGrant
+        .route("/configclient/referencegrants", get(get_referencegrants))
+        .route("/configclient/referencegrants/list", get(list_referencegrants))
         // PluginMetaData
         .route("/configclient/pluginmetadata", get(get_pluginmetadata))
         .route("/configclient/pluginmetadata/list", get(list_pluginmetadata))

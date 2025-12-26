@@ -19,6 +19,7 @@ pub enum ResourceKind {
     TLSRoute = 14,
     LinkSys = 15,
     EdgionStreamPlugins = 16,
+    ReferenceGrant = 17,
 }
 
 impl ResourceKind {
@@ -61,6 +62,7 @@ impl ResourceKind {
             "tlsroute" => Some(ResourceKind::TLSRoute),
             "linksys" => Some(ResourceKind::LinkSys),
             "edgionstreamplugins" => Some(ResourceKind::EdgionStreamPlugins),
+            "referencegrant" => Some(ResourceKind::ReferenceGrant),
             _ => None,
         }
     }

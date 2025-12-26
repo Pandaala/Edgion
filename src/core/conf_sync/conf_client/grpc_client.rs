@@ -209,6 +209,9 @@ impl ConfigSyncClient {
             EdgionStreamPlugins => {
                 self.config_client.edgion_stream_plugins().start_watch().await?;
             }
+            ReferenceGrant => {
+                self.config_client.reference_grants().start_watch().await?;
+            }
             PluginMetaData => {
                 self.config_client.plugin_metadata().start_watch().await?;
             }

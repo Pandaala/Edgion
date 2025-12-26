@@ -258,6 +258,7 @@ const RESOURCE_TYPES: &[(&str, &str, &str)] = &[
     ("EdgionTls", "/api/v1/namespaced/EdgionTls", "/configclient/edgiontls/list"),
     ("EdgionPlugins", "/api/v1/namespaced/EdgionPlugins", "/configclient/edgionplugins/list"),
     ("EdgionStreamPlugins", "/api/v1/namespaced/EdgionStreamPlugins", "/configclient/edgionstreamplugins/list"),
+    ("ReferenceGrant", "/api/v1/namespaced/ReferenceGrant", "/configclient/referencegrants/list"),
     ("LinkSys", "/api/v1/namespaced/LinkSys", "/configclient/linksys/list"),
     ("PluginMetaData", "/api/v1/namespaced/PluginMetaData", "/configclient/pluginmetadata/list"),
 ];

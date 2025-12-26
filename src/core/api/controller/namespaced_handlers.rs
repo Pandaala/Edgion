@@ -60,6 +60,14 @@ pub async fn list_all_namespaces(
             let list_data = state.config_server.edgion_plugins.list();
             list_to_json!(list_data.data)
         }
+        crate::types::ResourceKind::EdgionStreamPlugins => {
+            let list_data = state.config_server.edgion_stream_plugins.list();
+            list_to_json!(list_data.data)
+        }
+        crate::types::ResourceKind::ReferenceGrant => {
+            let list_data = state.config_server.reference_grants.list();
+            list_to_json!(list_data.data)
+        }
         crate::types::ResourceKind::PluginMetaData => {
             let list_data = state.config_server.plugin_metadata.list();
             list_to_json!(list_data.data)
@@ -144,6 +152,20 @@ pub async fn list_namespaced(
         }
         crate::types::ResourceKind::EdgionPlugins => {
             let list_data = state.config_server.edgion_plugins.list();
+            let filtered: Vec<_> = list_data.data.into_iter()
+                .filter(|r| r.namespace().as_deref() == Some(ns.as_str()))
+                .collect();
+            list_to_json!(filtered)
+        }
+        crate::types::ResourceKind::EdgionStreamPlugins => {
+            let list_data = state.config_server.edgion_stream_plugins.list();
+            let filtered: Vec<_> = list_data.data.into_iter()
+                .filter(|r| r.namespace().as_deref() == Some(ns.as_str()))
+                .collect();
+            list_to_json!(filtered)
+        }
+        crate::types::ResourceKind::ReferenceGrant => {
+            let list_data = state.config_server.reference_grants.list();
             let filtered: Vec<_> = list_data.data.into_iter()
                 .filter(|r| r.namespace().as_deref() == Some(ns.as_str()))
                 .collect();
@@ -234,6 +256,18 @@ pub async fn get_namespaced(
         }
         crate::types::ResourceKind::EdgionPlugins => {
             let list_data = state.config_server.edgion_plugins.list();
+            list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .and_then(|r| serde_json::to_value(r).ok())
+        }
+        crate::types::ResourceKind::EdgionStreamPlugins => {
+            let list_data = state.config_server.edgion_stream_plugins.list();
+            list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .and_then(|r| serde_json::to_value(r).ok())
+        }
+        crate::types::ResourceKind::ReferenceGrant => {
+            let list_data = state.config_server.reference_grants.list();
             list_data.data.into_iter()
                 .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
                 .and_then(|r| serde_json::to_value(r).ok())

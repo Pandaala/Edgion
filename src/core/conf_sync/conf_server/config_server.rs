@@ -30,6 +30,7 @@ pub enum ResourceItem {
     EdgionTls(EdgionTls),
     EdgionPlugins(EdgionPlugins),
     EdgionStreamPlugins(EdgionStreamPlugins),
+    ReferenceGrant(ReferenceGrant),
     PluginMetaData(PluginMetaData),
     Secret(Secret),
 }
@@ -50,6 +51,7 @@ pub struct ConfigServer {
     pub edgion_tls: ServerCache<EdgionTls>,
     pub edgion_plugins: ServerCache<EdgionPlugins>,
     pub edgion_stream_plugins: ServerCache<EdgionStreamPlugins>,
+    pub reference_grants: ServerCache<ReferenceGrant>,
     pub plugin_metadata: ServerCache<PluginMetaData>,
     pub secrets: ServerCache<Secret>,
     pub secret_ref_manager: Arc<SecretRefManager>,
@@ -85,6 +87,7 @@ impl ConfigServer {
             edgion_tls: ServerCache::new(conf_sync_config.edgion_tls_capacity),
             edgion_plugins: ServerCache::new(conf_sync_config.edgion_plugins_capacity),
             edgion_stream_plugins: ServerCache::new(conf_sync_config.edgion_stream_plugins_capacity),
+            reference_grants: ServerCache::new(conf_sync_config.reference_grants_capacity),
             plugin_metadata: ServerCache::new(conf_sync_config.plugin_metadata_capacity),
             secrets: ServerCache::new(conf_sync_config.secrets_capacity),
             secret_ref_manager: Arc::new(SecretRefManager::new()),
@@ -218,16 +221,10 @@ impl ConfigServer {
                     .map_err(|e| format!("Failed to serialize EdgionStreamPlugins data: {}", e))?;
                 (json, list_data.resource_version)
             }
-            ResourceKind::PluginMetaData => {
-                let list_data = self.list_plugin_metadata();
+            ResourceKind::ReferenceGrant => {
+                let list_data = self.list_reference_grants();
                 let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize PluginMetaData data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::LinkSys => {
-                let list_data = self.list_link_sys();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize LinkSys data: {}", e))?;
+                    .map_err(|e| format!("Failed to serialize ReferenceGrant data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::Secret => {
@@ -601,6 +598,34 @@ impl ConfigServer {
                     }
                 });
             }
+            ResourceKind::ReferenceGrant => {
+                let mut receiver = self.watch_reference_grants(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize ReferenceGrant events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
             ResourceKind::PluginMetaData => {
                 let mut receiver = self.watch_plugin_metadata(client_id, client_name, from_version);
                 tokio::spawn(async move {
@@ -739,8 +764,14 @@ impl ConfigServer {
         self.edgion_plugins.list_owned()
     }
 
+    /// List EdgionStreamPlugins
     pub fn list_edgion_stream_plugins(&self) -> ListData<EdgionStreamPlugins> {
         self.edgion_stream_plugins.list_owned()
+    }
+
+    /// List ReferenceGrants
+    pub fn list_reference_grants(&self) -> ListData<ReferenceGrant> {
+        self.reference_grants.list_owned()
     }
 
     /// List secrets
@@ -858,6 +889,7 @@ impl ConfigServer {
         self.edgion_plugins.watch(client_id, client_name, from_version)
     }
 
+    /// Watch EdgionStreamPlugins
     pub fn watch_edgion_stream_plugins(
         &self,
         client_id: String,
@@ -865,6 +897,16 @@ impl ConfigServer {
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<EdgionStreamPlugins>> {
         self.edgion_stream_plugins.watch(client_id, client_name, from_version)
+    }
+
+    /// Watch ReferenceGrants
+    pub fn watch_reference_grants(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<ReferenceGrant>> {
+        self.reference_grants.watch(client_id, client_name, from_version)
     }
 
     /// Watch secrets
