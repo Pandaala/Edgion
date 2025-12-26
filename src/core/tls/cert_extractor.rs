@@ -48,20 +48,14 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
     // Extract Subject Alternative Names (SANs)
     let sans = extract_sans(&cert);
     
-    // Calculate certificate fingerprint (SHA256) with efficient formatting
+    // Calculate certificate fingerprint (SHA256)
     let fingerprint = cert.digest(pingora_core::tls::hash::MessageDigest::sha256())
         .map(|digest| {
             let bytes = digest.as_ref();
-            let mut result = String::with_capacity(bytes.len() * 3 - 1); // "xx:xx:xx..."
-            for (i, b) in bytes.iter().enumerate() {
-                if i > 0 {
-                    result.push(':');
-                }
-                // Use write! to avoid allocation
-                use std::fmt::Write;
-                let _ = write!(result, "{:02x}", b);
-            }
-            result
+            bytes.iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join(":")
         })
         .unwrap_or_else(|_| "unknown".to_string());
     
@@ -89,6 +83,7 @@ fn extract_sans(cert: &X509Ref) -> Vec<String> {
                 let ip_str = match ip_bytes.len() {
                     4 => {
                         // IPv4: 4 bytes
+                        // SAFETY: We've verified length is 4, so indexing [0..3] is safe
                         format!(
                             "{}.{}.{}.{}",
                             ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
@@ -96,8 +91,17 @@ fn extract_sans(cert: &X509Ref) -> Vec<String> {
                     }
                     16 => {
                         // IPv6: 16 bytes - use std::net::Ipv6Addr for RFC-compliant formatting
-                        let mut octets = [0u8; 16];
-                        octets.copy_from_slice(ip_bytes);
+                        // SAFETY: We've verified length is 16 before converting to array
+                        let octets: [u8; 16] = match ip_bytes.try_into() {
+                            Ok(arr) => arr,
+                            Err(_) => {
+                                tracing::error!(
+                                    "Failed to convert IPv6 bytes to array, length: {}",
+                                    ip_bytes.len()
+                                );
+                                continue;
+                            }
+                        };
                         std::net::Ipv6Addr::from(octets).to_string()
                     }
                     _ => {

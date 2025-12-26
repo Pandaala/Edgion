@@ -125,7 +125,8 @@ unsafe fn verify_callback_impl(
         // Get error details for logging
         let error_code = boring_sys::X509_STORE_CTX_get_error(x509_ctx);
         
-        // SAFETY: X509_verify_cert_error_string may return NULL for unknown error codes
+        // SAFETY: X509_verify_cert_error_string expects i64 (c_long on most platforms)
+        // error_code is c_int, which is always safely convertible to i64
         let error_ptr = boring_sys::X509_verify_cert_error_string(error_code as i64);
         let error_str = if error_ptr.is_null() {
             format!("Unknown error code: {}", error_code)

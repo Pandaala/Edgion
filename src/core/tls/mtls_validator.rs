@@ -85,12 +85,30 @@ fn matches_pattern(value: &str, pattern: &str) -> bool {
     
     if pattern.starts_with("*.") {
         // Wildcard match: *.example.com
+        // SAFETY: Check pattern length before slicing to prevent panic
+        if pattern.len() < 3 {
+            // Pattern is just "*." with no suffix - invalid
+            return false;
+        }
         let suffix = &pattern[2..]; // Remove "*."
+        
         if value.ends_with(suffix) {
             // Check that there's exactly one subdomain level
-            let prefix = &value[..value.len() - suffix.len()];
-            if prefix.ends_with('.') && !prefix[..prefix.len()-1].contains('.') {
-                return true;
+            // SAFETY: value.len() >= suffix.len() because ends_with() succeeded
+            let prefix_len = value.len() - suffix.len();
+            if prefix_len == 0 {
+                // value equals suffix, no subdomain prefix
+                return false;
+            }
+            let prefix = &value[..prefix_len];
+            // SAFETY: Check prefix is not empty before further slicing
+            if prefix.ends_with('.') {
+                if prefix.len() > 1 {
+                    // Check subdomain part doesn't contain dots
+                    return !prefix[..prefix.len()-1].contains('.');
+                }
+                // prefix is just "." - invalid
+                return false;
             }
         }
     }
