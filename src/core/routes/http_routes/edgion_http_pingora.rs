@@ -13,7 +13,7 @@ use tracing::log::error;
 use super::edgion_http::EdgionHttp;
 use crate::types::EdgionHttpContext;
 use crate::types::filters::PluginRunningResult;
-use crate::core::gateway::{end_response_400, end_response_421, end_response_404, end_response_500};
+use crate::core::gateway::{end_response_400, end_response_403, end_response_421, end_response_404, end_response_500};
 use crate::core::backends::get_peer;
 use crate::types::EdgionStatus;
 use crate::types::err::EdError;
@@ -102,6 +102,12 @@ async fn build_request_metadata(
     // 2. Using a custom Session wrapper that exposes SNI
     // For HTTPS connections, Host header should match the original SNI anyway (RFC requirement)
     ctx.request_info.sni = None;  // TODO: Find way to extract SNI from Pingora Session
+    
+    // Extract client certificate information (for mTLS connections)
+    // Note: In Pingora, we cannot directly access SSL connection from Session in request_filter
+    // Client cert extraction should happen at TLS layer or via connection metadata
+    // For now, we leave this as None and will implement via TLS callback if needed
+    ctx.request_info.client_cert_info = None;  // TODO: Extract client cert via TLS callback
 
     // Validate SNI matches Host header (for HTTPS only)
     if let Some(security_config) = &edgion_http.edgion_gateway_config.spec.security_protect {
@@ -306,6 +312,58 @@ impl ProxyHttp for EdgionHttp {
                 }
             }
         }
+        
+        // Step 1.5: Validate mTLS client certificate whitelist (if configured)
+        // TODO: This is temporarily disabled due to Pingora architecture limitations
+        // Pingora does not expose SSL connection in request_filter phase
+        // Possible solutions:
+        // 1. Store client cert info in connection metadata during TLS handshake
+        // 2. Use Pingora's custom context to pass cert info from TLS layer to HTTP layer
+        // 3. Wait for Pingora to add SSL access in request_filter
+        /*
+        if let Some(ref cert_info) = ctx.request_info.client_cert_info {
+            // Get EdgionTls configuration for the matched hostname
+            if let Some(edgion_tls) = crate::core::tls::tls_store::get_global_tls_store()
+                .get_tls_by_host(&ctx.request_info.hostname)
+            {
+                if let Some(ref client_auth) = edgion_tls.spec.client_auth {
+                    // Validate SAN whitelist
+                    if let Some(ref allowed_sans) = client_auth.allowed_sans {
+                        if !crate::core::tls::mtls_validator::validate_san_whitelist(cert_info, allowed_sans) {
+                            tracing::warn!(
+                                hostname = %ctx.request_info.hostname,
+                                cert_subject = %cert_info.subject,
+                                "Client certificate SAN validation failed"
+                            );
+                            ctx.add_error(EdgionStatus::ClientCertInvalid);
+                            end_response_403(session, ctx, &self.server_header_opts).await?;
+                            return Ok(true);
+                        }
+                    }
+                    
+                    // Validate CN whitelist
+                    if let Some(ref allowed_cns) = client_auth.allowed_cns {
+                        if !crate::core::tls::mtls_validator::validate_cn_whitelist(cert_info, allowed_cns) {
+                            tracing::warn!(
+                                hostname = %ctx.request_info.hostname,
+                                cert_subject = %cert_info.subject,
+                                "Client certificate CN validation failed"
+                            );
+                            ctx.add_error(EdgionStatus::ClientCertInvalid);
+                            end_response_403(session, ctx, &self.server_header_opts).await?;
+                            return Ok(true);
+                        }
+                    }
+                    
+                    tracing::debug!(
+                        hostname = %ctx.request_info.hostname,
+                        cert_subject = %cert_info.subject,
+                        "Client certificate whitelist validation passed"
+                    );
+                }
+            }
+        }
+        */
         
         // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
         if let Some(ref plugin_refs) = self.edgion_gateway_config.spec.global_plugins_ref {

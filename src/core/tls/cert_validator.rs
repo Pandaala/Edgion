@@ -403,6 +403,8 @@ mod tests {
                     namespace: Some("default".to_string()),
                 },
                 client_auth: None,
+                tls_versions: None,
+                cipher_suites: None,
                 secret: Some(Secret {
                     data: Some(data),
                     ..Default::default()
@@ -483,6 +485,7 @@ mod tests {
             mode: ClientAuthMode::Mutual,
             ca_secret_ref: None, // Missing CA Secret
             verify_depth: 1,
+            ca_secret: None,
             allowed_sans: None,
             allowed_cns: None,
         };
@@ -508,6 +511,7 @@ mod tests {
                 kind: None,
             }),
             verify_depth: 10, // Out of range (max is 9)
+            ca_secret: None,
             allowed_sans: None,
             allowed_cns: None,
         };
@@ -533,6 +537,7 @@ mod tests {
                 kind: None,
             }),
             verify_depth: 1,
+            ca_secret: None,
             allowed_sans: Some(vec!["".to_string(), "  ".to_string()]), // Empty patterns
             allowed_cns: None,
         };
@@ -558,6 +563,7 @@ mod tests {
                 kind: None,
             }),
             verify_depth: 2,
+            ca_secret: None,
             allowed_sans: Some(vec!["client1.example.com".to_string()]),
             allowed_cns: Some(vec!["AdminClient".to_string()]),
         };
@@ -576,6 +582,7 @@ mod tests {
             mode: ClientAuthMode::Terminate,
             ca_secret_ref: None, // CA not required for Terminate mode
             verify_depth: 1,
+            ca_secret: None,
             allowed_sans: None,
             allowed_cns: None,
         };

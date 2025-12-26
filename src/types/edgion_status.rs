@@ -16,6 +16,9 @@ pub enum EdgionStatus {
 
     /// SNI and Host header mismatch (HTTP 421)
     SniHostMismatch = 421_01,
+    
+    /// Client certificate validation failed (HTTP 403)
+    ClientCertInvalid = 403_01,
 
     /// Upstream route not matched
     UpstreamNotRouteMatched = 500_01,

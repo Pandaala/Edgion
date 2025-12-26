@@ -12,6 +12,59 @@ pub const EDGION_TLS_GROUP: &str = "edgion.io";
 /// Kind for EdgionTls
 pub const EDGION_TLS_KIND: &str = "EdgionTls";
 
+/// TLS protocol version
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum TlsVersion {
+    #[serde(rename = "TLS1_2")]
+    Tls12,
+    #[serde(rename = "TLS1_3")]
+    Tls13,
+}
+
+/// TLS version configuration
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsVersionConfig {
+    /// Minimum TLS version (default: TLS 1.2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_version: Option<TlsVersion>,
+    /// Maximum TLS version (default: TLS 1.3)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_version: Option<TlsVersion>,
+}
+
+/// Cipher suite profile (predefined security levels)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum CipherSuiteProfile {
+    /// Modern profile: TLS 1.3 only, strongest ciphers
+    /// Recommended for modern clients (2020+)
+    Modern,
+    /// Intermediate profile: TLS 1.2+, balanced security and compatibility
+    /// Recommended for most use cases (default)
+    Intermediate,
+    /// Old profile: TLS 1.0+, maximum compatibility
+    /// Only use if you must support very old clients
+    Old,
+    /// Custom cipher suite list
+    /// Specify exact cipher suites to use
+    Custom(Vec<String>),
+}
+
+impl Default for CipherSuiteProfile {
+    fn default() -> Self {
+        CipherSuiteProfile::Intermediate
+    }
+}
+
+/// Cipher suite configuration
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CipherSuiteConfig {
+    /// Cipher suite profile or custom list
+    #[serde(default)]
+    pub profile: CipherSuiteProfile,
+}
+
 /// Client authentication mode for mTLS
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub enum ClientAuthMode {
@@ -52,22 +105,17 @@ pub struct ClientAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ca_secret: Option<Secret>,
     
-    // TODO: SAN/CN whitelist validation - requires SSL_CTX level callback or application layer validation
-    // For now, only basic CA verification is supported at TLS layer
-    // Future implementation options:
-    // 1. Global SSL_CTX callback (loses per-SNI dynamic config)
-    // 2. Application layer validation in request_filter (after TLS handshake)
-    // 3. Wait for Pingora to support per-connection verify callbacks
-    //
-    // /// Optional Subject Alternative Names whitelist
-    // /// If configured, client certificate SAN must match one of these
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // pub allowed_sans: Option<Vec<String>>,
-    //
-    // /// Optional Common Name whitelist
-    // /// If configured, client certificate CN must match one of these
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // pub allowed_cns: Option<Vec<String>>,
+    /// Optional Subject Alternative Names whitelist
+    /// If configured, client certificate SAN must match one of these
+    /// Validation happens at application layer after TLS handshake
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_sans: Option<Vec<String>>,
+    
+    /// Optional Common Name whitelist
+    /// If configured, client certificate CN must match one of these
+    /// Validation happens at application layer after TLS handshake
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_cns: Option<Vec<String>>,
 }
 
 fn default_verify_depth() -> u8 {
@@ -97,6 +145,12 @@ pub struct EdgionTlsSpec {
     /// mTLS client authentication configuration (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_auth: Option<ClientAuthConfig>,
+    /// TLS version configuration (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_versions: Option<TlsVersionConfig>,
+    /// Cipher suite configuration (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cipher_suites: Option<CipherSuiteConfig>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub secret: Option<Secret>,
 }
@@ -310,6 +364,8 @@ mod tests {
                     namespace: Some("default".to_string()),
                 },
                 client_auth: None,
+                tls_versions: None,
+                cipher_suites: None,
                 secret: None,
             },
             status: None,
@@ -387,6 +443,8 @@ spec:
                     namespace: Some("default".to_string()),
                 },
                 client_auth: None,
+                tls_versions: None,
+                cipher_suites: None,
                 secret: None,
             },
             status: None,

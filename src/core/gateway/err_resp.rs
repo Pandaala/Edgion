@@ -36,6 +36,35 @@ pub async fn end_response_400(
     Ok(())
 }
 
+/// Send 403 Forbidden error response (nginx-style)
+/// Used when client certificate validation fails or access is denied
+pub async fn end_response_403(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    server_header_opts: &ServerHeaderOpts,
+) -> pingora_core::Result<()> {
+    ctx.request_info.status = 403;
+    
+    let mut resp = ResponseHeader::build(403, None)?;
+    server_header_opts.apply_to_response(&mut resp);
+    resp.insert_header("Content-Type", "text/html").unwrap();
+    
+    let body = r#"<html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+<hr><center>edgion</center>
+</body>
+</html>"#;
+    
+    let resp_box = Box::new(resp);
+    session.write_response_header(resp_box, false).await?;
+    session.write_response_body(Some(Bytes::from(body)), true).await?;
+    session.shutdown().await;
+    
+    Ok(())
+}
+
 /// Send 421 Misdirected Request error response (RFC 7540)
 /// Used when SNI and Host header mismatch for HTTPS requests
 pub async fn end_response_421(

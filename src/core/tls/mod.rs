@@ -2,6 +2,8 @@ pub mod cert_validator;
 pub mod tls_cert_matcher;
 pub mod tls_pingora;
 pub mod tls_store;
+pub mod cert_extractor;
+pub mod mtls_validator;
 mod conf_handler_impl;
 
 pub use cert_validator::{validate_cert, CertValidationResult, CertValidationError};

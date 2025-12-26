@@ -82,6 +82,8 @@ mod tests {
                     kind: None,
                 },
                 client_auth: None,
+                tls_versions: None,
+                cipher_suites: None,
                 secret,
             },
             status: None,

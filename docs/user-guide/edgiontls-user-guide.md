@@ -634,6 +634,55 @@ TLS Session 复用默认启用，可减少握手开销。
 
 **当前状态**：规划中，未来版本将支持。
 
+### 11. TLS 版本控制相关问题
+
+**Q: 如何只允许 TLS 1.3 连接？**
+
+A: 设置 `minVersion` 和 `maxVersion` 都为 `TLS1_3`：
+
+```yaml
+tlsVersions:
+  minVersion: TLS1_3
+  maxVersion: TLS1_3
+```
+
+**Q: 客户端使用 TLS 1.2 连接 TLS 1.3 only 的服务会怎样？**
+
+A: 连接会被拒绝，客户端收到 TLS 握手失败错误。
+
+---
+
+### 12. 密码套件配置相关问题
+
+**Q: 密码套件配置当前为什么不完全生效？**
+
+A: 由于 Pingora 框架的限制，动态 SNI 场景下无法在握手时设置密码套件。这需要 Pingora API 增强。当前配置会被记录但不会立即应用。
+
+**Q: 应该选择哪个密码套件配置文件？**
+
+A: 
+- **大多数场景**: 使用 `Intermediate`（默认）
+- **仅现代客户端**: 使用 `Modern`
+- **必须支持旧客户端**: 使用 `Old`（不推荐）
+
+---
+
+### 13. SAN/CN 白名单相关问题
+
+**Q: SAN 白名单和 CN 白名单有什么区别？**
+
+A: 
+- **SAN (Subject Alternative Names)**: 现代标准，支持多个域名/IP，推荐使用
+- **CN (Common Name)**: 旧标准，仅支持单个域名，已被废弃
+
+**Q: SAN 白名单验证当前为什么不完全生效？**
+
+A: 由于 Pingora 架构限制，无法在 HTTP 请求阶段直接访问 SSL 连接。需要在 TLS 层提取证书信息并传递到应用层。这需要架构增强。
+
+**Q: 通配符白名单如何工作？**
+
+A: `*.example.com` 匹配 `sub.example.com`，但不匹配 `example.com` 或 `sub.sub.example.com`（仅一级子域名）。
+
 ---
 
 ## 参考资源
@@ -643,6 +692,180 @@ TLS Session 复用默认启用，可减少握手开销。
 - [OpenSSL 命令参考](https://www.openssl.org/docs/man1.1.1/man1/openssl.html)
 - [Let's Encrypt 文档](https://letsencrypt.org/docs/)
 - [cert-manager 文档](https://cert-manager.io/docs/)
+
+---
+
+## 高级配置
+
+### TLS 版本控制
+
+限制允许的 TLS 协议版本，增强安全性。
+
+**配置示例**：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: tls-version-control
+  namespace: default
+spec:
+  hosts:
+    - secure.example.com
+  secretRef:
+    name: secure-tls-secret
+    namespace: default
+  tlsVersions:
+    minVersion: TLS1_2  # 最低 TLS 1.2
+    maxVersion: TLS1_3  # 最高 TLS 1.3
+```
+
+**支持的版本**：
+- `TLS1_2`: TLS 1.2
+- `TLS1_3`: TLS 1.3
+
+**使用场景**：
+- 🔒 **仅 TLS 1.3**: 设置 `minVersion: TLS1_3` 和 `maxVersion: TLS1_3`，适用于现代客户端
+- 🔄 **兼容模式**: 设置 `minVersion: TLS1_2`，支持更广泛的客户端
+- 🚫 **禁用旧协议**: 不支持 TLS 1.0/1.1（已被废弃）
+
+---
+
+### 密码套件配置
+
+控制允许的加密算法，平衡安全性和兼容性。
+
+**配置示例**：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: cipher-suite-config
+  namespace: default
+spec:
+  hosts:
+    - secure.example.com
+  secretRef:
+    name: secure-tls-secret
+    namespace: default
+  cipherSuites:
+    profile: Intermediate  # Modern, Intermediate, Old
+```
+
+**预定义配置文件**：
+
+| 配置文件 | TLS 版本 | 安全性 | 兼容性 | 适用场景 |
+|---------|---------|--------|--------|---------|
+| **Modern** | TLS 1.3 only | ⭐⭐⭐⭐⭐ | ⭐⭐ | 现代客户端 (2020+) |
+| **Intermediate** | TLS 1.2+ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 大多数场景（推荐） |
+| **Old** | TLS 1.0+ | ⭐⭐ | ⭐⭐⭐⭐⭐ | 必须支持旧客户端 |
+
+**Modern 配置文件**：
+- 仅 TLS 1.3 密码套件
+- 最强加密算法
+- 适合内部服务或现代应用
+
+**Intermediate 配置文件**（默认）：
+- TLS 1.2 和 TLS 1.3 密码套件
+- 平衡安全性和兼容性
+- 适合大多数生产环境
+
+**Old 配置文件**：
+- 包含旧版密码套件
+- 最大兼容性
+- 仅在必须支持旧客户端时使用
+
+**注意事项**：
+- ⚠️ 密码套件配置当前需要 Pingora API 增强才能完全生效
+- 📝 配置会被记录但可能不会立即应用
+- 🔄 建议结合 TLS 版本控制一起使用
+
+---
+
+### SAN/CN 白名单验证
+
+对客户端证书的 Subject Alternative Names (SAN) 或 Common Name (CN) 进行白名单验证。
+
+**配置示例**：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: mtls-san-whitelist
+  namespace: default
+spec:
+  hosts:
+    - api.example.com
+  secretRef:
+    name: api-tls-secret
+    namespace: default
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: client-ca
+      namespace: default
+    verifyDepth: 2
+    allowedSans:
+      - "client1.example.com"
+      - "client2.example.com"
+      - "*.internal.example.com"  # 支持通配符
+    allowedCns:
+      - "TrustedClient"
+      - "AdminUser"
+```
+
+**字段说明**：
+- `allowedSans`: SAN 白名单，支持通配符（`*.example.com`）
+- `allowedCns`: CN 白名单，精确匹配
+
+**验证流程**：
+1. TLS 握手时验证 CA 和证书链
+2. 应用层提取客户端证书信息
+3. 检查 SAN/CN 是否在白名单中
+4. 不匹配返回 403 Forbidden
+
+**注意事项**：
+- ⚠️ SAN/CN 白名单验证当前需要架构增强才能完全生效
+- 📝 需要在 TLS 层提取证书信息并传递到应用层
+- 🔄 推荐使用 SAN 而非 CN（CN 已被废弃）
+
+---
+
+### 组合配置示例
+
+结合多个高级功能的完整配置：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: advanced-tls-config
+  namespace: production
+spec:
+  hosts:
+    - secure-api.example.com
+  secretRef:
+    name: api-tls-secret
+    namespace: production
+  # mTLS 配置
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: client-ca
+      namespace: production
+    verifyDepth: 3
+    allowedSans:
+      - "*.trusted-clients.example.com"
+  # TLS 版本控制
+  tlsVersions:
+    minVersion: TLS1_2
+    maxVersion: TLS1_3
+  # 密码套件
+  cipherSuites:
+    profile: Intermediate
+```
 
 ---
 

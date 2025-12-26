@@ -397,17 +397,17 @@ impl TestSuite for MtlsTestSuite {
         vec![
             // Basic mTLS mode tests (CA verification only)
             Self::test_mutual_with_valid_cert(),
+            Self::test_mutual_without_cert(),        // Mutual mode should reject clients without cert
+            Self::test_mutual_with_invalid_cert(),   // Mutual mode should reject invalid certs
             Self::test_optional_with_cert(),
             Self::test_optional_without_cert(),
             Self::test_cert_chain_depth(),
             
-            // TODO: These tests require TLS-layer enforcement which needs SSL_CTX level callbacks
-            // Currently not supported due to BoringSSL/Pingora per-SNI dynamic config constraints
+            // TODO: These tests require application-layer SAN/CN validation
+            // Currently not supported due to Pingora architecture constraints (cannot access SSL in request_filter)
             // 
-            // Self::test_mutual_without_cert(),        // Requires FAIL_IF_NO_PEER_CERT enforcement
-            // Self::test_mutual_with_invalid_cert(),   // Requires CA verification failure handling
-            // Self::test_san_whitelist_matching(),     // Requires SAN whitelist at TLS layer
-            // Self::test_san_whitelist_non_matching(), // Requires SAN whitelist at TLS layer
+            // Self::test_san_whitelist_matching(),     // Requires SAN whitelist at application layer
+            // Self::test_san_whitelist_non_matching(), // Requires SAN whitelist at application layer
         ]
     }
 }

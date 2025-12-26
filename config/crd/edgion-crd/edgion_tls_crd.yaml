@@ -102,6 +102,27 @@ spec:
                       description: "Optional Common Name whitelist"
                       items:
                         type: string
+                tls_versions:
+                  type: object
+                  description: "TLS version configuration (optional)"
+                  properties:
+                    min_version:
+                      type: string
+                      description: "Minimum TLS version"
+                      enum: ["TLS1_2", "TLS1_3"]
+                    max_version:
+                      type: string
+                      description: "Maximum TLS version"
+                      enum: ["TLS1_2", "TLS1_3"]
+                cipher_suites:
+                  type: object
+                  description: "Cipher suite configuration (optional)"
+                  properties:
+                    profile:
+                      type: string
+                      description: "Cipher suite profile"
+                      enum: ["Modern", "Intermediate", "Old"]
+                      default: "Intermediate"
             status:
               type: object
               properties:

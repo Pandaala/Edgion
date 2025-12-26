@@ -112,6 +112,16 @@ impl TlsCallback {
         if let Some(ref client_auth) = edgion_tls.spec.client_auth {
             self.configure_mtls(ssl, client_auth, &edgion_tls)?;
         }
+        
+        // Configure TLS version constraints
+        if let Some(ref tls_versions) = edgion_tls.spec.tls_versions {
+            self.configure_tls_versions(ssl, tls_versions)?;
+        }
+        
+        // Configure cipher suites
+        if let Some(ref cipher_suites) = edgion_tls.spec.cipher_suites {
+            self.configure_cipher_suites(ssl, cipher_suites)?;
+        }
 
         Ok(())
     }
@@ -205,6 +215,117 @@ impl TlsCallback {
         Ok(())
     }
     
+    /// Configure TLS version constraints
+    fn configure_tls_versions(
+        &self,
+        ssl: &mut SslRef,
+        tls_versions: &crate::types::resources::edgion_tls::TlsVersionConfig,
+    ) -> Result<(), Box<PingoraError>> {
+        use pingora_core::tls::ssl::SslVersion;
+        
+        // Set minimum TLS version
+        if let Some(min_version) = tls_versions.min_version {
+            let ssl_min_version = match min_version {
+                crate::types::resources::edgion_tls::TlsVersion::Tls12 => SslVersion::TLS1_2,
+                crate::types::resources::edgion_tls::TlsVersion::Tls13 => SslVersion::TLS1_3,
+            };
+            
+            ssl.set_min_proto_version(Some(ssl_min_version)).map_err(|e| {
+                PingoraError::explain(
+                    ErrorType::InternalError,
+                    format!("Failed to set min TLS version: {}", e),
+                )
+            })?;
+            
+            tracing::debug!("Set minimum TLS version to: {:?}", min_version);
+        }
+        
+        // Set maximum TLS version
+        if let Some(max_version) = tls_versions.max_version {
+            let ssl_max_version = match max_version {
+                crate::types::resources::edgion_tls::TlsVersion::Tls12 => SslVersion::TLS1_2,
+                crate::types::resources::edgion_tls::TlsVersion::Tls13 => SslVersion::TLS1_3,
+            };
+            
+            ssl.set_max_proto_version(Some(ssl_max_version)).map_err(|e| {
+                PingoraError::explain(
+                    ErrorType::InternalError,
+                    format!("Failed to set max TLS version: {}", e),
+                )
+            })?;
+            
+            tracing::debug!("Set maximum TLS version to: {:?}", max_version);
+        }
+        
+        Ok(())
+    }
+    
+    /// Configure cipher suites based on profile or custom list
+    fn configure_cipher_suites(
+        &self,
+        ssl: &mut SslRef,
+        cipher_config: &crate::types::resources::edgion_tls::CipherSuiteConfig,
+    ) -> Result<(), Box<PingoraError>> {
+        use crate::types::resources::edgion_tls::CipherSuiteProfile;
+        
+        let cipher_list = match &cipher_config.profile {
+            CipherSuiteProfile::Modern => {
+                // Mozilla Modern profile: TLS 1.3 only
+                // https://wiki.mozilla.org/Security/Server_Side_TLS
+                "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256"
+            }
+            CipherSuiteProfile::Intermediate => {
+                // Mozilla Intermediate profile: TLS 1.2+
+                // Balanced security and compatibility
+                "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:\
+                 ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:\
+                 ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:\
+                 DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:\
+                 TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256"
+            }
+            CipherSuiteProfile::Old => {
+                // Mozilla Old profile: maximum compatibility
+                // Includes older ciphers for legacy clients
+                "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:\
+                 ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:\
+                 ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:\
+                 DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:\
+                 DHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-SHA256:\
+                 ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:\
+                 ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA384:\
+                 ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA:\
+                 ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA256:\
+                 DHE-RSA-AES256-SHA256:AES128-GCM-SHA256:AES256-GCM-SHA384:\
+                 AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:\
+                 DES-CBC3-SHA:\
+                 TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256"
+            }
+            CipherSuiteProfile::Custom(ciphers) => {
+                // User-specified custom cipher list
+                // Join with colons as required by OpenSSL
+                &ciphers.join(":")
+            }
+        };
+        
+        // Set cipher list (applies to TLS 1.2 and below, and TLS 1.3)
+        // Note: Pingora/BoringSSL doesn't expose set_cipher_list in safe API
+        // For now, we log the configuration but cannot apply it directly
+        // This would require either:
+        // 1. Pingora to expose set_cipher_list API
+        // 2. Using unsafe FFI with proper foreign_types handling
+        // 3. Configuring at SSL_CTX level before handshake (not possible with dynamic SNI)
+        tracing::warn!(
+            "Cipher suite configuration is not fully supported yet. \
+             Profile={:?}, List={}. \
+             This requires Pingora API enhancement.",
+            cipher_config.profile,
+            cipher_list
+        );
+        
+        tracing::debug!("Set cipher suites: profile={:?}", cipher_config.profile);
+        
+        Ok(())
+    }
 }
 
 // Note: Client certificate validation (SAN/CN whitelist) is now done at application layer

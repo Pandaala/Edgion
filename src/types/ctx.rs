@@ -42,6 +42,20 @@ impl fmt::Display for MatchInfo {
     }
 }
 
+/// Client certificate information extracted from TLS connection
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientCertInfo {
+    /// Certificate subject DN (Distinguished Name)
+    pub subject: String,
+    /// Subject Alternative Names (SANs) from certificate
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sans: Vec<String>,
+    /// Common Name (CN) extracted from subject
+    pub cn: Option<String>,
+    /// Certificate fingerprint (SHA256 hex)
+    pub fingerprint: String,
+}
+
 /// Request information extracted from the incoming request
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {
@@ -77,6 +91,9 @@ pub struct RequestInfo {
     /// gRPC method (parsed from path)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grpc_method: Option<String>,
+    /// Client certificate information (for mTLS connections)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_cert_info: Option<ClientCertInfo>,
 }
 
 /// Upstream connection information for a single connection attempt
