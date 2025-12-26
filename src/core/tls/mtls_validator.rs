@@ -125,7 +125,7 @@ mod tests {
         };
         
         // Empty whitelist should allow all
-        assert!(validate_san_whitelist(&cert_info, &[]));
+        assert!(validate_san_whitelist(&cert_info, &vec![]));
     }
     
     #[test]
@@ -137,9 +137,9 @@ mod tests {
             fingerprint: "abc123".to_string(),
         };
         
-        assert!(validate_san_whitelist(&cert_info, &["test.example.com".to_string()]));
-        assert!(validate_san_whitelist(&cert_info, &["other.com".to_string()]));
-        assert!(validate_san_whitelist(&cert_info, &["*.example.com".to_string()]));
+        assert!(validate_san_whitelist(&cert_info, &vec!["test.example.com".to_string()]));
+        assert!(validate_san_whitelist(&cert_info, &vec!["other.com".to_string()]));
+        assert!(validate_san_whitelist(&cert_info, &vec!["*.example.com".to_string()]));
     }
     
     #[test]
@@ -151,7 +151,7 @@ mod tests {
             fingerprint: "abc123".to_string(),
         };
         
-        assert!(!validate_san_whitelist(&cert_info, &["other.com".to_string()]));
+        assert!(!validate_san_whitelist(&cert_info, &vec!["other.com".to_string()]));
     }
     
     #[test]
@@ -163,9 +163,9 @@ mod tests {
             fingerprint: "abc123".to_string(),
         };
         
-        assert!(validate_cn_whitelist(&cert_info, &[])); // Empty whitelist
-        assert!(validate_cn_whitelist(&cert_info, &["TestUser".to_string()]));
-        assert!(!validate_cn_whitelist(&cert_info, &["OtherUser".to_string()]));
+        assert!(validate_cn_whitelist(&cert_info, &vec![])); // Empty whitelist
+        assert!(validate_cn_whitelist(&cert_info, &vec!["TestUser".to_string()]));
+        assert!(!validate_cn_whitelist(&cert_info, &vec!["OtherUser".to_string()]));
     }
 }
 

@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use crate::core::tls::tls_cert_matcher::match_sni;
-use crate::core::tls::tls_store::get_global_tls_store;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
 use anyhow::anyhow;
@@ -199,12 +198,29 @@ impl TlsCallback {
         ssl.set_verify_depth(client_auth.verify_depth as u32);
         tracing::debug!("Set mTLS verification depth: {}", client_auth.verify_depth);
 
-        // Set the verify mode for TLS layer (basic CA verification)
-        // Note: SAN/CN whitelist validation will be done at application layer (request_filter)
-        // This allows us to have per-SNI dynamic configuration while working within
-        // BoringSSL's SSL_CTX architecture constraints.
-        ssl.set_verify(verify_mode);
-        tracing::debug!("Set mTLS verify mode: {:?}", verify_mode);
+        // Set verify mode with custom callback for SAN/CN whitelist (if configured)
+        if client_auth.allowed_sans.is_some() || client_auth.allowed_cns.is_some() {
+            // Use custom verify callback that validates SAN/CN whitelist
+            tracing::debug!("Setting custom verify callback for SAN/CN whitelist");
+            
+            if let Err(e) = crate::core::tls::mtls_verify_callback::set_verify_callback_with_whitelist(
+                ssl,
+                verify_mode,
+                client_auth,
+                edgion_tls,
+            ) {
+                return Err(PingoraError::explain(
+                    ErrorType::InternalError,
+                    format!("Failed to set verify callback: {}", e),
+                ));
+            }
+            
+            tracing::info!("Custom verify callback configured for SAN/CN whitelist");
+        } else {
+            // No whitelist, use standard verify mode
+            ssl.set_verify(verify_mode);
+            tracing::debug!("Set mTLS verify mode (no whitelist): {:?}", verify_mode);
+        }
 
         tracing::info!(
             "mTLS configured successfully for SNI with mode: {:?}, verify_depth: {}",
@@ -263,7 +279,7 @@ impl TlsCallback {
     /// Configure cipher suites based on profile or custom list
     fn configure_cipher_suites(
         &self,
-        ssl: &mut SslRef,
+        _ssl: &mut SslRef,
         cipher_config: &crate::types::resources::edgion_tls::CipherSuiteConfig,
     ) -> Result<(), Box<PingoraError>> {
         use crate::types::resources::edgion_tls::CipherSuiteProfile;
@@ -327,7 +343,3 @@ impl TlsCallback {
         Ok(())
     }
 }
-
-// Note: Client certificate validation (SAN/CN whitelist) is now done at application layer
-// in request_filter using cert_extractor and mtls_policy modules.
-// This allows per-SNI dynamic configuration while working within BoringSSL's architecture.

@@ -126,6 +126,9 @@ pingora-load-balancing = "0.6"
 pingora-proxy = { version = "0.6" }
 etcd-client = "0.11"
 
+# BoringSSL bindings for custom TLS callbacks
+boring-sys = "4"
+
 # Metrics
 metrics = "0.24"
 metrics-exporter-prometheus = "0.15"

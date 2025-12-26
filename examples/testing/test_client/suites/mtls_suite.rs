@@ -403,11 +403,9 @@ impl TestSuite for MtlsTestSuite {
             Self::test_optional_without_cert(),
             Self::test_cert_chain_depth(),
             
-            // TODO: These tests require application-layer SAN/CN validation
-            // Currently not supported due to Pingora architecture constraints (cannot access SSL in request_filter)
-            // 
-            // Self::test_san_whitelist_matching(),     // Requires SAN whitelist at application layer
-            // Self::test_san_whitelist_non_matching(), // Requires SAN whitelist at application layer
+            // SAN/CN whitelist validation tests (now implemented at TLS layer)
+            Self::test_san_whitelist_matching(),     // SAN whitelist matching
+            Self::test_san_whitelist_non_matching(), // SAN whitelist non-matching
         ]
     }
 }
