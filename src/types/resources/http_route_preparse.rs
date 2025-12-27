@@ -158,6 +158,53 @@ impl HTTPRoute {
             }
         }
     }
+    
+    /// Parse and pre-process annotation configurations for all rules
+    /// 
+    /// This method is called during route loading (in pre_parse) to parse
+    /// HTTPRoute-level annotations and make them available to all rules.
+    /// Supported annotations:
+    /// - edgion.io/max-retries: Override max retry attempts (u32)
+    pub fn parse_annotations(&mut self) {
+        let Some(annotations) = &self.metadata.annotations else {
+            return;
+        };
+        
+        // Parse max_retries from annotation "edgion.io/max-retries"
+        let max_retries = annotations.get("edgion.io/max-retries")
+            .and_then(|v| v.parse::<u32>().ok())
+            .or_else(|| {
+                if let Some(v) = annotations.get("edgion.io/max-retries") {
+                    tracing::warn!(
+                        route = %format!("{}/{}", 
+                            self.metadata.namespace.as_deref().unwrap_or("default"), 
+                            self.metadata.name.as_deref().unwrap_or("")),
+                        value = %v,
+                        "Invalid edgion.io/max-retries annotation value, must be u32"
+                    );
+                }
+                None
+            });
+        
+        // Apply to all rules
+        let Some(rules) = self.spec.rules.as_mut() else {
+            return;
+        };
+        
+        if max_retries.is_some() {
+            for rule in rules.iter_mut() {
+                rule.parsed_max_retries = max_retries;
+            }
+            
+            tracing::debug!(
+                route = %format!("{}/{}", 
+                    self.metadata.namespace.as_deref().unwrap_or("default"), 
+                    self.metadata.name.as_deref().unwrap_or("")),
+                max_retries = ?max_retries,
+                "Parsed max_retries annotation for HTTPRoute"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

@@ -21,20 +21,25 @@ pub async fn create_access_logger(config: &crate::core::cli::edgion_gateway::con
     // Process output configuration based on variant
     match &config.output {
         StringOutput::LocalFile(file_cfg) => {
+            // Check for environment variable override first
+            let log_path = std::env::var("EDGION_ACCESS_LOG")
+                .unwrap_or_else(|_| file_cfg.path.clone());
+            
             // If path is empty, return empty logger
-            if file_cfg.path.is_empty() {
+            if log_path.is_empty() {
                 tracing::info!("Access logger disabled (no path configured)");
                 return Ok(Arc::new(logger));
             }
             
             tracing::info!(
-                path = %file_cfg.path,
+                path = %log_path,
                 queue_size = ?file_cfg.queue_size,
+                env_override = std::env::var("EDGION_ACCESS_LOG").is_ok(),
                 "Initializing access logger with LocalFile output"
             );
             
-            // Create LocalFileWriterConfig from config
-            let mut writer_config = LocalFileWriterConfig::new(&file_cfg.path);
+            // Create LocalFileWriterConfig from config (with env override if present)
+            let mut writer_config = LocalFileWriterConfig::new(&log_path);
             
             if let Some(queue_size) = file_cfg.queue_size {
                 writer_config = writer_config.with_queue_size(queue_size);

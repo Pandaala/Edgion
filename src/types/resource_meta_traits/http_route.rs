@@ -32,6 +32,9 @@ impl ResourceMeta for HTTPRoute {
         
         // Parse timeouts to populate parsed_timeouts in rules
         self.parse_timeouts();
+        
+        // Parse annotations to populate parsed_max_retries in rules
+        self.parse_annotations();
     }
 }
 

@@ -162,6 +162,74 @@ impl ServiceDiscovery for EndpointSliceDiscovery {
     }
 }
 
+/// MultiEndpointSliceDiscovery aggregates multiple EndpointSlices
+/// 
+/// This is used when a Service has multiple EndpointSlices, and we need to
+/// aggregate all their backends into a single load balancer.
+struct MultiEndpointSliceDiscovery {
+    /// Map of EndpointSlice name -> EndpointSlice
+    endpoint_slices: RwLock<HashMap<String, EndpointSlice>>,
+    /// Port to use for all backends
+    port: u16,
+}
+
+impl MultiEndpointSliceDiscovery {
+    fn new(slices: Vec<EndpointSlice>) -> Self {
+        // Get port from first slice
+        let port = slices.first()
+            .and_then(|s| s.ports.as_ref()?.first()?.port)
+            .map(|p| p as u16)
+            .unwrap_or(8080);
+        
+        let mut slice_map = HashMap::new();
+        for slice in slices {
+            if let Some(name) = slice.metadata.name.clone() {
+                slice_map.insert(name, slice);
+            }
+        }
+        
+        Self {
+            endpoint_slices: RwLock::new(slice_map),
+            port,
+        }
+    }
+}
+
+#[async_trait]
+impl ServiceDiscovery for MultiEndpointSliceDiscovery {
+    async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>), Box<pingora_core::Error>> {
+        let ep_slices = self.endpoint_slices.read().unwrap();
+        let mut all_backends = BTreeSet::new();
+        
+        // Aggregate backends from all EndpointSlices
+        for ep_slice in ep_slices.values() {
+            let backends = ep_slice.build_backends(self.port);
+            all_backends.extend(backends);
+        }
+        
+        tracing::debug!(
+            endpoint_slice_count = ep_slices.len(),
+            backend_count = all_backends.len(),
+            "Built backends from multiple EndpointSlices"
+        );
+        
+        // Return empty health map - all backends default to healthy
+        let health = HashMap::new();
+        
+        Ok((all_backends, health))
+    }
+}
+
+/// Wrapper to make Arc<dyn ServiceDiscovery> implement ServiceDiscovery
+struct DiscoveryWrapper(Arc<dyn ServiceDiscovery + Send + Sync>);
+
+#[async_trait]
+impl ServiceDiscovery for DiscoveryWrapper {
+    async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>), Box<pingora_core::Error>> {
+        self.0.discover().await
+    }
+}
+
 /// EndpointSliceLoadBalancer combines EndpointSliceDiscovery with LoadBalancer
 ///
 /// This struct wraps an EndpointSliceDiscovery and creates a LoadBalancer that uses it
@@ -171,8 +239,8 @@ where
     S: BackendSelection + 'static,
     S::Iter: pingora_load_balancing::selection::BackendIter,
 {
-    /// The discovery implementation
-    discovery: EndpointSliceDiscovery,
+    /// The discovery implementation (either single or multi)
+    discovery: Arc<dyn ServiceDiscovery + Send + Sync>,
     /// The load balancer using the discovery
     lb: LoadBalancer<S>,
 }
@@ -182,12 +250,26 @@ where
     S: BackendSelection + 'static,
     S::Iter: pingora_load_balancing::selection::BackendIter,
 {
-    /// Create a new EndpointSliceLoadBalancer from EndpointSlice
+    /// Create a new EndpointSliceLoadBalancer from a single EndpointSlice
     /// Returns Arc<Self> since it's typically used with Arc at storage layer
     pub fn new(endpoint_slice: EndpointSlice) -> Arc<Self> {
-        let discovery = EndpointSliceDiscovery::new(endpoint_slice);
+        Self::new_with_slices(vec![endpoint_slice])
+    }
+    
+    /// Create a new EndpointSliceLoadBalancer from multiple EndpointSlices
+    /// This aggregates all EndpointSlices' backends into a single LoadBalancer
+    pub fn new_with_slices(slices: Vec<EndpointSlice>) -> Arc<Self> {
+        let discovery: Arc<dyn ServiceDiscovery + Send + Sync> = if slices.len() == 1 {
+            // Single EndpointSlice: use the efficient single-slice discovery
+            Arc::new(EndpointSliceDiscovery::new(slices.into_iter().next().unwrap()))
+        } else {
+            // Multiple EndpointSlices: use the aggregating multi-slice discovery
+            Arc::new(MultiEndpointSliceDiscovery::new(slices))
+        };
         
-        let backends = Backends::new(Box::new(discovery.clone()));
+        // Clone the Arc for Backends
+        let discovery_clone = discovery.clone();
+        let backends = Backends::new(Box::new(DiscoveryWrapper(discovery_clone)));
         let lb = LoadBalancer::from_backends(backends);
         
         // Initialize backends by calling update once
@@ -220,11 +302,6 @@ where
         })
     }
     
-    /// Update the EndpointSlice data in-place
-    pub fn update(&self, new_endpoint_slice: EndpointSlice) -> Result<(), String> {
-        self.discovery.update(new_endpoint_slice)
-    }
-    
     /// Trigger LoadBalancer update
     /// Calls lb.update() which will refresh backends from discovery
     pub async fn update_load_balancer(&self) -> Result<(), String> {
@@ -239,19 +316,6 @@ where
     /// Get a reference to the load balancer
     pub fn load_balancer(&self) -> &LoadBalancer<S> {
         &self.lb
-    }
-    
-    /// Execute a function with read access to the underlying EndpointSlice
-    pub fn with_endpoint_slice<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&EndpointSlice) -> R,
-    {
-        self.discovery.with_endpoint_slice(f)
-    }
-    
-    /// Get a clone of the underlying EndpointSlice
-    pub fn endpoint_slice(&self) -> EndpointSlice {
-        self.discovery.endpoint_slice()
     }
 }
 

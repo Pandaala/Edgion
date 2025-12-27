@@ -115,6 +115,13 @@ pub struct HTTPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub parsed_timeouts: Option<ParsedRouteTimeouts>,
+    
+    /// Pre-parsed max retries from HTTPRoute annotation (not serialized)
+    /// Parsed from annotation "edgion.io/max-retries" during route loading
+    /// None = use global default, Some(n) = use annotation value
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub parsed_max_retries: Option<u32>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -131,6 +138,7 @@ impl Clone for HTTPRouteRule {
             backend_finder: BackendSelector::new(),
             plugin_runtime: self.plugin_runtime.clone(),
             parsed_timeouts: self.parsed_timeouts.clone(),
+            parsed_max_retries: self.parsed_max_retries,
         }
     }
 }

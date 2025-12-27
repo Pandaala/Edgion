@@ -225,6 +225,7 @@ echo_success "edgion-controller started (PID: $(cat ${PID_DIR}/controller.pid))"
 # 3. 启动 edgion-gateway
 echo_info "Starting edgion-gateway (using default config)..."
 EDGION_ACCESS_LOG="$ACCESS_LOG" \
+EDGION_TEST_ACCESS_LOG_PATH="$ACCESS_LOG" \
 cargo run --bin edgion-gateway > "$GATEWAY_LOG" 2>&1 &
 echo $! > "${PID_DIR}/gateway.pid"
 
@@ -232,7 +233,7 @@ echo $! > "${PID_DIR}/gateway.pid"
 wait_for_port 10080 "edgion-gateway" "${PID_DIR}/gateway.pid" 30 || {
     echo_error "Failed to start gateway"
     echo "         Log: $GATEWAY_LOG"
-    echo "         Manual: cd $PROJECT_DIR && EDGION_ACCESS_LOG=$ACCESS_LOG cargo run --bin edgion-gateway"
+    echo "         Manual: cd $PROJECT_DIR && EDGION_ACCESS_LOG=$ACCESS_LOG EDGION_TEST_ACCESS_LOG_PATH=$ACCESS_LOG cargo run --bin edgion-gateway"
     exit 1
 }
 

@@ -19,35 +19,30 @@ impl EpSliceHandler {
     /// Full set for RoundRobin store (all EndpointSlices get RoundRobin LB)
     fn full_set_roundrobin(&self, data: &HashMap<String, EndpointSlice>) {
         let roundrobin_store = get_roundrobin_store();
-        let roundrobin_map: HashMap<String, Arc<EndpointSliceLoadBalancer<_>>> = data
-            .iter()
-            .map(|(key, ep_slice)| {
-                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                (key.clone(), lb)
-            })
-            .collect();
-        roundrobin_store.replace_all(roundrobin_map);
+        // Store handles aggregation by service_key internally
+        roundrobin_store.replace_all(data.clone());
     }
     
     /// Full set for Consistent store (only for services with Consistent policy)
     fn full_set_consistent(&self, data: &HashMap<String, EndpointSlice>) -> usize {
         let consistent_store = get_consistent_store();
         let policy_store = get_global_policy_store();
-        let mut consistent_map = HashMap::new();
         
+        // Filter EndpointSlices by their service's LB policy
+        let mut filtered_data = HashMap::new();
         for (key, ep_slice) in data {
             let service_key = ep_slice.key_name();
             let policies = policy_store.get(&service_key);
             
             if policies.contains(&LbPolicy::Consistent) {
-                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                consistent_map.insert(key.clone(), lb);
-                tracing::debug!(key = %key, "Created Consistent LB");
+                filtered_data.insert(key.clone(), ep_slice.clone());
+                tracing::debug!(key = %key, "Included for Consistent LB");
             }
         }
         
-        let count = consistent_map.len();
-        consistent_store.replace_all(consistent_map);
+        let count = filtered_data.len();
+        // Store handles aggregation by service_key internally
+        consistent_store.replace_all(filtered_data);
         count
     }
     
@@ -55,21 +50,22 @@ impl EpSliceHandler {
     fn full_set_leastconn(&self, data: &HashMap<String, EndpointSlice>) -> usize {
         let leastconn_store = get_leastconn_store();
         let policy_store = get_global_policy_store();
-        let mut leastconn_map = HashMap::new();
         
+        // Filter EndpointSlices by their service's LB policy
+        let mut filtered_data = HashMap::new();
         for (key, ep_slice) in data {
             let service_key = ep_slice.key_name();
             let policies = policy_store.get(&service_key);
             
             if policies.contains(&LbPolicy::LeastConnection) {
-                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                leastconn_map.insert(key.clone(), lb);
-                tracing::debug!(key = %key, "Created LeastConnection LB");
+                filtered_data.insert(key.clone(), ep_slice.clone());
+                tracing::debug!(key = %key, "Included for LeastConnection LB");
             }
         }
         
-        let count = leastconn_map.len();
-        leastconn_store.replace_all(leastconn_map);
+        let count = filtered_data.len();
+        // Store handles aggregation by service_key internally
+        leastconn_store.replace_all(filtered_data);
         count
     }
     
@@ -77,21 +73,22 @@ impl EpSliceHandler {
     fn full_set_ewma(&self, data: &HashMap<String, EndpointSlice>) -> usize {
         let ewma_store = get_ewma_store();
         let policy_store = get_global_policy_store();
-        let mut ewma_map = HashMap::new();
         
+        // Filter EndpointSlices by their service's LB policy
+        let mut filtered_data = HashMap::new();
         for (key, ep_slice) in data {
             let service_key = ep_slice.key_name();
             let policies = policy_store.get(&service_key);
             
             if policies.contains(&LbPolicy::Ewma) {
-                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                ewma_map.insert(key.clone(), lb);
-                tracing::debug!(key = %key, "Created EWMA LB");
+                filtered_data.insert(key.clone(), ep_slice.clone());
+                tracing::debug!(key = %key, "Included for EWMA LB");
             }
         }
         
-        let count = ewma_map.len();
-        ewma_store.replace_all(ewma_map);
+        let count = filtered_data.len();
+        // Store handles aggregation by service_key internally
+        ewma_store.replace_all(filtered_data);
         count
     }
     
@@ -103,26 +100,12 @@ impl EpSliceHandler {
         remove: &HashSet<String>,
     ) {
         let roundrobin_store = get_roundrobin_store();
-        
-        // Handle updates (in-place)
-        for (key, ep_slice) in update {
-            if let Err(e) = roundrobin_store.update_in_place_and_refresh_lb(key, ep_slice.clone()) {
-                tracing::error!(key = %key, error = %e, "Failed to update RoundRobin LB");
-            }
-        }
-        
-        // Handle add/remove
-        if !add.is_empty() || !remove.is_empty() {
-            roundrobin_store.apply_modifications(|map| {
-                for key in remove {
-                    map.remove(key);
-                }
-                for (key, ep_slice) in add {
-                    let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                    map.insert(key.clone(), lb);
-                }
-            });
-        }
+        // Use new aggregation-aware update method
+        roundrobin_store.update_with_service_aggregation(
+            add.clone(),
+            update.clone(),
+            remove,
+        );
     }
     
     /// Partial update for Consistent store
@@ -135,36 +118,30 @@ impl EpSliceHandler {
         let consistent_store = get_consistent_store();
         let policy_store = get_global_policy_store();
         
-        let mut consistent_add = HashMap::new();
-        let mut consistent_remove = HashSet::new();
+        // Filter by LB policy
+        let mut filtered_add = HashMap::new();
+        let mut filtered_update = HashMap::new();
         
-        // Handle removes
-        for key in remove {
-            consistent_remove.insert(key.clone());
-        }
-        
-        // Handle adds and updates
-        for (key, ep_slice) in add.iter().chain(update.iter()) {
+        for (key, ep_slice) in add {
             let service_key = ep_slice.key_name();
-            let policies = policy_store.get(&service_key);
-            
-            if policies.contains(&LbPolicy::Consistent) {
-                if !consistent_store.contains(key) {
-                    let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                    consistent_add.insert(key.clone(), lb);
-                } else if update.contains_key(key) {
-                    if let Err(e) = consistent_store.update_in_place_and_refresh_lb(key, ep_slice.clone()) {
-                        tracing::error!(key = %key, error = %e, "Failed to update Consistent LB");
-                    }
-                }
-            } else {
-                consistent_remove.insert(key.clone());
+            if policy_store.get(&service_key).contains(&LbPolicy::Consistent) {
+                filtered_add.insert(key.clone(), ep_slice.clone());
             }
         }
         
-        if !consistent_add.is_empty() || !consistent_remove.is_empty() {
-            consistent_store.update(consistent_add, &consistent_remove);
+        for (key, ep_slice) in update {
+            let service_key = ep_slice.key_name();
+            if policy_store.get(&service_key).contains(&LbPolicy::Consistent) {
+                filtered_update.insert(key.clone(), ep_slice.clone());
+            }
         }
+        
+        // Use new aggregation-aware update method
+        consistent_store.update_with_service_aggregation(
+            filtered_add,
+            filtered_update,
+            remove,
+        );
     }
     
     /// Partial update for LeastConnection store
@@ -177,47 +154,30 @@ impl EpSliceHandler {
         let leastconn_store = get_leastconn_store();
         let policy_store = get_global_policy_store();
         
-        let mut leastconn_add = HashMap::new();
-        let mut leastconn_remove = HashSet::new();
+        // Filter by LB policy
+        let mut filtered_add = HashMap::new();
+        let mut filtered_update = HashMap::new();
         
-        // Handle removes
-        // Note: Backend state cleanup will be handled by the cleaner task
-        // Backends will be filtered out by the selection algorithm if draining
-        for key in remove {
-            leastconn_remove.insert(key.clone());
-        }
-        
-        // Handle updates - check for removed backends and mark as draining
-        for (key, new_ep_slice) in update {
-            let service_key = new_ep_slice.key_name();
-            let policies = policy_store.get(&service_key);
-            
-            if policies.contains(&LbPolicy::LeastConnection) {
-                // Update the load balancer
-                // Note: Backend state management (draining/reactivation) will be handled
-                // by monitoring connection counts in the cleaner task
-                if let Err(e) = leastconn_store.update_in_place_and_refresh_lb(key, new_ep_slice.clone()) {
-                    tracing::error!(key = %key, error = %e, "Failed to update LeastConnection LB");
-                }
-            } else {
-                leastconn_remove.insert(key.clone());
-            }
-        }
-        
-        // Handle adds
         for (key, ep_slice) in add {
             let service_key = ep_slice.key_name();
-            let policies = policy_store.get(&service_key);
-            
-            if policies.contains(&LbPolicy::LeastConnection) {
-                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                leastconn_add.insert(key.clone(), lb);
+            if policy_store.get(&service_key).contains(&LbPolicy::LeastConnection) {
+                filtered_add.insert(key.clone(), ep_slice.clone());
             }
         }
         
-        if !leastconn_add.is_empty() || !leastconn_remove.is_empty() {
-            leastconn_store.update(leastconn_add, &leastconn_remove);
+        for (key, ep_slice) in update {
+            let service_key = ep_slice.key_name();
+            if policy_store.get(&service_key).contains(&LbPolicy::LeastConnection) {
+                filtered_update.insert(key.clone(), ep_slice.clone());
+            }
         }
+        
+        // Use new aggregation-aware update method
+        leastconn_store.update_with_service_aggregation(
+            filtered_add,
+            filtered_update,
+            remove,
+        );
     }
     
     /// Partial update for EWMA store
@@ -230,44 +190,30 @@ impl EpSliceHandler {
         let ewma_store = get_ewma_store();
         let policy_store = get_global_policy_store();
         
-        let mut ewma_add = HashMap::new();
-        let mut ewma_remove = HashSet::new();
+        // Filter by LB policy
+        let mut filtered_add = HashMap::new();
+        let mut filtered_update = HashMap::new();
         
-        // Handle removes
-        // EWMA metrics for removed backends will be cleaned up
-        for key in remove {
-            ewma_remove.insert(key.clone());
-        }
-        
-        // Handle updates
-        for (key, new_ep_slice) in update {
-            let service_key = new_ep_slice.key_name();
-            let policies = policy_store.get(&service_key);
-            
-            if policies.contains(&LbPolicy::Ewma) {
-                // Update the load balancer
-                if let Err(e) = ewma_store.update_in_place_and_refresh_lb(key, new_ep_slice.clone()) {
-                    tracing::error!(key = %key, error = %e, "Failed to update EWMA LB");
-                }
-            } else {
-                ewma_remove.insert(key.clone());
-            }
-        }
-        
-        // Handle adds
         for (key, ep_slice) in add {
             let service_key = ep_slice.key_name();
-            let policies = policy_store.get(&service_key);
-            
-            if policies.contains(&LbPolicy::Ewma) {
-                let lb = EndpointSliceLoadBalancer::new(ep_slice.clone());
-                ewma_add.insert(key.clone(), lb);
+            if policy_store.get(&service_key).contains(&LbPolicy::Ewma) {
+                filtered_add.insert(key.clone(), ep_slice.clone());
             }
         }
         
-        if !ewma_add.is_empty() || !ewma_remove.is_empty() {
-            ewma_store.update(ewma_add, &ewma_remove);
+        for (key, ep_slice) in update {
+            let service_key = ep_slice.key_name();
+            if policy_store.get(&service_key).contains(&LbPolicy::Ewma) {
+                filtered_update.insert(key.clone(), ep_slice.clone());
+            }
         }
+        
+        // Use new aggregation-aware update method
+        ewma_store.update_with_service_aggregation(
+            filtered_add,
+            filtered_update,
+            remove,
+        );
     }
 }
 
