@@ -128,3 +128,201 @@ impl PluginEntry {
     }
 }
 
+/// RequestFilterEntry - for request stage plugins (async)
+///
+/// Supports plugins:
+/// - BasicAuth, Cors, Csrf, IpRestriction, Mock (from edgion_plugins)
+/// - RequestHeaderModifier, RequestRedirect, ExtensionRef (from gapi_filters)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestFilterEntry {
+    /// Whether this plugin is enabled (default: true)
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub enable: bool,
+
+    /// Conditional enable configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition_enable: Option<ConditionEnable>,
+
+    /// The actual plugin configuration
+    #[serde(flatten)]
+    pub plugin: EdgionPlugin,
+}
+
+impl RequestFilterEntry {
+    /// Create a new enabled plugin entry
+    pub fn new(plugin: EdgionPlugin) -> Self {
+        Self {
+            enable: true,
+            condition_enable: None,
+            plugin,
+        }
+    }
+
+    /// Create a new plugin entry with specified enable state
+    pub fn with_enable(plugin: EdgionPlugin, enable: bool) -> Self {
+        Self {
+            enable,
+            condition_enable: None,
+            plugin,
+        }
+    }
+
+    /// Create a new plugin entry with condition enable
+    pub fn with_condition(plugin: EdgionPlugin, condition: ConditionEnable) -> Self {
+        Self {
+            enable: true,
+            condition_enable: Some(condition),
+            plugin,
+        }
+    }
+
+    /// Check if this plugin is enabled (considering both enable flag and condition)
+    pub fn is_enabled(&self) -> bool {
+        if !self.enable {
+            return false;
+        }
+        // Check condition if present
+        if let Some(condition) = &self.condition_enable {
+            return condition.is_satisfied();
+        }
+        true
+    }
+
+    /// Get the plugin type name
+    pub fn type_name(&self) -> &'static str {
+        self.plugin.type_name()
+    }
+}
+
+/// UpstreamResponseFilterEntry - for upstream response filter stage plugins (sync)
+///
+/// Supports plugins:
+/// - ResponseHeaderModifier (from gapi_filters)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpstreamResponseFilterEntry {
+    /// Whether this plugin is enabled (default: true)
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub enable: bool,
+
+    /// Conditional enable configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition_enable: Option<ConditionEnable>,
+
+    /// The actual plugin configuration
+    #[serde(flatten)]
+    pub plugin: EdgionPlugin,
+}
+
+impl UpstreamResponseFilterEntry {
+    /// Create a new enabled plugin entry
+    pub fn new(plugin: EdgionPlugin) -> Self {
+        Self {
+            enable: true,
+            condition_enable: None,
+            plugin,
+        }
+    }
+
+    /// Create a new plugin entry with specified enable state
+    pub fn with_enable(plugin: EdgionPlugin, enable: bool) -> Self {
+        Self {
+            enable,
+            condition_enable: None,
+            plugin,
+        }
+    }
+
+    /// Create a new plugin entry with condition enable
+    pub fn with_condition(plugin: EdgionPlugin, condition: ConditionEnable) -> Self {
+        Self {
+            enable: true,
+            condition_enable: Some(condition),
+            plugin,
+        }
+    }
+
+    /// Check if this plugin is enabled (considering both enable flag and condition)
+    pub fn is_enabled(&self) -> bool {
+        if !self.enable {
+            return false;
+        }
+        // Check condition if present
+        if let Some(condition) = &self.condition_enable {
+            return condition.is_satisfied();
+        }
+        true
+    }
+
+    /// Get the plugin type name
+    pub fn type_name(&self) -> &'static str {
+        self.plugin.type_name()
+    }
+}
+
+/// UpstreamResponseEntry - for upstream response stage plugins (async)
+///
+/// Currently no plugins, reserved for future expansion
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpstreamResponseEntry {
+    /// Whether this plugin is enabled (default: true)
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub enable: bool,
+
+    /// Conditional enable configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition_enable: Option<ConditionEnable>,
+
+    /// The actual plugin configuration
+    #[serde(flatten)]
+    pub plugin: EdgionPlugin,
+}
+
+impl UpstreamResponseEntry {
+    /// Create a new enabled plugin entry
+    pub fn new(plugin: EdgionPlugin) -> Self {
+        Self {
+            enable: true,
+            condition_enable: None,
+            plugin,
+        }
+    }
+
+    /// Create a new plugin entry with specified enable state
+    pub fn with_enable(plugin: EdgionPlugin, enable: bool) -> Self {
+        Self {
+            enable,
+            condition_enable: None,
+            plugin,
+        }
+    }
+
+    /// Create a new plugin entry with condition enable
+    pub fn with_condition(plugin: EdgionPlugin, condition: ConditionEnable) -> Self {
+        Self {
+            enable: true,
+            condition_enable: Some(condition),
+            plugin,
+        }
+    }
+
+    /// Check if this plugin is enabled (considering both enable flag and condition)
+    pub fn is_enabled(&self) -> bool {
+        if !self.enable {
+            return false;
+        }
+        // Check condition if present
+        if let Some(condition) = &self.condition_enable {
+            return condition.is_satisfied();
+        }
+        true
+    }
+
+    /// Get the plugin type name
+    pub fn type_name(&self) -> &'static str {
+        self.plugin.type_name()
+    }
+}
+

@@ -5,8 +5,8 @@
 use async_trait::async_trait;
 
 use crate::types::resources::LocalObjectReference;
-use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
-use crate::core::plugins::plugin_runtime::traits::{Plugin, PluginSession};
+use crate::types::filters::{PluginRunningResult, PluginRunningStage};
+use crate::core::plugins::plugin_runtime::filters::{RequestFilter, PluginSession};
 use crate::core::plugins::plugin_runtime::log::PluginLog;
 use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 
@@ -64,26 +64,15 @@ impl ExtensionRefFilter {
         // Run edgion_plugins based on stage
         match stage {
             PluginRunningStage::Request => {
-                // For request stage, iterate through request edgion_plugins
-                for plugin in plugin_runtime.request_plugins_iter() {
-                    let mut inner_log = PluginLog::new(plugin.name());
-                    let result = plugin.run_sync(stage, session, &mut inner_log);
-                    
-                    // Append inner log to outer log
-                    if let Some(inner_log_str) = &inner_log.log {
-                        log.add_plugin_log(inner_log_str);
-                    }
-                    
-                    if result == PluginRunningResult::ErrTerminateRequest {
-                        return result;
-                    }
-                }
+                // Request stage plugins are async, cannot be called in sync context
+                // This is a design limitation - Request filters should only be called via run_extension_async
+                log.add_plugin_log("Warning: Request stage should use async path");
             }
             PluginRunningStage::UpstreamResponseFilter => {
                 // For sync response stage
                 for plugin in plugin_runtime.upstream_response_plugins_iter() {
                     let mut inner_log = PluginLog::new(plugin.name());
-                    let result = plugin.run_sync(stage, session, &mut inner_log);
+                    let result = plugin.run_upstream_response_filter(session, &mut inner_log);
                     
                     if let Some(inner_log_str) = &inner_log.log {
                         log.add_plugin_log(inner_log_str);
@@ -133,7 +122,7 @@ impl ExtensionRefFilter {
             PluginRunningStage::Request => {
                 for plugin in plugin_runtime.request_plugins_iter() {
                     let mut inner_log = PluginLog::new(plugin.name());
-                    let result = plugin.run_async(stage, session, &mut inner_log).await;
+                    let result = plugin.run_request(session, &mut inner_log).await;
                     
                     if let Some(inner_log_str) = &inner_log.log {
                         log.add_plugin_log(inner_log_str);
@@ -147,7 +136,7 @@ impl ExtensionRefFilter {
             PluginRunningStage::UpstreamResponse => {
                 for plugin in plugin_runtime.upstream_response_async_plugins_iter() {
                     let mut inner_log = PluginLog::new(plugin.name());
-                    let result = plugin.run_async(stage, session, &mut inner_log).await;
+                    let result = plugin.run_upstream_response(session, &mut inner_log).await;
                     
                     if let Some(inner_log_str) = &inner_log.log {
                         log.add_plugin_log(inner_log_str);
@@ -162,7 +151,7 @@ impl ExtensionRefFilter {
                 // Sync stage - handled in run_sync
                 for plugin in plugin_runtime.upstream_response_plugins_iter() {
                     let mut inner_log = PluginLog::new(plugin.name());
-                    let result = plugin.run_sync(stage, session, &mut inner_log);
+                    let result = plugin.run_upstream_response_filter(session, &mut inner_log);
                     
                     if let Some(inner_log_str) = &inner_log.log {
                         log.add_plugin_log(inner_log_str);
@@ -181,38 +170,17 @@ impl ExtensionRefFilter {
 }
 
 #[async_trait]
-impl Plugin for ExtensionRefFilter {
+impl RequestFilter for ExtensionRefFilter {
     fn name(&self) -> &str {
         "ExtensionRef"
     }
 
-    fn run_sync(
+    async fn run_request(
         &self,
-        stage: PluginRunningStage,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        self.run_extension(stage, session, log)
+        self.run_extension_async(PluginRunningStage::Request, session, log).await
     }
-
-    async fn run_async(
-        &self,
-        stage: PluginRunningStage,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-    ) -> PluginRunningResult {
-        self.run_extension_async(stage, session, log).await
-    }
-
-    fn supports_sync(&self) -> bool {
-        true
-    }
-
-    fn get_stages(&self) -> Vec<PluginRunningStage> {
-        // ExtensionRef can run in request stage
-        vec![PluginRunningStage::Request]
-    }
-
-    fn check_schema(&self, _conf: &PluginConf) {}
 }
 

@@ -12,8 +12,8 @@
 
 use async_trait::async_trait;
 
-use crate::core::plugins::{Plugin, PluginSession, PluginLog};
-use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
+use crate::core::plugins::plugin_runtime::{RequestFilter, PluginSession, PluginLog};
+use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::CsrfConfig;
 
 use super::token::CsrfToken;
@@ -23,7 +23,6 @@ const SAFE_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS"];
 pub struct Csrf {
     name: String,
     config: CsrfConfig,
-    stages: Vec<PluginRunningStage>,
 }
 
 impl Csrf {
@@ -32,7 +31,6 @@ impl Csrf {
         Csrf {
             name: "Csrf".to_string(),
             config: config.clone(),
-            stages: vec![PluginRunningStage::Request],
         }
     }
 
@@ -80,21 +78,16 @@ impl Csrf {
 }
 
 #[async_trait]
-impl Plugin for Csrf {
+impl RequestFilter for Csrf {
     fn name(&self) -> &str {
         &self.name
     }
 
-    async fn run_async(
+    async fn run_request(
         &self,
-        stage: PluginRunningStage,
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
-        if stage != PluginRunningStage::Request {
-            return PluginRunningResult::Nothing;
-        }
-
         let method = session.method();
 
         // For safe methods, skip validation but set cookie for future use
@@ -162,20 +155,12 @@ impl Plugin for Csrf {
             }
         }
     }
-
-    fn get_stages(&self) -> Vec<PluginRunningStage> {
-        self.stages.clone()
-    }
-
-    fn check_schema(&self, _conf: &PluginConf) {
-        // Schema validation can be implemented here if needed
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugins::plugin_runtime::traits::MockPluginSession;
+    use crate::core::plugins::plugin_runtime::filters::session::MockPluginSession;
 
     fn create_csrf_config() -> CsrfConfig {
         CsrfConfig {
@@ -197,7 +182,7 @@ mod tests {
             .expect_set_response_header()
             .returning(|_, _| Ok(()));
 
-        let result = csrf.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.log.as_ref().unwrap().contains("Safe method"));
@@ -216,7 +201,7 @@ mod tests {
             .with(mockall::predicate::eq("X-CSRF-Token"))
             .returning(|_| None);
 
-        let result = csrf.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
 
         match result {
             PluginRunningResult::ErrResponse { status, .. } => {
@@ -244,7 +229,7 @@ mod tests {
             .with(mockall::predicate::eq("cookie"))
             .returning(|_| None);
 
-        let result = csrf.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
 
         match result {
             PluginRunningResult::ErrResponse { status, .. } => {
@@ -272,7 +257,7 @@ mod tests {
             .with(mockall::predicate::eq("cookie"))
             .returning(|_| Some("X-CSRF-Token=token2".to_string()));
 
-        let result = csrf.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
 
         match result {
             PluginRunningResult::ErrResponse { status, .. } => {

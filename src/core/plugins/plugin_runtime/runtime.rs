@@ -4,11 +4,12 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
 use crate::types::EdgionHttpContext;
-use crate::types::filters::PluginRunningStage;
 use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
-use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, GRPCRouteFilter, GRPCRouteFilterType, EdgionPlugin, PluginEntry};
+use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, GRPCRouteFilter, GRPCRouteFilterType, EdgionPlugin};
+use crate::types::resources::{RequestFilterEntry, UpstreamResponseFilterEntry, UpstreamResponseEntry};
 
 use super::log::PluginLog;
+use super::filters::{RequestFilter, UpstreamResponseFilter, UpstreamResponse};
 use crate::core::plugins::gapi_filters::{ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
 use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
 use crate::core::plugins::edgion_plugins::cors::Cors;
@@ -16,15 +17,14 @@ use crate::core::plugins::edgion_plugins::csrf::Csrf;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::mock::Mock;
 use super::session_adapter::PingoraSessionAdapter;
-use super::traits::Plugin;
 
 pub struct PluginRuntime {
     /// Plugins for request stage (async)
-    request_plugins: Vec<Box<dyn Plugin>>,
+    request_plugins: Vec<Box<dyn RequestFilter>>,
     /// Plugins for upstream_response_filter stage (sync)
-    upstream_response_plugins: Vec<Box<dyn Plugin>>,
+    upstream_response_plugins: Vec<Box<dyn UpstreamResponseFilter>>,
     /// Plugins for response_filter stage (async)
-    upstream_response_async_plugins: Vec<Box<dyn Plugin>>,
+    upstream_response_async_plugins: Vec<Box<dyn UpstreamResponse>>,
 }
 
 impl Clone for PluginRuntime {
@@ -67,8 +67,28 @@ impl PluginRuntime {
 
     pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter], namespace: &str) {
         for filter in filters {
-            if let Some(p) = Self::create_plugin(filter, namespace) {
-                self.add_plugin(p);
+            match filter.filter_type {
+                HTTPRouteFilterType::RequestHeaderModifier => {
+                    if let Some(config) = &filter.request_header_modifier {
+                        self.add_request_filter(Box::new(RequestHeaderModifierFilter::new(config.clone())));
+                    }
+                }
+                HTTPRouteFilterType::ResponseHeaderModifier => {
+                    if let Some(config) = &filter.response_header_modifier {
+                        self.add_upstream_response_filter(Box::new(ResponseHeaderModifierFilter::new(config.clone())));
+                    }
+                }
+                HTTPRouteFilterType::RequestRedirect => {
+                    if let Some(config) = &filter.request_redirect {
+                        self.add_request_filter(Box::new(RequestRedirectFilter::new(config.clone())));
+                    }
+                }
+                HTTPRouteFilterType::ExtensionRef => {
+                    if let Some(ext_ref) = &filter.extension_ref {
+                        self.add_request_filter(Box::new(ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone())));
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -81,125 +101,114 @@ impl PluginRuntime {
 
     pub fn add_from_grpcroute_filters(&mut self, filters: &[GRPCRouteFilter], namespace: &str) {
         for filter in filters {
-            if let Some(p) = Self::create_grpc_plugin(filter, namespace) {
-                self.add_plugin(p);
+            match filter.filter_type {
+                GRPCRouteFilterType::RequestHeaderModifier => {
+                    if let Some(config) = &filter.request_header_modifier {
+                        self.add_request_filter(Box::new(RequestHeaderModifierFilter::new_from_grpc(config.clone())));
+                    }
+                }
+                GRPCRouteFilterType::ResponseHeaderModifier => {
+                    if let Some(config) = &filter.response_header_modifier {
+                        self.add_upstream_response_filter(Box::new(ResponseHeaderModifierFilter::new_from_grpc(config.clone())));
+                    }
+                }
+                GRPCRouteFilterType::ExtensionRef => {
+                    if let Some(ext_ref) = &filter.extension_ref {
+                        self.add_request_filter(Box::new(ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone())));
+                    }
+                }
+                _ => {}
             }
         }
     }
 
-    /// Create from EdgionPlugins plugin entries (only enabled edgion_plugins)
-    pub fn from_edgion_plugins(entries: &[PluginEntry]) -> Self {
-        let mut runtime = Self::new();
-        runtime.add_from_edgion_plugins(entries);
-        runtime
-    }
-
-    /// Add edgion_plugins from EdgionPlugins entries (only enabled edgion_plugins)
-    pub fn add_from_edgion_plugins(&mut self, entries: &[PluginEntry]) {
+    /// Add request filters from entries (only enabled)
+    pub fn add_from_request_filters(&mut self, entries: &[RequestFilterEntry]) {
         for entry in entries {
             if entry.is_enabled() {
-                if let Some(p) = Self::create_plugin_from_edgion(&entry.plugin) {
-                    self.add_plugin(p);
+                if let Some(filter) = Self::create_request_filter_from_edgion(&entry.plugin) {
+                    self.add_request_filter(filter);
                 }
             }
         }
     }
 
-    /// Create a Plugin instance from EdgionPlugin enum
-    fn create_plugin_from_edgion(plugin: &EdgionPlugin) -> Option<Box<dyn Plugin>> {
+    /// Add upstream response filters from entries (only enabled)
+    pub fn add_from_upstream_response_filters(&mut self, entries: &[UpstreamResponseFilterEntry]) {
+        for entry in entries {
+            if entry.is_enabled() {
+                if let Some(filter) = Self::create_upstream_response_filter_from_edgion(&entry.plugin) {
+                    self.add_upstream_response_filter(filter);
+                }
+            }
+        }
+    }
+
+    /// Add upstream response handlers from entries (only enabled)
+    pub fn add_from_upstream_responses(&mut self, entries: &[UpstreamResponseEntry]) {
+        for entry in entries {
+            if entry.is_enabled() {
+                if let Some(filter) = Self::create_upstream_response_from_edgion(&entry.plugin) {
+                    self.add_upstream_response(filter);
+                }
+            }
+        }
+    }
+
+    /// Create a RequestFilter instance from EdgionPlugin enum
+    fn create_request_filter_from_edgion(plugin: &EdgionPlugin) -> Option<Box<dyn RequestFilter>> {
         match plugin {
             EdgionPlugin::RequestHeaderModifier(config) => {
-                Some(Box::new(RequestHeaderModifierFilter::new(config.clone())) as Box<dyn Plugin>)
-            }
-            EdgionPlugin::ResponseHeaderModifier(config) => {
-                Some(Box::new(ResponseHeaderModifierFilter::new(config.clone())) as Box<dyn Plugin>)
+                Some(Box::new(RequestHeaderModifierFilter::new(config.clone())))
             }
             EdgionPlugin::RequestRedirect(config) => {
-                Some(Box::new(RequestRedirectFilter::new(config.clone())) as Box<dyn Plugin>)
+                Some(Box::new(RequestRedirectFilter::new(config.clone())))
             }
             EdgionPlugin::BasicAuth(config) => {
-                Some(Box::new(BasicAuth::new(config)) as Box<dyn Plugin>)
+                Some(Box::new(BasicAuth::new(config)))
             }
             EdgionPlugin::Cors(config) => {
-                Some(Box::new(Cors::new(config)) as Box<dyn Plugin>)
+                Some(Box::new(Cors::new(config)))
             }
             EdgionPlugin::Csrf(config) => {
-                Some(Box::new(Csrf::new(config)) as Box<dyn Plugin>)
+                Some(Box::new(Csrf::new(config)))
             }
             EdgionPlugin::IpRestriction(config) => {
                 Some(IpRestriction::new(config))
             }
             EdgionPlugin::Mock(config) => {
-                Some(Box::new(Mock::new(config)) as Box<dyn Plugin>)
+                Some(Box::new(Mock::new(config)))
             }
-            // TODO: Add other plugin types (UrlRewrite, RequestMirror, ExtensionRef)
             _ => None,
         }
     }
 
-    fn add_plugin(&mut self, plugin: Box<dyn Plugin>) {
-        if let Some(stage) = plugin.get_stages().first() {
-            match stage {
-                PluginRunningStage::Request => {
-                    self.request_plugins.push(plugin);
-                }
-                PluginRunningStage::UpstreamResponseFilter => {
-                    self.upstream_response_plugins.push(plugin);
-                }
-                PluginRunningStage::UpstreamResponse => {
-                    self.upstream_response_async_plugins.push(plugin);
-                }
+    /// Create an UpstreamResponseFilter instance from EdgionPlugin enum
+    fn create_upstream_response_filter_from_edgion(plugin: &EdgionPlugin) -> Option<Box<dyn UpstreamResponseFilter>> {
+        match plugin {
+            EdgionPlugin::ResponseHeaderModifier(config) => {
+                Some(Box::new(ResponseHeaderModifierFilter::new(config.clone())))
             }
-        }
-    }
-
-    fn create_plugin(filter: &HTTPRouteFilter, namespace: &str) -> Option<Box<dyn Plugin>> {
-        match filter.filter_type {
-            HTTPRouteFilterType::RequestHeaderModifier => {
-                filter.request_header_modifier.as_ref().map(|config| {
-                    Box::new(RequestHeaderModifierFilter::new(config.clone())) as Box<dyn Plugin>
-                })
-            }
-            HTTPRouteFilterType::ResponseHeaderModifier => {
-                filter.response_header_modifier.as_ref().map(|config| {
-                    Box::new(ResponseHeaderModifierFilter::new(config.clone())) as Box<dyn Plugin>
-                })
-            }
-            HTTPRouteFilterType::RequestRedirect => {
-                filter.request_redirect.as_ref().map(|config| {
-                    Box::new(RequestRedirectFilter::new(config.clone())) as Box<dyn Plugin>
-                })
-            }
-            HTTPRouteFilterType::ExtensionRef => {
-                filter.extension_ref.as_ref().map(|ext_ref| {
-                    Box::new(ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone())) as Box<dyn Plugin>
-                })
-            }
-            // TODO: Add other plugin types (UrlRewrite, RequestMirror)
             _ => None,
         }
     }
 
-    fn create_grpc_plugin(filter: &GRPCRouteFilter, namespace: &str) -> Option<Box<dyn Plugin>> {
-        match filter.filter_type {
-            GRPCRouteFilterType::RequestHeaderModifier => {
-                filter.request_header_modifier.as_ref().map(|config| {
-                    Box::new(RequestHeaderModifierFilter::new_from_grpc(config.clone())) as Box<dyn Plugin>
-                })
-            }
-            GRPCRouteFilterType::ResponseHeaderModifier => {
-                filter.response_header_modifier.as_ref().map(|config| {
-                    Box::new(ResponseHeaderModifierFilter::new_from_grpc(config.clone())) as Box<dyn Plugin>
-                })
-            }
-            GRPCRouteFilterType::ExtensionRef => {
-                filter.extension_ref.as_ref().map(|ext_ref| {
-                    Box::new(ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone())) as Box<dyn Plugin>
-                })
-            }
-            // TODO: Add RequestMirror support for gRPC
-            _ => None,
-        }
+    /// Create an UpstreamResponse instance from EdgionPlugin enum
+    fn create_upstream_response_from_edgion(_plugin: &EdgionPlugin) -> Option<Box<dyn UpstreamResponse>> {
+        // Currently no plugins for this stage
+        None
+    }
+
+    fn add_request_filter(&mut self, filter: Box<dyn RequestFilter>) {
+        self.request_plugins.push(filter);
+    }
+
+    fn add_upstream_response_filter(&mut self, filter: Box<dyn UpstreamResponseFilter>) {
+        self.upstream_response_plugins.push(filter);
+    }
+
+    fn add_upstream_response(&mut self, filter: Box<dyn UpstreamResponse>) {
+        self.upstream_response_async_plugins.push(filter);
     }
 
     /// Get total plugin count across all stages
@@ -209,30 +218,29 @@ impl PluginRuntime {
             + self.upstream_response_async_plugins.len()
     }
 
-    /// Iterate over request stage edgion_plugins
-    pub fn request_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn Plugin>> {
+    /// Iterate over request stage filters
+    pub fn request_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn RequestFilter>> {
         self.request_plugins.iter()
     }
 
-    /// Iterate over upstream_response_filter stage edgion_plugins (sync)
-    pub fn upstream_response_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn Plugin>> {
+    /// Iterate over upstream_response_filter stage filters (sync)
+    pub fn upstream_response_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn UpstreamResponseFilter>> {
         self.upstream_response_plugins.iter()
     }
 
-    /// Iterate over response_filter stage edgion_plugins (async)
-    pub fn upstream_response_async_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn Plugin>> {
+    /// Iterate over response_filter stage filters (async)
+    pub fn upstream_response_async_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn UpstreamResponse>> {
         self.upstream_response_async_plugins.iter()
     }
 
-    /// Run request stage edgion_plugins (async)
+    /// Run request stage filters (async)
     pub async fn run_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
-        for plugin in &self.request_plugins {
-            let mut plugin_log = PluginLog::new(plugin.name());
+        for filter in &self.request_plugins {
+            let mut plugin_log = PluginLog::new(filter.name());
 
-            let result = plugin.run_async(
-                PluginRunningStage::Request,
+            let result = filter.run_request(
                 &mut session_adapter,
                 &mut plugin_log,
             ).await;
@@ -245,7 +253,7 @@ impl PluginRuntime {
         }
     }
 
-    /// Run upstream_response_filter stage edgion_plugins (sync)
+    /// Run upstream_response_filter stage filters (sync)
     pub fn run_upstream_response_plugins_sync(
         &self,
         s: &mut Session,
@@ -254,11 +262,10 @@ impl PluginRuntime {
     ) {
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
-        for plugin in &self.upstream_response_plugins {
-            let mut plugin_log = PluginLog::new(plugin.name());
+        for filter in &self.upstream_response_plugins {
+            let mut plugin_log = PluginLog::new(filter.name());
 
-            let result = plugin.run_sync(
-                PluginRunningStage::UpstreamResponseFilter,
+            let result = filter.run_upstream_response_filter(
                 &mut session_adapter,
                 &mut plugin_log,
             );
@@ -271,7 +278,7 @@ impl PluginRuntime {
         }
     }
 
-    /// Run response_filter stage edgion_plugins (async)
+    /// Run response_filter stage filters (async)
     pub async fn run_upstream_response_plugins_async(
         &self,
         s: &mut Session,
@@ -280,11 +287,10 @@ impl PluginRuntime {
     ) {
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
-        for plugin in &self.upstream_response_async_plugins {
-            let mut plugin_log = PluginLog::new(plugin.name());
+        for filter in &self.upstream_response_async_plugins {
+            let mut plugin_log = PluginLog::new(filter.name());
 
-            let result = plugin.run_async(
-                PluginRunningStage::UpstreamResponse,
+            let result = filter.run_upstream_response(
                 &mut session_adapter,
                 &mut plugin_log,
             ).await;

@@ -4,8 +4,8 @@
 
 use async_trait::async_trait;
 use crate::types::resources::{HTTPHeaderFilter, GRPCHeaderFilter};
-use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
-use crate::core::plugins::plugin_runtime::traits::{Plugin, PluginSession};
+use crate::types::filters::PluginRunningResult;
+use crate::core::plugins::plugin_runtime::filters::{RequestFilter, PluginSession};
 use crate::core::plugins::plugin_runtime::log::PluginLog;
 
 /// Filter that modifies request headers
@@ -33,38 +33,18 @@ impl RequestHeaderModifierFilter {
 }
 
 #[async_trait]
-impl Plugin for RequestHeaderModifierFilter {
+impl RequestFilter for RequestHeaderModifierFilter {
     fn name(&self) -> &str {
         "RequestHeaderModifier"
     }
 
-    fn run_sync(
+    async fn run_request(
         &self,
-        _stage: PluginRunningStage,
         session: &mut dyn PluginSession,
         _log: &mut PluginLog,
     ) -> PluginRunningResult {
         self.modify_headers(session)
     }
-
-    async fn run_async(
-        &self,
-        _stage: PluginRunningStage,
-        session: &mut dyn PluginSession,
-        _log: &mut PluginLog,
-    ) -> PluginRunningResult {
-        self.modify_headers(session)
-    }
-
-    fn supports_sync(&self) -> bool {
-        true
-    }
-
-    fn get_stages(&self) -> Vec<PluginRunningStage> {
-        vec![PluginRunningStage::Request]
-    }
-
-    fn check_schema(&self, _conf: &PluginConf) {}
 }
 
 impl RequestHeaderModifierFilter {

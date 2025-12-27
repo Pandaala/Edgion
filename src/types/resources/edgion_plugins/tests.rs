@@ -4,11 +4,13 @@ use super::*;
 use crate::types::resources::http_route::{HTTPHeader, HTTPHeaderFilter};
 
 /// Helper function to create EdgionPlugins for testing
-fn create_edgion_plugins(plugins: Option<Vec<PluginEntry>>) -> EdgionPlugins {
+fn create_edgion_plugins_with_request_filters(plugins: Option<Vec<RequestFilterEntry>>) -> EdgionPlugins {
     let mut ep = EdgionPlugins {
         metadata: Default::default(),
         spec: EdgionPluginsSpec {
-            plugins,
+            request_plugins: plugins,
+            upstream_response_filter_plugins: None,
+            upstream_response_plugins: None,
             plugin_runtime: Default::default(),
         },
         status: None,
@@ -31,42 +33,42 @@ fn make_header_modifier_plugin() -> EdgionPlugin {
 
 #[test]
 fn test_has_plugins_empty() {
-    let ep = create_edgion_plugins(None);
+    let ep = create_edgion_plugins_with_request_filters(None);
     assert!(!ep.has_plugins());
     assert_eq!(ep.plugin_count(), 0);
 }
 
 #[test]
 fn test_has_plugins_with_empty_vec() {
-    let ep = create_edgion_plugins(Some(vec![]));
+    let ep = create_edgion_plugins_with_request_filters(Some(vec![]));
     assert!(!ep.has_plugins());
     assert_eq!(ep.plugin_count(), 0);
 }
 
 #[test]
 fn test_plugin_entry_default_enabled() {
-    let entry = PluginEntry::new(make_header_modifier_plugin());
+    let entry = RequestFilterEntry::new(make_header_modifier_plugin());
     assert!(entry.is_enabled());
     assert_eq!(entry.type_name(), "RequestHeaderModifier");
 }
 
 #[test]
 fn test_plugin_entry_disabled() {
-    let entry = PluginEntry::with_enable(make_header_modifier_plugin(), false);
+    let entry = RequestFilterEntry::with_enable(make_header_modifier_plugin(), false);
     assert!(!entry.is_enabled());
 }
 
 #[test]
 fn test_plugin_entry_serialization() {
     // Enabled plugin (enable field should be omitted)
-    let enabled_entry = PluginEntry::new(make_header_modifier_plugin());
+    let enabled_entry = RequestFilterEntry::new(make_header_modifier_plugin());
     let json = serde_json::to_string(&enabled_entry).unwrap();
     assert!(!json.contains("\"enable\"")); // enable=true is skipped
     assert!(json.contains("\"type\":\"requestHeaderModifier\""));
     assert!(json.contains("\"config\""));
 
     // Disabled plugin (enable field should be present)
-    let disabled_entry = PluginEntry::with_enable(make_header_modifier_plugin(), false);
+    let disabled_entry = RequestFilterEntry::with_enable(make_header_modifier_plugin(), false);
     let json = serde_json::to_string(&disabled_entry).unwrap();
     assert!(json.contains("\"enable\":false"));
 }
@@ -75,26 +77,26 @@ fn test_plugin_entry_serialization() {
 fn test_plugin_entry_deserialization() {
     // With enable=false
     let json = r#"{"enable":false,"type":"requestHeaderModifier","config":{"set":[{"name":"X-Test","value":"test-value"}]}}"#;
-    let entry: PluginEntry = serde_json::from_str(json).unwrap();
+    let entry: RequestFilterEntry = serde_json::from_str(json).unwrap();
     assert!(!entry.is_enabled());
     assert_eq!(entry.type_name(), "RequestHeaderModifier");
 
     // Without enable field (should default to true)
     let json = r#"{"type":"requestHeaderModifier","config":{"set":[{"name":"X-Test","value":"test-value"}]}}"#;
-    let entry: PluginEntry = serde_json::from_str(json).unwrap();
+    let entry: RequestFilterEntry = serde_json::from_str(json).unwrap();
     assert!(entry.is_enabled());
 }
 
 #[test]
 fn test_enabled_plugins_filter() {
-    let plugins = vec![
-        PluginEntry::new(EdgionPlugin::RequestHeaderModifier(HTTPHeaderFilter {
+    let request_plugins = vec![
+        RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(HTTPHeaderFilter {
             set: None,
             add: None,
             remove: Some(vec!["X-Remove".into()]),
         })),
-        PluginEntry::with_enable(
-            EdgionPlugin::ResponseHeaderModifier(HTTPHeaderFilter {
+        RequestFilterEntry::with_enable(
+            EdgionPlugin::RequestHeaderModifier(HTTPHeaderFilter {
                 set: None,
                 add: Some(vec![HTTPHeader {
                     name: "X-Response".into(),
@@ -106,12 +108,32 @@ fn test_enabled_plugins_filter() {
         ),
     ];
 
-    let ep = create_edgion_plugins(Some(plugins));
-    assert_eq!(ep.plugin_count(), 2);
+    let response_filter_plugins = vec![
+        UpstreamResponseFilterEntry::new(EdgionPlugin::ResponseHeaderModifier(HTTPHeaderFilter {
+            set: None,
+            add: None,
+            remove: Some(vec!["X-Remove".into()]),
+        })),
+    ];
 
-    let enabled = ep.enabled_plugins();
-    assert_eq!(enabled.len(), 1);
-    assert_eq!(enabled[0].type_name(), "RequestHeaderModifier");
+    let mut ep = EdgionPlugins {
+        metadata: Default::default(),
+        spec: EdgionPluginsSpec {
+            request_plugins: Some(request_plugins),
+            upstream_response_filter_plugins: Some(response_filter_plugins),
+            upstream_response_plugins: None,
+            plugin_runtime: Default::default(),
+        },
+        status: None,
+    };
+    ep.init_plugin_runtime();
+
+    assert_eq!(ep.plugin_count(), 3);
+
+    // Test individual stage counts
+    let request_entries = ep.spec.request_plugins.as_ref().unwrap();
+    let enabled_request = request_entries.iter().filter(|e| e.is_enabled()).count();
+    assert_eq!(enabled_request, 1);
 }
 
 #[test]

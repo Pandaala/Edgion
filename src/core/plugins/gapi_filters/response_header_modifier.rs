@@ -1,9 +1,8 @@
 //! ResponseHeaderModifier filter implementation
 
-use async_trait::async_trait;
 use crate::types::resources::{HTTPHeaderFilter, GRPCHeaderFilter};
-use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
-use crate::core::plugins::plugin_runtime::traits::{Plugin, PluginSession};
+use crate::types::filters::PluginRunningResult;
+use crate::core::plugins::plugin_runtime::filters::{UpstreamResponseFilter, PluginSession};
 use crate::core::plugins::plugin_runtime::log::PluginLog;
 
 pub struct ResponseHeaderModifierFilter {
@@ -28,39 +27,18 @@ impl ResponseHeaderModifierFilter {
     }
 }
 
-#[async_trait]
-impl Plugin for ResponseHeaderModifierFilter {
+impl UpstreamResponseFilter for ResponseHeaderModifierFilter {
     fn name(&self) -> &str {
         "ResponseHeaderModifier"
     }
 
-    fn run_sync(
+    fn run_upstream_response_filter(
         &self,
-        _stage: PluginRunningStage,
         session: &mut dyn PluginSession,
         _log: &mut PluginLog,
     ) -> PluginRunningResult {
         self.modify_headers(session)
     }
-
-    async fn run_async(
-        &self,
-        _stage: PluginRunningStage,
-        session: &mut dyn PluginSession,
-        _log: &mut PluginLog,
-    ) -> PluginRunningResult {
-        self.modify_headers(session)
-    }
-
-    fn supports_sync(&self) -> bool {
-        true
-    }
-
-    fn get_stages(&self) -> Vec<PluginRunningStage> {
-        vec![PluginRunningStage::UpstreamResponseFilter]
-    }
-
-    fn check_schema(&self, _conf: &PluginConf) {}
 }
 
 impl ResponseHeaderModifierFilter {

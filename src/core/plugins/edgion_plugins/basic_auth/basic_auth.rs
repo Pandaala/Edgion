@@ -4,8 +4,8 @@ use bytes::Bytes;
 use pingora_http::ResponseHeader;
 use std::collections::HashMap;
 
-use crate::core::plugins::{Plugin, PluginSession, PluginLog};
-use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
+use crate::core::plugins::plugin_runtime::{RequestFilter, PluginSession, PluginLog};
+use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::BasicAuthConfig;
 
 use base64::{Engine as _, engine::general_purpose};
@@ -20,7 +20,6 @@ pub struct BasicAuth {
     // Simple username -> password_hash mapping
     user_passwords: HashMap<String, String>,
     config: BasicAuthConfig,
-    stages: Vec<PluginRunningStage>,
 }
 
 impl BasicAuth {
@@ -30,7 +29,6 @@ impl BasicAuth {
             name: "BasicAuth".to_string(),
             user_passwords: HashMap::new(),
             config: config.clone(),
-            stages: vec![PluginRunningStage::Request],
         }
     }
 
@@ -155,21 +153,16 @@ impl BasicAuth {
 }
 
 #[async_trait]
-impl Plugin for BasicAuth {
+impl RequestFilter for BasicAuth {
     fn name(&self) -> &str {
         &self.name
     }
 
-    async fn run_async(
+    async fn run_request(
         &self,
-        stage: PluginRunningStage,
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
-        if stage != PluginRunningStage::Request {
-            return PluginRunningResult::Nothing;
-        }
-
         // Hard-coded: Skip OPTIONS requests
         // CORS preflight is handled by CORS plugin
         if session.method() == "OPTIONS" {
@@ -213,20 +206,12 @@ impl Plugin for BasicAuth {
 
         PluginRunningResult::GoodNext
     }
-
-    fn get_stages(&self) -> Vec<PluginRunningStage> {
-        self.stages.clone()
-    }
-
-    fn check_schema(&self, _conf: &PluginConf) {
-        // Schema validation can be implemented here if needed
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugins::plugin_runtime::traits::MockPluginSession;
+    use crate::core::plugins::plugin_runtime::filters::session::MockPluginSession;
     use base64::engine::general_purpose;
 
     fn create_basic_auth_with_users() -> BasicAuth {
@@ -267,7 +252,7 @@ mod tests {
             .expect_set_request_header()
             .returning(|_, _| Ok(()));
         
-        let result = auth.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
         
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.log.as_ref().unwrap().contains("Auth successful"));
@@ -293,7 +278,7 @@ mod tests {
             .expect_shutdown()
             .returning(|| {});
         
-        let result = auth.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
         
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
     }
@@ -314,7 +299,7 @@ mod tests {
         mock_session.expect_header_value().returning(|_| None);
         mock_session.expect_set_request_header().returning(|_, _| Ok(()));
         
-        let result = auth.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
         
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.log.as_ref().unwrap().contains("anonymous"));
@@ -348,7 +333,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
         
-        let result = auth.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
         
         assert_eq!(result, PluginRunningResult::GoodNext);
     }
@@ -361,7 +346,7 @@ mod tests {
         
         mock_session.expect_method().returning(|| "OPTIONS".to_string());
         
-        let result = auth.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
         
         assert_eq!(result, PluginRunningResult::GoodNext);
     }

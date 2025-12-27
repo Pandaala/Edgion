@@ -12,14 +12,13 @@
 use async_trait::async_trait;
 use tokio::time::{sleep, Duration};
 
-use crate::core::plugins::{Plugin, PluginSession, PluginLog};
-use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
+use crate::core::plugins::plugin_runtime::{RequestFilter, PluginSession, PluginLog};
+use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::MockConfig;
 
 pub struct Mock {
     name: String,
     config: MockConfig,
-    stages: Vec<PluginRunningStage>,
 }
 
 impl Mock {
@@ -28,27 +27,21 @@ impl Mock {
         Mock {
             name: "Mock".to_string(),
             config: config.clone(),
-            stages: vec![PluginRunningStage::Request],
         }
     }
 }
 
 #[async_trait]
-impl Plugin for Mock {
+impl RequestFilter for Mock {
     fn name(&self) -> &str {
         &self.name
     }
 
-    async fn run_async(
+    async fn run_request(
         &self,
-        stage: PluginRunningStage,
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
-        if stage != PluginRunningStage::Request {
-            return PluginRunningResult::Nothing;
-        }
-
         plugin_log.add_plugin_log(&format!("Returning mock response with status {}; ", self.config.status_code));
 
         // Apply delay if configured
@@ -77,14 +70,6 @@ impl Plugin for Mock {
             body: self.config.body.clone(),
         }
     }
-
-    fn get_stages(&self) -> Vec<PluginRunningStage> {
-        self.stages.clone()
-    }
-
-    fn check_schema(&self, _conf: &PluginConf) {
-        // Schema validation can be implemented here if needed
-    }
 }
 
 #[cfg(test)]
@@ -99,15 +84,5 @@ mod tests {
         assert_eq!(mock.name(), "Mock");
         assert_eq!(mock.config.status_code, 200);
         assert_eq!(mock.config.body, Some(r#"{"message":"OK"}"#.to_string()));
-    }
-
-    #[test]
-    fn test_mock_stages() {
-        let config = MockConfig::default();
-        let mock = Mock::new(&config);
-
-        let stages = mock.get_stages();
-        assert_eq!(stages.len(), 1);
-        assert_eq!(stages[0], PluginRunningStage::Request);
     }
 }

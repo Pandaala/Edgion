@@ -34,24 +34,22 @@ use bytes::Bytes;
 use pingora_http::ResponseHeader;
 use std::net::IpAddr;
 
-use crate::core::plugins::{Plugin, PluginSession, PluginLog};
-use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
+use crate::core::plugins::plugin_runtime::{RequestFilter, PluginSession, PluginLog};
+use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{IpRestrictionConfig, IpSource};
 
 /// IP Restriction plugin
 pub struct IpRestriction {
     name: String,
     config: IpRestrictionConfig,
-    stages: Vec<PluginRunningStage>,
 }
 
 impl IpRestriction {
     /// Create a new IpRestriction plugin from configuration
-    pub fn new(config: &IpRestrictionConfig) -> Box<dyn Plugin> {
+    pub fn new(config: &IpRestrictionConfig) -> Box<dyn RequestFilter> {
         let ip_restriction = IpRestriction {
             name: "IpRestriction".to_string(),
             config: config.clone(),
-            stages: vec![PluginRunningStage::Request],
         };
 
         Box::new(ip_restriction)
@@ -74,21 +72,16 @@ impl IpRestriction {
 }
 
 #[async_trait]
-impl Plugin for IpRestriction {
+impl RequestFilter for IpRestriction {
     fn name(&self) -> &str {
         &self.name
     }
 
-    async fn run_async(
+    async fn run_request(
         &self,
-        stage: PluginRunningStage,
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
-        if stage != PluginRunningStage::Request {
-            return PluginRunningResult::GoodNext;
-        }
-
         // Get client IP
         let client_ip = match self.get_client_ip(session) {
             Some(ip) => ip,
@@ -131,20 +124,12 @@ impl Plugin for IpRestriction {
         plugin_log.add_plugin_log(&format!("Access ALLOWED for {}\n", client_ip));
         PluginRunningResult::GoodNext
     }
-
-    fn get_stages(&self) -> Vec<PluginRunningStage> {
-        self.stages.clone()
-    }
-
-    fn check_schema(&self, _conf: &PluginConf) {
-        // Schema validation is done in IpRestrictionConfig::new
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugins::plugin_runtime::traits::MockPluginSession;
+    use crate::core::plugins::plugin_runtime::filters::session::MockPluginSession;
     use crate::types::resources::edgion_plugins::DefaultAction;
 
     fn create_ip_config_allow_list() -> IpRestrictionConfig {
@@ -186,7 +171,7 @@ mod tests {
             .expect_remote_addr()
             .return_const("192.168.1.50".to_string());
 
-        let result = plugin.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.log.as_ref().unwrap().contains("ALLOWED"));
@@ -209,7 +194,7 @@ mod tests {
             .expect_write_response_body()
             .returning(|_, _| Ok(()));
 
-        let result = plugin.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(plugin_log.log.as_ref().unwrap().contains("DENIED"));
@@ -232,7 +217,7 @@ mod tests {
             .expect_write_response_body()
             .returning(|_, _| Ok(()));
 
-        let result = plugin.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(plugin_log.log.as_ref().unwrap().contains("DENIED"));
@@ -249,7 +234,7 @@ mod tests {
             .expect_remote_addr()
             .return_const("172.16.0.1".to_string());
 
-        let result = plugin.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.log.as_ref().unwrap().contains("ALLOWED"));
@@ -266,7 +251,7 @@ mod tests {
             .expect_remote_addr()
             .return_const("".to_string());
 
-        let result = plugin.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.log.as_ref().unwrap().contains("Failed to get client IP"));

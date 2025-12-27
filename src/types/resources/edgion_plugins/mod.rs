@@ -21,7 +21,7 @@ pub mod plugin_configs;
 mod tests;
 
 // Re-exports
-pub use entry::{ConditionEnable, PluginEntry};
+pub use entry::{ConditionEnable, PluginEntry, RequestFilterEntry, UpstreamResponseFilterEntry, UpstreamResponseEntry};
 pub use gateway_api_plugins::EdgionPlugin;
 pub use plugin_configs::{
     BasicAuthConfig,
@@ -52,9 +52,17 @@ pub const EDGION_PLUGINS_KIND: &str = "EdgionPlugins";
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionPluginsSpec {
-    /// Plugin configurations
+    /// Request stage plugins (async)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugins: Option<Vec<PluginEntry>>,
+    pub request_plugins: Option<Vec<RequestFilterEntry>>,
+
+    /// Upstream response filter stage plugins (sync)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_response_filter_plugins: Option<Vec<UpstreamResponseFilterEntry>>,
+
+    /// Upstream response stage plugins (async)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_response_plugins: Option<Vec<UpstreamResponseEntry>>,
 
     /// Plugin runtime (runtime only, not serialized)
     /// This is computed from edgion_plugins at runtime
@@ -83,40 +91,52 @@ impl EdgionPlugins {
 
     /// Check if this plugin has any plugins defined
     pub fn has_plugins(&self) -> bool {
-        self.spec.plugins.as_ref().map_or(false, |p| !p.is_empty())
+        self.spec.request_plugins.as_ref().map_or(false, |p| !p.is_empty())
+            || self.spec.upstream_response_filter_plugins.as_ref().map_or(false, |p| !p.is_empty())
+            || self.spec.upstream_response_plugins.as_ref().map_or(false, |p| !p.is_empty())
     }
 
     /// Get the total number of plugins
     pub fn plugin_count(&self) -> usize {
-        self.spec.plugins.as_ref().map_or(0, |p| p.len())
+        let request_count = self.spec.request_plugins.as_ref().map_or(0, |p| p.len());
+        let filter_count = self.spec.upstream_response_filter_plugins.as_ref().map_or(0, |p| p.len());
+        let response_count = self.spec.upstream_response_plugins.as_ref().map_or(0, |p| p.len());
+        request_count + filter_count + response_count
     }
 
-    /// Get plugin entries as a slice
-    pub fn plugin_entries(&self) -> &[PluginEntry] {
-        self.spec.plugins.as_deref().unwrap_or(&[])
+    /// Get request filter entries as a slice
+    pub fn request_filter_entries(&self) -> &[RequestFilterEntry] {
+        self.spec.request_plugins.as_deref().unwrap_or(&[])
     }
 
-    /// Get only enabled plugins
-    pub fn enabled_plugins(&self) -> Vec<&EdgionPlugin> {
-        self.spec
-            .plugins
-            .as_ref()
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter(|e| e.enable)
-                    .map(|e| &e.plugin)
-                    .collect()
-            })
-            .unwrap_or_default()
+    /// Get upstream response filter entries as a slice
+    pub fn upstream_response_filter_entries(&self) -> &[UpstreamResponseFilterEntry] {
+        self.spec.upstream_response_filter_plugins.as_deref().unwrap_or(&[])
+    }
+
+    /// Get upstream response entries as a slice
+    pub fn upstream_response_entries(&self) -> &[UpstreamResponseEntry] {
+        self.spec.upstream_response_plugins.as_deref().unwrap_or(&[])
     }
 
     /// Initialize plugin runtime from edgion_plugins
     /// This should be called after deserialization to populate the runtime field
     pub fn init_plugin_runtime(&mut self) {
-        if let Some(plugins) = &self.spec.plugins {
-            self.spec.plugin_runtime = Arc::new(PluginRuntime::from_edgion_plugins(plugins));
+        let mut runtime = PluginRuntime::new();
+        
+        if let Some(request_plugins) = &self.spec.request_plugins {
+            runtime.add_from_request_filters(request_plugins);
         }
+        
+        if let Some(upstream_response_filter_plugins) = &self.spec.upstream_response_filter_plugins {
+            runtime.add_from_upstream_response_filters(upstream_response_filter_plugins);
+        }
+        
+        if let Some(upstream_response_plugins) = &self.spec.upstream_response_plugins {
+            runtime.add_from_upstream_responses(upstream_response_plugins);
+        }
+        
+        self.spec.plugin_runtime = Arc::new(runtime);
     }
 }
 

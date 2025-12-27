@@ -7,8 +7,8 @@ use http::StatusCode;
 use pingora_http::ResponseHeader;
 
 use crate::types::resources::HTTPRequestRedirectFilter;
-use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
-use crate::core::plugins::plugin_runtime::traits::{Plugin, PluginSession};
+use crate::types::filters::PluginRunningResult;
+use crate::core::plugins::plugin_runtime::filters::{RequestFilter, PluginSession};
 use crate::core::plugins::plugin_runtime::log::PluginLog;
 
 pub struct RequestRedirectFilter {
@@ -50,14 +50,13 @@ impl RequestRedirectFilter {
 }
 
 #[async_trait]
-impl Plugin for RequestRedirectFilter {
+impl RequestFilter for RequestRedirectFilter {
     fn name(&self) -> &str {
         "RequestRedirect"
     }
 
-    async fn run_async(
+    async fn run_request(
         &self,
-        _stage: PluginRunningStage,
         session: &mut dyn PluginSession,
         _log: &mut PluginLog,
     ) -> PluginRunningResult {
@@ -86,11 +85,5 @@ impl Plugin for RequestRedirectFilter {
         
         PluginRunningResult::ErrTerminateRequest
     }
-
-    fn get_stages(&self) -> Vec<PluginRunningStage> {
-        vec![PluginRunningStage::Request]
-    }
-
-    fn check_schema(&self, _conf: &PluginConf) {}
 }
 

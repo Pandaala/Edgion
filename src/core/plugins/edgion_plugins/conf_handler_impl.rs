@@ -49,7 +49,7 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::edgion_plugins::{EdgionPluginsSpec, PluginEntry, EdgionPlugin};
+    use crate::types::resources::edgion_plugins::{EdgionPluginsSpec, RequestFilterEntry, EdgionPlugin};
     use crate::types::resources::http_route::HTTPHeaderFilter;
 
     fn create_test_plugin(namespace: &str, name: &str) -> EdgionPlugins {
@@ -60,13 +60,15 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionPluginsSpec {
-                plugins: Some(vec![
-                    PluginEntry::new(EdgionPlugin::RequestHeaderModifier(HTTPHeaderFilter {
+                request_plugins: Some(vec![
+                    RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(HTTPHeaderFilter {
                         set: None,
                         add: None,
                         remove: Some(vec!["X-Remove".to_string()]),
                     })),
                 ]),
+                upstream_response_filter_plugins: None,
+                upstream_response_plugins: None,
                 plugin_runtime: Default::default(),
             },
             status: None,

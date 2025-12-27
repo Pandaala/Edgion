@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
 
-use crate::core::plugins::{Plugin, PluginSession, PluginLog};
-use crate::types::filters::{PluginConf, PluginRunningResult, PluginRunningStage};
+use crate::core::plugins::plugin_runtime::{RequestFilter, PluginSession, PluginLog};
+use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::CorsConfig;
 
 type CorsError = Box<dyn std::error::Error + Send + Sync>;
@@ -13,7 +13,6 @@ type CorsResult<T> = Result<T, CorsError>;
 pub struct Cors {
     name: String,
     config: CorsConfig,
-    stages: Vec<PluginRunningStage>,
 }
 
 impl Cors {
@@ -35,7 +34,6 @@ impl Cors {
         Cors {
             name: "Cors".to_string(),
             config,
-            stages: vec![PluginRunningStage::Request],
         }
     }
 
@@ -208,22 +206,16 @@ impl Cors {
 }
 
 #[async_trait]
-impl Plugin for Cors {
+impl RequestFilter for Cors {
     fn name(&self) -> &str {
         &self.name
     }
 
-    async fn run_async(
+    async fn run_request(
         &self,
-        stage: PluginRunningStage,
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
-        // Only process in Request stage
-        if stage != PluginRunningStage::Request {
-            return PluginRunningResult::Nothing;
-        }
-
         // Check if there's an Origin header (CORS indicator)
         let origin_header = match session.header_value("origin") {
             Some(origin) => origin,
@@ -272,20 +264,12 @@ impl Plugin for Cors {
         // Continue processing
         PluginRunningResult::GoodNext
     }
-
-    fn get_stages(&self) -> Vec<PluginRunningStage> {
-        self.stages.clone()
-    }
-
-    fn check_schema(&self, _conf: &PluginConf) {
-        // Schema validation is done in CorsConfig::new
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugins::plugin_runtime::traits::MockPluginSession;
+    use crate::core::plugins::plugin_runtime::filters::session::MockPluginSession;
 
     fn create_cors_config() -> CorsConfig {
         CorsConfig {
@@ -343,7 +327,7 @@ mod tests {
             .expect_write_response_body()
             .returning(|_, _| Ok(()));
 
-        let result = cors.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(plugin_log.log.as_ref().unwrap().contains("preflight"));
@@ -376,7 +360,7 @@ mod tests {
             .expect_append_response_header()
             .returning(|_, _| Ok(()));
 
-        let result = cors.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.log.as_ref().unwrap().contains("normal request"));
@@ -395,7 +379,7 @@ mod tests {
             .with(mockall::predicate::eq("origin"))
             .returning(|_| Some("https://evil.com".to_string()));
 
-        let result = cors.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.log.as_ref().unwrap().contains("Rejecting"));
@@ -413,7 +397,7 @@ mod tests {
             .with(mockall::predicate::eq("origin"))
             .returning(|_| None);
 
-        let result = cors.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.log.is_none());
@@ -451,7 +435,7 @@ mod tests {
             .expect_append_response_header()
             .returning(|_, _| Ok(()));
 
-        let result = cors.run_async(PluginRunningStage::Request, &mut mock_session, &mut plugin_log).await;
+        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.log.as_ref().unwrap().contains("Forwarding preflight"));
