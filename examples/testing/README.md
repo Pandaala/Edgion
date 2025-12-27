@@ -16,6 +16,7 @@ This document provides comprehensive information about Edgion's testing infrastr
 - [Log Files](#log-files)
 - [Configuration Files](#configuration-files)
 - [Troubleshooting](#troubleshooting)
+- [For AI Assistants](#for-ai-assistants)
 
 ---
 
@@ -273,7 +274,6 @@ cd examples/testing
 
 ## Quick Start
 
-
 ### One-Command Integration Test (Recommended)
 
 ```bash
@@ -351,7 +351,6 @@ cargo run --bin edgion-gateway
 ---
 
 ## Test Client CLI
-
 
 ### Basic Usage
 
@@ -480,7 +479,6 @@ The test client uses a modular suite-based architecture:
 
 ## Manual Testing Commands
 
-
 ### HTTP Tests (curl)
 
 ```bash
@@ -599,98 +597,98 @@ echo "Hello WebSocket" | websocat ws://localhost:30005/ws  # Direct
 
 ## Port Reference
 
-### test_server 后端端口
+### test_server Backend Ports
 
-| 协议 | 端口 | 说明 |
-|------|------|------|
-| HTTP | 30001-30004 | HTTP 测试服务（4 个实例）|
-| gRPC | 30021 | gRPC 测试服务 |
-| WebSocket | 30005 | WebSocket 回显服务 |
-| TCP | 30010 | TCP 回显服务 |
-| UDP | 30011 | UDP 回显服务 |
+| Protocol | Ports | Description |
+|----------|-------|-------------|
+| HTTP | 30001-30004 | HTTP test services (4 instances for load balancing) |
+| gRPC | 30021 | gRPC test service |
+| WebSocket | 30005 | WebSocket echo service |
+| TCP | 30010 | TCP echo service |
+| UDP | 30011 | UDP echo service |
 
-### Gateway 监听端口
+### Gateway Listener Ports
 
-| 协议 | 端口 | 说明 |
-|------|------|------|
-| HTTP | 10080 | HTTP 网关 |
-| HTTPS | 10443 | HTTPS 网关（需要 TLS 证书）|
-| gRPC (HTTP) | 10080 | gRPC over HTTP/2 |
+| Protocol | Port | Description |
+|----------|------|-------------|
+| HTTP | 10080 | HTTP gateway |
+| HTTPS | 10443 | HTTPS gateway (requires TLS certificates) |
+| gRPC (HTTP) | 10080 | gRPC over HTTP/2 cleartext |
 | gRPC (HTTPS) | 18443 | gRPC over TLS |
-| TCP | 19000 | TCP 代理 |
-| UDP | 19002 | UDP 代理 |
-| TLS Terminate | 19001 | TLS 终结到 TCP 后端 |
+| TCP | 19000 | TCP proxy |
+| UDP | 19002 | UDP proxy |
+| TLS Terminate | 19001 | TLS termination to TCP backend |
 
-### Controller 端口
+### Controller Ports
 
-| 端口 | 说明 |
-|------|------|
-| 50051 | gRPC API（Gateway 连接）|
-| 8080 | Admin API |
+| Port | Description |
+|------|-------------|
+| 50051 | gRPC API (Gateway connection) |
+| 8080 | Admin API (health checks, resource queries) |
 
 ---
 
-## TLS 证书
+## TLS Certificates
 
-HTTPS 和 gRPC-HTTPS 测试需要 TLS 证书。
+HTTPS and gRPC-HTTPS tests require TLS certificates.
 
-### 自动生成（推荐）
+### Automatic Generation (Recommended)
 
 ```bash
 cd examples/testing
 ./scripts/generate_certs.sh
 ```
 
-### 生成规则
+### Generation Rules
 
-- **智能跳过**：如果 `Secret_edge_edge-tls.yaml` 已存在，自动跳过
-- **按需重新生成**：
+- **Smart Skip**: Automatically skips if `Secret_edge_edge-tls.yaml` already exists
+- **Regenerate On Demand**:
   ```bash
   rm ../conf/Secret_edge_edge-tls.yaml
   ./scripts/generate_certs.sh
   ```
 
-### 证书说明
+### Certificate Details
 
-- 自签名证书（仅用于测试）
-- 支持多个域名（SAN）：
-  - `test.example.com`（HTTPS 测试）
-  - `grpc.example.com`（gRPC-HTTPS 测试）
-  - `tcp.example.com`（TLS Terminate to TCP 测试）
-- 临时文件自动清理（`/tmp/edgion-certs-$$`）
-- Secret YAML 被 `.gitignore` 忽略
-- 客户端测试证书：`examples/testing/certs/ca.pem`（自动生成）
+- Self-signed certificate (test purposes only)
+- Supports multiple domains (SAN):
+  - `test.example.com` (HTTPS tests)
+  - `grpc.example.com` (gRPC-HTTPS tests)
+  - `tcp.example.com` (TLS Terminate to TCP tests)
+- Temporary files automatically cleaned up (`/tmp/edgion-certs-$$`)
+- Secret YAML ignored by `.gitignore`
+- Client test certificate: `examples/testing/certs/ca.pem` (auto-generated)
 
-### 生成的资源
+### Generated Resources
 
 ```
 examples/conf/
-├── Secret_edge_edge-tls.yaml     # TLS 证书 Secret
-└── EdgionTls_edge_edge-tls.yaml  # TLS 证书配置
+├── Secret_edge_edge-tls.yaml     # TLS certificate Secret
+└── EdgionTls_edge_edge-tls.yaml  # TLS certificate config
 
 examples/testing/certs/
-└── ca.pem                         # 客户端测试用 CA 证书
+└── ca.pem                         # CA certificate for client tests
 ```
 
 ---
 
-## TLS Terminate to TCP 测试
+## TLS Terminate to TCP Tests
 
-这是一个特殊的测试场景，用于验证 Gateway 的 TLS 终结功能：
+This is a special test scenario to validate Gateway's TLS termination capability:
 
-**流程**：客户端 TLS → Gateway（终结 TLS）→ 后端 TCP（明文）
+**Flow**: Client TLS → Gateway (terminates TLS) → Backend TCP (plaintext)
 
-### 配置文件
+### Configuration Files
 
 ```yaml
-# Gateway 配置（使用 annotation 扩展）
+# Gateway configuration (using annotation extension)
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: tls-terminate-gateway
   namespace: edge
   annotations:
-    edgion.io/backend-protocol: tcp  # 指示后端使用 TCP
+    edgion.io/backend-protocol: tcp  # Indicates TCP backend
 spec:
   listeners:
     - name: tls-terminate-tcp
@@ -701,7 +699,7 @@ spec:
         certificateRefs:
           - name: edge-tls
 
-# TLSRoute 配置（基于 SNI 路由）
+# TLSRoute configuration (SNI-based routing)
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TLSRoute
 metadata:
@@ -719,13 +717,13 @@ spec:
           port: 30010
 ```
 
-### 测试命令
+### Test Commands
 
 ```bash
-# 使用 test_client（推荐）
+# Using test_client (recommended)
 cargo run --example test_client -- -g tls-tcp
 
-# 手动测试（使用 openssl）
+# Manual test (using openssl)
 (echo "TLS-TCP-TEST"; sleep 0.5) | \
   openssl s_client -connect 127.0.0.1:19001 \
   -servername tcp.example.com \
@@ -733,116 +731,339 @@ cargo run --example test_client -- -g tls-tcp
   -quiet 2>/dev/null
 ```
 
-### 验证点
+### Validation Points
 
-1. ✅ TLS 握手成功（使用正确的 SNI: tcp.example.com）
-2. ✅ Gateway 正确终结 TLS
-3. ✅ 后端收到明文 TCP 数据
-4. ✅ Echo 响应能正确返回到客户端（通过 TLS 加密）
+1. ✅ TLS handshake successful (using correct SNI: tcp.example.com)
+2. ✅ Gateway correctly terminates TLS
+3. ✅ Backend receives plaintext TCP data
+4. ✅ Echo response returns to client (encrypted via TLS)
 
-### 使用场景
+### Use Cases
 
-- 数据库代理（如 MySQL、PostgreSQL）
-- Redis TLS 前端
-- 自定义协议的 TLS offloading
-- 需要在 Gateway 层检查/修改流量的场景
+- Database proxy (e.g., MySQL, PostgreSQL)
+- Redis TLS frontend
+- Custom protocol TLS offloading
+- Scenarios requiring traffic inspection/modification at Gateway layer
 
 ---
 
-## 日志文件
+## Log Files
 
-集成测试脚本日志位置：`examples/testing/logs/`
+Integration test script log location: `examples/testing/logs/`
 
 ```
 examples/testing/logs/
-├── controller.log    # edgion-controller 日志
-├── gateway.log       # edgion-gateway 日志
-├── test_server.log   # test_server 日志
-├── access.log        # HTTP 访问日志
-└── test_result.log   # 测试结果日志
+├── controller.log    # edgion-controller logs
+├── gateway.log       # edgion-gateway logs
+├── test_server.log   # test_server logs
+├── access.log        # HTTP access logs
+└── test_result.log   # Test result logs
 ```
 
-### 查看日志
+### Viewing Logs
 
 ```bash
-# 实时查看 Gateway 访问日志
+# Real-time Gateway access log
 tail -f examples/testing/logs/access.log
 
-# 查看测试结果
+# View test results
 cat examples/testing/logs/test_result.log
 
-# 查看 Gateway 日志
+# View Gateway logs
 tail -f examples/testing/logs/gateway.log
 
-# 查看所有日志
+# List all logs
 ls -lh examples/testing/logs/
 ```
 
 ---
 
-## 配置文件
+## Configuration Files
 
-配置文件位于 `examples/conf/`：
+Configuration files are located in `examples/conf/`:
 
-### Gateway API 资源
+### Gateway API Resources
 
 - `GatewayClass__public-gateway.yaml` - GatewayClass
-- `Gateway_edge_example-gateway.yaml` - Gateway（HTTP/HTTPS/gRPC/TCP/UDP）
-- `HTTPRoute_edge_test-http.yaml` - HTTP 路由（包含 WebSocket）
-- `GRPCRoute_edge_test-grpc.yaml` - gRPC HTTP 路由（10080）
-- `GRPCRoute_edge_test-grpc-https.yaml` - gRPC HTTPS 路由（18443）
-- `TCPRoute_edge_test-tcp.yaml` - TCP 路由
-- `UDPRoute_edge_test-udp.yaml` - UDP 路由
+- `Gateway_edge_example-gateway.yaml` - Gateway (HTTP/HTTPS/gRPC/TCP/UDP)
+- `HTTPRoute_edge_test-http.yaml` - HTTP routes (includes WebSocket)
+- `GRPCRoute_edge_test-grpc.yaml` - gRPC HTTP routes (10080)
+- `GRPCRoute_edge_test-grpc-https.yaml` - gRPC HTTPS routes (18443)
+- `TCPRoute_edge_test-tcp.yaml` - TCP routes
+- `UDPRoute_edge_test-udp.yaml` - UDP routes
 
-### 后端服务
+### Backend Services
 
-- `Service_edge_test-*.yaml` - Service 定义
-- `EndpointSlice_edge_test-*.yaml` - 后端 Endpoint
+- `Service_edge_test-*.yaml` - Service definitions
+- `EndpointSlice_edge_test-*.yaml` - Backend endpoints
 
-### TLS 资源
+### TLS Resources
 
-- `EdgionTls_edge_edge-tls.yaml` - TLS 证书配置
-- `Secret_edge_edge-tls.yaml` - TLS 证书数据（自动生成，被 gitignore）
+- `EdgionTls_edge_edge-tls.yaml` - TLS certificate configuration
+- `Secret_edge_edge-tls.yaml` - TLS certificate data (auto-generated, gitignored)
+
+### Edgion Custom Resources
+
+- `EdgionPlugins_*.yaml` - HTTP plugin configurations (CORS, CSRF, IP restriction, etc.)
+- `EdgionStreamPlugins_*.yaml` - Stream plugin configurations (TCP/UDP)
+- `EdgionGatewayConfig__*.yaml` - Gateway-specific configurations
+- `PluginMetaData_*.yaml` - Plugin metadata (IP lists, regex patterns, etc.)
+- `LinkSys_*.yaml` - External system connections (Redis, databases, etc.)
 
 ---
 
-## 故障排查
+## Troubleshooting
 
-### Gateway 启动失败
+### Gateway Startup Fails
 
 ```bash
-# 检查 Controller 是否在运行
+# Check if Controller is running
 ps aux | grep edgion-controller
 
-# 检查 Controller 端口
+# Check Controller port
 lsof -i :50051
 
-# 查看 Gateway 日志
+# View Gateway logs
 tail -100 examples/testing/logs/gateway.log
 ```
 
-### HTTPS 测试失败
+### HTTPS Tests Fail
 
 ```bash
-# 检查证书是否生成
+# Check if certificate is generated
 ls examples/conf/Secret_edge_edge-tls.yaml
 
-# 重新生成证书
+# Regenerate certificate
 rm examples/conf/Secret_edge_edge-tls.yaml
 ./scripts/generate_certs.sh
 
-# 检查 HTTPS 监听器
+# Check HTTPS listener
 lsof -i :10443
 ```
 
-### 测试连接失败
+### Test Connection Fails
 
 ```bash
-# 检查所有服务进程
+# Check all service processes
 ps aux | grep -E "edgion|test_server"
 
-# 检查端口占用
+# Check port usage
 lsof -i :10080  # HTTP Gateway
 lsof -i :10443  # HTTPS Gateway
 lsof -i :30001  # HTTP Backend
 ```
+
+### Configuration Load Failures
+
+If `config_load_validator` reports failures:
+
+1. **Check controller logs**:
+   ```bash
+   tail -100 examples/testing/logs/controller.log | grep -i error
+   ```
+
+2. **Common issues**:
+   - YAML syntax errors (indentation, missing fields)
+   - Invalid field names (check camelCase vs snake_case)
+   - Missing required fields
+   - Invalid enum values
+
+3. **Validate YAML syntax**:
+   ```bash
+   # Install yamllint if needed
+   yamllint examples/conf/YourFile.yaml
+   ```
+
+4. **Skip problematic resources temporarily**:
+   Add annotation to the resource:
+   ```yaml
+   metadata:
+     annotations:
+       edgion.io/skip-load-validation: "true"
+   ```
+
+### Resource Synchronization Failures
+
+If `resource_diff` reports mismatches:
+
+1. **Wait for sync**: Resources may take a few seconds to propagate from controller to gateway
+2. **Check gRPC connection**: Ensure gateway is connected to controller on port 50051
+3. **Check controller logs**: Look for gRPC push errors
+4. **Restart gateway**: Sometimes a restart resolves stale state
+
+---
+
+## For AI Assistants
+
+### Quick Reference Guide
+
+When working with Edgion testing framework, AI assistants should:
+
+#### 1. Understanding the Test Pipeline
+
+- **Primary entry point**: `examples/testing/run_integration_test.sh`
+- **Test order**: Config validation → Resource sync → Direct mode → Gateway mode → Specialized tests
+- **Two critical pre-checks**: 
+  1. `config_load_validator` - Validates YAML configs loaded by controller
+  2. `resource_diff` - Verifies controller-gateway state consistency
+
+#### 2. Adding New Tests
+
+**To add a new test suite**:
+1. Create `examples/testing/test_client/suites/your_suite.rs`
+2. Implement `TestSuite` trait with `run(&self, ctx: &TestContext) -> Result<TestResult>`
+3. Add to `examples/testing/test_client/suites/mod.rs`
+4. Register in `examples/testing/test_client.rs` Commands enum
+5. Add to `run_integration_test.sh` if needed (usually for Gateway-only features)
+6. Update this README.md
+
+**Test case structure**:
+```rust
+fn test_something(&self, ctx: &TestContext) -> Result<TestCaseResult> {
+    // 1. Send request
+    let response = /* ... */;
+    
+    // 2. Assert expectations
+    assert_eq!(response.status(), 200, "Status code mismatch");
+    
+    // 3. Return result
+    Ok(TestCaseResult {
+        name: "Test Something".to_string(),
+        passed: true,
+        message: None,
+        duration: elapsed,
+    })
+}
+```
+
+#### 3. Adding New Configuration
+
+**File naming convention**:
+- With namespace: `Kind_namespace_name.yaml`
+- Without namespace: `Kind__name.yaml` (double underscore)
+
+**Special annotations**:
+- Skip load validation: `edgion.io/skip-load-validation: "true"`
+
+**After adding new configs**:
+1. Place in `examples/conf/`
+2. Run `cargo run --example config_load_validator` to verify
+3. Run full integration test: `./run_integration_test.sh`
+
+#### 4. Debugging Test Failures
+
+**Systematic approach**:
+1. **Check unified report**: `examples/testing/logs/test_result.log`
+2. **Identify failing stage**: Config load? Resource sync? Specific test suite?
+3. **View relevant logs**:
+   - Controller: `examples/testing/logs/controller.log`
+   - Gateway: `examples/testing/logs/gateway.log`
+   - Test server: `examples/testing/logs/test_server.log`
+   - Access logs: `examples/testing/logs/access.log`
+4. **Run specific test**: `cargo run --example test_client -- -g <command>`
+5. **Check resource state**: `cargo run --example resource_diff`
+
+**Common failure patterns**:
+- **502 Bad Gateway**: Backend not reachable, check ports and Service/EndpointSlice
+- **404 Not Found**: Route not matched, check Host header and route paths
+- **Configuration errors**: Check controller logs for YAML parsing errors
+- **Plugin errors**: Check access.log for plugin execution details
+
+#### 5. Port Allocation Rules
+
+- **Backend (test_server)**: 30000-30999
+- **Gateway listeners**: 10000-19999
+- **Controller APIs**: 8080 (admin), 50051 (gRPC)
+
+**Never use ports outside these ranges** to avoid conflicts.
+
+#### 6. Plugin Testing
+
+**Plugin log validation**:
+- Plugin logs stored in `ctx.plugin_logs` (type: `Vec<StagePluginLogs>`)
+- Structure: Array of stages, each containing plugin logs
+- Stages: `request_filters`, `upstream_response_filters`, `upstream_responses`
+- Each log has: `name`, `time_cost`, `log` (optional message)
+
+**DebugAccessLogToHeader plugin**:
+- Returns entire access log as JSON in `X-Debug-Access-Log` header
+- Useful for testing plugin execution order and structure
+- Example config: `EdgionPlugins_default_debug-access-log.yaml`
+
+#### 7. Running Tests After Code Changes
+
+**After modifying core routing/gateway logic**:
+```bash
+cd examples/testing
+./run_integration_test.sh
+```
+
+**After modifying plugin system**:
+```bash
+cargo run --example test_client -- -g plugin-logs
+```
+
+**After modifying TLS handling**:
+```bash
+cargo run --example test_client -- -g https
+cargo run --example test_client -- -g grpc-tls
+cargo run --example test_client -- -g mtls
+```
+
+**Quick smoke test** (Direct mode, no setup needed):
+```bash
+cargo run --example test_server &
+sleep 2
+cargo run --example test_client -- all
+killall test_server
+```
+
+#### 8. Key Files to Remember
+
+- **Integration test script**: `examples/testing/run_integration_test.sh`
+- **Config validator**: `examples/testing/config_load_validator.rs`
+- **Resource diff**: `examples/testing/resource_diff.rs`
+- **Test client**: `examples/testing/test_client.rs`
+- **Test server**: `examples/testing/test_server.rs`
+- **Test suites**: `examples/testing/test_client/suites/*.rs`
+- **Configs**: `examples/conf/*.yaml`
+- **Logs**: `examples/testing/logs/*.log`
+
+#### 9. Best Practices
+
+1. **Always run integration tests** after significant changes
+2. **Check config_load_validator** output for YAML errors before debugging functional tests
+3. **Verify resource_diff** passes before investigating routing issues
+4. **Add test cases** for new features to prevent regressions
+5. **Update this README** when adding new test suites or changing test infrastructure
+6. **Keep test server running** when iterating on test client (faster feedback loop)
+7. **Use verbose mode** (`-v`) when debugging specific test failures
+8. **Check access.log** for plugin execution details and request/response information
+
+#### 10. Understanding Test Infrastructure Evolution
+
+The testing framework has evolved to include multiple validation layers:
+
+**Historical context**:
+- Initially: Only functional tests (Direct + Gateway modes)
+- Added: Resource synchronization checks (`resource_diff`)
+- Added: Configuration load validation (`config_load_validator`)
+- Added: Plugin logging validation (`plugin_logs_suite`)
+- Added: Unified test reporting
+
+This layered approach catches issues early:
+- Config errors caught by `config_load_validator` (before any routing tests)
+- Sync issues caught by `resource_diff` (before functional tests)
+- Functional issues caught by protocol-specific suites
+- Plugin issues caught by dedicated plugin tests
+
+**When adding new features**, consider:
+1. Does it need new YAML resources? → Add example configs
+2. Does it affect resource synchronization? → Verify `resource_diff` coverage
+3. Does it need specialized validation? → Add new test suite
+4. Does it change plugin behavior? → Update plugin log tests
+
+---
+
+**Last Updated**: 2025-12-27
+**Test Framework Version**: v2.0 (with unified reporting and multi-layer validation)
