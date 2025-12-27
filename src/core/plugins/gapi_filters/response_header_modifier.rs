@@ -2,7 +2,7 @@
 
 use crate::types::resources::{HTTPHeaderFilter, GRPCHeaderFilter};
 use crate::types::filters::PluginRunningResult;
-use crate::core::plugins::plugin_runtime::filters::{UpstreamResponseFilter, PluginSession};
+use crate::core::plugins::plugin_runtime::traits::{UpstreamResponseFilter, PluginSession};
 use crate::core::plugins::plugin_runtime::log::PluginLog;
 
 pub struct ResponseHeaderModifierFilter {

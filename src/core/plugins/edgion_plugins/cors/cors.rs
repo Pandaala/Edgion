@@ -269,7 +269,7 @@ impl RequestFilter for Cors {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugins::plugin_runtime::filters::session::MockPluginSession;
+    use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
 
     fn create_cors_config() -> CorsConfig {
         CorsConfig {

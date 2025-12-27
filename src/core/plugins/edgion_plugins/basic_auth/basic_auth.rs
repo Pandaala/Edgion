@@ -211,7 +211,7 @@ impl RequestFilter for BasicAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugins::plugin_runtime::filters::session::MockPluginSession;
+    use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
     use base64::engine::general_purpose;
 
     fn create_basic_auth_with_users() -> BasicAuth {

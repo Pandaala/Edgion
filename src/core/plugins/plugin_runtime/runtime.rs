@@ -9,7 +9,7 @@ use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, GRPCRouteFil
 use crate::types::resources::{RequestFilterEntry, UpstreamResponseFilterEntry, UpstreamResponseEntry};
 
 use super::log::PluginLog;
-use super::filters::{RequestFilter, UpstreamResponseFilter, UpstreamResponse};
+use super::traits::{RequestFilter, UpstreamResponseFilter, UpstreamResponse};
 use crate::core::plugins::gapi_filters::{ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
 use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
 use crate::core::plugins::edgion_plugins::cors::Cors;

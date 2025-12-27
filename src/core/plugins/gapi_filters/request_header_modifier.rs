@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use crate::types::resources::{HTTPHeaderFilter, GRPCHeaderFilter};
 use crate::types::filters::PluginRunningResult;
-use crate::core::plugins::plugin_runtime::filters::{RequestFilter, PluginSession};
+use crate::core::plugins::plugin_runtime::traits::{RequestFilter, PluginSession};
 use crate::core::plugins::plugin_runtime::log::PluginLog;
 
 /// Filter that modifies request headers

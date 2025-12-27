@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::types::resources::LocalObjectReference;
 use crate::types::filters::{PluginRunningResult, PluginRunningStage};
-use crate::core::plugins::plugin_runtime::filters::{RequestFilter, PluginSession};
+use crate::core::plugins::plugin_runtime::traits::{RequestFilter, PluginSession};
 use crate::core::plugins::plugin_runtime::log::PluginLog;
 use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 

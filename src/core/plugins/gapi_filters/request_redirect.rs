@@ -8,7 +8,7 @@ use pingora_http::ResponseHeader;
 
 use crate::types::resources::HTTPRequestRedirectFilter;
 use crate::types::filters::PluginRunningResult;
-use crate::core::plugins::plugin_runtime::filters::{RequestFilter, PluginSession};
+use crate::core::plugins::plugin_runtime::traits::{RequestFilter, PluginSession};
 use crate::core::plugins::plugin_runtime::log::PluginLog;
 
 pub struct RequestRedirectFilter {

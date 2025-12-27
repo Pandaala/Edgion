@@ -7,7 +7,7 @@ use pingora_proxy::Session;
 use crate::types::EdgionHttpContext;
 use crate::types::filters::PluginRunningResult;
 use super::log::PluginLog;
-use super::filters::{PluginSession, PluginSessionError, PluginSessionResult};
+use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,

@@ -160,7 +160,7 @@ impl RequestFilter for Csrf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugins::plugin_runtime::filters::session::MockPluginSession;
+    use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
 
     fn create_csrf_config() -> CsrfConfig {
         CsrfConfig {

@@ -129,7 +129,7 @@ impl RequestFilter for IpRestriction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugins::plugin_runtime::filters::session::MockPluginSession;
+    use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
     use crate::types::resources::edgion_plugins::DefaultAction;
 
     fn create_ip_config_allow_list() -> IpRestrictionConfig {
