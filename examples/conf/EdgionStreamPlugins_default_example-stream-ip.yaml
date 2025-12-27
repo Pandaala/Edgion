@@ -7,7 +7,7 @@ spec:
   plugins:
     # IP restriction for stream connections
     - enable: true
-      type: IpRestriction
+      type: ipRestriction
       config:
         # IP source: clientIp (from proxy headers) or remoteAddr (direct connection)
         ipSource: remoteAddr

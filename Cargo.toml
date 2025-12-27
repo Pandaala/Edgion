@@ -32,6 +32,10 @@ path = "examples/testing/test_client.rs"
 name = "resource_diff"
 path = "examples/testing/resource_diff.rs"
 
+[[example]]
+name = "config_load_validator"
+path = "examples/testing/config_load_validator.rs"
+
 [features]
 # Default features
 default = ["allocator-jemalloc", "boringssl"]

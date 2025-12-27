@@ -7,7 +7,7 @@ spec:
   plugins:
     # IP restriction for stream connections - allows localhost for testing
     - enable: true
-      type: IpRestriction
+      type: ipRestriction
       config:
         # IP source: remoteAddr (direct connection)
         ipSource: remoteAddr

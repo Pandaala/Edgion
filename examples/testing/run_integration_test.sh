@@ -30,10 +30,14 @@ GATEWAY_LOG="${LOG_DIR}/gateway.log"
 TEST_SERVER_LOG="${LOG_DIR}/test_server.log"
 ACCESS_LOG="${LOG_DIR}/access.log"
 TEST_RESULT_LOG="${LOG_DIR}/test_result.log"
+TEST_REPORT="${LOG_DIR}/test_report.txt"
 
 # PID 文件
 PID_DIR="${LOG_DIR}/pids"
 mkdir -p "$PID_DIR"
+
+# 记录测试开始时间
+TEST_START_TIME=$(date +%s)
 
 echo_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -155,6 +159,7 @@ sleep 1
 > "$TEST_SERVER_LOG"
 > "$ACCESS_LOG"
 > "$TEST_RESULT_LOG"
+> "$TEST_REPORT"
 
 # 0. 生成 TLS 证书
 echo_info "Generating TLS certificates..."
@@ -226,6 +231,24 @@ wait_for_port 10080 "edgion-gateway" "${PID_DIR}/gateway.pid" 30 || {
     echo "         Manual: cd $PROJECT_DIR && EDGION_ACCESS_LOG=$ACCESS_LOG cargo run --bin edgion-gateway"
     exit 1
 }
+
+# 4. Verify configuration loading
+echo ""
+echo "=========================================="
+echo "  Configuration Load Validation"
+echo "=========================================="
+echo ""
+
+echo_info "Verifying all config files are loaded by controller..."
+if cargo run --example config_load_validator 2>&1 | tee -a "$TEST_RESULT_LOG"; then
+    echo_success "All configurations loaded successfully"
+else
+    echo_error "Configuration loading FAILED - some YAML files not loaded"
+    echo_info "Check controller logs for parsing errors: $CONTROLLER_LOG"
+    exit 1
+fi
+
+echo ""
 
 # 4.5. Verify resource synchronization
 echo ""
@@ -503,7 +526,114 @@ echo "Gateway:     $GATEWAY_LOG"
 echo "Test Server: $TEST_SERVER_LOG"
 echo "Access Log:  $ACCESS_LOG"
 echo "Test Result: $TEST_RESULT_LOG"
+echo "Test Report: $TEST_REPORT"
 echo ""
+
+# 生成统一测试报告
+TEST_END_TIME=$(date +%s)
+TEST_DURATION=$((TEST_END_TIME - TEST_START_TIME))
+
+# 计算通过和失败的测试数
+PASSED_COUNT=0
+FAILED_COUNT=0
+TOTAL_TESTS=16
+
+[ $DIRECT_HTTP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_HTTP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $DIRECT_GRPC_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_GRPC_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $DIRECT_TCP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_TCP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $DIRECT_UDP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_UDP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $DIRECT_WS_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_WS_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_HTTPS_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_GRPC_TLS_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_REAL_IP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_SECURITY_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_MTLS_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+
+# 生成报告文件
+cat > "$TEST_REPORT" << EOF
+================================================================================
+                    EDGION INTEGRATION TEST REPORT
+================================================================================
+
+Test Date:       $(date '+%Y-%m-%d %H:%M:%S')
+Test Duration:   ${TEST_DURATION}s
+Total Tests:     ${TOTAL_TESTS}
+Passed:          ${PASSED_COUNT}
+Failed:          ${FAILED_COUNT}
+Success Rate:    $(( PASSED_COUNT * 100 / TOTAL_TESTS ))%
+
+================================================================================
+                          TEST RESULTS SUMMARY
+================================================================================
+
+Configuration & Validation:
+  [✓] TLS Certificate Generation
+  [✓] mTLS Certificate Generation
+  [✓] Configuration Load Validation
+  [✓] Resource Synchronization Check
+
+Functional Tests:
+  $([ $DIRECT_HTTP_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") HTTP Direct mode (backend:30001)
+  $([ $GATEWAY_HTTP_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") HTTP Gateway mode (gateway:10080)
+  $([ $DIRECT_GRPC_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") gRPC Direct mode (backend:30021)
+  $([ $GATEWAY_GRPC_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") gRPC Gateway mode (gateway:10080)
+  $([ $DIRECT_TCP_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") TCP Direct mode (backend:30010)
+  $([ $GATEWAY_TCP_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") TCP Gateway mode (gateway:19000)
+  $([ $DIRECT_UDP_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") UDP Direct mode (backend:30011)
+  $([ $GATEWAY_UDP_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") UDP Gateway mode (gateway:19002)
+  $([ $DIRECT_WS_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") WebSocket Direct mode (backend:30005)
+  $([ $GATEWAY_WS_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") WebSocket Gateway mode (gateway:10080)
+  $([ $GATEWAY_HTTPS_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") HTTPS Gateway mode (gateway:18443)
+  $([ $GATEWAY_GRPC_TLS_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") gRPC-TLS Gateway mode (gateway:18443)
+  $([ $GATEWAY_REAL_IP_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") Real IP Gateway mode (gateway:10080)
+  $([ $GATEWAY_SECURITY_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") Security Protection Gateway mode (gateway:10080)
+  $([ $GATEWAY_MTLS_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") mTLS Gateway mode (gateway:10444)
+  $([ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") Plugin Logs Gateway mode (gateway:10080)
+
+================================================================================
+                          LOG FILE LOCATIONS
+================================================================================
+
+Controller Log:   $CONTROLLER_LOG
+Gateway Log:      $GATEWAY_LOG
+Test Server Log:  $TEST_SERVER_LOG
+Access Log:       $ACCESS_LOG
+Test Result Log:  $TEST_RESULT_LOG
+
+================================================================================
+                          OVERALL TEST STATUS
+================================================================================
+
+EOF
+
+if [ $PASSED_COUNT -eq $TOTAL_TESTS ]; then
+    echo "Status: ✓ ALL TESTS PASSED" >> "$TEST_REPORT"
+    echo "" >> "$TEST_REPORT"
+    echo "All $TOTAL_TESTS tests completed successfully!" >> "$TEST_REPORT"
+else
+    echo "Status: ✗ SOME TESTS FAILED" >> "$TEST_REPORT"
+    echo "" >> "$TEST_REPORT"
+    echo "Passed: $PASSED_COUNT/$TOTAL_TESTS tests" >> "$TEST_REPORT"
+    echo "Failed: $FAILED_COUNT/$TOTAL_TESTS tests" >> "$TEST_REPORT"
+    echo "" >> "$TEST_REPORT"
+    echo "Please check the log files for detailed error messages." >> "$TEST_REPORT"
+fi
+
+echo "================================================================================" >> "$TEST_REPORT"
+
+# 显示报告
+echo ""
+echo "=========================================="
+echo "  Test Report Generated"
+echo "=========================================="
+echo ""
+cat "$TEST_REPORT"
 
 # 显示 access.log 最后几行
 if [ -f "$ACCESS_LOG" ] && [ -s "$ACCESS_LOG" ]; then
