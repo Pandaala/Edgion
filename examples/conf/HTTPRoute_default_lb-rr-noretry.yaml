@@ -16,6 +16,9 @@ spec:
         - path:
             type: PathPrefix
             value: /test
+      timeouts:
+        request: 2s        # Total request timeout
+        backendRequest: 1s # Backend connect + response timeout (overrides global 5s)
       backendRefs:
         - name: lb-rr-test-service
 

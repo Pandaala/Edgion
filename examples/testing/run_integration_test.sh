@@ -16,9 +16,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 项目根目录
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# 创建带时间戳的独立日志目录
+# 创建带时间戳的独立日志目录（每次测试一个独立的 logs_xxx 目录）
 TEST_RUN_ID=$(date +%Y%m%d_%H%M%S)
-LOG_DIR="${SCRIPT_DIR}/logs/test_run_${TEST_RUN_ID}"
+LOG_DIR="${SCRIPT_DIR}/logs_${TEST_RUN_ID}"
 mkdir -p "$LOG_DIR"
 
 # 运行时目录
@@ -418,6 +418,15 @@ echo_info "Test 16: Plugin Logs Gateway mode (gateway:10080)"
 cargo run --example test_client -- -g plugin-logs 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_PLUGIN_LOGS_RESULT=$?
 
+echo ""
+echo "---"
+echo ""
+
+# Gateway 模式 LB Policy 测试
+echo_info "Test 17: LB Policy Gateway mode (gateway:10080)"
+EDGION_TEST_ACCESS_LOG_PATH="$ACCESS_LOG" cargo run --example test_client -- -g lb-policy 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_LB_POLICY_RESULT=$?
+
 # 6. 显示结果
 echo ""
 echo "=========================================="
@@ -521,6 +530,12 @@ else
     echo_error "Plugin Logs Gateway mode: FAILED"
 fi
 
+if [ $GATEWAY_LB_POLICY_RESULT -eq 0 ]; then
+    echo_success "LB Policy Gateway mode: PASSED"
+else
+    echo_error "LB Policy Gateway mode: FAILED"
+fi
+
 echo ""
 echo "=========================================="
 echo "  Logs"
@@ -541,7 +556,7 @@ TEST_DURATION=$((TEST_END_TIME - TEST_START_TIME))
 # 计算通过和失败的测试数
 PASSED_COUNT=0
 FAILED_COUNT=0
-TOTAL_TESTS=16
+TOTAL_TESTS=17
 
 [ $DIRECT_HTTP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $GATEWAY_HTTP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
@@ -559,6 +574,7 @@ TOTAL_TESTS=16
 [ $GATEWAY_SECURITY_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $GATEWAY_MTLS_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_LB_POLICY_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 
 # 生成报告文件
 cat > "$TEST_REPORT" << EOF
@@ -600,6 +616,7 @@ Functional Tests:
   $([ $GATEWAY_SECURITY_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") Security Protection Gateway mode (gateway:10080)
   $([ $GATEWAY_MTLS_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") mTLS Gateway mode (gateway:10444)
   $([ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") Plugin Logs Gateway mode (gateway:10080)
+  $([ $GATEWAY_LB_POLICY_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") LB Policy Gateway mode (gateway:10080)
 
 ================================================================================
                           LOG FILE LOCATIONS
@@ -657,7 +674,8 @@ if [ $DIRECT_HTTP_RESULT -eq 0 ] && [ $GATEWAY_HTTP_RESULT -eq 0 ] && \
    [ $DIRECT_WS_RESULT -eq 0 ] && [ $GATEWAY_WS_RESULT -eq 0 ] && \
    [ $GATEWAY_HTTPS_RESULT -eq 0 ] && [ $GATEWAY_GRPC_TLS_RESULT -eq 0 ] && \
    [ $GATEWAY_REAL_IP_RESULT -eq 0 ] && [ $GATEWAY_SECURITY_RESULT -eq 0 ] && \
-   [ $GATEWAY_MTLS_RESULT -eq 0 ] && [ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ]; then
+   [ $GATEWAY_MTLS_RESULT -eq 0 ] && [ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ] && \
+   [ $GATEWAY_LB_POLICY_RESULT -eq 0 ]; then
     echo_success "All tests PASSED! ✨"
     exit 0
 else

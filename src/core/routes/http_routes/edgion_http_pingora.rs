@@ -769,8 +769,12 @@ impl EdgionHttp {
                     .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
             });
         
-        // Connection timeout (only from global config)
-        peer.options.connection_timeout = Some(backend_timeout.connect_timeout);
+        // Connection timeout: route-level backend_request_timeout overrides global connect_timeout
+        peer.options.connection_timeout = Some(
+            route_timeouts
+                .and_then(|rt| rt.backend_request_timeout)
+                .unwrap_or(backend_timeout.connect_timeout)
+        );
         
         // Read/Write timeout: route-level overrides global
         let effective_per_try_timeout = route_timeouts
