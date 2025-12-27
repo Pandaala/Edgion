@@ -39,18 +39,15 @@ impl TlsStore {
             "Full set of TLS certificates"
         );
 
-        let mut tls_data = match self.tls_data.write() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                tracing::error!(
+        let mut tls_data = self.tls_data.write().unwrap_or_else(|poisoned| {
+            tracing::error!(
                     component = "tls_store",
                     "TLS store write lock poisoned - recovering data from poisoned lock. \
                     A thread previously panicked while holding this lock."
                 );
-                // TODO(observability): Add metric for lock poison recovery
-                poisoned.into_inner()
-            }
-        };
+            // TODO(observability): Add metric for lock poison recovery
+            poisoned.into_inner()
+        });
         tls_data.clear();
         
         for (key, tls) in data {
@@ -111,18 +108,15 @@ impl TlsStore {
             "Partial update of TLS certificates"
         );
 
-        let mut tls_data = match self.tls_data.write() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                tracing::error!(
+        let mut tls_data = self.tls_data.write().unwrap_or_else(|poisoned| {
+            tracing::error!(
                     component = "tls_store",
                     "TLS store write lock poisoned during partial update - recovering. \
                     A thread previously panicked while holding this lock."
                 );
-                // TODO(observability): Add metric for lock poison recovery
-                poisoned.into_inner()
-            }
-        };
+            // TODO(observability): Add metric for lock poison recovery
+            poisoned.into_inner()
+        });
         
         // Add new certificates
         for (key, tls) in add {
