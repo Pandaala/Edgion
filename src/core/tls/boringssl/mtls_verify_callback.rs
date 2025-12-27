@@ -94,26 +94,23 @@ unsafe extern "C" fn verify_callback(
     let result = std::panic::catch_unwind(|| {
         verify_callback_impl(preverify_ok, x509_ctx)
     });
-    
-    match result {
-        Ok(code) => code,
-        Err(e) => {
-            // Panic occurred - log and reject connection
-            let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = e.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "unknown panic".to_string()
-            };
-            
-            tracing::error!(
+
+    result.unwrap_or_else(|e| {
+        // Panic occurred - log and reject connection
+        let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = e.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic".to_string()
+        };
+
+        tracing::error!(
                 panic = %panic_msg,
                 "PANIC in TLS verify callback! Rejecting connection to prevent UB"
             );
-            0 // Reject on panic
-        }
-    }
+        0 // Reject on panic
+    })
 }
 
 /// Internal implementation of verify callback (can safely panic)
