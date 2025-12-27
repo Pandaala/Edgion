@@ -227,6 +227,22 @@ wait_for_port 10080 "edgion-gateway" "${PID_DIR}/gateway.pid" 30 || {
     exit 1
 }
 
+# 4.5. Verify resource synchronization
+echo ""
+echo "=========================================="
+echo "  Resource Synchronization Check"
+echo "=========================================="
+echo ""
+
+echo_info "Verifying controller and gateway resource sync..."
+if cargo run --example resource_diff 2>&1 | tee -a "$TEST_RESULT_LOG"; then
+    echo_success "Resource synchronization verified"
+else
+    echo_warn "Resource diff check completed with warnings (non-fatal)"
+fi
+
+echo ""
+
 # 5. 运行测试
 echo ""
 echo "=========================================="
@@ -365,6 +381,15 @@ echo_info "Test 15: mTLS Gateway mode (gateway:10444)"
 cargo run --example test_client -- -g mtls 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_MTLS_RESULT=$?
 
+echo ""
+echo "---"
+echo ""
+
+# Gateway 模式 Plugin Logs 测试
+echo_info "Test 16: Plugin Logs Gateway mode (gateway:10080)"
+cargo run --example test_client -- -g plugin-logs 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_PLUGIN_LOGS_RESULT=$?
+
 # 6. 显示结果
 echo ""
 echo "=========================================="
@@ -462,6 +487,12 @@ else
     echo_error "mTLS Gateway mode: FAILED"
 fi
 
+if [ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ]; then
+    echo_success "Plugin Logs Gateway mode: PASSED"
+else
+    echo_error "Plugin Logs Gateway mode: FAILED"
+fi
+
 echo ""
 echo "=========================================="
 echo "  Logs"
@@ -491,7 +522,7 @@ if [ $DIRECT_HTTP_RESULT -eq 0 ] && [ $GATEWAY_HTTP_RESULT -eq 0 ] && \
    [ $DIRECT_WS_RESULT -eq 0 ] && [ $GATEWAY_WS_RESULT -eq 0 ] && \
    [ $GATEWAY_HTTPS_RESULT -eq 0 ] && [ $GATEWAY_GRPC_TLS_RESULT -eq 0 ] && \
    [ $GATEWAY_REAL_IP_RESULT -eq 0 ] && [ $GATEWAY_SECURITY_RESULT -eq 0 ] && \
-   [ $GATEWAY_MTLS_RESULT -eq 0 ]; then
+   [ $GATEWAY_MTLS_RESULT -eq 0 ] && [ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ]; then
     echo_success "All tests PASSED! ✨"
     exit 0
 else

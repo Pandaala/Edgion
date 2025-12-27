@@ -85,7 +85,9 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        self.add_request_filter(Box::new(ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone())));
+                        let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                        self.add_request_filter(Box::new(ext_filter.clone()));
+                        self.add_upstream_response_filter(Box::new(ext_filter));
                     }
                 }
                 _ => {}
@@ -114,7 +116,9 @@ impl PluginRuntime {
                 }
                 GRPCRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        self.add_request_filter(Box::new(ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone())));
+                        let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                        self.add_request_filter(Box::new(ext_filter.clone()));
+                        self.add_upstream_response_filter(Box::new(ext_filter));
                     }
                 }
                 _ => {}

@@ -6,11 +6,12 @@ use async_trait::async_trait;
 
 use crate::types::resources::LocalObjectReference;
 use crate::types::filters::{PluginRunningResult, PluginRunningStage};
-use crate::core::plugins::plugin_runtime::traits::{RequestFilter, PluginSession};
+use crate::core::plugins::plugin_runtime::traits::{RequestFilter, UpstreamResponseFilter, PluginSession};
 use crate::core::plugins::plugin_runtime::log::PluginLog;
 use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 
 /// Filter that handles ExtensionRef to EdgionPlugins
+#[derive(Clone)]
 pub struct ExtensionRefFilter {
     /// The namespace to look up the plugin (from the HTTPRoute's namespace)
     namespace: String,
@@ -181,6 +182,20 @@ impl RequestFilter for ExtensionRefFilter {
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         self.run_extension_async(PluginRunningStage::Request, session, log).await
+    }
+}
+
+impl UpstreamResponseFilter for ExtensionRefFilter {
+    fn name(&self) -> &str {
+        "ExtensionRef"
+    }
+
+    fn run_upstream_response_filter(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+    ) -> PluginRunningResult {
+        self.run_extension(PluginRunningStage::UpstreamResponseFilter, session, log)
     }
 }
 
