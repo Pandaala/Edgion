@@ -159,6 +159,11 @@ pub struct ConfSyncConfig {
     #[serde(default = "default_capacity")]
     pub endpoint_slices_capacity: u32,
 
+    /// EventStore capacity for Endpoints resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub endpoints_capacity: u32,
+
     /// EventStore capacity for EdgionTls resources
     #[arg(skip)]
     #[serde(default = "default_capacity")]
@@ -279,6 +284,7 @@ impl Default for ConfSyncConfig {
             link_sys_capacity: default_capacity(),
             services_capacity: default_capacity(),
             endpoint_slices_capacity: default_capacity(),
+            endpoints_capacity: default_capacity(),
             edgion_tls_capacity: default_capacity(),
             edgion_plugins_capacity: default_capacity(),
             edgion_stream_plugins_capacity: default_capacity(),

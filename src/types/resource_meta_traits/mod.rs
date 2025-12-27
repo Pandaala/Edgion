@@ -16,6 +16,7 @@ mod plugin_metadata;
 mod link_sys;
 mod service;
 mod endpoint_slice;
+mod endpoint;
 mod secret;
 mod edgion_tls;
 mod edgion_plugins;

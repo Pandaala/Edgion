@@ -4,10 +4,10 @@ use crate::core::conf_sync::types::ListData;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::utils::format_resource_info;
 use crate::core::routes::create_route_manager_handler;
-use crate::core::backends::{create_service_handler, create_ep_slice_handler};
+use crate::core::backends::{create_service_handler, create_ep_slice_handler, create_endpoint_handler};
 use crate::types::prelude_resources::*;
 use anyhow::Result;
-use k8s_openapi::api::core::v1::Service;
+use k8s_openapi::api::core::v1::{Endpoints, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::Resource;
 use std::sync::RwLock;
@@ -23,6 +23,7 @@ pub struct ConfigClient {
     link_sys: ClientCache<LinkSys>,
     services: ClientCache<Service>,
     endpoint_slices: ClientCache<EndpointSlice>,
+    endpoints: ClientCache<Endpoints>,
     edgion_tls: ClientCache<EdgionTls>,
     edgion_plugins: ClientCache<EdgionPlugins>,
     edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
@@ -48,6 +49,11 @@ impl ConfigClient {
         let endpoint_slices_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
         let ep_slice_handler = create_ep_slice_handler();
         endpoint_slices_cache.set_conf_processor(ep_slice_handler);
+
+        // Register EndpointHandler as the handler for Endpoints resources
+        let endpoints_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let endpoint_handler = create_endpoint_handler();
+        endpoints_cache.set_conf_processor(endpoint_handler);
 
         // Register PluginStore as the handler for EdgionPlugins resources
         let plugins_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
@@ -105,6 +111,7 @@ impl ConfigClient {
             link_sys: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,
+            endpoints: endpoints_cache,
             edgion_tls: edgion_tls_cache,
             edgion_plugins: plugins_cache,
             edgion_stream_plugins: stream_plugins_cache,
@@ -153,6 +160,11 @@ impl ConfigClient {
     /// Get endpoint_slices cache for direct access
     pub fn endpoint_slices(&self) -> &ClientCache<EndpointSlice> {
         &self.endpoint_slices
+    }
+
+    /// Get endpoints cache for direct access
+    pub fn endpoints(&self) -> &ClientCache<Endpoints> {
+        &self.endpoints
     }
 
     /// Get edgion_tls cache for direct access
@@ -730,6 +742,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     Self::apply_change_to_cache(&self.endpoint_slices, change, resource);
                 }
                 Err(e) => log_error("EndpointSlice", &e),
+            },
+            ResourceKind::Endpoint => match serde_yaml::from_str::<Endpoints>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.endpoints, change, resource);
+                }
+                Err(e) => log_error("Endpoints", &e),
             },
             ResourceKind::EdgionTls => match serde_yaml::from_str::<EdgionTls>(&data) {
                 Ok(resource) => {

@@ -5,7 +5,7 @@ use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_mgr::ConfStore;
 use crate::types::ResourceKind;
 use crate::types::prelude_resources::*;
-use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 
 /// Load all resources from storage into ConfigServer
@@ -100,6 +100,15 @@ pub async fn load_all_resources_from_store(
                 match serde_yaml::from_str::<EndpointSlice>(&resource.content) {
                     Ok(eps) => {
                         config_server.endpoint_slices.apply_change(ResourceChange::InitAdd, eps);
+                        Ok::<(), anyhow::Error>(())
+                    }
+                    Err(e) => Err(e.into()),
+                }
+            }
+            Some(ResourceKind::Endpoint) => {
+                match serde_yaml::from_str::<Endpoints>(&resource.content) {
+                    Ok(endpoint) => {
+                        config_server.endpoints.apply_change(ResourceChange::InitAdd, endpoint);
                         Ok::<(), anyhow::Error>(())
                     }
                     Err(e) => Err(e.into()),

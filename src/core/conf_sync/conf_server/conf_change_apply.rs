@@ -2,7 +2,7 @@ use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::{CacheEventDispatch, ServerCache, ResourceMeta};
 use crate::types::prelude_resources::*;
-use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::{Resource, ResourceExt};
 
@@ -448,6 +448,16 @@ impl ConfigServer {
             "Applying EndpointSlice resource change"
         );
         execute_change_on_cache(change, &self.endpoint_slices, resource);
+    }
+
+    /// Apply Endpoints change
+    pub fn apply_endpoint_change(&self, change: ResourceChange, resource: Endpoints) {
+        tracing::info!(
+            component = "config_server",
+            kind = "Endpoints",
+            "Applying Endpoints resource change"
+        );
+        execute_change_on_cache(change, &self.endpoints, resource);
     }
 
     /// Apply EdgionPlugins change

@@ -1,8 +1,10 @@
 pub mod services;
 pub mod endpoint_slice;
+pub mod endpoint;
 
 pub use services::{ServiceStore, get_global_service_store, create_service_handler};
 pub use endpoint_slice::{EpSliceStore, get_roundrobin_store, get_consistent_store, get_leastconn_store, get_ewma_store, create_ep_slice_handler};
+pub use endpoint::{EndpointStore, get_endpoint_roundrobin_store, get_endpoint_consistent_store, get_endpoint_leastconn_store, get_endpoint_ewma_store, create_endpoint_handler};
 
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_core::prelude::HttpPeer;

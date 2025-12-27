@@ -21,6 +21,7 @@ pub enum ResourceKind {
     EdgionStreamPlugins = 16,
     ReferenceGrant = 17,
     BackendTLSPolicy = 18,
+    Endpoint = 19,
 }
 
 impl ResourceKind {
@@ -65,6 +66,7 @@ impl ResourceKind {
             "edgionstreamplugins" => Some(ResourceKind::EdgionStreamPlugins),
             "referencegrant" => Some(ResourceKind::ReferenceGrant),
             "backendtlspolicy" => Some(ResourceKind::BackendTLSPolicy),
+            "endpoint" | "endpoints" => Some(ResourceKind::Endpoint),
             _ => None,
         }
     }

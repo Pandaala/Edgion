@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::core::conf_sync::CacheEventDispatch;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::types::prelude_resources::*;
-use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::ResourceExt;
 
@@ -50,6 +50,10 @@ pub async fn list_all_namespaces(
         }
         crate::types::ResourceKind::EndpointSlice => {
             let list_data = state.config_server.endpoint_slices.list();
+            list_to_json!(list_data.data)
+        }
+        crate::types::ResourceKind::Endpoint => {
+            let list_data = state.config_server.endpoints.list();
             list_to_json!(list_data.data)
         }
         crate::types::ResourceKind::EdgionTls => {
@@ -142,6 +146,13 @@ pub async fn list_namespaced(
         }
         crate::types::ResourceKind::EndpointSlice => {
             let list_data = state.config_server.endpoint_slices.list();
+            let filtered: Vec<_> = list_data.data.into_iter()
+                .filter(|r| r.namespace().as_deref() == Some(ns.as_str()))
+                .collect();
+            list_to_json!(filtered)
+        }
+        crate::types::ResourceKind::Endpoint => {
+            let list_data = state.config_server.endpoints.list();
             let filtered: Vec<_> = list_data.data.into_iter()
                 .filter(|r| r.namespace().as_deref() == Some(ns.as_str()))
                 .collect();
@@ -255,6 +266,12 @@ pub async fn get_namespaced(
         }
         crate::types::ResourceKind::EndpointSlice => {
             let list_data = state.config_server.endpoint_slices.list();
+            list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .and_then(|r| serde_json::to_value(r).ok())
+        }
+        crate::types::ResourceKind::Endpoint => {
+            let list_data = state.config_server.endpoints.list();
             list_data.data.into_iter()
                 .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
                 .and_then(|r| serde_json::to_value(r).ok())
@@ -387,6 +404,10 @@ pub async fn create_namespaced(
             let list_data = state.config_server.endpoint_slices.list();
             list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
         }
+        crate::types::ResourceKind::Endpoint => {
+            let list_data = state.config_server.endpoints.list();
+            list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+        }
         crate::types::ResourceKind::EdgionTls => {
             let list_data = state.config_server.edgion_tls.list();
             list_data.data.iter().any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
@@ -507,6 +528,18 @@ pub async fn create_namespaced(
             resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             state.config_server.endpoint_slices.apply_change(ResourceChange::EventAdd, ep);
+        }
+        crate::types::ResourceKind::Endpoint => {
+            let endpoint: Endpoints = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
+            validate_resource(&state.schema_validator, kind, &endpoint)?;
+            let json_content = serde_json::to_string(&endpoint)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.endpoints.apply_change(ResourceChange::EventAdd, endpoint);
         }
         crate::types::ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource_and_update_version(
@@ -680,6 +713,18 @@ pub async fn update_namespaced(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             state.config_server.endpoint_slices.apply_change(ResourceChange::EventUpdate, ep);
         }
+        crate::types::ResourceKind::Endpoint => {
+            let endpoint: Endpoints = parse_resource_and_update_version(
+                &content,
+                state.resource_mgr.is_some()
+            )?;
+            validate_resource(&state.schema_validator, kind, &endpoint)?;
+            let json_content = serde_json::to_string(&endpoint)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr.set_one(&kind_str, Some(&ns), &name, json_content).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state.config_server.endpoints.apply_change(ResourceChange::EventUpdate, endpoint);
+        }
         crate::types::ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource_and_update_version(
                 &content,
@@ -827,6 +872,15 @@ pub async fn delete_namespaced(
             let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
             update_resource_version(&mut ep);
             state.config_server.endpoint_slices.apply_change(ResourceChange::EventDelete, ep);
+        }
+        crate::types::ResourceKind::Endpoint => {
+            let list_data = state.config_server.endpoints.list();
+            let mut endpoint = list_data.data.into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut endpoint);
+            state.config_server.endpoints.apply_change(ResourceChange::EventDelete, endpoint);
         }
         crate::types::ResourceKind::EdgionTls => {
             let list_data = state.config_server.edgion_tls.list();

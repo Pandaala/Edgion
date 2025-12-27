@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use crate::core::conf_sync::ConfigClient;
 use crate::types::prelude_resources::*;
-use k8s_openapi::api::core::v1::Service;
+use k8s_openapi::api::core::v1::{Endpoints, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::ResourceExt;
 
@@ -304,6 +304,36 @@ async fn list_endpointslice(
     Json(ListResponse::success(list_data.data))
 }
 
+/// Get Endpoints by namespace and name
+async fn get_endpoints(
+    State(client): State<Arc<ConfigClient>>,
+    Query(query): Query<ResourceQuery>,
+) -> Json<ApiResponse<Endpoints>> {
+    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
+        Ok(k) => k,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    let list_data = client.endpoints().list();
+    let name = query.name.as_ref().unwrap().as_str();
+    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    
+    match list_data.data.into_iter().find(|r| {
+        r.name_any() == name && r.namespace().as_deref() == namespace
+    }) {
+        Some(endpoint) => Json(ApiResponse::success(endpoint)),
+        None => Json(ApiResponse::error(format!("Endpoints not found: {}", key))),
+    }
+}
+
+/// List all Endpoints resources
+async fn list_endpoints(
+    State(client): State<Arc<ConfigClient>>,
+) -> Json<ListResponse<Endpoints>> {
+    let list_data = client.endpoints().list();
+    Json(ListResponse::success(list_data.data))
+}
+
 /// Get EdgionTls by namespace and name
 async fn get_edgiontls(
     State(client): State<Arc<ConfigClient>>,
@@ -570,6 +600,9 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
         // EndpointSlice
         .route("/configclient/endpointslice", get(get_endpointslice))
         .route("/configclient/endpointslice/list", get(list_endpointslice))
+        // Endpoints
+        .route("/configclient/endpoints", get(get_endpoints))
+        .route("/configclient/endpoints/list", get(list_endpoints))
         // EdgionTls
         .route("/configclient/edgiontls", get(get_edgiontls))
         .route("/configclient/edgiontls/list", get(list_edgiontls))

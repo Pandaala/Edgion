@@ -70,6 +70,7 @@ impl ConfigSyncClient {
         config_client.link_sys().set_grpc_client(client.clone()).await;
         config_client.services().set_grpc_client(client.clone()).await;
         config_client.endpoint_slices().set_grpc_client(client.clone()).await;
+        config_client.endpoints().set_grpc_client(client.clone()).await;
         config_client.edgion_tls().set_grpc_client(client.clone()).await;
         config_client.edgion_plugins().set_grpc_client(client.clone()).await;
         config_client.plugin_metadata().set_grpc_client(client.clone()).await;
@@ -200,6 +201,9 @@ impl ConfigSyncClient {
             EndpointSlice => {
                 self.config_client.endpoint_slices().start_watch().await?;
             }
+            Endpoint => {
+                self.config_client.endpoints().start_watch().await?;
+            }
             EdgionTls => {
                 self.config_client.edgion_tls().start_watch().await?;
             }
@@ -246,6 +250,7 @@ impl ConfigSyncClient {
             LinkSys,
             Service,
             EndpointSlice,
+            Endpoint,
             EdgionTls,
             EdgionPlugins,
             EdgionStreamPlugins,

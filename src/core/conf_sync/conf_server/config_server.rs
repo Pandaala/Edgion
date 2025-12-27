@@ -1,4 +1,4 @@
-use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -27,6 +27,7 @@ pub enum ResourceItem {
     LinkSys(LinkSys),
     Service(Service),
     EndpointSlice(EndpointSlice),
+    Endpoint(Endpoints),
     EdgionTls(EdgionTls),
     EdgionPlugins(EdgionPlugins),
     EdgionStreamPlugins(EdgionStreamPlugins),
@@ -49,6 +50,7 @@ pub struct ConfigServer {
     pub link_sys: ServerCache<LinkSys>,
     pub services: ServerCache<Service>,
     pub endpoint_slices: ServerCache<EndpointSlice>,
+    pub endpoints: ServerCache<Endpoints>,
     pub edgion_tls: ServerCache<EdgionTls>,
     pub edgion_plugins: ServerCache<EdgionPlugins>,
     pub edgion_stream_plugins: ServerCache<EdgionStreamPlugins>,
@@ -86,6 +88,7 @@ impl ConfigServer {
             link_sys: ServerCache::new(conf_sync_config.link_sys_capacity),
             services: ServerCache::new(conf_sync_config.services_capacity),
             endpoint_slices: ServerCache::new(conf_sync_config.endpoint_slices_capacity),
+            endpoints: ServerCache::new(conf_sync_config.endpoints_capacity),
             edgion_tls: ServerCache::new(conf_sync_config.edgion_tls_capacity),
             edgion_plugins: ServerCache::new(conf_sync_config.edgion_plugins_capacity),
             edgion_stream_plugins: ServerCache::new(conf_sync_config.edgion_stream_plugins_capacity),
@@ -204,6 +207,12 @@ impl ConfigServer {
                 let list_data = self.list_endpoint_slices();
                 let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EndpointSlice data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::Endpoint => {
+                let list_data = self.list_endpoints();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize Endpoints data: {}", e))?;
                 (json, list_data.resource_version)
             }
             ResourceKind::EdgionTls => {
@@ -523,6 +532,34 @@ impl ConfigServer {
                     }
                 });
             }
+            ResourceKind::Endpoint => {
+                let mut receiver = self.watch_endpoints(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize Endpoints events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
             ResourceKind::EdgionTls => {
                 let mut receiver = self.watch_edgion_tls(client_id, client_name, from_version);
                 tokio::spawn(async move {
@@ -735,6 +772,11 @@ impl ConfigServer {
         self.endpoint_slices.list_owned()
     }
 
+    /// List Endpoints
+    pub fn list_endpoints(&self) -> ListData<Endpoints> {
+        self.endpoints.list_owned()
+    }
+
     /// List Edgion TLS
     pub fn list_edgion_tls(&self) -> ListData<EdgionTls> {
         self.edgion_tls.list_owned()
@@ -852,6 +894,16 @@ impl ConfigServer {
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<EndpointSlice>> {
         self.endpoint_slices.watch(client_id, client_name, from_version)
+    }
+
+    /// Watch Endpoints
+    pub fn watch_endpoints(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<Endpoints>> {
+        self.endpoints.watch(client_id, client_name, from_version)
     }
 
     /// Watch Edgion TLS
