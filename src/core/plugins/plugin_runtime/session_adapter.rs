@@ -6,7 +6,6 @@ use pingora_proxy::Session;
 
 use crate::types::EdgionHttpContext;
 use crate::types::filters::PluginRunningResult;
-use super::log::PluginLog;
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 
 pub struct PingoraSessionAdapter<'a> {
@@ -18,7 +17,11 @@ pub struct PingoraSessionAdapter<'a> {
 impl<'a> PingoraSessionAdapter<'a> {
     #[inline]
     pub fn new(inner: &'a mut Session, ctx: &'a mut EdgionHttpContext) -> Self {
-        Self { inner, ctx, response_header: None }
+        Self { 
+            inner, 
+            ctx, 
+            response_header: None,
+        }
     }
 
     #[inline]
@@ -27,12 +30,11 @@ impl<'a> PingoraSessionAdapter<'a> {
         ctx: &'a mut EdgionHttpContext,
         response_header: &'a mut ResponseHeader,
     ) -> Self {
-        Self { inner, ctx, response_header: Some(response_header) }
-    }
-
-    #[inline]
-    pub fn push_plugin_log(&mut self, log: PluginLog) {
-        self.ctx.plugin_logs.push(log);
+        Self { 
+            inner, 
+            ctx, 
+            response_header: Some(response_header),
+        }
     }
 
     #[inline]
@@ -158,4 +160,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn client_addr(&self) -> &str { &self.ctx.request_info.client_addr }
     fn remote_addr(&self) -> &str { &self.ctx.request_info.remote_addr }
+    
+    fn ctx(&self) -> &EdgionHttpContext {
+        self.ctx
+    }
 }

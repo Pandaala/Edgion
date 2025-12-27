@@ -1,7 +1,7 @@
 //! Access log entry definition
 
 use crate::types::{BackendContext, EdgionHttpContext, EdgionStatus, MatchInfo, RequestInfo};
-use crate::core::plugins::PluginLog;
+use crate::core::plugins::StagePluginLogs;
 use serde::Serialize;
 
 /// Helper function to check if a slice is empty
@@ -25,8 +25,8 @@ pub struct AccessLogEntry<'a> {
     
     pub backend_context: Option<&'a BackendContext>,
     
-    #[serde(skip_serializing_if = "is_empty")]
-    pub plugin_logs: &'a [PluginLog],
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub plugin_logs: &'a [StagePluginLogs],
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conn_est: Option<bool>,

@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
+use crate::types::EdgionHttpContext;
 
 pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;
 pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
@@ -63,5 +64,8 @@ pub trait PluginSession: Send {
 
     /// Get remote address (real client IP, extracted from proxy headers)
     fn remote_addr(&self) -> &str;
+
+    /// Get reference to EdgionHttpContext (for access log generation)
+    fn ctx(&self) -> &EdgionHttpContext;
 }
 

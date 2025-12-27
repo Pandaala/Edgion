@@ -27,6 +27,7 @@ pub use plugin_configs::{
     BasicAuthConfig,
     CorsConfig,
     CsrfConfig,
+    DebugAccessLogToHeaderConfig,
     IpRestrictionConfig,
     IpSource,
     DefaultAction,

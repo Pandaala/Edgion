@@ -7,7 +7,7 @@ use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter,
     HTTPURLRewriteFilter, LocalObjectReference,
 };
-use super::plugin_configs::{BasicAuthConfig, CorsConfig, CsrfConfig, IpRestrictionConfig, MockConfig};
+use super::plugin_configs::{BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig, MockConfig};
 
 /// Plugin enum for all supported plugin types
 ///
@@ -42,6 +42,8 @@ pub enum EdgionPlugin {
     IpRestriction(IpRestrictionConfig),
     /// Mock filter (return predefined responses for testing/prototyping)
     Mock(MockConfig),
+    /// Debug Access Log to Header filter (for debugging)
+    DebugAccessLogToHeader(DebugAccessLogToHeaderConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionRateLimit(RateLimitConfig),
     // EdgionCircuitBreaker(CircuitBreakerConfig),
@@ -66,6 +68,7 @@ impl EdgionPlugin {
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::Mock(_) => "Mock",
+            EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
         }
     }
 }

@@ -8,9 +8,9 @@ use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
 use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, GRPCRouteFilter, GRPCRouteFilterType, EdgionPlugin};
 use crate::types::resources::{RequestFilterEntry, UpstreamResponseFilterEntry, UpstreamResponseEntry};
 
-use super::log::PluginLog;
+use super::log::{PluginLog, StagePluginLogs};
 use super::traits::{RequestFilter, UpstreamResponseFilter, UpstreamResponse};
-use crate::core::plugins::gapi_filters::{ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter};
+use crate::core::plugins::gapi_filters::{ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter, DebugAccessLogToHeaderFilter};
 use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
 use crate::core::plugins::edgion_plugins::cors::Cors;
 use crate::core::plugins::edgion_plugins::csrf::Csrf;
@@ -189,6 +189,9 @@ impl PluginRuntime {
             EdgionPlugin::ResponseHeaderModifier(config) => {
                 Some(Box::new(ResponseHeaderModifierFilter::new(config.clone())))
             }
+            EdgionPlugin::DebugAccessLogToHeader(config) => {
+                Some(Box::new(DebugAccessLogToHeaderFilter::new(config)))
+            }
             _ => None,
         }
     }
@@ -235,22 +238,35 @@ impl PluginRuntime {
 
     /// Run request stage filters (async)
     pub async fn run_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
+        if self.request_plugins.is_empty() {
+            return;
+        }
+
+        let mut stage_logs = Vec::with_capacity(self.request_plugins.len());
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.request_plugins {
             let mut plugin_log = PluginLog::new(filter.name());
+            let start = std::time::Instant::now();
 
             let result = filter.run_request(
                 &mut session_adapter,
                 &mut plugin_log,
             ).await;
-            session_adapter.push_plugin_log(plugin_log);
+            
+            plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+            stage_logs.push(plugin_log);
 
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
-                return;
+                break;
             }
         }
+
+        ctx.plugin_logs.push(StagePluginLogs {
+            stage: "request_filters",
+            logs: stage_logs,
+        });
     }
 
     /// Run upstream_response_filter stage filters (sync)
@@ -260,22 +276,35 @@ impl PluginRuntime {
         ctx: &mut EdgionHttpContext,
         response_header: &mut ResponseHeader,
     ) {
+        if self.upstream_response_plugins.is_empty() {
+            return;
+        }
+
+        let mut stage_logs = Vec::with_capacity(self.upstream_response_plugins.len());
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_plugins {
             let mut plugin_log = PluginLog::new(filter.name());
+            let start = std::time::Instant::now();
 
             let result = filter.run_upstream_response_filter(
                 &mut session_adapter,
                 &mut plugin_log,
             );
-            session_adapter.push_plugin_log(plugin_log);
+            
+            plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+            stage_logs.push(plugin_log);
 
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
-                return;
+                break;
             }
         }
+
+        ctx.plugin_logs.push(StagePluginLogs {
+            stage: "upstream_response_filters",
+            logs: stage_logs,
+        });
     }
 
     /// Run response_filter stage filters (async)
@@ -285,21 +314,34 @@ impl PluginRuntime {
         ctx: &mut EdgionHttpContext,
         response_header: &mut ResponseHeader,
     ) {
+        if self.upstream_response_async_plugins.is_empty() {
+            return;
+        }
+
+        let mut stage_logs = Vec::with_capacity(self.upstream_response_async_plugins.len());
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_async_plugins {
             let mut plugin_log = PluginLog::new(filter.name());
+            let start = std::time::Instant::now();
 
             let result = filter.run_upstream_response(
                 &mut session_adapter,
                 &mut plugin_log,
             ).await;
-            session_adapter.push_plugin_log(plugin_log);
+            
+            plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+            stage_logs.push(plugin_log);
 
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
-                return;
+                break;
             }
         }
+
+        ctx.plugin_logs.push(StagePluginLogs {
+            stage: "upstream_responses",
+            logs: stage_logs,
+        });
     }
 }
