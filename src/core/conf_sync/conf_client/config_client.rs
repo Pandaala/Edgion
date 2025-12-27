@@ -370,6 +370,12 @@ impl ConfigClient {
                     .map_err(|e| format!("Failed to serialize EndpointSlice data: {}", e))?;
                 (json, list_data.resource_version)
             }
+            ResourceKind::Endpoint => {
+                let list_data = self.endpoints.list();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize Endpoints data: {}", e))?;
+                (json, list_data.resource_version)
+            }
             ResourceKind::EdgionTls => {
                 let list_data = self.edgion_tls.list();
                 let json = serde_json::to_string(&list_data.data)
