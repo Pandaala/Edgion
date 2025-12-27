@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
+use std::path::PathBuf;
 
 /// 测试上下文 - 包含测试所需的所有配置信息
 #[derive(Clone)]
@@ -21,6 +22,7 @@ pub struct TestContext {
     pub grpc_host: Option<String>,
     pub gateway: bool,
     pub verbose: bool,
+    pub access_log_path: PathBuf,
 }
 
 impl TestContext {
@@ -37,6 +39,7 @@ impl TestContext {
         grpc_host: Option<String>,
         gateway: bool,
         verbose: bool,
+        access_log_path: PathBuf,
     ) -> Self {
         // Configure HTTP client to accept self-signed certificates for HTTPS testing
         let http_client = reqwest::Client::builder()
@@ -59,6 +62,7 @@ impl TestContext {
             grpc_host,
             gateway,
             verbose,
+            access_log_path,
         }
     }
     

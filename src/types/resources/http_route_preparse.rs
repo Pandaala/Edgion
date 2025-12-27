@@ -4,9 +4,10 @@
 use std::sync::Arc;
 use crate::core::plugins::PluginRuntime;
 use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
+use serde::{Serialize, Deserialize};
 
 /// Hash source type for consistent hash LB policy
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConsistentHashOn {
     /// Hash based on request header
     Header(String),
@@ -17,7 +18,7 @@ pub enum ConsistentHashOn {
 }
 
 /// Parsed LB policy from extensionRef
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParsedLBPolicy {
     /// Consistent hash with specified source
     ConsistentHash(ConsistentHashOn),

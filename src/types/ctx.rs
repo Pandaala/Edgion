@@ -130,7 +130,7 @@ pub struct UpstreamInfo {
     #[serde(skip)]
     pub backend_addr: Option<SocketAddr>,
     /// LB policy used for this upstream selection
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lb_policy: Option<ParsedLBPolicy>,
 }
 

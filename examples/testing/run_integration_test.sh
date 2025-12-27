@@ -16,28 +16,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 项目根目录
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# 日志目录
-LOG_DIR="${SCRIPT_DIR}/logs"
+# 创建带时间戳的独立日志目录
+TEST_RUN_ID=$(date +%Y%m%d_%H%M%S)
+LOG_DIR="${SCRIPT_DIR}/logs/test_run_${TEST_RUN_ID}"
 mkdir -p "$LOG_DIR"
 
 # 运行时目录
 RUNTIME_DIR="${SCRIPT_DIR}/runtime"
 mkdir -p "$RUNTIME_DIR"
-
-# 日志文件
-CONTROLLER_LOG="${LOG_DIR}/controller.log"
-GATEWAY_LOG="${LOG_DIR}/gateway.log"
-TEST_SERVER_LOG="${LOG_DIR}/test_server.log"
-ACCESS_LOG="${LOG_DIR}/access.log"
-TEST_RESULT_LOG="${LOG_DIR}/test_result.log"
-TEST_REPORT="${LOG_DIR}/test_report.txt"
-
-# PID 文件
-PID_DIR="${LOG_DIR}/pids"
-mkdir -p "$PID_DIR"
-
-# 记录测试开始时间
-TEST_START_TIME=$(date +%s)
 
 echo_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -54,6 +40,24 @@ echo_warn() {
 echo_error() {
     echo -e "${RED}[✗]${NC} $1"
 }
+
+echo_info "Test run ID: ${TEST_RUN_ID}"
+echo_info "Logs will be saved to: ${LOG_DIR}"
+
+# 日志文件
+CONTROLLER_LOG="${LOG_DIR}/controller.log"
+GATEWAY_LOG="${LOG_DIR}/gateway.log"
+TEST_SERVER_LOG="${LOG_DIR}/test_server.log"
+ACCESS_LOG="${LOG_DIR}/access.log"
+TEST_RESULT_LOG="${LOG_DIR}/test_result.log"
+TEST_REPORT="${LOG_DIR}/test_report.txt"
+
+# PID 文件
+PID_DIR="${LOG_DIR}/pids"
+mkdir -p "$PID_DIR"
+
+# 记录测试开始时间
+TEST_START_TIME=$(date +%s)
 
 # Wait for a service to be ready by checking if it's listening on a port
 # Usage: wait_for_port <port> <service_name> <pid_file> [timeout_seconds]

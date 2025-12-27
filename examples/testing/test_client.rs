@@ -7,6 +7,8 @@ mod framework;
 mod reporter;
 #[path = "./test_client/suites/mod.rs"]
 mod suites;
+#[path = "./test_client/log_analyzer.rs"]
+mod log_analyzer;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -14,6 +16,7 @@ use framework::{TestContext, TestRunner};
 use reporter::{ConsoleReporter, JsonReporter};
 use std::time::Instant;
 use std::sync::Once;
+use std::path::PathBuf;
 
 static INIT: Once = Once::new();
 
@@ -135,6 +138,10 @@ async fn main() -> Result<()> {
     println!("目标: {}:{}", cli.target_host, http_port);
     println!("========================================\n");
     
+    // Get access log path from environment variable
+    let access_log_path = std::env::var("EDGION_TEST_ACCESS_LOG_PATH")
+        .unwrap_or_else(|_| "examples/testing/logs/access.log".to_string());
+    
     let context = TestContext::new(
         cli.target_host.clone(),
         http_port,
@@ -148,6 +155,7 @@ async fn main() -> Result<()> {
         grpc_host,
         cli.gateway,
         cli.verbose,
+        PathBuf::from(access_log_path),
     );
     
     let mut runner = TestRunner::new(context);
