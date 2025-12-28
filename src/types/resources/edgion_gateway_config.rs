@@ -140,12 +140,6 @@ pub struct BackendTimeout {
     #[serde(default = "default_backend_request_timeout")]
     pub default_request_timeout: String,
 
-    /// Maximum timeout for a single try
-    /// Format: Duration string (e.g., "30s", "1m", "500ms")
-    /// Without unit defaults to seconds (e.g., "30" = "30s")
-    #[serde(default = "default_backend_per_try_timeout")]
-    pub default_per_try_timeout: String,
-
     /// Idle timeout for backend connection pool
     /// Format: Duration string (e.g., "300s", "5m", "500ms")
     /// Without unit defaults to seconds (e.g., "300" = "300s")
@@ -177,10 +171,6 @@ fn default_backend_connect_timeout() -> String {
 
 fn default_backend_request_timeout() -> String {
     "60s".to_string()
-}
-
-fn default_backend_per_try_timeout() -> String {
-    "30s".to_string()
 }
 
 fn default_backend_idle_timeout() -> String {
@@ -234,7 +224,6 @@ impl Default for BackendTimeout {
         Self {
             default_connect_timeout: default_backend_connect_timeout(),
             default_request_timeout: default_backend_request_timeout(),
-            default_per_try_timeout: default_backend_per_try_timeout(),
             default_idle_timeout: default_backend_idle_timeout(),
             default_max_retries: default_backend_max_retries(),
         }

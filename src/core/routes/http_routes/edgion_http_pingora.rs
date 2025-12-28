@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::time::Instant;
 use pingora_core::modules::http::grpc_web::{GrpcWeb, GrpcWebBridge};
 use pingora_core::modules::http::HttpModules;
 use pingora_core::modules::http::compression::ResponseCompressionBuilder;
@@ -201,6 +202,34 @@ impl ProxyHttp for EdgionHttp {
     }
 
     async fn upstream_peer(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
+        // Check request timeout dynamically before attempting peer selection
+        // This prevents starting a new retry attempt when deadline is already exceeded
+        let request_timeout = ctx.route_unit.as_ref()
+            .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
+            .and_then(|timeouts| timeouts.request_timeout)
+            .or_else(|| {
+                ctx.grpc_route_unit.as_ref()
+                    .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
+                    .and_then(|timeouts| timeouts.request_timeout)
+            });
+        
+        if let Some(timeout) = request_timeout {
+            let elapsed = ctx.start_time.elapsed();
+            if elapsed >= timeout {
+                tracing::warn!(
+                    total_attempts = ctx.try_cnt,
+                    elapsed_secs = elapsed.as_secs_f64(),
+                    timeout_secs = timeout.as_secs_f64(),
+                    "Request timeout exceeded before upstream_peer"
+                );
+                ctx.add_error(EdgionStatus::Unknown);
+                if let Some(upstream) = ctx.get_current_upstream_mut() {
+                    upstream.status = Some(504);
+                }
+                return Err(PingoraError::new_str("Request timeout exceeded"));
+            }
+        }
+        
         // Route to appropriate handler based on matched route type (not protocol)
         if ctx.is_grpc_route {
             self.upstream_peer_grpc(session, ctx).await
@@ -529,6 +558,35 @@ impl ProxyHttp for EdgionHttp {
             upstream.et = Some(upstream.start_time.elapsed().as_millis() as u64);
         }
 
+        // Check request timeout dynamically before allowing retry
+        // If timeout is exceeded, block all retries and return 504
+        let request_timeout = ctx.route_unit.as_ref()
+            .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
+            .and_then(|timeouts| timeouts.request_timeout)
+            .or_else(|| {
+                ctx.grpc_route_unit.as_ref()
+                    .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
+                    .and_then(|timeouts| timeouts.request_timeout)
+            });
+        
+        if let Some(timeout) = request_timeout {
+            let elapsed = ctx.start_time.elapsed();
+            if elapsed >= timeout {
+                tracing::warn!(
+                    total_attempts = ctx.try_cnt,
+                    elapsed_secs = elapsed.as_secs_f64(),
+                    timeout_secs = timeout.as_secs_f64(),
+                    "Request timeout exceeded, blocking retry"
+                );
+                // Set 504 status for timeout
+                if let Some(upstream) = ctx.get_current_upstream_mut() {
+                    upstream.status = Some(504);
+                }
+                // Do not set retry flag - this blocks any further retries
+                return e;
+            }
+        }
+        
         // Determine max_retries: route annotation > global config
         let max_retries = ctx.route_unit.as_ref()
             .and_then(|unit| unit.rule.parsed_max_retries)
@@ -777,20 +835,15 @@ impl EdgionHttp {
                     .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
             });
         
-        // Connection timeout: route-level backend_request_timeout overrides global connect_timeout
-        peer.options.connection_timeout = Some(
-            route_timeouts
-                .and_then(|rt| rt.backend_request_timeout)
-                .unwrap_or(backend_timeout.connect_timeout)
-        );
+        // Backend request timeout: route-level backend_request_timeout overrides global request_timeout
+        // This timeout covers connection + read + write for a single backend request
+        let effective_backend_timeout = route_timeouts
+            .and_then(|rt| rt.backend_request_timeout)
+            .unwrap_or(backend_timeout.request_timeout);
         
-        // Read/Write timeout: route-level overrides global
-        let effective_per_try_timeout = route_timeouts
-            .and_then(|rt| rt.per_try_timeout)
-            .unwrap_or(backend_timeout.per_try_timeout);
-        
-        peer.options.read_timeout = Some(effective_per_try_timeout);
-        peer.options.write_timeout = Some(effective_per_try_timeout);
+        peer.options.connection_timeout = Some(effective_backend_timeout);
+        peer.options.read_timeout = Some(effective_backend_timeout);
+        peer.options.write_timeout = Some(effective_backend_timeout);
         
         // Idle timeout: route-level overrides global
         peer.options.idle_timeout = Some(

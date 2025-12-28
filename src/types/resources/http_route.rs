@@ -474,11 +474,8 @@ pub struct LocalObjectReference {
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteTimeouts {
     /// Request specifies the maximum duration for a gateway to respond to an HTTP request
-    /// This timeout is intended to cover as close to the whole request-response transaction
-    /// as possible although an implementation MAY choose to start the timeout after
-    /// the entire request stream has been received instead of immediately after the
-    /// transaction is initiated by the client.
-    /// NOTE: Not implemented yet
+    /// This timeout covers the entire request-response transaction including all retries.
+    /// Gateway API v1.4 standard field
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<String>,
@@ -494,11 +491,6 @@ pub struct HTTPRouteTimeouts {
     /// Format: Duration (e.g., "5m", "300s")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_timeout: Option<String>,
-    
-    /// PerTryTimeout specifies the timeout for a single attempt to the backend
-    /// Format: Duration (e.g., "2s", "500ms")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub per_try_timeout: Option<String>,
 }
 
 /// HTTPRouteRetry defines retry policy for an HTTPRoute
@@ -597,14 +589,17 @@ use std::time::Duration;
 /// These are parsed once when the route is loaded and used at runtime
 #[derive(Debug, Clone)]
 pub struct ParsedRouteTimeouts {
+    /// Parsed request timeout (end-to-end including retries)
+    /// Gateway API v1.4 standard field
+    pub request_timeout: Option<Duration>,
+    
     /// Parsed backend request timeout
+    /// Gateway API v1.4 standard field
     pub backend_request_timeout: Option<Duration>,
     
     /// Parsed idle timeout
+    /// Edgion extension (recommended to configure in EdgionGatewayConfig)
     pub idle_timeout: Option<Duration>,
-    
-    /// Parsed per-try timeout
-    pub per_try_timeout: Option<Duration>,
 }
 
 impl ParsedRouteTimeouts {
@@ -612,6 +607,17 @@ impl ParsedRouteTimeouts {
     /// Returns None if no timeouts are configured
     pub fn from_config(config: &HTTPRouteTimeouts) -> Option<Self> {
         use crate::core::utils::parse_duration;
+        
+        // Parse request timeout (end-to-end, Gateway API v1.4 standard)
+        let request_timeout = config.request.as_ref()
+            .and_then(|s| {
+                parse_duration(s)
+                    .map_err(|e| {
+                        tracing::warn!("Invalid request timeout '{}': {}", s, e);
+                        e
+                    })
+                    .ok()
+            });
         
         let backend_request_timeout = config.backend_request.as_ref()
             .and_then(|s| {
@@ -633,22 +639,12 @@ impl ParsedRouteTimeouts {
                     .ok()
             });
         
-        let per_try_timeout = config.per_try_timeout.as_ref()
-            .and_then(|s| {
-                parse_duration(s)
-                    .map_err(|e| {
-                        tracing::warn!("Invalid per_try_timeout '{}': {}", s, e);
-                        e
-                    })
-                    .ok()
-            });
-        
         // Only create if at least one timeout is configured
-        if backend_request_timeout.is_some() || idle_timeout.is_some() || per_try_timeout.is_some() {
+        if request_timeout.is_some() || backend_request_timeout.is_some() || idle_timeout.is_some() {
             Some(Self {
+                request_timeout,
                 backend_request_timeout,
                 idle_timeout,
-                per_try_timeout,
             })
         } else {
             None

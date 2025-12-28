@@ -25,7 +25,6 @@ pub struct ParsedClientTimeout {
 pub struct ParsedBackendTimeout {
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
-    pub per_try_timeout: Duration,
     pub idle_timeout: Duration,
 }
 
@@ -109,12 +108,6 @@ impl ParsedBackendTimeout {
                 Duration::from_secs(60)
             });
         
-        let per_try_timeout = parse_duration(&config.default_per_try_timeout)
-            .unwrap_or_else(|e| {
-                tracing::warn!("Invalid default_per_try_timeout '{}': {}, using default 30s", config.default_per_try_timeout, e);
-                Duration::from_secs(30)
-            });
-        
         let idle_timeout = parse_duration(&config.default_idle_timeout)
             .unwrap_or_else(|e| {
                 tracing::warn!("Invalid default_idle_timeout '{}': {}, using default 300s", config.default_idle_timeout, e);
@@ -124,7 +117,6 @@ impl ParsedBackendTimeout {
         Self {
             connect_timeout,
             request_timeout,
-            per_try_timeout,
             idle_timeout,
         }
     }
@@ -135,7 +127,6 @@ impl Default for ParsedBackendTimeout {
         Self {
             connect_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(60),
-            per_try_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(300),
         }
     }

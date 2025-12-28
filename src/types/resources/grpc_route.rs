@@ -292,11 +292,8 @@ pub struct GRPCRequestMirrorFilter {
 #[serde(rename_all = "camelCase")]
 pub struct GRPCRouteTimeouts {
     /// Request specifies the maximum duration for a gateway to respond to a gRPC request
-    /// This timeout is intended to cover as close to the whole request-response transaction
-    /// as possible although an implementation MAY choose to start the timeout after
-    /// the entire request stream has been received instead of immediately after the
-    /// transaction is initiated by the client.
-    /// NOTE: Not implemented yet
+    /// This timeout covers the entire request-response transaction including all retries.
+    /// Gateway API v1.4 standard field
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<String>,
@@ -312,11 +309,6 @@ pub struct GRPCRouteTimeouts {
     /// Format: Duration (e.g., "5m", "300s")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_timeout: Option<String>,
-    
-    /// PerTryTimeout specifies the timeout for a single attempt to the backend
-    /// Format: Duration (e.g., "2s", "500ms")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub per_try_timeout: Option<String>,
 }
 
 /// GRPCRouteRetry defines retry policy for a GRPCRoute
@@ -408,20 +400,20 @@ impl GRPCRoute {
             // Parse timeouts for each rule
             if let Some(timeouts) = &rule.timeouts {
                 // Parse GRPCRouteTimeouts manually (same structure as HTTPRouteTimeouts)
+                let request_timeout = timeouts.request.as_ref()
+                    .and_then(|s| parse_duration(s).ok());
+                
                 let backend_request_timeout = timeouts.backend_request.as_ref()
                     .and_then(|s| parse_duration(s).ok());
                 
                 let idle_timeout = timeouts.idle_timeout.as_ref()
                     .and_then(|s| parse_duration(s).ok());
                 
-                let per_try_timeout = timeouts.per_try_timeout.as_ref()
-                    .and_then(|s| parse_duration(s).ok());
-                
-                if backend_request_timeout.is_some() || idle_timeout.is_some() || per_try_timeout.is_some() {
+                if request_timeout.is_some() || backend_request_timeout.is_some() || idle_timeout.is_some() {
                     rule.parsed_timeouts = Some(HttpParsedRouteTimeouts {
+                        request_timeout,
                         backend_request_timeout,
                         idle_timeout,
-                        per_try_timeout,
                     });
                     
                     tracing::debug!("Parsed route-level timeouts for GRPCRoute rule");
