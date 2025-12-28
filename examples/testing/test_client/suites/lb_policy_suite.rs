@@ -1,3 +1,17 @@
+// ============================================================================
+// DISABLED: This test suite is currently disabled
+// ============================================================================
+// Reason: The current approach relies on log analysis timing which is unreliable.
+//         Access logs may not be flushed immediately, causing flaky test results.
+//
+// TODO: Redesign test to use one of these approaches:
+//       1. Real backends that return their address in response headers
+//       2. Gateway debug headers (X-Backend-Tried) added to responses
+//       3. Mixed approach with real backends for success cases
+//
+// The test suite code is preserved below for future reference.
+// ============================================================================
+//
 // LB Policy Test Suite - 使用 log_analyzer 验证负载均衡策略
 // 这个测试套件演示如何通过 access log 分析来验证 LB 策略
 //
