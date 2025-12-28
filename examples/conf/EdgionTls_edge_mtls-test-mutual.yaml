@@ -1,4 +1,4 @@
-apiVersion: edgion.ztrace.cloud/v1
+apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: mtls-test-mutual
