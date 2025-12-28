@@ -1,6 +1,7 @@
 // 测试套件模块
 
 mod http_suite;
+mod http_match_suite;
 mod https_suite;
 mod grpc_suite;
 mod grpc_tls_suite;
@@ -14,6 +15,7 @@ mod plugin_logs_suite;
 mod lb_policy_suite;
 
 pub use http_suite::HttpTestSuite;
+pub use http_match_suite::HttpMatchTestSuite;
 pub use https_suite::HttpsTestSuite;
 pub use grpc_suite::GrpcTestSuite;
 pub use grpc_tls_suite::GrpcTlsTestSuite;

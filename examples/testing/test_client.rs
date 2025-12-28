@@ -68,6 +68,7 @@ struct Cli {
 enum Commands {
     // proto test
     Http,
+    HttpMatch,  // HTTP Match Rules test
     Https,
     Grpc,
     GrpcTls,
@@ -164,6 +165,13 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Http => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
+        }
+        Commands::HttpMatch => {
+            if !cli.gateway {
+                eprintln!("Error: HTTP Match Rules tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HttpMatchTestSuite));
         }
         Commands::Https => {
             if !cli.gateway {

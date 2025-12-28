@@ -371,6 +371,7 @@ cargo run --example test_client -- [OPTIONS] <COMMAND>
 
 # Commands
   http          # HTTP tests
+  http-match    # HTTP Match Rules tests (Gateway mode only)
   grpc          # gRPC tests
   grpc-tls      # gRPC-TLS tests (Gateway mode only)
   tcp           # TCP tests
@@ -380,6 +381,7 @@ cargo run --example test_client -- [OPTIONS] <COMMAND>
   tls-tcp       # TLS Terminate to TCP tests (Gateway mode only)
   mtls          # mTLS tests (Gateway mode only)
   plugin-logs   # Plugin logging tests (Gateway mode only)
+  lb-policy     # Load balancing policy tests (Gateway mode only)
   all           # Run all tests
 ```
 
@@ -411,6 +413,7 @@ cargo run --example test_client -- -g all
 
 # Test individual protocols
 cargo run --example test_client -- -g http      # HTTP (10080)
+cargo run --example test_client -- -g http-match # HTTP Match Rules tests
 cargo run --example test_client -- -g grpc      # gRPC (10080, HTTP/2)
 cargo run --example test_client -- -g tcp       # TCP (19000)
 cargo run --example test_client -- -g udp       # UDP (19002)
@@ -1025,6 +1028,38 @@ This section maps each test suite to its required configuration files. Use this 
 - `GatewayClass__public-gateway.yaml` - GatewayClass configuration
 
 **Notes**: Tests TCP/UDP layer-4 plugin functionality.
+
+---
+
+#### 14. HTTP Match Rules Test Suite (`http_match_suite.rs`)
+
+**Command**: `cargo run --example test_client -- -g http-match`
+
+**Dependencies**:
+- `HTTPRoute_default_match-test.yaml` - Comprehensive match rules test route (contains 8 rules)
+- `EndpointSlice_edge_test-http.yaml` - HTTP backend service discovery
+- `Service_edge_test-http.yaml` - HTTP service definition
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+**Notes**: Tests all HTTPRoute matching capabilities including:
+- Path matching types: `PathPrefix`, `Exact`, `RegularExpression`
+- Header matching: `Exact` and `RegularExpression` types
+- Query parameter matching: `Exact` and `RegularExpression` types
+- HTTP method matching: `GET`, `POST`, `PUT`, etc.
+- Combined matching: Multiple match conditions in a single rule
+
+**Test Cases**:
+1. `test_path_prefix_match` - Validates PathPrefix matching (`/api/v1` prefix)
+2. `test_exact_path_match` - Validates Exact path matching (`/exact/path` only)
+3. `test_regex_path_match` - Validates RegularExpression path matching (`^/users/[0-9]+$`)
+4. `test_header_exact_match` - Validates Header exact matching (`X-Custom-Header: CustomValue`)
+5. `test_header_regex_match` - Validates Header regex matching (`X-Version: ^v[0-9]+\.[0-9]+$`)
+6. `test_query_param_match` - Validates Query parameter matching (multiple params with different types)
+7. `test_method_match` - Validates HTTP method matching (POST vs GET)
+8. `test_combined_match` - Validates complex combined matching (path + method + headers + query params)
+
+Each test case includes both positive tests (should match) and negative tests (should not match) to ensure routing logic correctness.
 
 ---
 
