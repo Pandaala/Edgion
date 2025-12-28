@@ -382,6 +382,7 @@ cargo run --example test_client -- [OPTIONS] <COMMAND>
   mtls          # mTLS tests (Gateway mode only)
   plugin-logs   # Plugin logging tests (Gateway mode only)
   lb-policy     # Load balancing policy tests (Gateway mode only)
+  timeout       # Timeout tests (Gateway mode only)
   all           # Run all tests
 ```
 
@@ -1060,6 +1061,36 @@ This section maps each test suite to its required configuration files. Use this 
 8. `test_combined_match` - Validates complex combined matching (path + method + headers + query params)
 
 Each test case includes both positive tests (should match) and negative tests (should not match) to ensure routing logic correctness.
+
+---
+
+#### 15. Timeout Test Suite (`timeout_suite.rs`)
+
+**Command**: `cargo run --example test_client -- -g timeout`
+
+**Dependencies**:
+- `HTTPRoute_default_timeout-backend.yaml` - Backend timeout test route
+- `HTTPRoute_default_timeout-client.yaml` - Client timeout test route
+- `EdgionPlugins_default_timeout-debug.yaml` - Debug plugin configuration
+- `EndpointSlice_edge_test-http.yaml` - HTTP backend service discovery (复用)
+- `Service_edge_test-http.yaml` - HTTP service definition (复用)
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration (复用)
+- `EdgionGatewayConfig__example-gateway.yaml` - GatewayConfig (使用现有的client.readTimeout: 60s)
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration (复用)
+
+**Notes**: Tests timeout handling for both client and backend scenarios:
+- Uses HTTPRoute `timeouts` field for backend timeout configuration
+- Uses EdgionPlugins with DebugAccessLogToHeader for internal status code validation
+- Validates HTTP response status codes and internal status codes (499 for client timeout, 504 for backend timeout)
+- Tests leverage the test_server's `/delay/{seconds}` endpoint
+
+**Test Cases**:
+1. `test_normal_response` - Validates normal response without timeout (1s delay, baseline test)
+2. `test_backend_request_timeout` - Validates backend request total timeout (5s delay vs 3s timeout → 504)
+3. `test_backend_per_try_timeout` - Validates backend per-try timeout (3s delay vs 2s timeout → 504)
+4. `test_client_read_timeout` - Validates client read timeout (65s delay vs 60s client timeout → 499)
+
+Each test verifies both HTTP response status codes and the internal status code from X-Debug-Access-Log header.
 
 ---
 

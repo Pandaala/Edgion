@@ -82,6 +82,7 @@ enum Commands {
     Mtls,  // mTLS tests
     PluginLogs,  // Plugin logs tests
     LbPolicy,  // LB Policy tests with log analyzer
+    Timeout,  // Timeout tests
     All,
 }
 
@@ -233,6 +234,13 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::LBPolicyTestSuite));
+        }
+        Commands::Timeout => {
+            if !cli.gateway {
+                eprintln!("Error: Timeout tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TimeoutTestSuite));
         }
         Commands::All => {
             runner.add_suite(Box::new(suites::HttpTestSuite));

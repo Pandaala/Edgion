@@ -13,6 +13,7 @@ pub mod security_suite;
 pub mod mtls_suite;
 mod plugin_logs_suite;
 mod lb_policy_suite;
+mod timeout_suite;
 
 pub use http_suite::HttpTestSuite;
 pub use http_match_suite::HttpMatchTestSuite;
@@ -27,4 +28,5 @@ pub use security_suite::SecurityTestSuite;
 pub use mtls_suite::MtlsTestSuite;
 pub use plugin_logs_suite::PluginLogsTestSuite;
 pub use lb_policy_suite::LBPolicyTestSuite;
+pub use timeout_suite::TimeoutTestSuite;
 

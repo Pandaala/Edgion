@@ -553,17 +553,23 @@ impl ProxyHttp for EdgionHttp {
     {
         let code = match e.etype() {
             HTTPStatus(code) => *code,
-            // Check for timeout errors first
-            ErrorType::ConnectTimedout | ErrorType::TLSHandshakeTimedout |
-            ErrorType::ReadTimedout | ErrorType::WriteTimedout => 504,
+            // Check for timeout errors - distinguish between client and backend timeouts
+            ErrorType::ReadTimedout | ErrorType::WriteTimedout => {
+                match e.esource() {
+                    ErrorSource::Downstream => 499,  // Client closed request (client timeout)
+                    ErrorSource::Upstream => 504,     // Gateway timeout (backend timeout)
+                    _ => 504,  // Default to 504 for other timeout sources
+                }
+            }
+            ErrorType::ConnectTimedout | ErrorType::TLSHandshakeTimedout => 504,  // Backend connection timeouts
             _ => {
                 match e.esource() {
                     ErrorSource::Upstream => 502,
                     ErrorSource::Downstream => {
                         match e.etype() {
                             WriteError | ReadError | ConnectionClosed => {
-                                /* conn already dead */
-                                0
+                                // Client closed connection - return 499 for logging, but don't send response
+                                499
                             }
                             _ => 400,
                         }
@@ -583,14 +589,16 @@ impl ProxyHttp for EdgionHttp {
             // Always update current upstream status and error message
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(code as u16);
-                // Only add error message for non-timeout errors (not 504)
-                if code != 504 {
+                // Only add error message for non-timeout errors (not 504/499)
+                if code != 504 && code != 499 {
                     upstream.err.push(e.etype().as_str().to_string());
                 }
             }
         }
 
-        if code > 0 {
+        // Don't send error response if connection is already closed (499)
+        // For 499, the client has already disconnected, so we can't send a response
+        if code > 0 && code != 499 {
             // Generate error response and apply custom server headers
             let mut resp = pingora_core::protocols::http::ServerSession::generate_error(code);
             self.server_header_opts.apply_to_response(&mut resp);
