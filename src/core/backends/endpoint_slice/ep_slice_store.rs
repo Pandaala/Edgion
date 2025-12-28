@@ -284,12 +284,12 @@ where
 fn extract_service_key(ep_slice: &EndpointSlice) -> String {
     let service_name = ep_slice.metadata.labels
         .as_ref()
-        .and_then(|labels| labels.get("gateway.edgion.io/service-name"))
+        .and_then(|labels| labels.get("kubernetes.io/service-name"))
         .map(|s| s.as_str())
         .unwrap_or_else(|| {
             tracing::warn!(
                 endpointslice = %ep_slice.metadata.name.as_deref().unwrap_or(""),
-                "EndpointSlice missing gateway.edgion.io/service-name label, using name as fallback"
+                "EndpointSlice missing kubernetes.io/service-name label, using name as fallback"
             );
             ep_slice.metadata.name.as_deref().unwrap_or("")
         });

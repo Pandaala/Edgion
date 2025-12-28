@@ -3,6 +3,8 @@ kind: EndpointSlice
 metadata:
   name: test-tcp
   namespace: edge
+  labels:
+    kubernetes.io/service-name: test-tcp
 addressType: IPv4
 ports:
   - name: tcp-30010

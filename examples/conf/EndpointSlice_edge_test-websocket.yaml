@@ -3,6 +3,8 @@ kind: EndpointSlice
 metadata:
   name: test-websocket
   namespace: edge
+  labels:
+    kubernetes.io/service-name: test-websocket
 addressType: IPv4
 ports:
   - name: ws-30005

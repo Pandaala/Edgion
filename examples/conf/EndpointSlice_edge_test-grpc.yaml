@@ -3,6 +3,8 @@ kind: EndpointSlice
 metadata:
   name: test-grpc
   namespace: edge
+  labels:
+    kubernetes.io/service-name: test-grpc
 addressType: IPv4
 ports:
   - name: grpc-30021

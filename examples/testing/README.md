@@ -383,6 +383,7 @@ cargo run --example test_client -- [OPTIONS] <COMMAND>
   plugin-logs   # Plugin logging tests (Gateway mode only)
   lb-policy     # Load balancing policy tests (Gateway mode only)
   timeout       # Timeout tests (Gateway mode only)
+  weighted-backend  # Weighted backend tests (Gateway mode only)
   all           # Run all tests
 ```
 
@@ -434,6 +435,15 @@ cargo run --example test_client -- -g mtls      # Mutual TLS tests
 
 # Plugin logging tests (Gateway mode only)
 cargo run --example test_client -- -g plugin-logs  # Plugin execution validation
+
+# Load balancing policy tests (Gateway mode only)
+cargo run --example test_client -- -g lb-policy    # LB policy validation
+
+# Timeout tests (Gateway mode only)
+cargo run --example test_client -- -g timeout      # Client and backend timeout tests
+
+# Weighted backend tests (Gateway mode only)
+cargo run --example test_client -- -g weighted-backend  # Weighted traffic distribution tests
 
 # Gateway mode + verbose output
 cargo run --example test_client -- -g --verbose http
@@ -1091,6 +1101,38 @@ Each test case includes both positive tests (should match) and negative tests (s
 4. `test_client_read_timeout` - Validates client read timeout (65s delay vs 60s client timeout → 499)
 
 Each test verifies both HTTP response status codes and the internal status code from X-Debug-Access-Log header.
+
+---
+
+#### 16. Weighted Backend Test Suite (`weighted_backend_suite.rs`)
+
+**Command**: `cargo run --example test_client -- -g weighted-backend`
+
+**Dependencies**:
+- `HTTPRoute_default_weighted-backend.yaml` - Weighted backend test route (50:30:20)
+- `Service_edge_backend-a.yaml` - Backend A service
+- `Service_edge_backend-b.yaml` - Backend B service
+- `Service_edge_backend-c.yaml` - Backend C service
+- `EndpointSlice_edge_backend-a.yaml` - Backend A endpoints
+- `EndpointSlice_edge_backend-b.yaml` - Backend B endpoints
+- `EndpointSlice_edge_backend-c.yaml` - Backend C endpoints
+- `EdgionPlugins_default_timeout-debug.yaml` - Debug plugin configuration (复用)
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration (复用)
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration (复用)
+
+**Notes**: Tests HTTPRoute weighted backend functionality:
+- Uses HTTPRoute `backendRefs[].weight` field to configure traffic distribution (50:30:20)
+- Uses EdgionPlugins with DebugAccessLogToHeader to extract backend name from X-Debug-Access-Log header
+- All three backend services point to the same test_server endpoint (127.0.0.1:30001)
+- Validates traffic distribution matches configured weights with ±10% tolerance
+- Tests leverage the test_server's `/echo` endpoint
+
+**Test Cases**:
+1. `test_backend_consistency` - Validates all backends return 200 OK (consistency check)
+2. `test_equal_weights` - Validates all backends receive traffic (basic distribution)
+3. `test_weighted_distribution` - Validates traffic distribution matches configured weights (50:30:20, main test)
+
+The main test sends 100 requests and analyzes the `backend_context.name` field in the X-Debug-Access-Log header to count traffic distribution across backends.
 
 ---
 

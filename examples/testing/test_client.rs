@@ -83,6 +83,7 @@ enum Commands {
     PluginLogs,  // Plugin logs tests
     LbPolicy,  // LB Policy tests with log analyzer
     Timeout,  // Timeout tests
+    WeightedBackend,  // Weighted backend tests
     All,
 }
 
@@ -241,6 +242,13 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TimeoutTestSuite));
+        }
+        Commands::WeightedBackend => {
+            if !cli.gateway {
+                eprintln!("Error: Weighted backend tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
         }
         Commands::All => {
             runner.add_suite(Box::new(suites::HttpTestSuite));

@@ -3,6 +3,8 @@ kind: EndpointSlice
 metadata:
   name: test-udp
   namespace: edge
+  labels:
+    kubernetes.io/service-name: test-udp
 addressType: IPv4
 ports:
   - name: udp-30011
