@@ -1,4 +1,13 @@
 // Stream Plugins 测试套件 - 测试 EdgionStreamPlugins 功能
+//
+// 依赖的配置文件（位于 examples/conf/）：
+// - EndpointSlice_edge_test-tcp.yaml          # TCP 后端服务发现
+// - Service_edge_test-tcp.yaml                # TCP 服务定义
+// - TCPRoute_edge_test-tcp-with-plugins.yaml  # 带插件的 TCP 路由（监听 19010 端口）
+// - EdgionStreamPlugins_edge_test-ip-filter.yaml  # IP 过滤 stream 插件配置
+//   注：该插件配置了允许的 IP 地址列表（127.0.0.1, 192.168.0.0/16）
+// - Gateway_edge_example-gateway.yaml         # Gateway 配置
+// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;

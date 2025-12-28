@@ -1,5 +1,19 @@
 // gRPC TLS 测试套件
 // 测试通过 HTTPS (TLS) 的 gRPC 连接
+//
+// 依赖的配置文件（位于 examples/conf/）：
+// - EndpointSlice_edge_test-grpc.yaml         # gRPC 后端服务发现
+// - Service_edge_test-grpc.yaml               # gRPC 服务定义
+// - GRPCRoute_edge_test-grpc-https.yaml       # gRPC TLS 路由规则（Host: grpc-tls.test.example.com）
+// - Gateway_edge_tls-terminate-gateway.yaml   # TLS 终止 Gateway 配置（监听 18443 端口）
+// - EdgionTls_edge_edge-tls.yaml              # TLS 证书配置
+// - Secret_edge_edge-tls.yaml                 # TLS 证书 Secret
+// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
+// 
+// 生成的证书文件：
+// - examples/testing/certs/server.crt         # 服务端证书（由 generate_certs.sh 生成）
+// - examples/testing/certs/server.key         # 服务端私钥
+// - examples/testing/certs/ca.pem             # CA 证书
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;

@@ -810,6 +810,241 @@ Configuration files are located in `examples/conf/`:
 - `PluginMetaData_*.yaml` - Plugin metadata (IP lists, regex patterns, etc.)
 - `LinkSys_*.yaml` - External system connections (Redis, databases, etc.)
 
+### Test Suite Configuration Dependencies
+
+This section maps each test suite to its required configuration files. Use this reference when running individual test suites or debugging configuration issues.
+
+> 💡 **Tip**: All test suite files have detailed dependency comments at the top of the file.
+
+#### 1. HTTP Test Suite (`http_suite.rs`)
+
+**Command**: `cargo run --example test_client -- [-g] http`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-http.yaml` - HTTP backend service discovery
+- `Service_edge_test-http.yaml` - HTTP service definition
+- `httproute_default_example-route.yaml` - HTTP routing rules (Host: test.example.com)
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+---
+
+#### 2. HTTPS Test Suite (`https_suite.rs`)
+
+**Command**: `cargo run --example test_client -- -g https`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-http.yaml` - HTTPS backend service (reuses HTTP backend)
+- `Service_edge_test-http.yaml` - HTTPS service definition
+- `HTTPRoute_edge_test-http.yaml` - HTTPS routing rules (Host: test.example.com, path: /secure/)
+- `Gateway_edge_tls-terminate-gateway.yaml` - TLS termination Gateway (port 18443)
+- `EdgionTls_edge_edge-tls.yaml` - TLS certificate configuration
+- `Secret_edge_edge-tls.yaml` - TLS certificate Secret
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+**Generated Certificates** (by `generate_certs.sh`):
+- `examples/testing/certs/server.crt` - Server certificate
+- `examples/testing/certs/server.key` - Server private key
+- `examples/testing/certs/ca.pem` - CA certificate
+
+---
+
+#### 3. gRPC Test Suite (`grpc_suite.rs`)
+
+**Command**: `cargo run --example test_client -- [-g] grpc`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-grpc.yaml` - gRPC backend service discovery
+- `Service_edge_test-grpc.yaml` - gRPC service definition
+- `GRPCRoute_edge_test-grpc.yaml` - gRPC routing rules (Host: grpc.test.example.com)
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+---
+
+#### 4. gRPC-TLS Test Suite (`grpc_tls_suite.rs`)
+
+**Command**: `cargo run --example test_client -- -g grpc-tls`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-grpc.yaml` - gRPC backend service discovery
+- `Service_edge_test-grpc.yaml` - gRPC service definition
+- `GRPCRoute_edge_test-grpc-https.yaml` - gRPC TLS routing rules (Host: grpc-tls.test.example.com)
+- `Gateway_edge_tls-terminate-gateway.yaml` - TLS termination Gateway (port 18443)
+- `EdgionTls_edge_edge-tls.yaml` - TLS certificate configuration
+- `Secret_edge_edge-tls.yaml` - TLS certificate Secret
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+**Generated Certificates** (by `generate_certs.sh`):
+- `examples/testing/certs/server.crt` - Server certificate
+- `examples/testing/certs/server.key` - Server private key
+- `examples/testing/certs/ca.pem` - CA certificate
+
+---
+
+#### 5. WebSocket Test Suite (`websocket_suite.rs`)
+
+**Command**: `cargo run --example test_client -- [-g] websocket`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-websocket.yaml` - WebSocket backend service discovery
+- `Service_edge_test-websocket.yaml` - WebSocket service definition
+- `httproute_default_example-route.yaml` - WebSocket routing rules (Host: test.example.com)
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+---
+
+#### 6. TCP Test Suite (`tcp_suite.rs`)
+
+**Command**: `cargo run --example test_client -- [-g] tcp`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-tcp.yaml` - TCP backend service discovery
+- `Service_edge_test-tcp.yaml` - TCP service definition
+- `TCPRoute_edge_test-tcp.yaml` - TCP routing rules (port 19000)
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+---
+
+#### 7. UDP Test Suite (`udp_suite.rs`)
+
+**Command**: `cargo run --example test_client -- [-g] udp`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-udp.yaml` - UDP backend service discovery
+- `Service_edge_test-udp.yaml` - UDP service definition
+- `UDPRoute_edge_test-udp.yaml` - UDP routing rules (port 19002)
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+---
+
+#### 8. Real IP Test Suite (`real_ip_suite.rs`)
+
+**Command**: `cargo run --example test_client -- -g real-ip`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-http.yaml` - HTTP backend service discovery
+- `Service_edge_test-http.yaml` - HTTP service definition
+- `httproute_default_example-route.yaml` - HTTP routing rules with trustedProxies config
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+**Notes**: Tests X-Forwarded-For header processing with trusted proxy configurations.
+
+---
+
+#### 9. Security Protection Test Suite (`security_suite.rs`)
+
+**Command**: `cargo run --example test_client -- -g security`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-http.yaml` - HTTP backend service discovery
+- `Service_edge_test-http.yaml` - HTTP service definition
+- `httproute_default_example-route.yaml` - HTTP routing rules with maxXFFLength config
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+**Notes**: Tests X-Forwarded-For header length restrictions (max 200 bytes).
+
+---
+
+#### 10. mTLS Test Suite (`mtls_suite.rs`)
+
+**Command**: `cargo run --example test_client -- -g mtls`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-http.yaml` - HTTP backend service discovery
+- `Service_edge_test-http.yaml` - HTTP service definition
+- `HTTPRoute_edge_mtls-test.yaml` - mTLS routing rules (Host: mtls*.example.com)
+- `Gateway_edge_mtls-test-gateway.yaml` - mTLS Gateway (port 10444)
+- `EdgionTls_edge_mtls-test-mutual.yaml` - Mutual TLS config (Host: mtls.example.com)
+- `EdgionTls_edge_mtls-test-optional.yaml` - Optional mTLS config (Host: mtls-optional.example.com)
+- `EdgionTls_edge_mtls-test-san.yaml` - SAN whitelist config (Host: mtls-san.example.com)
+- `EdgionTls_edge_mtls-test-chain.yaml` - Certificate chain config (Host: mtls-chain.example.com)
+- `Secret_edge_mtls-server.yaml` - mTLS server certificate Secret
+- `Secret_edge_client-ca.yaml` - Client CA certificate Secret
+- `Secret_edge_ca-chain.yaml` - Intermediate CA certificate chain Secret
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+**Generated Certificates** (by `generate_mtls_certs.sh`):
+- `examples/testing/certs/mtls/valid-client.crt` - Valid client certificate
+- `examples/testing/certs/mtls/valid-client.key` - Valid client private key
+- `examples/testing/certs/mtls/invalid-client.crt` - Invalid client certificate (untrusted CA)
+- `examples/testing/certs/mtls/invalid-client.key` - Invalid client private key
+- `examples/testing/certs/mtls/nonmatching-client.crt` - Non-matching SAN client certificate
+- `examples/testing/certs/mtls/nonmatching-client.key` - Non-matching SAN client private key
+- `examples/testing/certs/mtls/chain-client-bundle.crt` - Client certificate with chain
+- `examples/testing/certs/mtls/chain-client.key` - Certificate chain client private key
+
+---
+
+#### 11. Plugin Logs Test Suite (`plugin_logs_suite.rs`)
+
+**Command**: `cargo run --example test_client -- -g plugin-logs`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-http.yaml` - HTTP backend service discovery
+- `Service_edge_test-http.yaml` - HTTP service definition
+- `HTTPRoute_default_plugin-logs-test.yaml` - Plugin logs routing rules (Host: plugin-test.example.com)
+- `EdgionPlugins_default_debug-access-log.yaml` - Debug access log plugin (CORS, CSRF, ResponseHeaderModifier, DebugAccessLogToHeader)
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+**Notes**: Tests plugin execution order, logs structure, and time_cost metrics.
+
+---
+
+#### 12. LB Policy Test Suite (`lb_policy_suite.rs`)
+
+**Command**: `cargo run --example test_client -- -g lb-policy`
+
+**Dependencies**:
+- `EndpointSlice_default_lb-rr-test.yaml` - Load balancing test backends (3 backends)
+- `Service_default_lb-rr-test.yaml` - Load balancing test service
+- `HTTPRoute_default_lb-rr-noretry.yaml` - RoundRobin LB routing rules (Host: lb-rr-test.example.com)
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+**Notes**: Uses unreachable backend addresses to verify load balancing distribution via access logs.
+
+---
+
+#### 13. Stream Plugins Test Suite (`stream_plugins_suite.rs`)
+
+**Command**: `cargo run --example test_client -- -g stream-plugins`
+
+**Dependencies**:
+- `EndpointSlice_edge_test-tcp.yaml` - TCP backend service discovery
+- `Service_edge_test-tcp.yaml` - TCP service definition
+- `TCPRoute_edge_test-tcp-with-plugins.yaml` - TCP routing with plugins (port 19010)
+- `EdgionStreamPlugins_edge_test-ip-filter.yaml` - IP filter stream plugin (allows 127.0.0.1, 192.168.0.0/16)
+- `Gateway_edge_example-gateway.yaml` - Gateway configuration
+- `GatewayClass__public-gateway.yaml` - GatewayClass configuration
+
+**Notes**: Tests TCP/UDP layer-4 plugin functionality.
+
+---
+
+### Configuration Quick Reference
+
+**Common Base Configurations** (required by all tests):
+- `GatewayClass__public-gateway.yaml` - Base GatewayClass
+- `Gateway_edge_example-gateway.yaml` - Primary Gateway
+- `EdgionGatewayConfig__example-gateway.yaml` - Gateway-specific configuration
+
+**Protocol-Specific Backends**:
+- HTTP/HTTPS/WebSocket: `Service_edge_test-http.yaml` + `EndpointSlice_edge_test-http.yaml`
+- gRPC/gRPC-TLS: `Service_edge_test-grpc.yaml` + `EndpointSlice_edge_test-grpc.yaml`
+- TCP: `Service_edge_test-tcp.yaml` + `EndpointSlice_edge_test-tcp.yaml`
+- UDP: `Service_edge_test-udp.yaml` + `EndpointSlice_edge_test-udp.yaml`
+
+**TLS/mTLS Configurations**:
+- Standard TLS: `Gateway_edge_tls-terminate-gateway.yaml` + `EdgionTls_edge_edge-tls.yaml` + `Secret_edge_edge-tls.yaml`
+- mTLS: `Gateway_edge_mtls-test-gateway.yaml` + `EdgionTls_edge_mtls-test-*.yaml` + `Secret_edge_*-ca.yaml`
+
 ---
 
 ## Troubleshooting

@@ -1,4 +1,11 @@
 // TCP 测试套件
+//
+// 依赖的配置文件（位于 examples/conf/）：
+// - EndpointSlice_edge_test-tcp.yaml          # TCP 后端服务发现
+// - Service_edge_test-tcp.yaml                # TCP 服务定义
+// - TCPRoute_edge_test-tcp.yaml               # TCP 路由规则（监听 19000 端口）
+// - Gateway_edge_example-gateway.yaml         # Gateway 配置
+// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;

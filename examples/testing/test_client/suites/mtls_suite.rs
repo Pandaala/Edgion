@@ -1,5 +1,29 @@
 // mTLS (Mutual TLS) 测试套件
 // 测试双向 TLS 认证功能
+//
+// 依赖的配置文件（位于 examples/conf/）：
+// - EndpointSlice_edge_test-http.yaml         # HTTP 后端服务发现
+// - Service_edge_test-http.yaml               # HTTP 服务定义
+// - HTTPRoute_edge_mtls-test.yaml             # mTLS 路由规则（Host: mtls*.example.com）
+// - Gateway_edge_mtls-test-gateway.yaml       # mTLS Gateway 配置（监听 10444 端口）
+// - EdgionTls_edge_mtls-test-mutual.yaml      # Mutual TLS 配置（Host: mtls.example.com）
+// - EdgionTls_edge_mtls-test-optional.yaml    # Optional mTLS 配置（Host: mtls-optional.example.com）
+// - EdgionTls_edge_mtls-test-san.yaml         # SAN 白名单配置（Host: mtls-san.example.com）
+// - EdgionTls_edge_mtls-test-chain.yaml       # 证书链配置（Host: mtls-chain.example.com）
+// - Secret_edge_mtls-server.yaml              # mTLS 服务端证书 Secret
+// - Secret_edge_client-ca.yaml                # 客户端 CA 证书 Secret
+// - Secret_edge_ca-chain.yaml                 # 中间 CA 证书链 Secret
+// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
+// 
+// 生成的证书文件（由 generate_mtls_certs.sh 生成）：
+// - examples/testing/certs/mtls/valid-client.crt          # 有效客户端证书
+// - examples/testing/certs/mtls/valid-client.key          # 有效客户端私钥
+// - examples/testing/certs/mtls/invalid-client.crt        # 无效客户端证书（不受信任的 CA）
+// - examples/testing/certs/mtls/invalid-client.key        # 无效客户端私钥
+// - examples/testing/certs/mtls/nonmatching-client.crt    # SAN 不匹配的客户端证书
+// - examples/testing/certs/mtls/nonmatching-client.key    # SAN 不匹配的客户端私钥
+// - examples/testing/certs/mtls/chain-client-bundle.crt   # 带证书链的客户端证书
+// - examples/testing/certs/mtls/chain-client.key          # 证书链客户端私钥
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;

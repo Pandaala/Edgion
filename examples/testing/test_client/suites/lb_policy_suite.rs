@@ -1,5 +1,15 @@
 // LB Policy Test Suite - 使用 log_analyzer 验证负载均衡策略
 // 这个测试套件演示如何通过 access log 分析来验证 LB 策略
+//
+// 依赖的配置文件（位于 examples/conf/）：
+// - EndpointSlice_default_lb-rr-test.yaml     # 负载均衡测试后端（3个后端：127.0.0.1:9999, 127.0.0.2:9999, 127.0.0.3:9999）
+// - Service_default_lb-rr-test.yaml           # 负载均衡测试服务定义
+// - HTTPRoute_default_lb-rr-noretry.yaml      # RoundRobin LB 路由规则（Host: lb-rr-test.example.com）
+//   注：该路由配置了 RoundRobin 负载均衡策略，并通过 annotation 禁用了重试
+// - Gateway_edge_example-gateway.yaml         # Gateway 配置
+// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
+// 
+// 注：此测试使用不可达的后端地址来验证负载均衡分发策略
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::log_analyzer::AccessLogAnalyzer;

@@ -1,4 +1,11 @@
 // UDP 测试套件
+//
+// 依赖的配置文件（位于 examples/conf/）：
+// - EndpointSlice_edge_test-udp.yaml          # UDP 后端服务发现
+// - Service_edge_test-udp.yaml                # UDP 服务定义
+// - UDPRoute_edge_test-udp.yaml               # UDP 路由规则（监听 19002 端口）
+// - Gateway_edge_example-gateway.yaml         # Gateway 配置
+// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;

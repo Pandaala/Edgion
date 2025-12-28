@@ -1,6 +1,7 @@
 # Test logs and runtime data
 logs/
 runtime/
+logs_*/
 *.log
 *.pid
 

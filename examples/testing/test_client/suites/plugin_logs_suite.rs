@@ -1,4 +1,13 @@
 // Plugin Logs Test Suite
+//
+// 依赖的配置文件（位于 examples/conf/）：
+// - EndpointSlice_edge_test-http.yaml         # HTTP 后端服务发现
+// - Service_edge_test-http.yaml               # HTTP 服务定义
+// - HTTPRoute_default_plugin-logs-test.yaml   # Plugin logs 路由规则（Host: plugin-test.example.com）
+// - EdgionPlugins_default_debug-access-log.yaml  # Debug access log 插件配置
+//   注：该插件启用了 CORS、CSRF、ResponseHeaderModifier 和 DebugAccessLogToHeader
+// - Gateway_edge_example-gateway.yaml         # Gateway 配置
+// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use serde::{Deserialize, Serialize};

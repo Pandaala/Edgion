@@ -1,5 +1,19 @@
 // HTTPS 测试套件
 // 只在 Gateway 模式下测试，使用 /secure/ 路径前缀区分
+//
+// 依赖的配置文件（位于 examples/conf/）：
+// - EndpointSlice_edge_test-http.yaml         # HTTPS 后端服务（复用 HTTP 后端）
+// - Service_edge_test-http.yaml               # HTTPS 服务定义
+// - HTTPRoute_edge_test-http.yaml             # HTTPS 路由规则（Host: test.example.com, path: /secure/）
+// - Gateway_edge_tls-terminate-gateway.yaml   # TLS 终止 Gateway 配置（监听 18443 端口）
+// - EdgionTls_edge_edge-tls.yaml              # TLS 证书配置
+// - Secret_edge_edge-tls.yaml                 # TLS 证书 Secret
+// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
+// 
+// 生成的证书文件：
+// - examples/testing/certs/server.crt         # 服务端证书（由 generate_certs.sh 生成）
+// - examples/testing/certs/server.key         # 服务端私钥
+// - examples/testing/certs/ca.pem             # CA 证书
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;

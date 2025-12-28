@@ -1,4 +1,11 @@
 // WebSocket 测试套件
+//
+// 依赖的配置文件（位于 examples/conf/）：
+// - EndpointSlice_edge_test-websocket.yaml    # WebSocket 后端服务发现
+// - Service_edge_test-websocket.yaml          # WebSocket 服务定义
+// - httproute_default_example-route.yaml      # WebSocket 路由规则（Host: test.example.com）
+// - Gateway_edge_example-gateway.yaml         # Gateway 配置
+// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
