@@ -87,7 +87,7 @@ pub fn add_http_listener(
 
     // Initialize RealIpExtractor from configuration
     let real_ip_extractor = if let Some(real_ip_config) = &context.edgion_gateway_config.spec.real_ip {
-        match crate::core::routes::http_routes::RealIpExtractor::new(
+        match crate::core::utils::RealIpExtractor::new(
             &real_ip_config.trusted_proxies,
             real_ip_config.real_ip_header.clone()
         ) {

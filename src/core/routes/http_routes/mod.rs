@@ -25,5 +25,5 @@ pub use routes_mgr::{RouteManager, DomainRouteRules, get_global_route_manager};
 pub use conf_handler_impl::create_route_manager_handler;
 
 // Re-export HTTP proxy types
-pub use proxy_http::{EdgionHttp, RealIpExtractor, extract_ip_string};
+pub use proxy_http::EdgionHttp;
 

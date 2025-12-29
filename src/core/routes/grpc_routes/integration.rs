@@ -44,24 +44,10 @@ pub async fn try_match_grpc_route(
     // 2. Try to match route
     match grpc_routes.match_route(&ctx.request_info.hostname, session) {
         Ok(grpc_route_unit) => {
-            tracing::debug!(
-                service = ?ctx.request_info.grpc_service,
-                method = ?ctx.request_info.grpc_method,
-                matched_info = %grpc_route_unit.matched_info,
-                "gRPC route matched"
-            );
-
-            // 3. Store in context
             ctx.grpc_route_unit = Some(grpc_route_unit);
-
             Ok(true) // Matched successfully
         }
         Err(_) => {
-            tracing::debug!(
-                service = ?ctx.request_info.grpc_service,
-                method = ?ctx.request_info.grpc_method,
-                "gRPC route not found, falling back to HTTP routes"
-            );
             Ok(false) // Not matched, fallback
         }
     }

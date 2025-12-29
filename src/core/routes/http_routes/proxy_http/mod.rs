@@ -33,7 +33,6 @@ mod pg_connected_to_upstream;
 
 // Re-exports
 pub use parse_timeout::{ParsedTimeouts, ParsedClientTimeout, ParsedBackendTimeout};
-pub use crate::core::utils::{RealIpExtractor, extract_ip_string};
 
 /// EdgionHttp proxy structure
 pub struct EdgionHttp {
