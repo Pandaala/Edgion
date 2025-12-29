@@ -41,7 +41,7 @@ impl<'a> AccessLogEntry<'a> {
             timestamp: chrono::Utc::now().timestamp_millis(),
             request_info: &ctx.request_info,
             match_info,
-            errors: &ctx.error_codes,
+            errors: &ctx.edgion_status,
             backend_context: ctx.backend_context.as_ref(),
             plugin_logs: &ctx.plugin_logs,
             conn_est: None,

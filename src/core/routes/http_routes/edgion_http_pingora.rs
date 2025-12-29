@@ -95,11 +95,6 @@ async fn build_request_metadata(
         }
     }
 
-    // Note: SNI and client certificate validation are now handled at TLS layer
-    // - SNI is used during certificate_callback for certificate selection
-    // - Client certificate SAN/CN whitelist is validated in configure_mtls
-    // This ensures validation happens during TLS handshake before HTTP processing
-
     // Protocol detection: check for WebSocket, gRPC-Web, and gRPC
     if ctx.request_info.discover_protocol.is_none() {
         // Check for WebSocket

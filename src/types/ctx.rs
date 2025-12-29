@@ -157,7 +157,7 @@ pub struct EdgionHttpContext {
     pub request_info: RequestInfo,
 
     /// Error codes collected during request processing
-    pub error_codes: Vec<EdgionStatus>,
+    pub edgion_status: Vec<EdgionStatus>,
 
     /// Matched HTTP route unit containing full route information
     pub route_unit: Option<Arc<HttpRouteRuleUnit>>,
@@ -197,7 +197,7 @@ impl EdgionHttpContext {
         Self {
             start_time: Instant::now(),
             request_info: RequestInfo::default(),
-            error_codes: Vec::with_capacity(5),
+            edgion_status: Vec::with_capacity(5),
             route_unit: None,
             selected_backend: None,
             grpc_route_unit: None,
@@ -213,7 +213,7 @@ impl EdgionHttpContext {
 
     /// Add an error code to the context
     pub fn add_error(&mut self, err_code: EdgionStatus) {
-        self.error_codes.push(err_code);
+        self.edgion_status.push(err_code);
     }
 
     /// Initialize backend context with name and namespace (call once)
