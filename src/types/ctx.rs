@@ -7,6 +7,7 @@ use crate::types::filters::{PluginRunningResult};
 use crate::types::resources::http_route_preparse::ParsedLBPolicy;
 use crate::core::plugins::PluginLogs;
 use crate::core::routes::HttpRouteRuleUnit;
+use crate::core::routes::grpc_routes::GrpcRouteRuleUnit;
 use pingora_core::protocols::l4::socket::SocketAddr;
 
 #[derive(Clone, Serialize)]
@@ -169,7 +170,7 @@ pub struct EdgionHttpContext {
     pub selected_backend: Option<HTTPBackendRef>,
 
     /// Matched gRPC route unit (for gRPC routes)
-    pub grpc_route_unit: Option<Arc<crate::core::routes::grpc_routes::GrpcRouteRuleUnit>>,
+    pub grpc_route_unit: Option<Arc<GrpcRouteRuleUnit>>,
 
     /// Selected gRPC backend (for gRPC routes)
     pub selected_grpc_backend: Option<GRPCBackendRef>,

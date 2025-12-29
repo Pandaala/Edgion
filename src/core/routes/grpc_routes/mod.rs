@@ -25,6 +25,5 @@ pub use integration::{
     is_grpc_protocol,
     try_match_grpc_route,
     handle_grpc_upstream,
-    run_grpc_route_plugins,
 };
 

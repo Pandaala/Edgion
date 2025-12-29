@@ -3,7 +3,7 @@ use crate::types::{EdgionHttpContext, EdgionStatus};
 use crate::types::filters::PluginRunningResult;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
 use crate::core::plugins::edgion_plugins::get_global_plugin_store;
-use crate::core::routes::grpc_routes::{try_match_grpc_route, run_grpc_route_plugins};
+use crate::core::routes::grpc_routes::try_match_grpc_route;
 use super::EdgionHttp;
 
 #[inline]
@@ -77,17 +77,11 @@ pub async fn request_filter(
     }
     
     // Step 3: Run route-level plugins based on matched route type
-    if ctx.is_grpc_route {
-        // Run gRPC route plugins
-        match run_grpc_route_plugins(session, ctx).await {
-            Ok(true) => return Ok(true), // Plugin terminated request
-            Ok(false) => return Ok(false), // Continue processing
-            Err(e) => {
-                tracing::error!("Error running gRPC route plugins: {:?}", e);
-                ctx.add_error(EdgionStatus::Unknown);
-                end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-                return Ok(true);
-            }
+    if let Some(grpc_route_unit) = ctx.grpc_route_unit.clone() {
+        // Run gRPC route plugins (inline for consistency with HTTP route handling)
+        grpc_route_unit.rule.plugin_runtime.run_request_plugins(session, ctx).await;
+        if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+            return Ok(true);
         }
     } else if let Some(route_unit) = ctx.route_unit.clone() {
         // Run HTTP route plugins

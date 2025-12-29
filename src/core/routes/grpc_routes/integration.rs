@@ -9,6 +9,8 @@ use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
 use std::sync::Arc;
 
+use super::GrpcRouteRules;
+
 /// Check if the request is a gRPC request (based on context)
 ///
 /// This is the preferred method. The protocol was already identified in 
@@ -16,6 +18,7 @@ use std::sync::Arc;
 ///
 /// Note: In most cases, you should check ctx.request_info.discover_protocol directly
 /// rather than calling this helper function.
+#[inline]
 pub fn is_grpc_protocol(ctx: &EdgionHttpContext) -> bool {
     ctx.request_info.discover_protocol
         .as_ref()
@@ -28,6 +31,7 @@ pub fn is_grpc_protocol(ctx: &EdgionHttpContext) -> bool {
 /// Returns: Ok(true) - matched successfully and handled
 ///          Ok(false) - not matched, should fallback to HTTP routes
 ///          Err - error occurred
+#[inline]
 pub async fn try_match_grpc_route(
     grpc_routes: &Arc<crate::core::routes::grpc_routes::DomainGrpcRouteRules>,
     session: &mut Session,
@@ -53,35 +57,6 @@ pub async fn try_match_grpc_route(
     }
 }
 
-/// Run gRPC route-level request edgion_plugins
-///
-/// Should be called in request_filter after route is matched.
-/// Returns: Ok(true) - plugin terminated the request
-///          Ok(false) - continue processing
-pub async fn run_grpc_route_plugins(
-    session: &mut Session,
-    ctx: &mut EdgionHttpContext,
-) -> Result<bool, EdError> {
-    // Clone the Arc to avoid borrow checker issues
-    let grpc_route_unit = match ctx.grpc_route_unit.clone() {
-        Some(unit) => unit,
-        None => return Ok(false),
-    };
-    
-    // Run rule-level request edgion_plugins
-    grpc_route_unit
-        .rule
-        .plugin_runtime
-        .run_request_plugins(session, ctx)
-        .await;
-
-    if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-        return Ok(true); // Terminate request
-    }
-    
-    Ok(false) // Continue processing
-}
-
 /// Handle gRPC upstream peer selection
 ///
 /// Should be called in upstream_peer.
@@ -97,19 +72,17 @@ pub async fn handle_grpc_upstream(
         return Ok(Some(())); // Already handled
     }
 
-    // Clone the Arc to avoid borrow checker issues
-    let grpc_route_unit = match ctx.grpc_route_unit.clone() {
+    // Get reference to grpc_route_unit without cloning
+    let grpc_route_unit = match ctx.grpc_route_unit.as_ref() {
         Some(unit) => unit,
         None => return Ok(None), // No gRPC route
     };
 
     // Select gRPC backend
-    use crate::core::routes::grpc_routes::GrpcRouteRules;
     let backend_ref = GrpcRouteRules::select_backend(&grpc_route_unit.rule)?;
 
-    tracing::info!("Selected gRPC backend: {:?}", backend_ref);
-
     // Run backend-level request edgion_plugins
+    // todo need keep here or change to run before route plugin run?
     backend_ref
         .plugin_runtime
         .run_request_plugins(session, ctx)
