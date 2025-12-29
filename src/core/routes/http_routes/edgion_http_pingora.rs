@@ -295,18 +295,13 @@ impl ProxyHttp for EdgionHttp {
             }
         }
         
-        // If no gRPC route matched, try HTTP route
+        // HTTP route Match, if grpc route already matched, skip here
         if ctx.grpc_route_unit.is_none() {
             match self.domain_routes.match_route(&ctx.request_info.hostname, session) {
                 Ok(route_unit) => {
                     ctx.route_unit = Some(route_unit.clone());
-                    tracing::debug!(
-                        matched_info = %route_unit.matched_info,
-                        "HTTP route matched"
-                    );
                 }
                 Err(_) => {
-                    // No route found at all
                     ctx.add_error(EdgionStatus::RouteNotFound);
                     end_response_404(session, ctx, &self.server_header_opts).await?;
                     return Ok(true);
@@ -325,16 +320,10 @@ impl ProxyHttp for EdgionHttp {
                 
                 // Get plugin from global store
                 if let Some(edgion_plugin) = crate::core::plugins::edgion_plugins::get_global_plugin_store().get(&plugin_key) {
-                    // Execute plugin runtime
                     edgion_plugin.spec.plugin_runtime.run_request_plugins(session, ctx).await;
-                    
-                    // Check if plugin terminated the request
                     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-                        tracing::debug!(plugin=%plugin_key, "Request terminated by global plugin");
                         return Ok(true);
                     }
-                } else {
-                    tracing::warn!(plugin=%plugin_key, "Global plugin not found in store");
                 }
             }
         }
@@ -360,11 +349,7 @@ impl ProxyHttp for EdgionHttp {
             }
         }
         
-        // Set X-Real-IP header with extracted remote_addr
         set_x_real_ip(session, ctx);
-        
-        // Append client_addr IP to X-Forwarded-For header
-        // This is done after all plugin processing but before forwarding to upstream
         append_x_forwarded_for(session, ctx);
         
         Ok(false)
@@ -376,20 +361,13 @@ impl ProxyHttp for EdgionHttp {
     {
         // Set client timeouts from pre-parsed config (no runtime overhead)
         let client_timeout = &self.parsed_timeouts.client;
-        
-        // Set read timeout (pre-parsed, no runtime overhead)
         session.set_read_timeout(Some(client_timeout.read_timeout));
-        
-        // Set write timeout (pre-parsed, no runtime overhead)
         session.set_write_timeout(Some(client_timeout.write_timeout));
-        
-        // Set keepalive timeout (pre-parsed, no runtime overhead)
         session.set_keepalive(Some(client_timeout.keepalive_timeout));
 
         Ok(())
     }
 
-    /// upstream_response_filter - sync hook
     fn upstream_response_filter(
         &self,
         session: &mut Session,
