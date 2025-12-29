@@ -401,7 +401,7 @@ impl ProxyHttp for EdgionHttp {
     ) -> pingora_core::Result<()> {
         // Record status code
         let status_code = upstream_response.status.as_u16();
-        ctx.request_info.status = status_code;
+        ctx.request_info.status = Some(status_code);
         
         // Apply custom server headers (including Server header)
         self.server_header_opts.apply_to_response(upstream_response);
@@ -501,7 +501,7 @@ impl ProxyHttp for EdgionHttp {
         
         // Update response status from session
         if let Some(resp_header) = session.response_written() {
-            ctx.request_info.status = resp_header.status.as_u16();
+            ctx.request_info.status = Some(resp_header.status.as_u16());
         }
 
         // Create access log entry
@@ -639,9 +639,9 @@ impl ProxyHttp for EdgionHttp {
 
         // Record error status code
         if code > 0 {
-            // Only update request_info.status if not already set (default is 0)
-            if ctx.request_info.status == 0 {
-                ctx.request_info.status = code as u16;
+            // Only update request_info.status if not already set
+            if ctx.request_info.status.is_none() {
+                ctx.request_info.status = Some(code as u16);
             }
 
             // Always update current upstream status and error message

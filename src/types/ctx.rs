@@ -74,7 +74,8 @@ pub struct RequestInfo {
     /// Request path from URI
     pub path: String,
     /// Response status code (e.g., 200, 400, 404, 500)
-    pub status: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
     /// Original X-Forwarded-For header value (before appending client IP)
     #[serde(rename = "x-forwarded-for", skip_serializing_if = "Option::is_none")]
     pub x_forwarded_for: Option<String>,

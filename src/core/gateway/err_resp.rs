@@ -14,7 +14,7 @@ pub async fn end_response_400(
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
-    ctx.request_info.status = 400;
+    ctx.request_info.status = Some(400);
     
     let mut resp = ResponseHeader::build(400, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -43,7 +43,7 @@ pub async fn end_response_403(
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
-    ctx.request_info.status = 403;
+    ctx.request_info.status = Some(403);
     
     let mut resp = ResponseHeader::build(403, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -72,7 +72,7 @@ pub async fn end_response_421(
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
-    ctx.request_info.status = 421;
+    ctx.request_info.status = Some(421);
     
     let mut resp = ResponseHeader::build(421, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -100,7 +100,7 @@ pub async fn end_response_404(
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
-    ctx.request_info.status = 404;
+    ctx.request_info.status = Some(404);
     
     let mut resp = ResponseHeader::build(404, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -128,7 +128,7 @@ pub async fn end_response_500(
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
-    ctx.request_info.status = 500;
+    ctx.request_info.status = Some(500);
     
     let mut resp = ResponseHeader::build(500, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -156,7 +156,7 @@ pub async fn end_response_503(
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
-    ctx.request_info.status = 503;
+    ctx.request_info.status = Some(503);
     
     let mut resp = ResponseHeader::build(503, None)?;
     server_header_opts.apply_to_response(&mut resp);

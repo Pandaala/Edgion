@@ -80,7 +80,7 @@ impl<'a> AccessLogEntry<'a> {
                 .unwrap_or_else(|| "-".to_string()),
             "GET",
             self.request_info.path,
-            self.request_info.status,
+            self.request_info.status.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string()),
             latency_ms,
             self.request_info.x_trace_id.as_deref().unwrap_or("-"),
         )
