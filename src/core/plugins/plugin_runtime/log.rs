@@ -43,7 +43,7 @@ impl PluginLog {
 /// Stage plugin logs structure
 /// Contains logs for a specific execution stage
 #[derive(Debug, Clone, Serialize)]
-pub struct StagePluginLogs {
+pub struct PluginLogs {
     pub stage: &'static str,
     pub logs: Vec<PluginLog>,
 }
@@ -54,7 +54,7 @@ mod tests {
     
     #[test]
     fn test_grouped_logs_serialization() {
-        let mut logs: Vec<StagePluginLogs> = Vec::new();
+        let mut logs: Vec<PluginLogs> = Vec::new();
         
         // Add request filters stage
         let mut request_logs = Vec::with_capacity(2);
@@ -67,7 +67,7 @@ mod tests {
         log2.time_cost = Some(5);
         request_logs.push(log2);
         
-        logs.push(StagePluginLogs {
+        logs.push(PluginLogs {
             stage: "request_filters",
             logs: request_logs,
         });
@@ -78,7 +78,7 @@ mod tests {
         log3.time_cost = Some(2);
         upstream_logs.push(log3);
         
-        logs.push(StagePluginLogs {
+        logs.push(PluginLogs {
             stage: "upstream_response_filters",
             logs: upstream_logs,
         });
@@ -106,17 +106,17 @@ mod tests {
     
     #[test]
     fn test_empty_logs_serialization() {
-        let logs: Vec<StagePluginLogs> = Vec::new();
+        let logs: Vec<PluginLogs> = Vec::new();
         let json = serde_json::to_string(&logs).unwrap();
         assert_eq!(json, "[]");
     }
     
     #[test]
     fn test_skip_empty_stage() {
-        let mut logs: Vec<StagePluginLogs> = Vec::new();
+        let mut logs: Vec<PluginLogs> = Vec::new();
         
         // Manual check: don't push empty stage
-        let empty_stage = StagePluginLogs {
+        let empty_stage = PluginLogs {
             stage: "request_filters",
             logs: Vec::new(),
         };

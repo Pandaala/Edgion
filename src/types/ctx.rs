@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::types::{EdgionStatus, HTTPBackendRef, GRPCBackendRef, HTTPRouteMatch};
 use crate::types::filters::{PluginRunningResult};
 use crate::types::resources::http_route_preparse::ParsedLBPolicy;
-use crate::core::plugins::StagePluginLogs;
+use crate::core::plugins::PluginLogs;
 use crate::core::routes::HttpRouteRuleUnit;
 use pingora_core::protocols::l4::socket::SocketAddr;
 
@@ -179,7 +179,7 @@ pub struct EdgionHttpContext {
     pub backend_context: Option<BackendContext>,
 
     /// Plugin execution logs (grouped by stage)
-    pub plugin_logs: Vec<StagePluginLogs>,
+    pub plugin_logs: Vec<PluginLogs>,
 
     /// Plugin running result
     pub plugin_running_result: PluginRunningResult,

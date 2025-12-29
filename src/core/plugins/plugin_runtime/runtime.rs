@@ -8,7 +8,7 @@ use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
 use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, GRPCRouteFilter, GRPCRouteFilterType, EdgionPlugin};
 use crate::types::resources::{RequestFilterEntry, UpstreamResponseFilterEntry, UpstreamResponseEntry};
 
-use super::log::{PluginLog, StagePluginLogs};
+use super::log::{PluginLog, PluginLogs};
 use super::traits::{RequestFilter, UpstreamResponseFilter, UpstreamResponse};
 use crate::core::plugins::gapi_filters::{ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter, ResponseHeaderModifierFilter, DebugAccessLogToHeaderFilter};
 use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
@@ -267,7 +267,7 @@ impl PluginRuntime {
             }
         }
 
-        ctx.plugin_logs.push(StagePluginLogs {
+        ctx.plugin_logs.push(PluginLogs {
             stage: "request_filters",
             logs: stage_logs,
         });
@@ -305,7 +305,7 @@ impl PluginRuntime {
             }
         }
 
-        ctx.plugin_logs.push(StagePluginLogs {
+        ctx.plugin_logs.push(PluginLogs {
             stage: "upstream_response_filters",
             logs: stage_logs,
         });
@@ -343,7 +343,7 @@ impl PluginRuntime {
             }
         }
 
-        ctx.plugin_logs.push(StagePluginLogs {
+        ctx.plugin_logs.push(PluginLogs {
             stage: "upstream_responses",
             logs: stage_logs,
         });
