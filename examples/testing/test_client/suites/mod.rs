@@ -2,6 +2,7 @@
 
 mod http_suite;
 mod http_match_suite;
+mod http_security_suite;
 mod https_suite;
 mod grpc_suite;
 mod grpc_tls_suite;
@@ -18,6 +19,7 @@ mod weighted_backend_suite;
 
 pub use http_suite::HttpTestSuite;
 pub use http_match_suite::HttpMatchTestSuite;
+pub use http_security_suite::HttpSecurityTestSuite;
 pub use https_suite::HttpsTestSuite;
 pub use grpc_suite::GrpcTestSuite;
 pub use grpc_tls_suite::GrpcTlsTestSuite;

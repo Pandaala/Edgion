@@ -69,6 +69,7 @@ enum Commands {
     // proto test
     Http,
     HttpMatch,  // HTTP Match Rules test
+    HttpSecurity,  // HTTP Security tests (hostname validation)
     Https,
     Grpc,
     GrpcTls,
@@ -175,6 +176,13 @@ async fn main() -> Result<()> {
             }
             runner.add_suite(Box::new(suites::HttpMatchTestSuite));
         }
+        Commands::HttpSecurity => {
+            if !cli.gateway {
+                eprintln!("Error: HTTP Security tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
+        }
         Commands::Https => {
             if !cli.gateway {
                 eprintln!("Error: HTTPS tests only support Gateway mode. Use -g flag.");
@@ -261,6 +269,7 @@ async fn main() -> Result<()> {
                 runner.add_suite(Box::new(suites::GrpcTlsTestSuite));
                 runner.add_suite(Box::new(suites::RealIpTestSuite));
                 runner.add_suite(Box::new(suites::SecurityTestSuite));
+                runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
                 runner.add_suite(Box::new(suites::PluginLogsTestSuite));
                 runner.add_suite(Box::new(suites::LBPolicyTestSuite));
             }
