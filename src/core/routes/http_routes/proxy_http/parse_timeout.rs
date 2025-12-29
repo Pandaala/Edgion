@@ -1,11 +1,6 @@
-use std::sync::Arc;
-use std::time::{SystemTime, Duration};
-use crate::core::gateway::server_header::ServerHeaderOpts;
-use crate::core::routes::{DomainRouteRules, grpc_routes::DomainGrpcRouteRules};
-use crate::types::Listener;
+use std::time::Duration;
 use crate::types::EdgionGatewayConfig;
 use crate::types::resources::edgion_gateway_config::{ClientTimeout, BackendTimeout};
-use crate::core::observe::AccessLogger;
 
 /// Pre-parsed timeout configurations for runtime use
 #[derive(Debug, Clone)]
@@ -130,38 +125,5 @@ impl Default for ParsedBackendTimeout {
             idle_timeout: Duration::from_secs(300),
         }
     }
-}
-
-pub struct EdgionHttp {
-    pub gateway_class_name: Option<String>,
-    pub gateway_namespace: Option<String>,
-    pub gateway_name: String,
-
-    pub listener: Listener,
-
-    pub server_start_time: SystemTime,
-
-    pub server_header_opts: ServerHeaderOpts,
-    
-    /// HTTP domain routes for this gateway
-    pub domain_routes: Arc<DomainRouteRules>,
-    
-    /// gRPC domain routes for this gateway
-    pub grpc_routes: Arc<DomainGrpcRouteRules>,
-    
-    /// Access logger for writing access logs
-    pub access_logger: Arc<AccessLogger>,
-    
-    /// Global gateway configuration
-    pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
-    
-    /// Pre-parsed timeout configurations (always has default values if not configured)
-    pub parsed_timeouts: ParsedTimeouts,
-    
-    /// Whether HTTP/2 is enabled for this listener
-    pub enable_http2: bool,
-    
-    /// Real IP extractor for trusted proxy support
-    pub real_ip_extractor: Option<Arc<crate::core::routes::http_routes::RealIpExtractor>>,
 }
 

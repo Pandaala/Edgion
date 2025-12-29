@@ -81,7 +81,7 @@ pub fn add_http_listener(
     let grpc_routes = grpc_route_manager.get_or_create_domain_grpc_routes(namespace_str, &context.gateway_name);
 
     // Pre-parse timeout configurations once at initialization
-    let parsed_timeouts = crate::core::routes::http_routes::edgion_http::ParsedTimeouts::from_config(
+    let parsed_timeouts = crate::core::routes::http_routes::proxy_http::ParsedTimeouts::from_config(
         &context.edgion_gateway_config
     );
 
