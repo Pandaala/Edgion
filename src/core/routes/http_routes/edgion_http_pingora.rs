@@ -19,6 +19,7 @@ use crate::core::backends::get_peer;
 use crate::types::EdgionStatus;
 use crate::types::err::EdError;
 use crate::core::observe::{AccessLogEntry, global_metrics};
+use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 use crate::core::routes::http_routes::routes_mgr::RouteRules;
 use crate::core::routes::grpc_routes::{
     try_match_grpc_route,
@@ -319,7 +320,7 @@ impl ProxyHttp for EdgionHttp {
                 );
                 
                 // Get plugin from global store
-                if let Some(edgion_plugin) = crate::core::plugins::edgion_plugins::get_global_plugin_store().get(&plugin_key) {
+                if let Some(edgion_plugin) = get_global_plugin_store().get(&plugin_key) {
                     edgion_plugin.spec.plugin_runtime.run_request_plugins(session, ctx).await;
                     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
                         return Ok(true);

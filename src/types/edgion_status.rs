@@ -5,6 +5,8 @@ pub enum EdgionStatus {
 
     Unknown = 999,
 
+    UnknownGRPCERR = 999_01,
+
     /// Missing Host header (HTTP 400)
     HostMissing = 400_01,
 
