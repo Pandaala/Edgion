@@ -21,6 +21,7 @@ use crate::core::backends::endpoint_slice::get_roundrobin_store;
 pub struct TlsContext {
     pub listener_port: u16,
     pub client_addr: String,
+    pub client_port: u16,
     pub sni_hostname: Option<String>,
     pub upstream_addr: Option<String>,
     pub start_time: Instant,
@@ -65,6 +66,7 @@ impl ServerApp for EdgionTls {
         let mut ctx = TlsContext {
             listener_port: self.listener_port,
             client_addr: "unknown".to_string(), // TODO: Extract from Stream
+            client_port: 0,
             sni_hostname: None,
             upstream_addr: None,
             start_time: Instant::now(),
@@ -290,6 +292,7 @@ impl EdgionTls {
             "protocol": "TLS-TCP",
             "listener_port": ctx.listener_port,
             "client_addr": &ctx.client_addr,
+            "client_port": ctx.client_port,
             "sni_hostname": &ctx.sni_hostname,
             "upstream_addr": &ctx.upstream_addr,
             "duration_ms": duration_ms,

@@ -59,7 +59,7 @@ impl IpRestriction {
     fn get_client_ip(&self, session: &mut dyn PluginSession) -> Option<IpAddr> {
         let ip_str = match self.config.ip_source {
             IpSource::ClientIp => session.remote_addr(),  // Real client IP from proxy headers
-            IpSource::RemoteAddr => session.client_addr(), // Direct TCP connection address
+            IpSource::RemoteAddr => session.client_addr(), // Direct TCP connection IP (without port)
         };
 
         // Return None if empty string (not yet populated)

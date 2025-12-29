@@ -25,7 +25,6 @@ use crate::core::routes::grpc_routes::{
     run_grpc_route_plugins,
     handle_grpc_upstream,
 };
-use crate::core::routes::http_routes::extract_ip_string;
 
 /// Build request metadata: client addresses, hostname, path, trace_id, x-forwarded-for, and protocol detection (inline for performance)
 /// Also validates X-Forwarded-For header length against security_protect configuration.
@@ -38,16 +37,20 @@ async fn build_request_metadata(
 ) -> pingora_core::Result<bool> {
     let req_header = session.req_header();
 
-    // Extract client_addr (TCP connection address)
+    // Extract client_addr and client_port (TCP connection address)
     let client_addr_str = session.client_addr().map(|addr| addr.to_string()).unwrap_or_default();
-    ctx.request_info.client_addr = client_addr_str.clone();
+    let parsed_addr = client_addr_str.parse::<std::net::SocketAddr>().ok();
+    ctx.request_info.client_addr = parsed_addr
+        .map(|a| a.ip().to_string())
+        .unwrap_or_else(|| client_addr_str.clone());
+    ctx.request_info.client_port = parsed_addr.map(|a| a.port()).unwrap_or(0);
     
     // Extract remote_addr (real client IP, considering trusted proxies)
     ctx.request_info.remote_addr = if let Some(extractor) = &edgion_http.real_ip_extractor {
         extractor.extract_real_ip(&client_addr_str, req_header)
     } else {
-        // No extractor configured, use client_addr IP (without port)
-        extract_ip_string(&client_addr_str)
+        // No extractor configured, use client_addr (already IP only)
+        ctx.request_info.client_addr.clone()
     };
 
     // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback)
@@ -163,7 +166,8 @@ fn append_x_forwarded_for(
     session: &mut Session, 
     ctx: &EdgionHttpContext
 ) {
-    let client_ip = extract_ip_string(&ctx.request_info.client_addr);
+    // client_addr is already IP only (without port)
+    let client_ip = &ctx.request_info.client_addr;
     
     // Append client IP to X-Forwarded-For (using pre-extracted value)
     let req_header_mut = session.req_header_mut();
@@ -173,7 +177,7 @@ fn append_x_forwarded_for(
         let _ = req_header_mut.insert_header("X-Forwarded-For", &new_xff);
     } else {
         // X-Forwarded-For doesn't exist, create new
-        let _ = req_header_mut.insert_header("X-Forwarded-For", &client_ip);
+        let _ = req_header_mut.insert_header("X-Forwarded-For", client_ip);
     }
 }
 

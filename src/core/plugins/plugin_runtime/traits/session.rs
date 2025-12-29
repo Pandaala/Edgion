@@ -59,7 +59,7 @@ pub trait PluginSession: Send {
 
     async fn shutdown(&mut self);
 
-    /// Get client address (TCP direct connection address)
+    /// Get client IP address (TCP direct connection, without port)
     fn client_addr(&self) -> &str;
 
     /// Get remote address (real client IP, extracted from proxy headers)

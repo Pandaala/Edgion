@@ -59,9 +59,12 @@ pub struct ClientCertInfo {
 /// Request information extracted from the incoming request
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {
-    /// TCP client address (direct connection, immutable)
+    /// TCP client IP address (direct connection, immutable)
     #[serde(rename = "client-addr")]
     pub client_addr: String,
+    /// TCP client port (direct connection, 0 if unknown)
+    #[serde(rename = "client-port")]
+    pub client_port: u16,
     /// Real client address (extracted from headers if behind trusted proxy)
     #[serde(rename = "remote-addr")]
     pub remote_addr: String,

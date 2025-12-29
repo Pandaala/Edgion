@@ -20,6 +20,7 @@ use crate::core::plugins::{StreamContext, StreamPluginResult};
 pub struct TcpContext {
     pub listener_port: u16,
     pub client_addr: String,
+    pub client_port: u16,
     pub upstream_addr: Option<String>,
     pub start_time: Instant,
     pub bytes_sent: u64,
@@ -60,6 +61,7 @@ impl ServerApp for EdgionTcp {
         let mut ctx = TcpContext {
             listener_port: self.listener_port,
             client_addr: "unknown".to_string(), // TODO: Extract from Stream
+            client_port: 0,
             upstream_addr: None,
             start_time: Instant::now(),
             bytes_sent: 0,
@@ -255,6 +257,7 @@ impl EdgionTcp {
             "protocol": "TCP",
             "listener_port": ctx.listener_port,
             "client_addr": &ctx.client_addr,
+            "client_port": ctx.client_port,
             "upstream_addr": &ctx.upstream_addr,
             "duration_ms": duration_ms,
             "bytes_sent": ctx.bytes_sent,
