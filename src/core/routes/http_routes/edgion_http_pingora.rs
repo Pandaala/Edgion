@@ -55,13 +55,17 @@ async fn build_request_metadata(
 
     // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback)
     // In HTTP/2, Pingora puts the hostname in the URI, not as a separate header
-    let hostname = req_header.uri.host()
+    ctx.request_info.hostname = req_header.uri.host()
         .map(|h| h.to_string())
         .or_else(|| req_header.headers.get("host").and_then(|h| h.to_str().ok().map(|s| s.to_string())))
-        .or_else(|| req_header.headers.get(":authority").and_then(|h| h.to_str().ok().map(|s| s.to_string())));
+        .or_else(|| req_header.headers.get(":authority").and_then(|h| h.to_str().ok().map(|s| s.to_string())))
+        .unwrap_or_default();
     
-    if let Some(host) = hostname {
-        ctx.request_info.hostname = host;
+    // Validate hostname is present
+    if ctx.request_info.hostname.is_empty() {
+        ctx.add_error(EdgionStatus::HostMissing);
+        end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true); // Response sent
     }
     
     // Extract request path
@@ -260,16 +264,10 @@ impl ProxyHttp for EdgionHttp {
     where
         Self::CTX: Send + Sync,
     {
-        // Build request metadata (addresses, hostname, path, trace_id, protocol) and validate XFF length
+        // Build request metadata (addresses, hostname, path, trace_id, protocol)
+        // Validates XFF length and hostname presence, returns true if response sent
         if build_request_metadata(self, session, ctx).await? {
-            return Ok(true); // Response already sent (XFF too long)
-        }
-        
-        // Validate hostname is present
-        if ctx.request_info.hostname.is_empty() {
-            ctx.add_error(EdgionStatus::HostMissing);
-            end_response_400(session, ctx, &self.server_header_opts).await?;
-            return Ok(true);
+            return Ok(true); // Response already sent (XFF too long or hostname missing)
         }
 
         // Step 1: Route matching - try gRPC first if applicable, then HTTP
