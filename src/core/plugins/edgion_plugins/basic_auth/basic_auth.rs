@@ -231,13 +231,11 @@ impl RequestFilter for BasicAuth {
         &self.name
     }
 
-    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Hard-coded: Skip OPTIONS requests
-        // CORS preflight is handled by CORS plugin
-        if session.method() == "OPTIONS" {
-            return PluginRunningResult::GoodNext;
-        }
-
+    async fn run_request(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+    ) -> PluginRunningResult {
         // Try to authenticate
         let username = match self.authenticate_request(session).await {
             Ok(user) => user,

@@ -1,6 +1,8 @@
 use pingora_proxy::Session;
+use std::sync::Arc;
 use crate::types::{EdgionHttpContext, EdgionStatus};
 use crate::types::filters::PluginRunningResult;
+use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, CorsConfig, EdgionPlugin};
 use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
 use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 use crate::core::routes::grpc_routes::try_match_grpc_route;
@@ -42,6 +44,39 @@ pub async fn request_filter(
             Err(_) => {
                 ctx.add_error(EdgionStatus::RouteNotFound);
                 end_response_404(session, ctx, &edgion_http.server_header_opts).await?;
+                return Ok(true);
+            }
+        }
+    }
+
+    // Step 1.5: Handle preflight requests (before plugin execution)
+    // Check if this is a preflight request and handle it early
+    if edgion_http.preflight_handler.is_preflight(session) {
+        // Get CORS config dynamically from matched route's EdgionPlugins
+        // This ensures we always get the latest config even if EdgionPlugin is updated
+        let cors_config = if let Some(ref route_unit) = ctx.route_unit {
+            let namespace = &route_unit.matched_info.rns;
+            extract_cors_config_from_route_filters(&route_unit.rule.filters, namespace)
+        } else if let Some(_grpc_route_unit) = &ctx.grpc_route_unit {
+            // gRPC routes don't have CORS config yet, so None
+            None
+        } else {
+            None
+        };
+
+        // Handle preflight request
+        match edgion_http.preflight_handler.handle_preflight(session, ctx, cors_config.as_ref()).await {
+            Ok(true) => {
+                // Preflight handled, terminate request
+                tracing::debug!("Preflight request handled, terminating");
+                return Ok(true);
+            }
+            Ok(false) => {
+                // Continue to plugin chain (shouldn't happen with current implementation)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to handle preflight request");
+                end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
                 return Ok(true);
             }
         }
@@ -224,5 +259,51 @@ fn append_x_forwarded_for(
 fn set_x_real_ip(session: &mut Session, ctx: &EdgionHttpContext) {
     let req_header_mut = session.req_header_mut();
     let _ = req_header_mut.insert_header("X-Real-IP", &ctx.request_info.remote_addr);
+}
+
+/// Extract CORS configuration dynamically from route filters
+/// 
+/// This function searches through route filters to find EdgionPlugins references
+/// and extracts the CORS configuration from the global plugin store.
+/// This ensures we always get the latest CORS config even if EdgionPlugin is updated.
+fn extract_cors_config_from_route_filters(
+    filters: &Option<Vec<HTTPRouteFilter>>,
+    namespace: &str,
+) -> Option<Arc<CorsConfig>> {
+    let filters = filters.as_ref()?;
+    
+    for filter in filters {
+        if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
+            continue;
+        }
+        
+        let ext_ref = filter.extension_ref.as_ref()?;
+        
+        // Check if it's EdgionPlugins
+        if ext_ref.kind != "EdgionPlugins"
+            || (!ext_ref.group.is_empty() && ext_ref.group != "edgion.io")
+        {
+            continue;
+        }
+        
+        // Look up EdgionPlugins in global store with namespace/name key
+        let key = format!("{}/{}", namespace, ext_ref.name);
+        let store = get_global_plugin_store();
+        
+        if let Some(edgion_plugins) = store.get(&key) {
+            // Search for CORS plugin in request_plugins
+            if let Some(ref entries) = edgion_plugins.spec.request_plugins {
+                for entry in entries {
+                    if let EdgionPlugin::Cors(cors_config) = &entry.plugin {
+                        if entry.is_enabled() {
+                            return Some(Arc::new(cors_config.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    None
 }
 

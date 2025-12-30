@@ -66,6 +66,9 @@ pub struct EdgionHttp {
     
     /// Real IP extractor for trusted proxy support
     pub real_ip_extractor: Option<Arc<crate::core::utils::RealIpExtractor>>,
+
+    /// Preflight request handler
+    pub preflight_handler: crate::core::gateway::PreflightHandler,
 }
 
 #[async_trait]

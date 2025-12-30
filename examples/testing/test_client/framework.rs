@@ -14,6 +14,7 @@ pub struct TestContext {
     pub grpc_port: u16,
     pub websocket_port: u16,
     pub tcp_port: u16,
+    pub tcp_filtered_port: u16,  // For testing sectionName matching
     pub udp_port: u16,
     pub https_port: u16,
     pub grpc_https_port: u16,
@@ -32,6 +33,7 @@ impl TestContext {
         grpc_port: u16,
         websocket_port: u16,
         tcp_port: u16,
+        tcp_filtered_port: u16,
         udp_port: u16,
         https_port: u16,
         grpc_https_port: u16,
@@ -54,6 +56,7 @@ impl TestContext {
             grpc_port,
             websocket_port,
             tcp_port,
+            tcp_filtered_port,
             udp_port,
             https_port,
             grpc_https_port,
@@ -80,6 +83,10 @@ impl TestContext {
     
     pub fn tcp_addr(&self) -> String {
         format!("{}:{}", self.target_host, self.tcp_port)
+    }
+    
+    pub fn tcp_filtered_addr(&self) -> String {
+        format!("{}:{}", self.target_host, self.tcp_filtered_port)
     }
     
     pub fn udp_addr(&self) -> String {

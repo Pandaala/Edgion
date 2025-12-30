@@ -107,6 +107,11 @@ pub fn add_http_listener(
         None
     };
 
+    // Create preflight handler from gateway config
+    let preflight_handler = crate::core::gateway::PreflightHandler::new(
+        context.edgion_gateway_config.spec.preflight_policy.clone()
+    );
+
     // Create EdgionHttp proxy handler
     let edgion_http = EdgionHttp {
         gateway_class_name: context.gateway_class_name.clone(),
@@ -122,6 +127,7 @@ pub fn add_http_listener(
         parsed_timeouts,
         enable_http2: context.enable_http2,
         real_ip_extractor,
+        preflight_handler,
     };
 
     // Create HTTP proxy service

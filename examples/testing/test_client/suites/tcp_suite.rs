@@ -72,6 +72,46 @@ impl TcpTestSuite {
             })
         )
     }
+    
+    fn test_tcp_section_name_filtered() -> TestCase {
+        TestCase::new(
+            "tcp_section_name_filtered",
+            "测试 TCP sectionName 匹配 (tcp-filtered listener)",
+            |ctx: TestContext| Box::pin(async move {
+                let start = Instant::now();
+                let test_data = b"Hello TCP Filtered";
+                
+                match TcpStream::connect(&ctx.tcp_filtered_addr()).await {
+                    Ok(mut stream) => {
+                        // 发送数据
+                        if let Err(e) = stream.write_all(test_data).await {
+                            return TestResult::failed(start.elapsed(), e.to_string());
+                        }
+                        
+                        // 读取响应
+                        let mut buffer = vec![0u8; 1024];
+                        match stream.read(&mut buffer).await {
+                            Ok(n) => {
+                                if n > 0 && &buffer[..n] == test_data {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "sectionName:tcp-filtered matched correctly".to_string()
+                                    )
+                                } else {
+                                    TestResult::failed(
+                                        start.elapsed(),
+                                        "Echo data mismatch".to_string()
+                                    )
+                                }
+                            }
+                            Err(e) => TestResult::failed(start.elapsed(), e.to_string()),
+                        }
+                    }
+                    Err(e) => TestResult::failed(start.elapsed(), e.to_string()),
+                }
+            })
+        )
+    }
 }
 
 #[async_trait]
@@ -84,6 +124,7 @@ impl TestSuite for TcpTestSuite {
         vec![
             Self::test_tcp_connection(),
             Self::test_tcp_echo(),
+            Self::test_tcp_section_name_filtered(),
         ]
     }
 }

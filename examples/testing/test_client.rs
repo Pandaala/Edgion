@@ -107,12 +107,13 @@ async fn main() -> Result<()> {
     }
     
     // Determine ports and host based on gateway flag
-    let (http_port, grpc_port, tcp_port, udp_port, websocket_port, https_port, grpc_https_port, http_host, grpc_host) = if cli.gateway {
+    let (http_port, grpc_port, tcp_port, tcp_filtered_port, udp_port, websocket_port, https_port, grpc_https_port, http_host, grpc_host) = if cli.gateway {
         // Gateway mode: use Gateway ports
         (
             10080,  // Gateway HTTP port
             10080,  // Gateway HTTP port (gRPC uses HTTP listener)
-            19000,  // Gateway TCP port
+            19000,  // Gateway TCP port (sectionName: tcp)
+            19010,  // Gateway TCP filtered port (sectionName: tcp-filtered) - for sectionName testing
             19002,  // Gateway UDP port
             10080,  // WebSocket through HTTP Gateway
             18443,  // Gateway HTTPS port
@@ -126,6 +127,7 @@ async fn main() -> Result<()> {
             cli.http_port,
             cli.grpc_port,
             cli.tcp_port,
+            19010,  // tcp_filtered_port - same as gateway mode for consistency
             cli.udp_port,
             cli.websocket_port,
             cli.https_port,
@@ -154,6 +156,7 @@ async fn main() -> Result<()> {
         grpc_port,
         websocket_port,
         tcp_port,
+        tcp_filtered_port,
         udp_port,
         https_port,
         grpc_https_port,

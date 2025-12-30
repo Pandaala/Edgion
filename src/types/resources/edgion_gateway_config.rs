@@ -45,6 +45,10 @@ pub struct EdgionGatewayConfigSpec {
     /// These plugins are executed before route-level plugins
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global_plugins_ref: Option<Vec<PluginReference>>,
+
+    /// Preflight request handling policy
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preflight_policy: Option<PreflightPolicy>,
 }
 
 // ============================================
@@ -286,6 +290,41 @@ fn default_xff_limit() -> usize {
 
 fn default_require_sni_host_match() -> bool {
     true
+}
+
+// ============================================
+// Preflight Policy Configuration
+// ============================================
+
+/// Preflight request handling policy
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PreflightPolicy {
+    /// Preflight detection mode (default: cors-standard)
+    #[serde(default = "default_preflight_mode")]
+    pub mode: PreflightMode,
+    
+    /// Status code to return when no CORS plugin is configured (default: 204)
+    #[serde(default = "default_preflight_status_code")]
+    pub status_code: u16,
+}
+
+/// Preflight detection mode
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PreflightMode {
+    /// CORS standard: OPTIONS + Origin + Access-Control-Request-Method (recommended)
+    CorsStandard,
+    /// All OPTIONS requests are treated as preflight
+    AllOptions,
+}
+
+fn default_preflight_mode() -> PreflightMode {
+    PreflightMode::CorsStandard
+}
+
+fn default_preflight_status_code() -> u16 {
+    204
 }
 
 // ============================================

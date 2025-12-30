@@ -20,7 +20,7 @@ use crate::types::resources::edgion_plugins::CsrfConfig;
 
 use super::token::CsrfToken;
 
-const SAFE_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS"];
+const SAFE_METHODS: &[&str] = &["GET", "HEAD"];
 
 pub struct Csrf {
     name: String,
