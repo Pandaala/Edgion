@@ -100,8 +100,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()> {
         if let Some(resp) = &mut self.response_header {
-            resp.remove_header(name)
-                .map_err(|e| Box::new(e) as PluginSessionError)?;
+            resp.remove_header(name);
         }
         Ok(())
     }

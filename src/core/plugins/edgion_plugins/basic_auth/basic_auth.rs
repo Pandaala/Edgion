@@ -103,20 +103,20 @@ impl BasicAuth {
 
         // 1. Check Cache (Fast Path)
         // If we have verified this exact header recently, skip cost.
-        if let Some(entry) = self.auth_cache.get(auth_header_value) {
+        if let Some(entry) = self.auth_cache.get(&auth_header_value) {
             let (username, expiry) = entry.value();
             if Instant::now() < *expiry {
                 return Ok(username.clone());
             } else {
                 // Expired
                 drop(entry); // unlock
-                self.auth_cache.remove(auth_header_value);
+                self.auth_cache.remove(&auth_header_value);
             }
         }
 
         // 2. Slow Path: Full Verification
         // Extract and decode credentials
-        let (username, password) = self.extract_credentials(auth_header_value)?;
+        let (username, password) = self.extract_credentials(&auth_header_value)?;
 
         // Find user
         let stored_hash = self
@@ -128,10 +128,14 @@ impl BasicAuth {
         // Verify password - OFF-LOADED TO BLOCKING THREAD
         // This prevents blocking the async runtime with expensive crypto operations (bcrypt/scrypt etc.)
         let password_clone = password.clone();
+        let username_clone = username.clone();
 
         let is_valid = tokio::task::spawn_blocking(move || {
             // 2.1 Try generic htpasswd verification (supports apr1, sha1, bcrypt, etc.)
-            if htpasswd_verify::verify(&stored_hash, &password_clone).unwrap_or(false) {
+            // Construct a temporary htpasswd line for verification
+            let htpasswd_line = format!("{}:{}", username_clone, stored_hash);
+            let htpasswd = htpasswd_verify::Htpasswd::from(htpasswd_line.as_str());
+            if htpasswd.check(&username_clone, &password_clone) {
                 return true;
             }
 

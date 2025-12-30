@@ -12,7 +12,7 @@
 
 use async_trait::async_trait;
 use cookie::{Cookie, CookieBuilder, SameSite};
-use time::Duration;
+use cookie::time::Duration;
 
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
