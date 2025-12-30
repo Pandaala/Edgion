@@ -26,57 +26,40 @@ impl GrpcMatchEngine {
 
         for route in routes {
             if let Some(ref grpc_method_match) = route.matched_info.matched.method {
-                use crate::types::GRPCMethodMatchType;
-                
-                let match_type = grpc_method_match
-                    .match_type
-                    .as_ref()
-                    .unwrap_or(&GRPCMethodMatchType::Exact);
-
-                match match_type {
-                    GRPCMethodMatchType::Exact => {
-                        // Classify based on service and method presence
-                        match (&grpc_method_match.service, &grpc_method_match.method) {
-                            (Some(service), Some(method)) => {
-                                // Exact match: both service and method specified
-                                // Use entry().or_insert_with() to append routes instead of overwriting
-                                exact_routes
-                                    .entry((service.clone(), method.clone()))
-                                    .or_insert_with(Vec::new)
-                                    .push(route);
-                            }
-                            (Some(service), None) => {
-                                // Service-level match: only service specified
-                                // Use entry().or_insert_with() to append routes instead of overwriting
-                                service_routes
-                                    .entry(service.clone())
-                                    .or_insert_with(Vec::new)
-                                    .push(route);
-                            }
-                            (None, None) => {
-                                // Catch-all: neither service nor method specified
-                                if catch_all_route.is_none() {
-                                    catch_all_route = Some(route);
-                                } else {
-                                    tracing::warn!(
-                                        "Multiple catch-all routes found, using first one"
-                                    );
-                                }
-                            }
-                            (None, Some(_)) => {
-                                // Invalid: method without service (should not happen)
-                                tracing::warn!(
-                                    route = %route.identifier(),
-                                    "Invalid gRPC route: method specified without service"
-                                );
-                            }
+                // Classify based on service and method presence
+                // Note: We only support Exact match type (default behavior)
+                match (&grpc_method_match.service, &grpc_method_match.method) {
+                    (Some(service), Some(method)) => {
+                        // Exact match: both service and method specified
+                        // Use entry().or_insert_with() to append routes instead of overwriting
+                        exact_routes
+                            .entry((service.clone(), method.clone()))
+                            .or_insert_with(Vec::new)
+                            .push(route);
+                    }
+                    (Some(service), None) => {
+                        // Service-level match: only service specified
+                        // Use entry().or_insert_with() to append routes instead of overwriting
+                        service_routes
+                            .entry(service.clone())
+                            .or_insert_with(Vec::new)
+                            .push(route);
+                    }
+                    (None, None) => {
+                        // Catch-all: neither service nor method specified
+                        if catch_all_route.is_none() {
+                            catch_all_route = Some(route);
+                        } else {
+                            tracing::warn!(
+                                "Multiple catch-all routes found, using first one"
+                            );
                         }
                     }
-                    GRPCMethodMatchType::RegularExpression => {
-                        // RegularExpression is not supported, log warning
+                    (None, Some(_)) => {
+                        // Invalid: method without service (should not happen)
                         tracing::warn!(
                             route = %route.identifier(),
-                            "RegularExpression match type is not supported, route will be ignored"
+                            "Invalid gRPC route: method specified without service"
                         );
                     }
                 }
@@ -154,7 +137,7 @@ pub fn parse_grpc_path(path: &str) -> Result<(String, String), EdError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{GRPCRouteMatch, GRPCMethodMatch, GRPCMethodMatchType};
+    use crate::types::{GRPCRouteMatch, GRPCMethodMatch};
     use crate::types::resources::grpc_route::GRPCRouteRule;
 
     #[test]
@@ -191,7 +174,7 @@ mod tests {
         // Create route 1: test.Service/Method with hostname api.example.com
         let match1 = GRPCRouteMatch {
             method: Some(GRPCMethodMatch {
-                match_type: Some(GRPCMethodMatchType::Exact),
+                match_type: None,  // Use default (Exact)
                 service: Some("test.Service".to_string()),
                 method: Some("Method".to_string()),
             }),
@@ -226,7 +209,7 @@ mod tests {
         // Create route 2: test.Service/Method with hostname grpc.example.com
         let match2 = GRPCRouteMatch {
             method: Some(GRPCMethodMatch {
-                match_type: Some(GRPCMethodMatchType::Exact),
+                match_type: None,  // Use default (Exact)
                 service: Some("test.Service".to_string()),
                 method: Some("Method".to_string()),
             }),
