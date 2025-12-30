@@ -1,24 +1,21 @@
 use crate::core::routes::grpc_routes::GrpcRouteRuleUnit;
 use crate::types::err::EdError;
-use crate::types::GRPCMethodMatch;
 use pingora_proxy::Session;
-use regex::Regex;
 use std::sync::Arc;
 use std::collections::HashMap;
 
 /// gRPC match engine for service/method based routing with optimized lookup
 pub struct GrpcMatchEngine {
-    /// Exact match: (service, method) -> route
-    exact_routes: HashMap<(String, String), Arc<GrpcRouteRuleUnit>>,
+    /// Exact match: (service, method) -> routes
+    /// Multiple routes may exist for same service/method with different hostnames or headers
+    exact_routes: HashMap<(String, String), Vec<Arc<GrpcRouteRuleUnit>>>,
     
-    /// Service-level match: service -> route (method not specified)
-    service_routes: HashMap<String, Arc<GrpcRouteRuleUnit>>,
+    /// Service-level match: service -> routes (method not specified)
+    /// Multiple routes may exist for same service with different hostnames or headers
+    service_routes: HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>,
     
     /// Catch-all route (both service and method not specified)
     catch_all_route: Option<Arc<GrpcRouteRuleUnit>>,
-    
-    /// Regex routes (need sequential traversal)
-    regex_routes: Vec<Arc<GrpcRouteRuleUnit>>,
 }
 
 impl GrpcMatchEngine {
@@ -26,7 +23,6 @@ impl GrpcMatchEngine {
         let mut exact_routes = HashMap::new();
         let mut service_routes = HashMap::new();
         let mut catch_all_route = None;
-        let mut regex_routes = Vec::new();
 
         for route in routes {
             if let Some(ref grpc_method_match) = route.matched_info.matched.method {
@@ -43,11 +39,19 @@ impl GrpcMatchEngine {
                         match (&grpc_method_match.service, &grpc_method_match.method) {
                             (Some(service), Some(method)) => {
                                 // Exact match: both service and method specified
-                                exact_routes.insert((service.clone(), method.clone()), route);
+                                // Use entry().or_insert_with() to append routes instead of overwriting
+                                exact_routes
+                                    .entry((service.clone(), method.clone()))
+                                    .or_insert_with(Vec::new)
+                                    .push(route);
                             }
                             (Some(service), None) => {
                                 // Service-level match: only service specified
-                                service_routes.insert(service.clone(), route);
+                                // Use entry().or_insert_with() to append routes instead of overwriting
+                                service_routes
+                                    .entry(service.clone())
+                                    .or_insert_with(Vec::new)
+                                    .push(route);
                             }
                             (None, None) => {
                                 // Catch-all: neither service nor method specified
@@ -69,8 +73,11 @@ impl GrpcMatchEngine {
                         }
                     }
                     GRPCMethodMatchType::RegularExpression => {
-                        // Regex routes need sequential traversal
-                        regex_routes.push(route);
+                        // RegularExpression is not supported, log warning
+                        tracing::warn!(
+                            route = %route.identifier(),
+                            "RegularExpression match type is not supported, route will be ignored"
+                        );
                     }
                 }
             }
@@ -80,7 +87,6 @@ impl GrpcMatchEngine {
             exact_routes,
             service_routes,
             catch_all_route,
-            regex_routes,
         }
     }
 
@@ -96,31 +102,26 @@ impl GrpcMatchEngine {
         let (service, method) = parse_grpc_path(path)?;
 
         // Priority 1: Try exact match (service, method)
-        if let Some(route_unit) = self.exact_routes.get(&(service.clone(), method.clone())) {
-            if route_unit.deep_match(session, listener_name)? {
-                return Ok(route_unit.clone());
-            }
-        }
-
-        // Priority 2: Try service-level match (service only)
-        if let Some(route_unit) = self.service_routes.get(&service) {
-            if route_unit.deep_match(session, listener_name)? {
-                return Ok(route_unit.clone());
-            }
-        }
-
-        // Priority 3: Try regex match (sequential)
-        for route_unit in &self.regex_routes {
-            if let Some(ref grpc_method_match) = route_unit.matched_info.matched.method {
-                if matches_regex(grpc_method_match, &service, &method)? {
-                    if route_unit.deep_match(session, listener_name)? {
-                        return Ok(route_unit.clone());
-                    }
+        // Iterate through all routes with matching service/method and return first one that passes deep_match
+        if let Some(routes) = self.exact_routes.get(&(service.clone(), method.clone())) {
+            for route_unit in routes {
+                if route_unit.deep_match(session, listener_name)? {
+                    return Ok(route_unit.clone());
                 }
             }
         }
 
-        // Priority 4: Try catch-all match
+        // Priority 2: Try service-level match (service only)
+        // Iterate through all routes with matching service and return first one that passes deep_match
+        if let Some(routes) = self.service_routes.get(&service) {
+            for route_unit in routes {
+                if route_unit.deep_match(session, listener_name)? {
+                    return Ok(route_unit.clone());
+                }
+            }
+        }
+
+        // Priority 3: Try catch-all match
         if let Some(ref route_unit) = self.catch_all_route {
             if route_unit.deep_match(session, listener_name)? {
                 tracing::debug!(
@@ -150,38 +151,11 @@ pub fn parse_grpc_path(path: &str) -> Result<(String, String), EdError> {
     }
 }
 
-/// RegularExpression match
-fn matches_regex(
-    matched: &GRPCMethodMatch,
-    service: &str,
-    method: &str,
-) -> Result<bool, EdError> {
-    let service_matches = match &matched.service {
-        Some(pattern) => {
-            let re = Regex::new(pattern).map_err(|e| {
-                EdError::RouteMatchError(format!("Invalid service regex: {}", e))
-            })?;
-            re.is_match(service)
-        }
-        None => true,
-    };
-
-    let method_matches = match &matched.method {
-        Some(pattern) => {
-            let re = Regex::new(pattern).map_err(|e| {
-                EdError::RouteMatchError(format!("Invalid method regex: {}", e))
-            })?;
-            re.is_match(method)
-        }
-        None => true,
-    };
-
-    Ok(service_matches && method_matches)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{GRPCRouteMatch, GRPCMethodMatch, GRPCMethodMatchType};
+    use crate::types::resources::grpc_route::GRPCRouteRule;
 
     #[test]
     fn test_parse_grpc_path_valid() {
@@ -205,6 +179,91 @@ mod tests {
         assert!(parse_grpc_path("//").is_err());
         assert!(parse_grpc_path("/service/").is_err());
         assert!(parse_grpc_path("//method").is_err());
+    }
+
+    #[test]
+    fn test_multiple_routes_same_service_method() {
+        // Test that multiple routes with same service/method are stored correctly
+        // This verifies the fix for HashMap collision issue
+        use crate::core::plugins::PluginRuntime;
+        use crate::core::lb::BackendSelector;
+        
+        // Create route 1: test.Service/Method with hostname api.example.com
+        let match1 = GRPCRouteMatch {
+            method: Some(GRPCMethodMatch {
+                match_type: Some(GRPCMethodMatchType::Exact),
+                service: Some("test.Service".to_string()),
+                method: Some("Method".to_string()),
+            }),
+            headers: None,
+        };
+        let route_info1 = Arc::new(crate::core::routes::grpc_routes::GrpcRouteInfo {
+            parent_refs: None,
+            hostnames: Some(vec!["api.example.com".to_string()]),
+        });
+        let rule1 = Arc::new(GRPCRouteRule {
+            matches: None,
+            filters: None,
+            backend_refs: None,
+            timeouts: None,
+            retry: None,
+            session_persistence: None,
+            backend_finder: BackendSelector::new(),
+            plugin_runtime: Arc::new(PluginRuntime::new()),
+            parsed_timeouts: None,
+        });
+        let route1 = Arc::new(GrpcRouteRuleUnit::new(
+            "default".to_string(),
+            "route1".to_string(),
+            0,
+            0,
+            "default/route1".to_string(),
+            match1,
+            rule1.clone(),
+            route_info1,
+        ));
+
+        // Create route 2: test.Service/Method with hostname grpc.example.com
+        let match2 = GRPCRouteMatch {
+            method: Some(GRPCMethodMatch {
+                match_type: Some(GRPCMethodMatchType::Exact),
+                service: Some("test.Service".to_string()),
+                method: Some("Method".to_string()),
+            }),
+            headers: None,
+        };
+        let route_info2 = Arc::new(crate::core::routes::grpc_routes::GrpcRouteInfo {
+            parent_refs: None,
+            hostnames: Some(vec!["grpc.example.com".to_string()]),
+        });
+        let route2 = Arc::new(GrpcRouteRuleUnit::new(
+            "default".to_string(),
+            "route2".to_string(),
+            0,
+            0,
+            "default/route2".to_string(),
+            match2,
+            rule1,
+            route_info2,
+        ));
+
+        // Create match engine with both routes
+        let engine = GrpcMatchEngine::new(vec![route1.clone(), route2.clone()]);
+
+        // Verify both routes are stored in the exact_routes HashMap
+        let key = ("test.Service".to_string(), "Method".to_string());
+        assert!(engine.exact_routes.contains_key(&key));
+        
+        let routes = engine.exact_routes.get(&key).unwrap();
+        assert_eq!(routes.len(), 2, "Should have 2 routes for same service/method");
+        
+        // Verify route identifiers
+        assert_eq!(routes[0].matched_info.route_name, "route1");
+        assert_eq!(routes[1].matched_info.route_name, "route2");
+        
+        // Verify hostnames are different
+        assert_eq!(routes[0].route_info.hostnames.as_ref().unwrap()[0], "api.example.com");
+        assert_eq!(routes[1].route_info.hostnames.as_ref().unwrap()[0], "grpc.example.com");
     }
 }
 

@@ -72,6 +72,7 @@ enum Commands {
     HttpSecurity,  // HTTP Security tests (hostname validation)
     Https,
     Grpc,
+    GrpcMatch,  // gRPC Match Rules test
     GrpcTls,
     Websocket,
     Tcp,
@@ -192,6 +193,13 @@ async fn main() -> Result<()> {
         }
         Commands::Grpc => {
             runner.add_suite(Box::new(suites::GrpcTestSuite));
+        }
+        Commands::GrpcMatch => {
+            if !cli.gateway {
+                eprintln!("Error: gRPC Match Rules tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcMatchTestSuite));
         }
         Commands::GrpcTls => {
             if !cli.gateway {

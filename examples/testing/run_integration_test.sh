@@ -314,8 +314,17 @@ echo ""
 echo "---"
 echo ""
 
+# Gateway 模式 gRPC Match Rules 测试
+echo_info "Test 5: gRPC Match Rules Gateway mode (gateway:10080)"
+cargo run --example test_client -- -g grpc-match 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_GRPC_MATCH_RESULT=$?
+
+echo ""
+echo "---"
+echo ""
+
 # Direct 模式 TCP 测试
-echo_info "Test 5: TCP Direct mode (backend:30010)"
+echo_info "Test 7: TCP Direct mode (backend:30010)"
 cargo run --example test_client -- tcp 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_TCP_RESULT=$?
 
@@ -324,7 +333,7 @@ echo "---"
 echo ""
 
 # Gateway 模式 TCP 测试
-echo_info "Test 6: TCP Gateway mode (gateway:19000)"
+echo_info "Test 8: TCP Gateway mode (gateway:19000)"
 cargo run --example test_client -- -g tcp 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_TCP_RESULT=$?
 
@@ -333,7 +342,7 @@ echo "---"
 echo ""
 
 # Direct 模式 UDP 测试
-echo_info "Test 7: UDP Direct mode (backend:30011)"
+echo_info "Test 9: UDP Direct mode (backend:30011)"
 cargo run --example test_client -- udp 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_UDP_RESULT=$?
 
@@ -342,7 +351,7 @@ echo "---"
 echo ""
 
 # Gateway 模式 UDP 测试
-echo_info "Test 8: UDP Gateway mode (gateway:19002)"
+echo_info "Test 10: UDP Gateway mode (gateway:19002)"
 cargo run --example test_client -- -g udp 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_UDP_RESULT=$?
 
@@ -351,7 +360,7 @@ echo "---"
 echo ""
 
 # Direct 模式 WebSocket 测试
-echo_info "Test 9: WebSocket Direct mode (backend:30005)"
+echo_info "Test 11: WebSocket Direct mode (backend:30005)"
 cargo run --example test_client -- websocket 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_WS_RESULT=$?
 
@@ -360,7 +369,7 @@ echo "---"
 echo ""
 
 # Gateway 模式 WebSocket 测试
-echo_info "Test 10: WebSocket Gateway mode (gateway:10080)"
+echo_info "Test 12: WebSocket Gateway mode (gateway:10080)"
 cargo run --example test_client -- -g websocket 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_WS_RESULT=$?
 
@@ -369,7 +378,7 @@ echo "---"
 echo ""
 
 # Gateway 模式 HTTPS 测试
-echo_info "Test 11: HTTPS Gateway mode (gateway:18443)"
+echo_info "Test 13: HTTPS Gateway mode (gateway:10443)"
 cargo run --example test_client -- -g https 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_HTTPS_RESULT=$?
 
@@ -378,7 +387,7 @@ echo "---"
 echo ""
 
 # Gateway 模式 gRPC-TLS 测试
-echo_info "Test 12: gRPC-TLS Gateway mode (gateway:18443)"
+echo_info "Test 14: gRPC-TLS Gateway mode (gateway:18443)"
 cargo run --example test_client -- -g grpc-tls 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_GRPC_TLS_RESULT=$?
 
@@ -387,7 +396,7 @@ echo "---"
 echo ""
 
 # Gateway 模式 Real IP 测试
-echo_info "Test 13: Real IP Gateway mode (gateway:10080)"
+echo_info "Test 15: Real IP Gateway mode (gateway:10080)"
 cargo run --example test_client -- -g real-ip 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_REAL_IP_RESULT=$?
 
@@ -395,8 +404,8 @@ echo ""
 echo "---"
 echo ""
 
-# Gateway 模式 Security 测试
-echo_info "Test 14: Security Protection Gateway mode (gateway:10080)"
+# Gateway 模式 Security Protection 测试
+echo_info "Test 16: Security Protection Gateway mode (gateway:10080)"
 cargo run --example test_client -- -g security 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_SECURITY_RESULT=$?
 
@@ -405,7 +414,7 @@ echo "---"
 echo ""
 
 # Gateway 模式 mTLS 测试（配置已在启动前复制）
-echo_info "Test 15: mTLS Gateway mode (gateway:10444)"
+echo_info "Test 17: mTLS Gateway mode (gateway:10444)"
 cargo run --example test_client -- -g mtls 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_MTLS_RESULT=$?
 
@@ -414,7 +423,7 @@ echo "---"
 echo ""
 
 # Gateway 模式 Plugin Logs 测试
-echo_info "Test 16: Plugin Logs Gateway mode (gateway:10080)"
+echo_info "Test 18: Plugin Logs Gateway mode (gateway:10080)"
 cargo run --example test_client -- -g plugin-logs 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_PLUGIN_LOGS_RESULT=$?
 
@@ -459,6 +468,12 @@ if [ $GATEWAY_GRPC_RESULT -eq 0 ]; then
     echo_success "gRPC Gateway mode: PASSED"
 else
     echo_error "gRPC Gateway mode: FAILED"
+fi
+
+if [ $GATEWAY_GRPC_MATCH_RESULT -eq 0 ]; then
+    echo_success "gRPC Match Rules Gateway mode: PASSED"
+else
+    echo_error "gRPC Match Rules Gateway mode: FAILED"
 fi
 
 if [ $DIRECT_TCP_RESULT -eq 0 ]; then
@@ -560,12 +575,13 @@ TEST_DURATION=$((TEST_END_TIME - TEST_START_TIME))
 # 计算通过和失败的测试数
 PASSED_COUNT=0
 FAILED_COUNT=0
-TOTAL_TESTS=16  # LB Policy test disabled
+TOTAL_TESTS=17  # LB Policy test disabled
 
 [ $DIRECT_HTTP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $GATEWAY_HTTP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $DIRECT_GRPC_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $GATEWAY_GRPC_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_GRPC_MATCH_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $DIRECT_TCP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $GATEWAY_TCP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $DIRECT_UDP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
@@ -608,6 +624,7 @@ Functional Tests:
   $([ $GATEWAY_HTTP_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") HTTP Gateway mode (gateway:10080)
   $([ $DIRECT_GRPC_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") gRPC Direct mode (backend:30021)
   $([ $GATEWAY_GRPC_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") gRPC Gateway mode (gateway:10080)
+  $([ $GATEWAY_GRPC_MATCH_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") gRPC Match Rules Gateway mode (gateway:10080)
   $([ $DIRECT_TCP_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") TCP Direct mode (backend:30010)
   $([ $GATEWAY_TCP_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") TCP Gateway mode (gateway:19000)
   $([ $DIRECT_UDP_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") UDP Direct mode (backend:30011)
@@ -672,6 +689,7 @@ fi
 # 返回测试结果 (LB Policy test disabled)
 if [ $DIRECT_HTTP_RESULT -eq 0 ] && [ $GATEWAY_HTTP_RESULT -eq 0 ] && \
    [ $DIRECT_GRPC_RESULT -eq 0 ] && [ $GATEWAY_GRPC_RESULT -eq 0 ] && \
+   [ $GATEWAY_GRPC_MATCH_RESULT -eq 0 ] && \
    [ $DIRECT_TCP_RESULT -eq 0 ] && [ $GATEWAY_TCP_RESULT -eq 0 ] && \
    [ $DIRECT_UDP_RESULT -eq 0 ] && [ $GATEWAY_UDP_RESULT -eq 0 ] && \
    [ $DIRECT_WS_RESULT -eq 0 ] && [ $GATEWAY_WS_RESULT -eq 0 ] && \
