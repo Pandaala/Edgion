@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
             19000,  // Gateway TCP port
             19002,  // Gateway UDP port
             10080,  // WebSocket through HTTP Gateway
-            10443,  // Gateway HTTPS port
+            18443,  // Gateway HTTPS port
             18443,  // Gateway gRPC-HTTPS port
             Some("test.example.com".to_string()),
             Some("grpc.example.com".to_string()),
