@@ -10,13 +10,25 @@ use std::sync::Arc;
 ///
 /// Note: if the matching strategy ever changes (e.g. DFA/NFA/regex), please
 /// update this documentation accordingly.
-#[derive(Clone)]
 pub struct RadixHost<T> {
     pub original: String,
     pub radix_key: String,
     pub is_wildcard: bool,
     pub wildcard_count: usize,
     pub runtime: Arc<T>,
+}
+
+// Manual Clone implementation: Arc<T> is always cloneable (shallow copy)
+impl<T> Clone for RadixHost<T> {
+    fn clone(&self) -> Self {
+        Self {
+            original: self.original.clone(),
+            radix_key: self.radix_key.clone(),
+            is_wildcard: self.is_wildcard,
+            wildcard_count: self.wildcard_count,
+            runtime: Arc::clone(&self.runtime), // Shallow copy of Arc
+        }
+    }
 }
 
 impl<T> RadixHost<T> {

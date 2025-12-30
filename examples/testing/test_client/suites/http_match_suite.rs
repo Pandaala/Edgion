@@ -427,6 +427,77 @@ impl HttpMatchTestSuite {
             })
         )
     }
+    
+    /// Test wildcard hostname matching (*.wildcard.example.com)
+    fn test_wildcard_hostname_match() -> TestCase {
+        TestCase::new(
+            "wildcard_hostname_match",
+            "Test wildcard hostname matching with *.wildcard.example.com",
+            |ctx: TestContext| Box::pin(async move {
+                let start = Instant::now();
+                
+                // Test 1: Single-level subdomain (api.wildcard.example.com)
+                let mut request1 = ctx.http_client.get(format!("{}/wildcard-test", ctx.http_url()));
+                request1 = request1.header("Host", "api.wildcard.example.com");
+                
+                match request1.send().await {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Single-level subdomain (api.wildcard.example.com) should match *.wildcard.example.com, got status: {}", response.status())
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        return TestResult::failed(start.elapsed(), format!("Request to api.wildcard.example.com failed: {}", e));
+                    }
+                }
+                
+                // Test 2: Multi-level subdomain (foo.bar.wildcard.example.com)
+                let mut request2 = ctx.http_client.get(format!("{}/wildcard-test", ctx.http_url()));
+                request2 = request2.header("Host", "foo.bar.wildcard.example.com");
+                
+                match request2.send().await {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Multi-level subdomain (foo.bar.wildcard.example.com) should match *.wildcard.example.com, got status: {}", response.status())
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        return TestResult::failed(start.elapsed(), format!("Request to foo.bar.wildcard.example.com failed: {}", e));
+                    }
+                }
+                
+                // Test 3: Root domain should NOT match (wildcard.example.com)
+                let mut request3 = ctx.http_client.get(format!("{}/wildcard-test", ctx.http_url()));
+                request3 = request3.header("Host", "wildcard.example.com");
+                
+                match request3.send().await {
+                    Ok(response) => {
+                        if response.status().is_success() {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Root domain (wildcard.example.com) should NOT match *.wildcard.example.com, but got success status: {}", response.status())
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        // 404 or connection error is expected
+                        // We accept either as "not matched"
+                    }
+                }
+                
+                TestResult::passed_with_message(
+                    start.elapsed(),
+                    "Wildcard hostname matching works correctly: *.wildcard.example.com matches api.wildcard.example.com and foo.bar.wildcard.example.com, but not wildcard.example.com".to_string()
+                )
+            })
+        )
+    }
 }
 
 #[async_trait]
@@ -446,6 +517,7 @@ impl TestSuite for HttpMatchTestSuite {
             Self::test_method_match(),
             Self::test_combined_match(),
             Self::test_section_name_match(),
+            Self::test_wildcard_hostname_match(),
         ]
     }
 }

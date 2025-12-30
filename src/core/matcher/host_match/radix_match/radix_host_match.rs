@@ -45,6 +45,12 @@ impl<T> RadixHostMatchEngine<T> {
     pub fn tree(&self) -> &RadixTree {
         &self.tree
     }
+    
+    /// Export all RadixHost instances (clones Arc pointers for efficiency)
+    /// This is useful for incremental updates where most hosts remain unchanged
+    pub fn export_hosts(&self) -> Vec<RadixHost<T>> {
+        self.hosts.clone()
+    }
 
     /// Match a hostname and return the matched runtime
     ///

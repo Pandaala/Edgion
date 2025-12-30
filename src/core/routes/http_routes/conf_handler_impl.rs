@@ -10,6 +10,7 @@ use crate::core::routes::http_routes::lb_policy_sync::{sync_lb_policies_for_rout
 use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::types::{HTTPRoute, ResourceMeta, HTTPRouteMatch, HTTPRouteRule};
 use regex::Regex;
+use crate::core::matcher::host_match::radix_match::{RadixHostMatchEngine, RadixHost};
 
 type GatewayKey = String;
 type DomainStr = String;
@@ -182,10 +183,304 @@ impl RouteManager {
         gateway_hostnames
     }
 
-    /// Collect all hostnames affected by add/update/remove operations
+    /// Rebuild RouteRules for a single exact hostname (fine-grained update)
+    /// Returns new RouteRules for the hostname, or None if no routes remain
+    fn rebuild_exact_hostname(
+        &self,
+        hostname: &str,
+        gateway_key: &str,
+        remove: &HashSet<String>,
+    ) -> Option<Arc<RouteRules>> {
+        let http_routes = self.http_routes.lock().unwrap();
+        
+        let mut route_rules_list: Vec<Arc<HttpRouteRuleUnit>> = Vec::new();
+        let mut regex_routes_list: Vec<Arc<HttpRouteRuleUnit>> = Vec::new();
+        let mut resource_keys: HashSet<String> = HashSet::new();
+        
+        // Collect all routes that apply to this hostname and gateway
+        for (resource_key, route) in http_routes.iter() {
+            // Skip routes that are being removed
+            if remove.contains(resource_key) {
+                continue;
+            }
+            
+            // Check if this route applies to this hostname
+            let applies_to_hostname = route.spec.hostnames
+                .as_ref()
+                .map(|hostnames| hostnames.contains(&hostname.to_string()))
+                .unwrap_or(false);
+            
+            if !applies_to_hostname {
+                continue;
+            }
+            
+            // Check if this route applies to this gateway
+            let applies_to_gateway = route.spec.parent_refs.as_ref().map(|parent_refs| {
+                let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+                parent_refs.iter().any(|parent_ref| {
+                    parent_ref.build_parent_key(Some(route_namespace)) == gateway_key
+                })
+            }).unwrap_or(false);
+            
+            if !applies_to_gateway {
+                continue;
+            }
+            
+            let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+            let route_name = route.metadata.name.as_deref().unwrap_or("");
+            
+            if let Some(rules) = &route.spec.rules {
+                for (rule_id, rule) in rules.iter().enumerate() {
+                    let rule_arc = Arc::new(rule.clone());
+                    
+                    if let Some(matches) = &rule.matches {
+                        for (match_id, match_item) in matches.iter().enumerate() {
+                            if Self::is_regex_path(match_item) {
+                                if let Ok(regex_unit) = Self::create_regex_route_unit(
+                                    route_namespace,
+                                    route_name,
+                                    rule_id,
+                                    match_id,
+                                    resource_key,
+                                    match_item,
+                                    rule_arc.clone(),
+                                    route.spec.parent_refs.clone(),
+                                ) {
+                                    regex_routes_list.push(Arc::new(regex_unit));
+                                }
+                            } else {
+                                let rule_unit = HttpRouteRuleUnit::new(
+                                    route_namespace.to_string(),
+                                    route_name.to_string(),
+                                    rule_id,
+                                    match_id,
+                                    resource_key.clone(),
+                                    match_item.clone(),
+                                    rule_arc.clone(),
+                                    None,
+                                    route.spec.parent_refs.clone(),
+                                );
+                                route_rules_list.push(Arc::new(rule_unit));
+                            }
+                        }
+                    }
+                }
+            }
+            
+            resource_keys.insert(resource_key.clone());
+        }
+        
+        // If no routes remain, return None
+        if route_rules_list.is_empty() && regex_routes_list.is_empty() {
+            return None;
+        }
+        
+        // Build match engine for exact/prefix routes
+        let match_engine = if route_rules_list.is_empty() {
+            None
+        } else {
+            match RadixRouteMatchEngine::build(route_rules_list.clone()) {
+                Ok(engine) => Some(Arc::new(engine)),
+                Err(e) => {
+                    tracing::error!(component="route_manager",hostname=%hostname,err=%e,"rebuild match_engine failed");
+                    return None;
+                }
+            }
+        };
+        
+        // Build regex routes engine
+        let regex_routes_engine = (!regex_routes_list.is_empty())
+            .then(|| Arc::new(RegexRoutesEngine::build(regex_routes_list.clone())));
+        
+        // Create RouteRules
+        Some(Arc::new(RouteRules {
+            resource_keys: RwLock::new(resource_keys),
+            route_rules_list: RwLock::new(route_rules_list),
+            match_engine,
+            regex_routes: RwLock::new(regex_routes_list),
+            regex_routes_engine,
+        }))
+    }
 
-    /// Update a single hostname's RouteRules in the given HashMap
+    /// Rebuild RadixHostMatchEngine for wildcard domains of a gateway (with Arc reuse optimization)
+    /// Returns a new RadixHostMatchEngine with ALL wildcard hostnames for this gateway
+    /// Excludes routes in the `remove` set
+    /// Returns None if no wildcard domains remain
+    /// 
+    /// Optimization: Reuses Arc<RouteRules> from existing engine for unchanged wildcard hostnames
+    fn rebuild_gateway_wildcard_engine(
+        &self,
+        gateway_key: &str,
+        affected_hostnames: &HashSet<String>,
+        remove: &HashSet<String>,
+        current_engine: Option<&RadixHostMatchEngine<RouteRules>>,
+    ) -> Result<Option<RadixHostMatchEngine<RouteRules>>, String> {
+        let http_routes = self.http_routes.lock().unwrap();
+        
+        // Step 1: Export existing RadixHosts (shallow copy of Arc pointers)
+        let mut existing_hosts_map: HashMap<String, RadixHost<RouteRules>> = HashMap::new();
+        if let Some(engine) = current_engine {
+            let existing_hosts = engine.export_hosts();
+            for host in existing_hosts {
+                existing_hosts_map.insert(host.original.to_lowercase(), host);
+            }
+        }
+        
+        // Step 2: Collect all wildcard hostnames for this gateway from http_routes
+        let mut gateway_wildcard_hostnames: HashSet<String> = HashSet::new();
+        for (resource_key, route) in http_routes.iter() {
+            // Skip routes being removed
+            if remove.contains(resource_key) {
+                continue;
+            }
+            
+            // Check if route belongs to this gateway
+            if let Some(parent_refs) = &route.spec.parent_refs {
+                let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+                for parent_ref in parent_refs {
+                    let parent_key = parent_ref.build_parent_key(Some(route_namespace));
+                    if parent_key == gateway_key {
+                        // Collect wildcard hostnames from this route
+                        if let Some(hostnames) = &route.spec.hostnames {
+                            for hostname in hostnames {
+                                if hostname.starts_with("*.") {
+                                    gateway_wildcard_hostnames.insert(hostname.clone());
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Step 3: Build final RadixHost list (reuse or rebuild)
+        let mut radix_hosts: Vec<RadixHost<RouteRules>> = Vec::new();
+        
+        for hostname in gateway_wildcard_hostnames.iter() {
+            // If hostname is not affected, reuse existing RadixHost (Arc reuse!)
+            if !affected_hostnames.contains(hostname) {
+                if let Some(existing_host) = existing_hosts_map.get(&hostname.to_lowercase()) {
+                    radix_hosts.push(existing_host.clone()); // Shallow copy of Arc
+                    tracing::trace!(component="route_manager",hostname=%hostname,"reused existing RadixHost");
+                    continue;
+                }
+            }
+            
+            // Hostname is affected or new, need to rebuild
+            // Collect all routes that apply to this hostname
+            let mut route_rules_list: Vec<Arc<HttpRouteRuleUnit>> = Vec::new();
+            let mut regex_routes_list: Vec<Arc<HttpRouteRuleUnit>> = Vec::new();
+            let mut resource_keys: HashSet<String> = HashSet::new();
+            
+            for (resource_key, route) in http_routes.iter() {
+                // Skip routes that are being removed
+                if remove.contains(resource_key) {
+                    continue;
+                }
+                
+                // Check if this route applies to this hostname
+                let applies = route.spec.hostnames
+                    .as_ref()
+                    .map(|hostnames| hostnames.contains(&hostname.to_string()))
+                    .unwrap_or(false);
+                
+                if !applies {
+                    continue;
+                }
+                
+                let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+                let route_name = route.metadata.name.as_deref().unwrap_or("");
+                
+                if let Some(rules) = &route.spec.rules {
+                    for (rule_id, rule) in rules.iter().enumerate() {
+                        let rule_arc = Arc::new(rule.clone());
+                        
+                        if let Some(matches) = &rule.matches {
+                            for (match_id, match_item) in matches.iter().enumerate() {
+                                if Self::is_regex_path(match_item) {
+                                    if let Ok(regex_unit) = Self::create_regex_route_unit(
+                                        route_namespace,
+                                        route_name,
+                                        rule_id,
+                                        match_id,
+                                        resource_key,
+                                        match_item,
+                                        rule_arc.clone(),
+                                        route.spec.parent_refs.clone(),
+                                    ) {
+                                        regex_routes_list.push(Arc::new(regex_unit));
+                                    }
+                                } else {
+                                    let rule_unit = HttpRouteRuleUnit::new(
+                                        route_namespace.to_string(),
+                                        route_name.to_string(),
+                                        rule_id,
+                                        match_id,
+                                        resource_key.clone(),
+                                        match_item.clone(),
+                                        rule_arc.clone(),
+                                        None,
+                                        route.spec.parent_refs.clone(),
+                                    );
+                                    route_rules_list.push(Arc::new(rule_unit));
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                resource_keys.insert(resource_key.clone());
+            }
+            
+            // Skip if no routes for this hostname
+            if route_rules_list.is_empty() && regex_routes_list.is_empty() {
+                continue;
+            }
+            
+            // Build match engine for exact/prefix routes
+            let match_engine = if route_rules_list.is_empty() {
+                None
+            } else {
+                match RadixRouteMatchEngine::build(route_rules_list.clone()) {
+                    Ok(engine) => Some(Arc::new(engine)),
+                    Err(e) => {
+                        tracing::error!(component="route_manager",hostname=%hostname,err=%e,"rebuild match_engine failed");
+                        continue;
+                    }
+                }
+            };
+            
+            // Build regex routes engine
+            let regex_routes_engine = (!regex_routes_list.is_empty())
+                .then(|| Arc::new(RegexRoutesEngine::build(regex_routes_list.clone())));
+            
+            // Create RouteRules
+            let route_rules = Arc::new(RouteRules {
+                resource_keys: RwLock::new(resource_keys),
+                route_rules_list: RwLock::new(route_rules_list),
+                match_engine,
+                regex_routes: RwLock::new(regex_routes_list),
+                regex_routes_engine,
+            });
+            
+            // Add to radix hosts
+            radix_hosts.push(RadixHost::new(hostname, route_rules));
+        }
+        
+        // Build RadixHostMatchEngine only if there are wildcard domains
+        if radix_hosts.is_empty() {
+            Ok(None)
+        } else {
+            let mut new_engine = RadixHostMatchEngine::new();
+            new_engine.initialize(radix_hosts)?;
+            Ok(Some(new_engine))
+        }
+    }
+
+    /// Update a single hostname's RouteRules in the given HashMap (legacy, kept for reference)
     /// This modifies the HashMap in place and does NOT do RCU
+    #[allow(dead_code)]
     fn update_single_hostname(
         &self,
         domain_hashmap: &mut HashMap<DomainStr, Arc<RouteRules>>,
@@ -519,8 +814,9 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 continue;
             }
 
-            // Build HashMap<DomainStr, Arc<RouteRules>> for this gateway
-            let mut new_domain_routes: HashMap<DomainStr, Arc<RouteRules>> = HashMap::new();
+            // Separate exact domains and wildcard domains
+            let mut exact_domain_map: HashMap<DomainStr, Arc<RouteRules>> = HashMap::new();
+            let mut wildcard_hosts: Vec<RadixHost<RouteRules>> = Vec::new();
 
             for (domain, split) in domain_rules_map.into_iter() {
                 // Skip if both normal routes and regex routes are empty
@@ -564,7 +860,16 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                     regex_routes_engine,
                 });
 
-                new_domain_routes.insert(domain, route_rules);
+                // Distinguish exact vs wildcard domains
+                if domain.starts_with("*.") {
+                    // Wildcard domain - add to RadixHostMatchEngine
+                    wildcard_hosts.push(RadixHost::new(&domain, route_rules));
+                    tracing::trace!(component="route_manager",gw=%gateway_key,domain=%domain,"added to wildcard engine");
+                } else {
+                    // Exact domain - add to HashMap (lowercase for case-insensitive matching)
+                    exact_domain_map.insert(domain.to_lowercase(), route_rules);
+                    tracing::trace!(component="route_manager",gw=%gateway_key,domain=%domain,"added to exact map");
+                }
             }
 
             // Get existing DomainRouteRules for this gateway (don't create new)
@@ -576,10 +881,22 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 continue;
             };
 
-            // Replace the domain_routes_map with the new one
-            // Note: ArcSwap<Arc<T>> requires Arc<Arc<T>> for store() method
-            // This double-Arc is needed for lock-free atomic pointer swapping
-            domain_route_rules.domain_routes_map.store(Arc::new(Arc::new(new_domain_routes)));
+            // Build and store exact domain map
+            domain_route_rules.exact_domain_map.store(Arc::new(exact_domain_map));
+            
+            // Build and store wildcard engine (only if wildcard domains exist)
+            let wildcard_engine = if !wildcard_hosts.is_empty() {
+                let mut engine = RadixHostMatchEngine::new();
+                if let Err(e) = engine.initialize(wildcard_hosts) {
+                    tracing::error!(component="route_manager",gw=%gateway_key,err=%e,"failed to build RadixHostMatchEngine");
+                    skipped_gateways += 1;
+                    continue;
+                }
+                Some(engine)
+            } else {
+                None
+            };
+            domain_route_rules.wildcard_engine.store(Arc::new(wildcard_engine));
 
             processed_gateways += 1;
         }
@@ -590,6 +907,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
 
     /// Handle partial configuration updates
     /// Processes additions, updates, and removals of HTTPRoutes
+    /// Uses fine-grained updates for exact domains and batch updates for wildcard domains
     fn partial_update(&self, add: HashMap<String, HTTPRoute>, update: HashMap<String, HTTPRoute>, remove: HashSet<String>) {
         tracing::info!(
             component = "route_manager",
@@ -617,30 +935,62 @@ impl ConfHandler<HTTPRoute> for RouteManager {
             }
         }
 
-        // Step 2: For each gateway, update all affected hostnames in one RCU operation
-        for (gateway_key, hostnames) in gateway_hostnames.iter() {
-            tracing::debug!(component="route_manager",gw=%gateway_key,cnt=hostnames.len(),"updating gw");
+        // Step 2: For each gateway, separate exact and wildcard hostnames, then update accordingly
+        for (gateway_key, affected_hostnames) in gateway_hostnames.iter() {
+            tracing::debug!(component="route_manager",gw=%gateway_key,affected=affected_hostnames.len(),"processing affected hostnames");
             
             if let Some(domain_routes_ref) = self.gateway_routes_map.get(gateway_key) {
-                // Clone current domain_routes_map
-                let current_map = domain_routes_ref.domain_routes_map.load();
-                let current_hashmap: &HashMap<DomainStr, Arc<RouteRules>> = current_map.as_ref();
-                let mut new_hashmap: HashMap<String, Arc<RouteRules>> = current_hashmap.clone();
+                // Separate exact and wildcard hostnames
+                let mut exact_hostnames: HashSet<String> = HashSet::new();
+                let mut wildcard_hostnames: HashSet<String> = HashSet::new();
                 
-                // Update all affected hostnames
-                for hostname in hostnames.iter() {
-                    self.update_single_hostname(
-                        &mut new_hashmap,
-                        hostname,
-                        &add_or_update,
-                        &remove,
-                    );
+                for hostname in affected_hostnames {
+                    if hostname.starts_with("*.") {
+                        wildcard_hostnames.insert(hostname.clone());
+                    } else {
+                        exact_hostnames.insert(hostname.clone());
+                    }
                 }
                 
-                // Replace the entire domain_routes_map in one atomic operation
-                // Note: ArcSwap<Arc<T>> requires Arc<Arc<T>> for store() method
-                domain_routes_ref.domain_routes_map.store(Arc::new(Arc::new(new_hashmap)));
-                tracing::info!(component="route_manager",gw=%gateway_key,cnt=hostnames.len(),"updated gw");
+                // Update exact domains (fine-grained, RCU pattern)
+                if !exact_hostnames.is_empty() {
+                    let current_map = domain_routes_ref.exact_domain_map.load();
+                    let mut new_map = (**current_map).clone(); // Clone HashMap
+                    
+                    for hostname in exact_hostnames.iter() {
+                        match self.rebuild_exact_hostname(hostname, gateway_key, &remove) {
+                            Some(new_route_rules) => {
+                                // Store with lowercase key for case-insensitive matching
+                                new_map.insert(hostname.to_lowercase(), new_route_rules);
+                                tracing::debug!(component="route_manager",gw=%gateway_key,hostname=%hostname,"updated exact domain");
+                            }
+                            None => {
+                                new_map.remove(&hostname.to_lowercase());
+                                tracing::debug!(component="route_manager",gw=%gateway_key,hostname=%hostname,"removed exact domain (no routes)");
+                            }
+                        }
+                    }
+                    
+                    // Atomically replace the exact domain map
+                    domain_routes_ref.exact_domain_map.store(Arc::new(new_map));
+                    tracing::info!(component="route_manager",gw=%gateway_key,cnt=exact_hostnames.len(),"exact domains updated");
+                }
+                
+                // Update wildcard domains (rebuild engine with Arc reuse)
+                if !wildcard_hostnames.is_empty() {
+                    let current_engine_opt = domain_routes_ref.wildcard_engine.load();
+                    let current_engine = current_engine_opt.as_ref().as_ref();
+                    
+                    match self.rebuild_gateway_wildcard_engine(gateway_key, &wildcard_hostnames, &remove, current_engine) {
+                        Ok(new_engine_opt) => {
+                            domain_routes_ref.wildcard_engine.store(Arc::new(new_engine_opt));
+                            tracing::info!(component="route_manager",gw=%gateway_key,cnt=wildcard_hostnames.len(),"wildcard engine rebuilt with Arc reuse");
+                        }
+                        Err(e) => {
+                            tracing::error!(component="route_manager",gw=%gateway_key,err=%e,"failed to rebuild wildcard engine");
+                        }
+                    }
+                }
             }
         }
         

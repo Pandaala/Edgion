@@ -10,6 +10,7 @@ use crate::core::routes::http_routes::match_engine::radix_route_match::RadixRout
 use crate::core::routes::http_routes::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::types::HTTPRoute;
 use crate::core::lb::{ERR_NO_BACKEND_REFS, ERR_INCONSISTENT_WEIGHT};
+use crate::core::matcher::host_match::radix_match::RadixHostMatchEngine;
 
 type DomainStr = String;
 
@@ -101,30 +102,48 @@ impl RouteRules {
 }
 
 pub struct DomainRouteRules {
-    pub(crate) domain_routes_map: ArcSwap<Arc<HashMap<DomainStr, Arc<RouteRules>>>>,
+    /// Exact domain matching (e.g., "example.com")
+    /// Uses HashMap for O(1) lookup performance
+    pub(crate) exact_domain_map: ArcSwap<HashMap<DomainStr, Arc<RouteRules>>>,
+    
+    /// Wildcard domain matching (e.g., "*.example.com")
+    /// Uses RadixHostMatchEngine for wildcard support
+    /// None if no wildcard domains are configured
+    pub(crate) wildcard_engine: ArcSwap<Option<RadixHostMatchEngine<RouteRules>>>,
 }
 
 impl DomainRouteRules {
     /// Match a route for the given hostname and session
     /// Returns Arc<HttpRouteRuleUnit> if found, or an error if no route matches
+    /// Supports wildcard hostname matching (e.g., *.example.com)
+    /// 
+    /// Matching priority (per Gateway API spec):
+    /// 1. Exact domain match (HashMap lookup - O(1))
+    /// 2. Wildcard domain match (RadixHostMatchEngine - O(log n))
     pub fn match_route(
         &self,
         hostname: &str,
         session: &mut pingora_proxy::Session,
         listener_name: &str,
     ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
-        let domain_routes_map = self.domain_routes_map.load();
-        
-        // Try to find RouteRules for the hostname (exact match only)
-        let route_rules = domain_routes_map
-            .get(hostname)
-            .cloned();
-
-        if let Some(route_rules) = route_rules {
-            route_rules.match_route(session, listener_name)
-        } else {
-            Err(EdError::RouteNotFound())
+        // Step 1: Try exact domain match first (highest priority, O(1))
+        // DNS hostnames are case-insensitive per RFC 952/1123
+        let exact_map = self.exact_domain_map.load();
+        if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {
+            return route_rules.match_route(session, listener_name);
         }
+        
+        // Step 2: Try wildcard domain match (fallback, O(log n))
+        // Only check if wildcard engine exists
+        let wildcard_engine = self.wildcard_engine.load();
+        if let Some(ref engine) = wildcard_engine.as_ref() {
+            if let Some(route_rules) = engine.match_host(hostname) {
+                return route_rules.match_route(session, listener_name);
+            }
+        }
+        
+        // No route matched
+        Err(EdError::RouteNotFound())
     }
 }
 
@@ -168,7 +187,8 @@ impl RouteManager {
         
         let domain_routes = entry
             .or_insert_with(|| Arc::new(DomainRouteRules {
-                domain_routes_map: ArcSwap::from_pointee(Arc::new(HashMap::new())),
+                exact_domain_map: ArcSwap::from_pointee(HashMap::new()),
+                wildcard_engine: ArcSwap::from_pointee(None),
             }))
             .value()
             .clone();

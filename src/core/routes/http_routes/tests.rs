@@ -141,8 +141,21 @@ mod route_matching_tests {
         hostname: &str,
         should_exist: bool,
     ) {
-        let domain_routes_map = domain_routes.domain_routes_map.load();
-        let exists = domain_routes_map.contains_key(hostname);
+        // Check exact domain map first (case-insensitive)
+        let exact_map = domain_routes.exact_domain_map.load();
+        let exists_exact = exact_map.get(&hostname.to_lowercase()).is_some();
+        
+        // Check wildcard engine if not found in exact map
+        let exists_wildcard = if !exists_exact {
+            let wildcard_engine = domain_routes.wildcard_engine.load();
+            wildcard_engine.as_ref().as_ref()
+                .and_then(|engine| engine.match_host(hostname))
+                .is_some()
+        } else {
+            false
+        };
+        
+        let exists = exists_exact || exists_wildcard;
         assert_eq!(exists, should_exist, "RouteRules for hostname '{}' should {}exist", hostname, if should_exist { "" } else { "not " });
     }
 
@@ -153,8 +166,18 @@ mod route_matching_tests {
         expected_normal_routes: usize,
         expected_regex_routes: usize,
     ) {
-        let domain_routes_map = domain_routes.domain_routes_map.load();
-        if let Some(route_rules) = domain_routes_map.get(hostname) {
+        // Try exact domain map first (case-insensitive)
+        let exact_map = domain_routes.exact_domain_map.load();
+        let route_rules = if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {
+            Some(route_rules.clone())
+        } else {
+            // Try wildcard engine
+            let wildcard_engine = domain_routes.wildcard_engine.load();
+            wildcard_engine.as_ref().as_ref()
+                .and_then(|engine| engine.match_host(hostname))
+        };
+        
+        if let Some(route_rules) = route_rules {
             let normal_count = route_rules.route_rules_list.read().unwrap().len();
             let regex_count = route_rules.regex_routes.read().unwrap().len();
             assert_eq!(normal_count, expected_normal_routes, "Expected {} normal routes for hostname '{}', got {}", expected_normal_routes, hostname, normal_count);
