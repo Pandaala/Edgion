@@ -4,9 +4,21 @@
 
 ## 📚 指南列表
 
-### 核心功能
+### 安全认证
 
-- 🌊 **[Stream Plugins 指南](./stream-plugins-guide.md)** - TCP/UDP 流式插件使用教程
+- 🔐 **[Basic Auth 认证](./basic-auth-user-guide.md)** - HTTP 基础认证配置
+- 🛡️ **[CSRF 防护](./csrf-user-guide.md)** - 跨站请求伪造防护
+- 🚫 **[IP 限制](./ip-restriction.md)** - IP 黑白名单配置
+
+### 跨域与 TLS
+
+- 🌐 **[CORS 跨域](./cors-user-guide.md)** - 跨域资源共享配置
+- ✈️ **[Preflight 策略](./preflight-policy-guide.md)** - 预检请求处理配置
+- 🔒 **[EdgionTLS](./edgiontls-user-guide.md)** - TLS 证书管理
+
+### 流式处理
+
+- 🌊 **[Stream Plugins](./stream-plugins-guide.md)** - TCP/UDP 流式插件
   - IP 访问控制
   - 跨命名空间引用
   - 常见使用场景
