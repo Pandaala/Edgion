@@ -70,6 +70,7 @@ impl Default for GatewayTcpRoutes {
 mod tests {
     use super::*;
     use crate::types::resources::tcp_route::*;
+    use crate::types::resources::common::ParentReference;
     
     fn create_test_tcp_route(namespace: &str, name: &str, port: i32) -> TCPRoute {
         TCPRoute {

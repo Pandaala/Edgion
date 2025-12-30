@@ -1,5 +1,5 @@
 use super::gateway::SecretObjectReference;
-use super::http_route::ParentReference;
+use super::common::ParentReference;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;

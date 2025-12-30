@@ -70,6 +70,7 @@ impl Default for GatewayUdpRoutes {
 mod tests {
     use super::*;
     use crate::types::resources::udp_route::*;
+    use crate::types::resources::common::ParentReference;
     
     fn create_test_udp_route(namespace: &str, name: &str, port: i32) -> UDPRoute {
         UDPRoute {

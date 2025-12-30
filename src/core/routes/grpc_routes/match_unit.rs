@@ -1,6 +1,6 @@
 use crate::types::err::EdError;
 use crate::types::{GRPCRouteMatch, GRPCRouteRule};
-use crate::types::resources::http_route::ParentReference;
+use crate::types::resources::common::ParentReference;
 use pingora_proxy::Session;
 use regex::Regex;
 use schemars::JsonSchema;

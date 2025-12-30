@@ -430,7 +430,7 @@ fn parse_http_routes_to_gateway_domain_rules(
 /// Validate HTTPRoute and extract required fields
 /// Returns Some((parent_refs, rules, hostnames, namespace, name)) if valid, None otherwise
 fn validate_http_route(route: &HTTPRoute) -> Option<(
-    &Vec<crate::types::resources::http_route::ParentReference>,
+    &Vec<crate::types::resources::common::ParentReference>,
     &Vec<crate::types::HTTPRouteRule>,
     &Vec<String>,
     String,

@@ -163,6 +163,7 @@ impl TcpRouteManager {
 mod tests {
     use super::*;
     use crate::types::ResourceMeta;
+    use crate::types::resources::common::ParentReference;
     
     fn create_test_tcp_route(namespace: &str, name: &str, gateway: &str, port: i32) -> TCPRoute {
         use crate::types::resources::tcp_route::*;

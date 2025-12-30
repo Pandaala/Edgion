@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::core::lb::BackendSelector;
 use crate::core::plugins::PluginRuntime;
 use super::http_route_preparse::BackendExtensionInfo;
-use super::http_route::{ParentReference, HTTPHeader, LocalObjectReference, SessionPersistence, BackendObjectReference, Fraction, ParsedRouteTimeouts as HttpParsedRouteTimeouts};
+use super::common::ParentReference;
+use super::http_route::{HTTPHeader, LocalObjectReference, SessionPersistence, BackendObjectReference, Fraction, ParsedRouteTimeouts as HttpParsedRouteTimeouts};
 
 /// API group for GRPCRoute
 pub const GRPC_ROUTE_GROUP: &str = "gateway.networking.k8s.io";

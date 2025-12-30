@@ -84,6 +84,7 @@ impl Default for GatewayTlsRoutes {
 mod tests {
     use super::*;
     use crate::types::resources::tls_route::*;
+    use crate::types::resources::common::ParentReference;
     
     fn create_test_tls_route(namespace: &str, name: &str, hostname: &str) -> TLSRoute {
         TLSRoute {

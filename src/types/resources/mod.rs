@@ -2,6 +2,7 @@
 //!
 //! This module contains all custom resource definitions and Gateway API types
 
+pub mod common;
 pub mod edgion_gateway_config;
 pub mod edgion_plugins;
 pub mod edgion_tls;
@@ -20,6 +21,7 @@ pub mod reference_grant;
 pub mod backend_tls_policy;
 
 // Re-export all resource types
+pub use self::common::*;
 pub use self::edgion_gateway_config::*;
 pub use self::edgion_plugins::*;
 pub use self::edgion_tls::*;
