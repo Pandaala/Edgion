@@ -47,14 +47,15 @@ impl RegexRoutesEngine {
     pub fn match_route(
         &self,
         session: &mut Session,
+        listener_name: &str,
     ) -> Result<Option<Arc<HttpRouteRuleUnit>>, EdError> {
         let path = session.req_header().uri.path();
 
         // Try each regex route in order (already sorted by length, longest first)
         for regex_route in &self.routes {
             if regex_route.matches_path(path) {
-                // Path matches, check deep match (headers, query params, method)
-                if regex_route.deep_match(session)? {
+                // Path matches, check deep match (headers, query params, method, sectionName)
+                if regex_route.deep_match(session, listener_name)? {
                     tracing::debug!(
                         path = %path,
                         regex = %regex_route.path_regex.as_ref().map(|r| r.as_str()).unwrap_or(""),

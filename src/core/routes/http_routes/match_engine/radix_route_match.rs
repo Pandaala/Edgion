@@ -55,9 +55,10 @@ impl RadixRouteMatchEngine {
         &self,
         route_idx: usize,
         session: &Session,
+        listener_name: &str,
     ) -> Result<Option<Arc<HttpRouteRuleUnit>>, EdError> {
         if let Some(route) = self.routes.get(route_idx) {
-            match route.deep_match(session) {
+            match route.deep_match(session, listener_name) {
                 Ok(true) => {
                     tracing::trace!("Route matched after deep_match: route_idx={}", route_idx);
                     return Ok(Some(route.clone()));
@@ -77,7 +78,7 @@ impl RadixRouteMatchEngine {
 
     /// Try exact match for the request path
     /// Returns matched route if found, None if no exact match
-    pub fn exact_match(&self, session: &mut Session) -> Result<Option<Arc<HttpRouteRuleUnit>>, EdError> {
+    pub fn exact_match(&self, session: &mut Session, listener_name: &str) -> Result<Option<Arc<HttpRouteRuleUnit>>, EdError> {
         let path = session.req_header().uri.path();
 
         tracing::trace!("[exact_match] Trying exact match for '{}'...", path);
@@ -102,7 +103,7 @@ impl RadixRouteMatchEngine {
                                 continue;
                             }
                             tracing::trace!("Pattern matched, trying deep match...");
-                            if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session)? {
+                            if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session, listener_name)? {
                                 tracing::debug!("Exact match succeeded");
                                 return Ok(Some(runtime));
                             }
@@ -118,7 +119,7 @@ impl RadixRouteMatchEngine {
 
     /// Try prefix match for the request path
     /// Returns matched route if found, RouteNotFound error if no match
-    pub fn prefix_match(&self, session: &mut Session) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
+    pub fn prefix_match(&self, session: &mut Session, listener_name: &str) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
         let path = session.req_header().uri.path();
 
         tracing::trace!("[prefix_match] Trying prefix matching...");
@@ -168,7 +169,7 @@ impl RadixRouteMatchEngine {
             let radix_path = &self.radix_paths[*path_idx];
             tracing::trace!(
                 "[{}] Trying: original='{}', priority={}, route_idx={}", i + 1,radix_path.original, radix_path.priority_weight, radix_path.route_idx);
-            if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session)? {
+            if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session, listener_name)? {
                 tracing::debug!("Prefix match succeeded,original='{}', priority={}, route_idx={}", radix_path.original,radix_path.priority_weight, radix_path.route_idx);
                 return Ok(runtime);
             }
@@ -181,10 +182,10 @@ impl RadixRouteMatchEngine {
 
     /// Combined match route
     /// Uses prefix_match which automatically handles exact match with higher priority
-    pub fn match_route(&self, session: &mut Session) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
+    pub fn match_route(&self, session: &mut Session, listener_name: &str) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
         // prefix_match already handles exact match with higher priority
         // (exact routes have odd priority_weight, prefix routes have even priority_weight)
-        self.prefix_match(session)
+        self.prefix_match(session, listener_name)
     }
 
     fn initialize_internal(&mut self, route_runtimes: Vec<Arc<HttpRouteRuleUnit>>) -> Result<(), EdError> {

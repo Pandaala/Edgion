@@ -78,10 +78,11 @@ impl RouteRules {
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
+        listener_name: &str,
     ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
         // Step 1: Try regex match first (highest priority)
         if let Some(ref regex_engine) = self.regex_routes_engine {
-            if let Some(route_unit) = regex_engine.match_route(session)? {
+            if let Some(route_unit) = regex_engine.match_route(session, listener_name)? {
                 tracing::debug!(path=%session.req_header().uri.path(),"regex match ok");
                 return Ok(route_unit);
             }
@@ -89,7 +90,7 @@ impl RouteRules {
         
         // Step 2: Fall back to radix tree match (exact + prefix)
         if let Some(ref match_engine) = self.match_engine {
-            let route_unit = match_engine.match_route(session)?;
+            let route_unit = match_engine.match_route(session, listener_name)?;
             tracing::debug!(path=%session.req_header().uri.path(),"radix match ok");
             return Ok(route_unit);
         }
@@ -110,6 +111,7 @@ impl DomainRouteRules {
         &self,
         hostname: &str,
         session: &mut pingora_proxy::Session,
+        listener_name: &str,
     ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
         let domain_routes_map = self.domain_routes_map.load();
         
@@ -119,7 +121,7 @@ impl DomainRouteRules {
             .cloned();
 
         if let Some(route_rules) = route_rules {
-            route_rules.match_route(session)
+            route_rules.match_route(session, listener_name)
         } else {
             Err(EdError::RouteNotFound())
         }

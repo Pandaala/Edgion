@@ -1,5 +1,6 @@
 use crate::types::err::EdError;
 use crate::types::{HTTPRouteMatch, HTTPRouteRule, MatchInfo};
+use crate::types::resources::common::ParentReference;
 use pingora_proxy::Session;
 use regex::Regex;
 use std::collections::HashMap;
@@ -14,6 +15,8 @@ pub struct HttpRouteRuleUnit {
     pub rule: Arc<HTTPRouteRule>,
     /// Compiled regex for path matching (only for RegularExpression path type)
     pub path_regex: Option<Regex>,
+    /// Parent references for sectionName matching
+    pub parent_refs: Option<Vec<ParentReference>>,
 }
 
 impl HttpRouteRuleUnit {
@@ -26,12 +29,14 @@ impl HttpRouteRuleUnit {
         match_item: HTTPRouteMatch,
         rule: Arc<HTTPRouteRule>,
         path_regex: Option<Regex>,
+        parent_refs: Option<Vec<ParentReference>>,
     ) -> HttpRouteRuleUnit {
         Self {
             resource_key,
             matched_info: MatchInfo::new(namespace, name, rule_id, match_id, match_item),
             rule,
             path_regex,
+            parent_refs,
         }
     }
     
@@ -49,11 +54,11 @@ impl HttpRouteRuleUnit {
         }
     }
     
-    /// Perform deep match (headers, query params, method)
+    /// Perform deep match (headers, query params, method, sectionName)
     /// For use with regex routes or when called directly
-    pub fn deep_match(&self, session: &Session) -> Result<bool, EdError> {
+    pub fn deep_match(&self, session: &Session, listener_name: &str) -> Result<bool, EdError> {
         let req_header = session.req_header();
-        Self::deep_match_common(&self.matched_info.m, req_header, &self.identifier())
+        Self::deep_match_common(&self.matched_info.m, req_header, &self.identifier(), &self.parent_refs, listener_name)
     }
     
     /// Get route identifier
@@ -173,12 +178,14 @@ impl HttpRouteRuleUnit {
         }
     }
     
-    /// Common deep match logic for checking method, headers, and query parameters
+    /// Common deep match logic for checking method, headers, query parameters, and sectionName
     /// This function is shared between HttpRouteRuleUnit and HttpRouteRuleRegexUnit
     pub(crate) fn deep_match_common(
         match_item: &HTTPRouteMatch,
         req_header: &pingora_http::RequestHeader,
         identifier: &str,
+        parent_refs: &Option<Vec<ParentReference>>,
+        listener_name: &str,
     ) -> Result<bool, EdError> {
         let method = req_header.method.as_str();
         
@@ -186,6 +193,17 @@ impl HttpRouteRuleUnit {
         let query_params = req_header.uri.query()
             .map(|q| Self::parse_query_string(q))
             .unwrap_or_default();
+        
+        // 0. Check SectionName (if parent_refs specify section_name)
+        if let Some(ref parent_refs) = parent_refs {
+            let matches = parent_refs.iter().any(|pr| {
+                pr.section_name.as_ref().map_or(true, |name| name == listener_name)
+            });
+            
+            if !matches {
+                return Ok(false);
+            }
+        }
         
         // 1. Check HTTP Method (if specified)
         if let Some(match_method) = &match_item.method {

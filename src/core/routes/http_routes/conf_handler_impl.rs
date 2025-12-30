@@ -65,6 +65,7 @@ impl RouteManager {
         resource_key: &str,
         match_item: &HTTPRouteMatch,
         rule: Arc<HTTPRouteRule>,
+        parent_refs: Option<Vec<crate::types::resources::common::ParentReference>>,
     ) -> Result<HttpRouteRuleUnit, String> {
         let path_value = match_item.path.as_ref()
             .and_then(|p| p.value.as_deref())
@@ -82,6 +83,7 @@ impl RouteManager {
             match_item.clone(),
             rule,
             Some(regex),
+            parent_refs,
         ))
     }
 }
@@ -254,6 +256,7 @@ impl RouteManager {
                                         resource_key,
                                         match_item,
                                         rule_arc.clone(),
+                                        route.spec.parent_refs.clone(),
                                     ) {
                                         regex_routes_list.push(Arc::new(regex_unit));
                                     }
@@ -268,6 +271,7 @@ impl RouteManager {
                                         match_item.clone(),
                                         rule_arc.clone(),
                                         None,
+                                        route.spec.parent_refs.clone(),
                                     );
                                     route_rules_list.push(Arc::new(rule_unit));
                                 }
@@ -389,6 +393,7 @@ fn parse_http_routes_to_gateway_domain_rules(
                                     &route.key_name(),
                                     match_item,
                                     rule_arc.clone(),
+                                    route.spec.parent_refs.clone(),
                                 ) {
                                     Ok(regex_unit) => {
                                         split.1.push(Arc::new(regex_unit));
@@ -408,6 +413,7 @@ fn parse_http_routes_to_gateway_domain_rules(
                                     match_item.clone(),
                                     rule_arc.clone(),
                                     None,
+                                    route.spec.parent_refs.clone(),
                                 );
                                 split.0.push(Arc::new(rule_unit));
                             }
