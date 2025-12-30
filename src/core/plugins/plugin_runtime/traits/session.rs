@@ -1,9 +1,9 @@
 //! PluginSession trait - shared across all filter stages
 
+use crate::types::EdgionHttpContext;
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
-use crate::types::EdgionHttpContext;
 
 pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;
 pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
@@ -33,6 +33,9 @@ pub trait PluginSession: Send {
     /// Append a value to an existing response header (e.g., Vary: Origin)
     fn append_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 
+    /// Remove a response header (for ResponseHeaderModifier)
+    fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()>;
+
     /// Set a request header (for upstream)
     fn set_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 
@@ -51,11 +54,7 @@ pub trait PluginSession: Send {
     /// Set the upstream HTTP method (for proxy rewrite)
     fn set_upstream_method(&mut self, method: &str) -> PluginSessionResult<()>;
 
-    async fn write_response_body(
-        &mut self,
-        body: Option<Bytes>,
-        end_of_stream: bool,
-    ) -> PluginSessionResult<()>;
+    async fn write_response_body(&mut self, body: Option<Bytes>, end_of_stream: bool) -> PluginSessionResult<()>;
 
     async fn shutdown(&mut self);
 
@@ -68,4 +67,3 @@ pub trait PluginSession: Send {
     /// Get reference to EdgionHttpContext (for access log generation)
     fn ctx(&self) -> &EdgionHttpContext;
 }
-

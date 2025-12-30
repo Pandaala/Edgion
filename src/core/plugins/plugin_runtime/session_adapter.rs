@@ -4,9 +4,9 @@ use http::Uri;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
-use crate::types::EdgionHttpContext;
-use crate::types::filters::PluginRunningResult;
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
+use crate::types::filters::PluginRunningResult;
+use crate::types::EdgionHttpContext;
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
@@ -17,9 +17,9 @@ pub struct PingoraSessionAdapter<'a> {
 impl<'a> PingoraSessionAdapter<'a> {
     #[inline]
     pub fn new(inner: &'a mut Session, ctx: &'a mut EdgionHttpContext) -> Self {
-        Self { 
-            inner, 
-            ctx, 
+        Self {
+            inner,
+            ctx,
             response_header: None,
         }
     }
@@ -30,9 +30,9 @@ impl<'a> PingoraSessionAdapter<'a> {
         ctx: &'a mut EdgionHttpContext,
         response_header: &'a mut ResponseHeader,
     ) -> Self {
-        Self { 
-            inner, 
-            ctx, 
+        Self {
+            inner,
+            ctx,
             response_header: Some(response_header),
         }
     }
@@ -98,6 +98,14 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(())
     }
 
+    fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()> {
+        if let Some(resp) = &mut self.response_header {
+            resp.remove_header(name)
+                .map_err(|e| Box::new(e) as PluginSessionError)?;
+        }
+        Ok(())
+    }
+
     fn set_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
         self.inner
             .req_header_mut()
@@ -122,8 +130,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()> {
-        let parsed_uri = uri.parse::<Uri>()
-            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        let parsed_uri = uri.parse::<Uri>().map_err(|e| Box::new(e) as PluginSessionError)?;
         self.inner.req_header_mut().set_uri(parsed_uri);
         Ok(())
     }
@@ -137,17 +144,14 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_upstream_method(&mut self, method: &str) -> PluginSessionResult<()> {
-        let parsed_method = method.parse::<http::Method>()
+        let parsed_method = method
+            .parse::<http::Method>()
             .map_err(|e| Box::new(e) as PluginSessionError)?;
         self.inner.req_header_mut().set_method(parsed_method);
         Ok(())
     }
 
-    async fn write_response_body(
-        &mut self,
-        body: Option<Bytes>,
-        end_of_stream: bool,
-    ) -> PluginSessionResult<()> {
+    async fn write_response_body(&mut self, body: Option<Bytes>, end_of_stream: bool) -> PluginSessionResult<()> {
         self.inner
             .write_response_body(body, end_of_stream)
             .await
@@ -158,9 +162,13 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.inner.shutdown().await;
     }
 
-    fn client_addr(&self) -> &str { &self.ctx.request_info.client_addr }
-    fn remote_addr(&self) -> &str { &self.ctx.request_info.remote_addr }
-    
+    fn client_addr(&self) -> &str {
+        &self.ctx.request_info.client_addr
+    }
+    fn remote_addr(&self) -> &str {
+        &self.ctx.request_info.remote_addr
+    }
+
     fn ctx(&self) -> &EdgionHttpContext {
         self.ctx
     }

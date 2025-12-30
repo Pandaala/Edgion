@@ -8,11 +8,13 @@
 //! - Safe methods (GET, HEAD, OPTIONS) skip CSRF validation
 //! - Unsafe methods (POST, PUT, DELETE, etc.) require valid CSRF token
 //! - Token must be present in both request header and cookie
-//! - Token must match and have valid signature
+//! - Token must match and have valid signature (stateless)
 
 use async_trait::async_trait;
+use cookie::{Cookie, CookieBuilder, SameSite};
+use time::Duration;
 
-use crate::core::plugins::plugin_runtime::{RequestFilter, PluginSession, PluginLog};
+use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::CsrfConfig;
 
@@ -34,17 +36,15 @@ impl Csrf {
         }
     }
 
-    /// Extract cookie value by name from Cookie header
+    /// Extract cookie value by name from Cookie header using Cookie crate
     fn get_cookie_value(&self, session: &mut dyn PluginSession, cookie_name: &str) -> Option<String> {
         let cookie_header = session.header_value("cookie")?;
 
-        for part in cookie_header.split(';') {
-            let part = part.trim();
-            if let Some(eq_pos) = part.find('=') {
-                let key = &part[..eq_pos];
-                if key == cookie_name {
-                    let value = &part[eq_pos + 1..];
-                    return Some(value.to_string());
+        // Parse cookies using the cookie crate to handle edge cases correctly
+        for cookie_str in cookie_header.split(';') {
+            if let Ok(c) = Cookie::parse(cookie_str.trim()) {
+                if c.name() == cookie_name {
+                    return Some(c.value().to_string());
                 }
             }
         }
@@ -53,18 +53,24 @@ impl Csrf {
     }
 
     /// Generate and set CSRF token cookie in response
+    /// Enforces rigorous security practices for the cookie.
     fn set_csrf_cookie(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) {
         let token = CsrfToken::generate(&self.config.key);
         match token.encode() {
             Ok(encoded_token) => {
-                let cookie_value = format!(
-                    "{}={}; Path=/; SameSite=Lax; Max-Age={}",
-                    self.config.name,
-                    encoded_token,
-                    self.config.expires
-                );
+                // Build a secure cookie
+                // Note: http_only is often FALSE for CSRF tokens in double-submit patterns
+                // because the JS client needs to read it to populate the header.
+                // We enforce Secure (HTTPS) and Lax SameSite.
+                let cookie = CookieBuilder::new(&self.config.name, &encoded_token)
+                    .path("/")
+                    .secure(true) // Enforce Secure (assumes HTTPS, critical for security)
+                    .same_site(SameSite::Lax) // Lax provides reasonable balance for CSRF
+                    .max_age(Duration::seconds(self.config.expires))
+                    .http_only(false) // Intentionally false so JS can read to set header
+                    .build();
 
-                if let Err(e) = session.set_response_header("Set-Cookie", &cookie_value) {
+                if let Err(e) = session.set_response_header("Set-Cookie", &cookie.to_string()) {
                     plugin_log.add_plugin_log(&format!("Failed to set cookie: {}; ", e));
                 } else {
                     plugin_log.add_plugin_log("Token set in cookie; ");
@@ -83,11 +89,7 @@ impl RequestFilter for Csrf {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        plugin_log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         let method = session.method();
 
         // For safe methods, skip validation but set cookie for future use
@@ -99,7 +101,7 @@ impl RequestFilter for Csrf {
 
         plugin_log.add_plugin_log(&format!("Checking token for method {}; ", method));
 
-        // Get token from header
+        // 1. Get token from HEADER
         let header_token = match session.header_value(&self.config.name) {
             Some(token) if !token.is_empty() => token,
             _ => {
@@ -111,7 +113,7 @@ impl RequestFilter for Csrf {
             }
         };
 
-        // Get token from cookie
+        // 2. Get token from COOKIE
         let cookie_token = match self.get_cookie_value(session, &self.config.name) {
             Some(token) => token,
             None => {
@@ -123,7 +125,7 @@ impl RequestFilter for Csrf {
             }
         };
 
-        // Tokens must match
+        // 3. Tokens must MATCH (Double Submit Cookie Pattern)
         if header_token != cookie_token {
             plugin_log.add_plugin_log("Token mismatch; ");
             return PluginRunningResult::ErrResponse {
@@ -132,7 +134,7 @@ impl RequestFilter for Csrf {
             };
         }
 
-        // Verify token signature and expiration
+        // 4. Verify token SIGNATURE and EXPIRATION (Stateless checking)
         match CsrfToken::decode(&cookie_token) {
             Ok(token) => {
                 if token.verify(&self.config.key, self.config.expires) {
@@ -178,9 +180,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("Csrf");
 
         mock_session.expect_method().returning(|| "GET".to_string());
-        mock_session
-            .expect_set_response_header()
-            .returning(|_, _| Ok(()));
+        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
 
         let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -252,6 +252,7 @@ mod tests {
             .expect_header_value()
             .with(mockall::predicate::eq("X-CSRF-Token"))
             .returning(|_| Some("token1".to_string()));
+        // In real usage, cookie::Cookie::parse would handle this string
         mock_session
             .expect_header_value()
             .with(mockall::predicate::eq("cookie"))

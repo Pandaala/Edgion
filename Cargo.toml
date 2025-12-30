@@ -157,6 +157,8 @@ tabled = "0.15"
 # Unix Socket support for HTTP
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
 tower = "0.5"
+htpasswd-verify = "0.3.0"
+cookie = "0.18.1"
 
 [build-dependencies]
 tonic-build = "0.12"

@@ -1,9 +1,9 @@
 //! ResponseHeaderModifier filter implementation
 
-use crate::types::resources::{HTTPHeaderFilter, GRPCHeaderFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::core::plugins::plugin_runtime::traits::{UpstreamResponseFilter, PluginSession};
 use crate::core::plugins::plugin_runtime::log::PluginLog;
+use crate::core::plugins::plugin_runtime::traits::{PluginSession, UpstreamResponseFilter};
+use crate::types::filters::PluginRunningResult;
+use crate::types::resources::{GRPCHeaderFilter, HTTPHeaderFilter};
 
 pub struct ResponseHeaderModifierFilter {
     config: HTTPHeaderFilter,
@@ -22,7 +22,7 @@ impl ResponseHeaderModifierFilter {
                 set: config.set,
                 add: config.add,
                 remove: config.remove,
-            }
+            },
         }
     }
 }
@@ -55,8 +55,12 @@ impl ResponseHeaderModifierFilter {
                 let _ = session.append_response_header(&h.name, &h.value);
             }
         }
-        // Remove headers - TODO: need remove_response_header in FilterSession
+        // Remove headers
+        if let Some(headers) = &self.config.remove {
+            for h in headers {
+                let _ = session.remove_response_header(h);
+            }
+        }
         PluginRunningResult::GoodNext
     }
 }
-
