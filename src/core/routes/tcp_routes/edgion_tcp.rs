@@ -43,6 +43,7 @@ pub enum TcpStatus {
 pub struct EdgionTcp {
     pub gateway_name: String,
     pub gateway_namespace: Option<String>,
+    pub listener_name: String,  // Listener name (sectionName in TCPRoute)
     pub listener_port: u16,
     pub gateway_tcp_routes: Arc<GatewayTcpRoutes>,
     pub access_logger: Arc<AccessLogger>,
@@ -85,8 +86,8 @@ impl ServerApp for EdgionTcp {
 impl EdgionTcp {
     /// Core logic for handling TCP connections
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TcpContext) {
-        // 1. Match TCPRoute
-        let tcp_route = match self.gateway_tcp_routes.match_route(self.listener_port) {
+        // 1. Match TCPRoute by listener_name and port
+        let tcp_route = match self.gateway_tcp_routes.match_route(&self.listener_name, self.listener_port) {
             Some(route) => route,
             None => {
                 ctx.status = TcpStatus::UpstreamConnectionFailed;

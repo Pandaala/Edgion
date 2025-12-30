@@ -51,27 +51,26 @@ impl TcpRouteManager {
         gateway_routes
     }
     
-    /// Build affected gateway->ports mapping from changed route keys
+    /// Build affected gateway->listener_names mapping from changed route keys
     /// 
-    /// Returns a map of gateway_key -> set of affected ports
-    /// This helps identify which specific gateway/port combinations need rebuilding
-    fn build_affected_gateway_ports(
+    /// Returns a map of gateway_key -> set of affected listener names
+    /// This helps identify which specific gateway/listener combinations need rebuilding
+    fn build_affected_gateway_listeners(
         &self,
         changed_route_keys: &HashSet<String>,
         removed_route_keys: &HashSet<String>,
-    ) -> HashMap<String, HashSet<u16>> {
-        let mut affected: HashMap<String, HashSet<u16>> = HashMap::new();
+    ) -> HashMap<String, HashSet<String>> {
+        let mut affected: HashMap<String, HashSet<String>> = HashMap::new();
         
         // Process changed routes (from current state)
         for route_key in changed_route_keys {
             if let Some(route) = self.routes_by_key.get(route_key) {
-                let gateways = self.extract_gateway_keys_from_route(&route);
-                let ports = self.extract_ports_from_route(&route);
+                let gateway_listeners = self.extract_gateway_listener_pairs_from_route(&route);
                 
-                for gateway_key in gateways {
+                for (gateway_key, listener_name) in gateway_listeners {
                     affected.entry(gateway_key)
                         .or_insert_with(HashSet::new)
-                        .extend(ports.iter().copied());
+                        .insert(listener_name);
                 }
             }
         }
@@ -79,13 +78,12 @@ impl TcpRouteManager {
         // Process removed routes (need to lookup before removal)
         for route_key in removed_route_keys {
             if let Some(route) = self.routes_by_key.get(route_key) {
-                let gateways = self.extract_gateway_keys_from_route(&route);
-                let ports = self.extract_ports_from_route(&route);
+                let gateway_listeners = self.extract_gateway_listener_pairs_from_route(&route);
                 
-                for gateway_key in gateways {
+                for (gateway_key, listener_name) in gateway_listeners {
                     affected.entry(gateway_key)
                         .or_insert_with(HashSet::new)
-                        .extend(ports.iter().copied());
+                        .insert(listener_name);
                 }
             }
         }
@@ -93,20 +91,20 @@ impl TcpRouteManager {
         affected
     }
     
-    /// Rebuild specified ports for a gateway (incremental update)
+    /// Rebuild specified listeners for a gateway (incremental update)
     /// 
-    /// Only rebuilds the affected ports, leaving other ports unchanged.
-    /// This is much more efficient than rebuilding all ports.
-    fn rebuild_gateway_ports_incremental(
+    /// Only rebuilds the affected listeners, leaving other listeners unchanged.
+    /// This is much more efficient than rebuilding all listeners.
+    fn rebuild_gateway_listeners_incremental(
         &self,
         gateway_key: &str,
-        affected_ports: &HashSet<u16>,
+        affected_listeners: &HashSet<String>,
         removed_route_keys: &HashSet<String>,
     ) {
-        // Rebuild only affected ports for this gateway
-        let mut port_routes: HashMap<u16, Vec<Arc<TCPRoute>>> = HashMap::new();
+        // Rebuild only affected listeners for this gateway
+        let mut listener_routes: HashMap<String, Vec<Arc<TCPRoute>>> = HashMap::new();
         
-        // Collect routes for this gateway's affected ports
+        // Collect routes for this gateway's affected listeners
         for entry in self.routes_by_key.iter() {
             let route_key = entry.key();
             
@@ -116,30 +114,26 @@ impl TcpRouteManager {
             }
             
             let route = entry.value();
-            let route_gateways = self.extract_gateway_keys_from_route(route);
-            let route_ports = self.extract_ports_from_route(route);
+            let gateway_listeners = self.extract_gateway_listener_pairs_from_route(route);
             
-            // Check if this route applies to our gateway
-            if !route_gateways.contains(gateway_key) {
-                continue;
-            }
-            
-            // Add to affected ports only
-            for port in route_ports.iter().filter(|p| affected_ports.contains(p)) {
-                port_routes
-                    .entry(*port)
-                    .or_insert_with(Vec::new)
-                    .push(route.clone());
+            // Add to affected listeners only
+            for (gw_key, listener_name) in gateway_listeners {
+                if gw_key == gateway_key && affected_listeners.contains(&listener_name) {
+                    listener_routes
+                        .entry(listener_name)
+                        .or_insert_with(Vec::new)
+                        .push(route.clone());
+                }
             }
         }
         
-        // Update only affected ports in the gateway
+        // Update only affected listeners in the gateway
         if let Some(gateway_tcp_routes) = self.gateway_tcp_routes_map.get(gateway_key) {
-            gateway_tcp_routes.update_ports_incremental(port_routes);
+            gateway_tcp_routes.update_listeners_incremental(listener_routes);
             tracing::debug!(
                 gateway_key = %gateway_key,
-                ports = affected_ports.len(),
-                "Incrementally updated TCPRoute ports"
+                listeners = affected_listeners.len(),
+                "Incrementally updated TCPRoute listeners"
             );
         }
     }
@@ -149,41 +143,38 @@ impl TcpRouteManager {
     /// This method should be called after replace_all to do a full rebuild.
     /// For add_route and remove_route, use incremental update instead.
     fn rebuild_gateway_routes_map(&self) {
-        // Group routes by gateway
-        let mut gateway_routes: HashMap<String, HashMap<u16, Vec<Arc<TCPRoute>>>> = HashMap::new();
+        // Group routes by gateway and listener
+        let mut gateway_routes: HashMap<String, HashMap<String, Vec<Arc<TCPRoute>>>> = HashMap::new();
         
         for entry in self.routes_by_key.iter() {
             let route = entry.value();
-            let gateway_keys = self.extract_gateway_keys_from_route(route);
-            let ports = self.extract_ports_from_route(route);
+            let gateway_listeners = self.extract_gateway_listener_pairs_from_route(route);
             
-            for gateway_key in gateway_keys {
+            for (gateway_key, listener_name) in gateway_listeners {
                 let gateway_map = gateway_routes
                     .entry(gateway_key)
                     .or_insert_with(HashMap::new);
                 
-                for port in &ports {
-                    gateway_map
-                        .entry(*port)
-                        .or_insert_with(Vec::new)
-                        .push(route.clone());
-                }
+                gateway_map
+                    .entry(listener_name)
+                    .or_insert_with(Vec::new)
+                    .push(route.clone());
             }
         }
         
         // Update all gateways in the map
         // First, update gateways that have routes
-        for (gateway_key, port_routes) in &gateway_routes {
-            let ports_count = port_routes.len();
+        for (gateway_key, listener_routes) in &gateway_routes {
+            let listeners_count = listener_routes.len();
             let gateway_tcp_routes = self.gateway_tcp_routes_map
                 .entry(gateway_key.clone())
                 .or_insert_with(|| Arc::new(GatewayTcpRoutes::new()))
                 .clone();
             
-            gateway_tcp_routes.update_routes(port_routes.clone());
+            gateway_tcp_routes.update_routes(listener_routes.clone());
             tracing::debug!(
                 gateway_key = %gateway_key,
-                ports = ports_count,
+                listeners = listeners_count,
                 "Updated GatewayTcpRoutes"
             );
         }
@@ -206,19 +197,19 @@ impl TcpRouteManager {
     pub fn add_route(&self, route: Arc<TCPRoute>) {
         let resource_key = route.key_name();
         
-        // Calculate affected gateways/ports BEFORE insertion
+        // Calculate affected gateways/listeners BEFORE insertion
         let mut changed_keys = HashSet::new();
         changed_keys.insert(resource_key.clone());
-        let affected = self.build_affected_gateway_ports(&changed_keys, &HashSet::new());
+        let affected = self.build_affected_gateway_listeners(&changed_keys, &HashSet::new());
         
         // Store by resource key
         self.routes_by_key.insert(resource_key.clone(), route);
         
         let affected_count = affected.len();
         
-        // Rebuild only affected gateway/ports (incremental)
-        for (gateway_key, ports) in affected {
-            self.rebuild_gateway_ports_incremental(&gateway_key, &ports, &HashSet::new());
+        // Rebuild only affected gateway/listeners (incremental)
+        for (gateway_key, listeners) in affected {
+            self.rebuild_gateway_listeners_incremental(&gateway_key, &listeners, &HashSet::new());
         }
         
         tracing::info!(
@@ -230,19 +221,19 @@ impl TcpRouteManager {
     
     /// Remove a TCPRoute by resource key (uses incremental update)
     pub fn remove_route(&self, resource_key: &str) {
-        // Calculate affected gateways/ports BEFORE removal
+        // Calculate affected gateways/listeners BEFORE removal
         let mut removed_keys = HashSet::new();
         removed_keys.insert(resource_key.to_string());
-        let affected = self.build_affected_gateway_ports(&HashSet::new(), &removed_keys);
+        let affected = self.build_affected_gateway_listeners(&HashSet::new(), &removed_keys);
         
         let affected_count = affected.len();
         
         // Remove from routes_by_key
         self.routes_by_key.remove(resource_key);
         
-        // Rebuild only affected gateway/ports (incremental)
-        for (gateway_key, ports) in &affected {
-            self.rebuild_gateway_ports_incremental(gateway_key, ports, &removed_keys);
+        // Rebuild only affected gateway/listeners (incremental)
+        for (gateway_key, listeners) in &affected {
+            self.rebuild_gateway_listeners_incremental(gateway_key, listeners, &removed_keys);
         }
         
         tracing::info!(
@@ -267,30 +258,30 @@ impl TcpRouteManager {
     
     // Private helper methods
     
-    fn extract_ports_from_route(&self, route: &TCPRoute) -> HashSet<u16> {
-        let mut ports = HashSet::new();
-        if let Some(parent_refs) = &route.spec.parent_refs {
-            for parent_ref in parent_refs {
-                if let Some(port) = parent_ref.port {
-                    ports.insert(port as u16);
-                }
-            }
-        }
-        ports
-    }
-    
-    fn extract_gateway_keys_from_route(&self, route: &TCPRoute) -> HashSet<String> {
-        let mut gateway_keys = HashSet::new();
+    /// Extract (gateway_key, listener_name) pairs from TCPRoute parentRefs
+    /// 
+    /// Each TCPRoute can reference multiple Gateway listeners via parentRefs.
+    /// This method extracts all (gateway, listener) combinations.
+    fn extract_gateway_listener_pairs_from_route(&self, route: &TCPRoute) -> HashSet<(String, String)> {
+        let mut pairs = HashSet::new();
+        
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
                 let namespace = parent_ref.namespace.as_deref()
                     .or_else(|| route.metadata.namespace.as_deref())
                     .unwrap_or("default");
                 let gateway_key = format!("{}/{}", namespace, parent_ref.name);
-                gateway_keys.insert(gateway_key);
+                
+                // Use sectionName from parentRef (listener name in Gateway)
+                // If not specified, use empty string as default (will not match any listener)
+                let listener_name = parent_ref.section_name.clone()
+                    .unwrap_or_else(|| String::from(""));
+                
+                pairs.insert((gateway_key, listener_name));
             }
         }
-        gateway_keys
+        
+        pairs
     }
 }
 

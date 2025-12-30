@@ -209,6 +209,7 @@ pub fn add_tcp_listener(
     let edgion_tcp = EdgionTcp {
         gateway_name: context.gateway_name.clone(),
         gateway_namespace: context.gateway_namespace.clone(),
+        listener_name: listener_name.clone(),  // Pass listener name for sectionName matching
         listener_port: port,
         gateway_tcp_routes,  // 传入预获取的路由
         access_logger: context.access_logger.clone(),
@@ -268,6 +269,7 @@ pub fn add_udp_listener(
     let edgion_udp = Arc::new(EdgionUdp::new(
         context.gateway_name.clone(),
         context.gateway_namespace.clone(),
+        listener_name.clone(),  // Pass listener name for sectionName matching
         port,
         gateway_udp_routes,
         context.edgion_gateway_config.clone(),

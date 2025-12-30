@@ -5,86 +5,86 @@ use crate::types::resources::TCPRoute;
 
 /// Gateway 级别的 TCP 路由集合
 /// 
-/// 存储某个特定 Gateway 关联的所有 TCPRoute，按监听端口索引
+/// 存储某个特定 Gateway 关联的所有 TCPRoute，按 listener name (sectionName) 索引
 /// 使用 ArcSwap 实现无锁并发访问
 pub struct GatewayTcpRoutes {
-    /// port -> Vec<Arc<TCPRoute>> mapping
-    /// Multiple routes can listen on the same port (with different section names or priorities)
-    port_routes_map: ArcSwap<Arc<HashMap<u16, Vec<Arc<TCPRoute>>>>>,
+    /// listener_name -> Vec<Arc<TCPRoute>> mapping
+    /// Routes are indexed by listener name (sectionName) for proper Gateway API compliance
+    listener_routes_map: ArcSwap<Arc<HashMap<String, Vec<Arc<TCPRoute>>>>>,
 }
 
 impl GatewayTcpRoutes {
     /// Create a new empty GatewayTcpRoutes
     pub fn new() -> Self {
         Self {
-            port_routes_map: ArcSwap::from_pointee(Arc::new(HashMap::new())),
+            listener_routes_map: ArcSwap::from_pointee(Arc::new(HashMap::new())),
         }
     }
     
-    /// Match a TCPRoute by listener port
+    /// Match a TCPRoute by listener name and port
     /// 
-    /// Returns the first matching route for the given port.
-    /// In case of multiple routes on the same port, returns the first one
-    /// (prioritization logic can be added later if needed).
-    pub fn match_route(&self, port: u16) -> Option<Arc<TCPRoute>> {
-        let port_routes = self.port_routes_map.load();
-        port_routes.get(&port)
+    /// Returns the first matching route for the given listener name.
+    /// Port is also checked for validation but primarily matches by listener name (sectionName).
+    /// This properly implements Gateway API sectionName matching.
+    pub fn match_route(&self, listener_name: &str, _port: u16) -> Option<Arc<TCPRoute>> {
+        let listener_routes = self.listener_routes_map.load();
+        listener_routes.get(listener_name)
             .and_then(|routes| routes.first().cloned())
     }
     
-    /// Get all routes for a specific port
-    pub fn get_routes_for_port(&self, port: u16) -> Vec<Arc<TCPRoute>> {
-        let port_routes = self.port_routes_map.load();
-        port_routes.get(&port)
+    /// Get all routes for a specific listener name
+    pub fn get_routes_for_listener(&self, listener_name: &str) -> Vec<Arc<TCPRoute>> {
+        let listener_routes = self.listener_routes_map.load();
+        listener_routes.get(listener_name)
             .map(|routes| routes.clone())
             .unwrap_or_default()
     }
     
-    /// Update the routes map (called by TcpRouteManager during config sync)
-    pub(crate) fn update_routes(&self, new_routes: HashMap<u16, Vec<Arc<TCPRoute>>>) {
-        // Note: ArcSwap<Arc<T>> requires Arc<Arc<T>> for store() method
-        // This double-Arc is needed for lock-free atomic pointer swapping
-        self.port_routes_map.store(Arc::new(Arc::new(new_routes)));
+    /// Get all listener names that have routes
+    pub fn get_all_listener_names(&self) -> Vec<String> {
+        let listener_routes = self.listener_routes_map.load();
+        listener_routes.keys().cloned().collect()
     }
     
-    /// Incrementally update routes for specified ports only (fine-grained update)
+    /// Update the routes map (called by TcpRouteManager during config sync)
+    pub(crate) fn update_routes(&self, new_routes: HashMap<String, Vec<Arc<TCPRoute>>>) {
+        // Note: ArcSwap<Arc<T>> requires Arc<Arc<T>> for store() method
+        // This double-Arc is needed for lock-free atomic pointer swapping
+        self.listener_routes_map.store(Arc::new(Arc::new(new_routes)));
+    }
+    
+    /// Incrementally update routes for specified listener names only (fine-grained update)
     /// 
-    /// This method only updates the specified ports, leaving other ports unchanged.
+    /// This method only updates the specified listeners, leaving other listeners unchanged.
     /// Uses RCU (Read-Copy-Update) pattern for lock-free updates.
     /// 
     /// # Arguments
-    /// * `port_routes` - Map of port -> routes to update. Empty Vec means clear that port.
-    pub(crate) fn update_ports_incremental(&self, port_routes: HashMap<u16, Vec<Arc<TCPRoute>>>) {
+    /// * `listener_routes` - Map of listener_name -> routes to update. Empty Vec means clear that listener.
+    pub(crate) fn update_listeners_incremental(&self, listener_routes: HashMap<String, Vec<Arc<TCPRoute>>>) {
         // Load current map (Arc<HashMap>)
-        let current_arc = (*self.port_routes_map.load()).clone();
+        let current_arc = (*self.listener_routes_map.load()).clone();
         
         // Clone inner HashMap and apply incremental updates
-        let mut new_map: HashMap<u16, Vec<Arc<TCPRoute>>> = (**current_arc).clone();
+        let mut new_map: HashMap<String, Vec<Arc<TCPRoute>>> = (**current_arc).clone();
         
-        for (port, routes) in port_routes {
+        for (listener_name, routes) in listener_routes {
             if routes.is_empty() {
-                // Remove port if no routes
-                new_map.remove(&port);
+                // Remove listener if no routes
+                new_map.remove(&listener_name);
             } else {
-                // Update or insert routes for this port
-                new_map.insert(port, routes);
+                // Update or insert routes for this listener
+                new_map.insert(listener_name, routes);
             }
         }
         
         // Atomically swap to new map
-        self.port_routes_map.store(Arc::new(Arc::new(new_map)));
-    }
-    
-    /// Get all ports that have routes
-    pub fn get_all_ports(&self) -> Vec<u16> {
-        let port_routes = self.port_routes_map.load();
-        port_routes.keys().copied().collect()
+        self.listener_routes_map.store(Arc::new(Arc::new(new_map)));
     }
     
     /// Check if there are any routes
     pub fn is_empty(&self) -> bool {
-        let port_routes = self.port_routes_map.load();
-        port_routes.is_empty()
+        let listener_routes = self.listener_routes_map.load();
+        listener_routes.is_empty()
     }
 }
 

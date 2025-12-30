@@ -26,6 +26,7 @@ struct ClientSession {
 pub struct EdgionUdp {
     pub gateway_name: String,
     pub gateway_namespace: Option<String>,
+    pub listener_name: String,  // Listener name (sectionName in UDPRoute)
     pub listener_port: u16,
     pub gateway_udp_routes: Arc<GatewayUdpRoutes>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
@@ -40,6 +41,7 @@ impl EdgionUdp {
     pub fn new(
         gateway_name: String,
         gateway_namespace: Option<String>,
+        listener_name: String,
         listener_port: u16,
         gateway_udp_routes: Arc<GatewayUdpRoutes>,
         edgion_gateway_config: Arc<EdgionGatewayConfig>,
@@ -48,6 +50,7 @@ impl EdgionUdp {
         Self {
             gateway_name,
             gateway_namespace,
+            listener_name,
             listener_port,
             gateway_udp_routes,
             edgion_gateway_config,
@@ -88,8 +91,8 @@ impl EdgionUdp {
     
     /// Handle a packet received from a client
     async fn handle_client_packet(&self, data: Vec<u8>, client_addr: std::net::SocketAddr) {
-        // 1. Match UDPRoute
-        let udp_route = match self.gateway_udp_routes.match_route(self.listener_port) {
+        // 1. Match UDPRoute by listener_name and port
+        let udp_route = match self.gateway_udp_routes.match_route(&self.listener_name, self.listener_port) {
             Some(route) => route,
             None => return, // No logging for dropped packets
         };
