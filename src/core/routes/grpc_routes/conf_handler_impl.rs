@@ -64,13 +64,7 @@ impl GrpcRouteManager {
             if let Some(route) = grpc_routes.get(resource_key) {
                 if let Some(parent_refs) = &route.spec.parent_refs {
                     for parent_ref in parent_refs {
-                        let gateway_key = if let Some(ns) = &parent_ref.namespace {
-                            format!("{}/{}", ns, parent_ref.name)
-                        } else if let Some(ns) = &route.metadata.namespace {
-                            format!("{}/{}", ns, parent_ref.name)
-                        } else {
-                            parent_ref.name.clone()
-                        };
+                        let gateway_key = parent_ref.build_parent_key(route.metadata.namespace.as_deref());
                         affected_gateways.insert(gateway_key);
                     }
                 }
@@ -98,13 +92,7 @@ impl GrpcRouteManager {
                 .as_ref()
                 .map(|refs| {
                     refs.iter().any(|parent_ref| {
-                        let gw_key = if let Some(ns) = &parent_ref.namespace {
-                            format!("{}/{}", ns, parent_ref.name)
-                        } else if let Some(ns) = &route.metadata.namespace {
-                            format!("{}/{}", ns, parent_ref.name)
-                        } else {
-                            parent_ref.name.clone()
-                        };
+                        let gw_key = parent_ref.build_parent_key(route.metadata.namespace.as_deref());
                         gw_key == gateway_key
                     })
                 })

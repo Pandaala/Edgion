@@ -359,11 +359,7 @@ fn parse_http_routes_to_gateway_domain_rules(
         // Process each parent gateway reference
         for parent_ref in parent_refs {
             // Build gateway key
-            let gateway_key = if let Some(namespace) = parent_ref.namespace.as_ref() {
-                format!("{}/{}", namespace, parent_ref.name)
-            } else {
-                format!("{}/{}", route_namespace, parent_ref.name)
-            };
+            let gateway_key = parent_ref.build_parent_key(Some(&route_namespace));
 
             // Get or create the domain map for this gateway
             let domain_map = gateway_domain_rules
