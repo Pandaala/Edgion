@@ -1,8 +1,16 @@
 use crate::types::err::EdError;
 use crate::types::{GRPCRouteMatch, GRPCRouteRule};
+use crate::types::resources::http_route::ParentReference;
 use pingora_proxy::Session;
 use regex::Regex;
 use std::sync::Arc;
+
+/// gRPC route level information shared across all rule units
+#[derive(Clone, Debug)]
+pub struct GrpcRouteInfo {
+    pub parent_refs: Option<Vec<ParentReference>>,
+    pub hostnames: Option<Vec<String>>,
+}
 
 /// gRPC route match information
 #[derive(Clone)]
@@ -68,8 +76,8 @@ pub struct GrpcRouteRuleUnit {
     pub resource_key: String,
     pub matched_info: GrpcMatchInfo,
     pub rule: Arc<GRPCRouteRule>,
-    /// Hostnames from GRPCRoute spec for hostname filtering
-    pub hostnames: Option<Vec<String>>,
+    /// Route level information (parent_refs, hostnames, etc.)
+    pub route_info: Arc<GrpcRouteInfo>,
 }
 
 impl GrpcRouteRuleUnit {
@@ -81,7 +89,7 @@ impl GrpcRouteRuleUnit {
         resource_key: String,
         match_item: GRPCRouteMatch,
         rule: Arc<GRPCRouteRule>,
-        hostnames: Option<Vec<String>>,
+        route_info: Arc<GrpcRouteInfo>,
     ) -> Self {
         Self {
             resource_key,
@@ -93,27 +101,33 @@ impl GrpcRouteRuleUnit {
                 match_item,
             ),
             rule,
-            hostnames,
+            route_info,
         }
     }
 
-    /// Deep match: check hostname and headers
-    pub fn deep_match(&self, session: &Session) -> Result<bool, EdError> {
+    /// Deep match: check hostname, section_name, and headers
+    pub fn deep_match(&self, session: &Session, listener_name: &str) -> Result<bool, EdError> {
         let req_header = session.req_header();
 
         // Check Hostname (if route specifies hostnames)
-        if let Some(ref route_hostnames) = self.hostnames {
+        if let Some(ref route_hostnames) = self.route_info.hostnames {
             if !route_hostnames.is_empty() {
                 let req_hostname = Self::extract_hostname(req_header);
                 if !Self::match_hostname(&req_hostname, route_hostnames) {
-                    tracing::trace!(
-                        req_hostname = %req_hostname,
-                        route_hostnames = ?route_hostnames,
-                        route = %self.identifier(),
-                        "gRPC hostname match failed"
-                    );
                     return Ok(false);
                 }
+            }
+        }
+
+        // Check SectionName (if parent_refs specify section_name)
+        if let Some(ref parent_refs) = self.route_info.parent_refs {
+            // At least one parent_ref must match: section_name is None or equals listener_name
+            let matches = parent_refs.iter().any(|pr| {
+                pr.section_name.as_ref().map_or(true, |name| name == listener_name)
+            });
+            
+            if !matches {
+                return Ok(false);
             }
         }
 

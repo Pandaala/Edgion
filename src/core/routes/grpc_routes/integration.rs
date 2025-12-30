@@ -36,6 +36,7 @@ pub async fn try_match_grpc_route(
     grpc_routes: &Arc<crate::core::routes::grpc_routes::DomainGrpcRouteRules>,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
+    listener_name: &str,
 ) -> Result<bool, EdError> {
     // 1. Parse gRPC service/method from path
     if let Ok((service, method)) =
@@ -45,8 +46,8 @@ pub async fn try_match_grpc_route(
         ctx.request_info.grpc_method = Some(method);
     }
 
-    // 2. Try to match route (based on service/method only)
-    match grpc_routes.match_route(session) {
+    // 2. Try to match route (based on service/method and section_name)
+    match grpc_routes.match_route(session, listener_name) {
         Ok(grpc_route_unit) => {
             ctx.grpc_route_unit = Some(grpc_route_unit);
             ctx.is_grpc_route_matched = true;

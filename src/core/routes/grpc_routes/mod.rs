@@ -10,7 +10,7 @@ mod integration;
 mod conf_handler_impl;
 
 // Export core types
-pub use match_unit::{GrpcRouteRuleUnit, GrpcMatchInfo};
+pub use match_unit::{GrpcRouteRuleUnit, GrpcMatchInfo, GrpcRouteInfo};
 pub use match_engine::GrpcMatchEngine;
 pub use routes_mgr::{
     GrpcRouteManager,

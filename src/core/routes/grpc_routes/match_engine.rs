@@ -88,6 +88,7 @@ impl GrpcMatchEngine {
     pub fn match_route(
         &self,
         session: &Session,
+        listener_name: &str,
     ) -> Result<Arc<GrpcRouteRuleUnit>, EdError> {
         let path = session.req_header().uri.path();
 
@@ -96,28 +97,14 @@ impl GrpcMatchEngine {
 
         // Priority 1: Try exact match (service, method)
         if let Some(route_unit) = self.exact_routes.get(&(service.clone(), method.clone())) {
-            if route_unit.deep_match(session)? {
-                tracing::debug!(
-                    service = %service,
-                    method = %method,
-                    route = %route_unit.identifier(),
-                    match_type = "exact",
-                    "gRPC route matched"
-                );
+            if route_unit.deep_match(session, listener_name)? {
                 return Ok(route_unit.clone());
             }
         }
 
         // Priority 2: Try service-level match (service only)
         if let Some(route_unit) = self.service_routes.get(&service) {
-            if route_unit.deep_match(session)? {
-                tracing::debug!(
-                    service = %service,
-                    method = %method,
-                    route = %route_unit.identifier(),
-                    match_type = "service",
-                    "gRPC route matched"
-                );
+            if route_unit.deep_match(session, listener_name)? {
                 return Ok(route_unit.clone());
             }
         }
@@ -126,14 +113,7 @@ impl GrpcMatchEngine {
         for route_unit in &self.regex_routes {
             if let Some(ref grpc_method_match) = route_unit.matched_info.matched.method {
                 if matches_regex(grpc_method_match, &service, &method)? {
-                    if route_unit.deep_match(session)? {
-                        tracing::debug!(
-                            service = %service,
-                            method = %method,
-                            route = %route_unit.identifier(),
-                            match_type = "regex",
-                            "gRPC route matched"
-                        );
+                    if route_unit.deep_match(session, listener_name)? {
                         return Ok(route_unit.clone());
                     }
                 }
@@ -142,7 +122,7 @@ impl GrpcMatchEngine {
 
         // Priority 4: Try catch-all match
         if let Some(ref route_unit) = self.catch_all_route {
-            if route_unit.deep_match(session)? {
+            if route_unit.deep_match(session, listener_name)? {
                 tracing::debug!(
                     service = %service,
                     method = %method,

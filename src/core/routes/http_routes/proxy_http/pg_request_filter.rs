@@ -30,7 +30,7 @@ pub async fn request_filter(
         }
         
         // Try to match gRPC route (sets ctx.is_grpc_route_matched internally if matched)
-        let _ = try_match_grpc_route(&edgion_http.grpc_routes, session, ctx).await;
+        let _ = try_match_grpc_route(&edgion_http.grpc_routes, session, ctx, &edgion_http.listener.name).await;
     }
     
     // HTTP route Match, if grpc route already matched, skip here
