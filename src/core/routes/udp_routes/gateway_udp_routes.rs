@@ -47,6 +47,34 @@ impl GatewayUdpRoutes {
         self.port_routes_map.store(Arc::new(Arc::new(new_routes)));
     }
     
+    /// Incrementally update routes for specified ports only (fine-grained update)
+    /// 
+    /// This method only updates the specified ports, leaving other ports unchanged.
+    /// Uses RCU (Read-Copy-Update) pattern for lock-free updates.
+    /// 
+    /// # Arguments
+    /// * `port_routes` - Map of port -> routes to update. Empty Vec means clear that port.
+    pub(crate) fn update_ports_incremental(&self, port_routes: HashMap<u16, Vec<Arc<UDPRoute>>>) {
+        // Load current map (Arc<HashMap>)
+        let current_arc = (*self.port_routes_map.load()).clone();
+        
+        // Clone inner HashMap and apply incremental updates
+        let mut new_map: HashMap<u16, Vec<Arc<UDPRoute>>> = (**current_arc).clone();
+        
+        for (port, routes) in port_routes {
+            if routes.is_empty() {
+                // Remove port if no routes
+                new_map.remove(&port);
+            } else {
+                // Update or insert routes for this port
+                new_map.insert(port, routes);
+            }
+        }
+        
+        // Atomically swap to new map
+        self.port_routes_map.store(Arc::new(Arc::new(new_map)));
+    }
+    
     /// Get all ports that have routes
     pub fn get_all_ports(&self) -> Vec<u16> {
         let port_routes = self.port_routes_map.load();
