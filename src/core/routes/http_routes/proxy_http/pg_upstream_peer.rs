@@ -47,7 +47,7 @@ pub async fn upstream_peer(
     }
     
     // Route to appropriate handler based on matched route type (not protocol)
-    if ctx.is_grpc_route {
+    if ctx.is_grpc_route_matched {
         upstream_peer_grpc(edgion_http, session, ctx).await
     } else {
         upstream_peer_http(edgion_http, session, ctx).await

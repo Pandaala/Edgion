@@ -90,6 +90,9 @@ pub struct RequestInfo {
     /// Auto-discovered protocol (e.g., "grpc", "grpc-web", "websocket")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discover_protocol: Option<String>,
+    /// Whether the request is a gRPC or gRPC-Web request
+    #[serde(skip)]
+    pub is_grpc_request: bool,
     /// gRPC service (parsed from path)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grpc_service: Option<String>,
@@ -177,7 +180,7 @@ pub struct EdgionHttpContext {
 
     /// Whether this request is handled by GRPCRoute (not just gRPC protocol)
     /// Used to determine backend peer selection and plugin execution
-    pub is_grpc_route: bool,
+    pub is_grpc_route_matched: bool,
 
     /// Backend context containing service info and upstream attempts
     pub backend_context: Option<BackendContext>,
@@ -206,7 +209,7 @@ impl EdgionHttpContext {
             selected_backend: None,
             grpc_route_unit: None,
             selected_grpc_backend: None,
-            is_grpc_route: false,
+            is_grpc_route_matched: false,
             backend_context: None,
             plugin_logs: Vec::with_capacity(3),
             plugin_running_result: PluginRunningResult::Nothing,

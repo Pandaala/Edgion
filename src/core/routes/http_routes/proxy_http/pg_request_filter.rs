@@ -19,32 +19,22 @@ pub async fn request_filter(
     }
 
     // Step 1: Route matching - try gRPC first if applicable, then HTTP
-    let is_grpc_request = ctx.request_info.discover_protocol.as_deref() == Some("grpc") 
-        || ctx.request_info.discover_protocol.as_deref() == Some("grpc-web");
-    
-    if is_grpc_request {
-        // Check if HTTP/2 is enabled for gRPC
-        if !edgion_http.enable_http2 {
-            ctx.add_error(EdgionStatus::Http2Required);
-            end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-            return Ok(true);
+    if ctx.request_info.is_grpc_request {
+        // Only pure gRPC requires HTTP/2, gRPC-Web can work on HTTP/1.1
+        if ctx.request_info.discover_protocol.as_deref() == Some("grpc") {
+            if !edgion_http.enable_http2 {
+                ctx.add_error(EdgionStatus::Http2Required);
+                end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+                return Ok(true);
+            }
         }
         
-        // Try to match gRPC route
-        match try_match_grpc_route(&edgion_http.grpc_routes, session, ctx).await {
-            Ok(true) => {
-                // gRPC route matched - mark as gRPC route handling
-                ctx.is_grpc_route = true;
-            }
-            Ok(false) | Err(_) => {
-                // gRPC route not matched, fallback to HTTP route matching
-                // Note: ctx.grpc_route_unit remains None, is_grpc_route remains false
-            }
-        }
+        // Try to match gRPC route (sets ctx.is_grpc_route_matched internally if matched)
+        let _ = try_match_grpc_route(&edgion_http.grpc_routes, session, ctx).await;
     }
     
     // HTTP route Match, if grpc route already matched, skip here
-    if ctx.grpc_route_unit.is_none() {
+    if !ctx.is_grpc_route_matched {
         match edgion_http.domain_routes.match_route(&ctx.request_info.hostname, session) {
             Ok(route_unit) => {
                 ctx.route_unit = Some(route_unit.clone());
@@ -108,6 +98,33 @@ async fn build_request_metadata(
 ) -> pingora_core::Result<bool> {
     let req_header = session.req_header();
 
+    // Protocol detection: check for WebSocket, gRPC-Web, and gRPC
+    if ctx.request_info.discover_protocol.is_none() {
+        // Check for WebSocket
+        if let Some(upgrade) = req_header.headers.get("upgrade") {
+            if let Ok(upgrade_str) = upgrade.to_str() {
+                if upgrade_str.eq_ignore_ascii_case("websocket") {
+                    ctx.request_info.discover_protocol = Some("websocket".to_string());
+                }
+            }
+        }
+        
+        // Check for gRPC/gRPC-Web (if not WebSocket)
+        if ctx.request_info.discover_protocol.is_none() {
+            if let Some(ct) = req_header.headers.get("content-type") {
+                if let Ok(ct_str) = ct.to_str() {
+                    if ct_str.starts_with("application/grpc-web") {
+                        ctx.request_info.discover_protocol = Some("grpc-web".to_string());
+                        ctx.request_info.is_grpc_request = true;
+                    } else if ct_str.starts_with("application/grpc") {
+                        ctx.request_info.discover_protocol = Some("grpc".to_string());
+                        ctx.request_info.is_grpc_request = true;
+                    }
+                }
+            }
+        }
+    }
+
     // Extract client_addr and client_port (TCP connection address)
     let client_addr_str = session.client_addr().map(|addr| addr.to_string()).unwrap_or_default();
     let parsed_addr = client_addr_str.parse::<std::net::SocketAddr>().ok();
@@ -132,8 +149,8 @@ async fn build_request_metadata(
         .or_else(|| req_header.headers.get(":authority").and_then(|h| h.to_str().ok().map(|s| s.to_string())))
         .unwrap_or_default();
     
-    // Validate hostname is present
-    if ctx.request_info.hostname.is_empty() {
+    // Validate hostname is present (not required for gRPC requests)
+    if !ctx.request_info.is_grpc_request && ctx.request_info.hostname.is_empty() {
         ctx.add_error(EdgionStatus::HostMissing);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true); // Response sent
@@ -169,31 +186,6 @@ async fn build_request_metadata(
                 ctx.add_error(EdgionStatus::XffHeaderTooLong);
                 end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
                 return Ok(true); // Response sent
-            }
-        }
-    }
-
-    // Protocol detection: check for WebSocket, gRPC-Web, and gRPC
-    if ctx.request_info.discover_protocol.is_none() {
-        // Check for WebSocket
-        if let Some(upgrade) = req_header.headers.get("upgrade") {
-            if let Ok(upgrade_str) = upgrade.to_str() {
-                if upgrade_str.eq_ignore_ascii_case("websocket") {
-                    ctx.request_info.discover_protocol = Some("websocket".to_string());
-                }
-            }
-        }
-        
-        // Check for gRPC/gRPC-Web (if not WebSocket)
-        if ctx.request_info.discover_protocol.is_none() {
-            if let Some(ct) = req_header.headers.get("content-type") {
-                if let Ok(ct_str) = ct.to_str() {
-                    if ct_str.starts_with("application/grpc-web") {
-                        ctx.request_info.discover_protocol = Some("grpc-web".to_string());
-                    } else if ct_str.starts_with("application/grpc") {
-                        ctx.request_info.discover_protocol = Some("grpc".to_string());
-                    }
-                }
             }
         }
     }

@@ -49,6 +49,7 @@ pub async fn try_match_grpc_route(
     match grpc_routes.match_route(&ctx.request_info.hostname, session) {
         Ok(grpc_route_unit) => {
             ctx.grpc_route_unit = Some(grpc_route_unit);
+            ctx.is_grpc_route_matched = true;
             Ok(true) // Matched successfully
         }
         Err(_) => {
