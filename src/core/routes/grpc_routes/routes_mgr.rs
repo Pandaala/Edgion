@@ -9,7 +9,6 @@ use crate::types::{GRPCRoute, GRPCRouteRule, GRPCBackendRef};
 use crate::types::err::EdError;
 use crate::core::lb::{ERR_NO_BACKEND_REFS, ERR_INCONSISTENT_WEIGHT};
 
-type DomainStr = String;
 type GatewayKey = String;
 type RouteKey = String; // Format: "namespace/name"
 
@@ -87,34 +86,25 @@ impl Clone for GrpcRouteRules {
     }
 }
 
-/// Domain-based gRPC route rules mapping
+/// gRPC route rules for a gateway (no hostname-based separation)
 pub struct DomainGrpcRouteRules {
-    pub domain_routes_map: ArcSwap<Arc<HashMap<DomainStr, Arc<GrpcRouteRules>>>>,
+    pub grpc_routes: ArcSwap<GrpcRouteRules>,
 }
 
 impl DomainGrpcRouteRules {
     pub fn new() -> Self {
         Self {
-            domain_routes_map: ArcSwap::from_pointee(Arc::new(HashMap::new())),
+            grpc_routes: ArcSwap::from_pointee(GrpcRouteRules::new()),
         }
     }
 
-    /// Match a route for the given hostname and session
+    /// Match a route based on service/method
     pub fn match_route(
         &self,
-        hostname: &str,
         session: &mut pingora_proxy::Session,
     ) -> Result<Arc<GrpcRouteRuleUnit>, EdError> {
-        let domain_routes_map = self.domain_routes_map.load();
-
-        // Try to find GrpcRouteRules for the hostname (exact match only)
-        let route_rules = domain_routes_map.get(hostname).cloned();
-
-        if let Some(route_rules) = route_rules {
-            route_rules.match_route(session)
-        } else {
-            Err(EdError::RouteNotFound())
-        }
+        let grpc_routes = self.grpc_routes.load();
+        grpc_routes.match_route(session)
     }
 }
 

@@ -34,7 +34,7 @@ pub struct GRPCRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_refs: Option<Vec<ParentReference>>,
 
-    /// Hostnames defines the set of hostnames
+    /// Hostnames defines a set of hostnames to match against the gRPC Host header
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostnames: Option<Vec<String>>,
 

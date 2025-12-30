@@ -45,8 +45,8 @@ pub async fn try_match_grpc_route(
         ctx.request_info.grpc_method = Some(method);
     }
 
-    // 2. Try to match route
-    match grpc_routes.match_route(&ctx.request_info.hostname, session) {
+    // 2. Try to match route (based on service/method only)
+    match grpc_routes.match_route(session) {
         Ok(grpc_route_unit) => {
             ctx.grpc_route_unit = Some(grpc_route_unit);
             ctx.is_grpc_route_matched = true;
