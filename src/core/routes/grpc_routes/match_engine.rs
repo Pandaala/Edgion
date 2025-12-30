@@ -78,6 +78,7 @@ impl GrpcMatchEngine {
         &self,
         session: &Session,
         listener_name: &str,
+        hostname: &str,
     ) -> Result<Arc<GrpcRouteRuleUnit>, EdError> {
         let path = session.req_header().uri.path();
 
@@ -88,7 +89,7 @@ impl GrpcMatchEngine {
         // Iterate through all routes with matching service/method and return first one that passes deep_match
         if let Some(routes) = self.exact_routes.get(&(service.clone(), method.clone())) {
             for route_unit in routes {
-                if route_unit.deep_match(session, listener_name)? {
+                if route_unit.deep_match(session, listener_name, hostname)? {
                     return Ok(route_unit.clone());
                 }
             }
@@ -98,7 +99,7 @@ impl GrpcMatchEngine {
         // Iterate through all routes with matching service and return first one that passes deep_match
         if let Some(routes) = self.service_routes.get(&service) {
             for route_unit in routes {
-                if route_unit.deep_match(session, listener_name)? {
+                if route_unit.deep_match(session, listener_name, hostname)? {
                     return Ok(route_unit.clone());
                 }
             }
@@ -106,7 +107,7 @@ impl GrpcMatchEngine {
 
         // Priority 3: Try catch-all match
         if let Some(ref route_unit) = self.catch_all_route {
-            if route_unit.deep_match(session, listener_name)? {
+            if route_unit.deep_match(session, listener_name, hostname)? {
                 tracing::debug!(
                     service = %service,
                     method = %method,

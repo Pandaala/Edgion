@@ -40,9 +40,10 @@ impl GrpcRouteRules {
         &self,
         session: &mut pingora_proxy::Session,
         listener_name: &str,
+        hostname: &str,
     ) -> Result<Arc<GrpcRouteRuleUnit>, EdError> {
         if let Some(ref engine) = self.match_engine {
-            engine.match_route(session, listener_name)
+            engine.match_route(session, listener_name, hostname)
         } else {
             Err(EdError::RouteNotFound())
         }
@@ -104,9 +105,10 @@ impl DomainGrpcRouteRules {
         &self,
         session: &mut pingora_proxy::Session,
         listener_name: &str,
+        hostname: &str,
     ) -> Result<Arc<GrpcRouteRuleUnit>, EdError> {
         let grpc_routes = self.grpc_routes.load();
-        grpc_routes.match_route(session, listener_name)
+        grpc_routes.match_route(session, listener_name, hostname)
     }
 }
 

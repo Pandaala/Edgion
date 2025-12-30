@@ -3,6 +3,8 @@ use crate::types::{GRPCRouteMatch, GRPCRouteRule};
 use crate::types::resources::http_route::ParentReference;
 use pingora_proxy::Session;
 use regex::Regex;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// gRPC route level information shared across all rule units
@@ -13,18 +15,21 @@ pub struct GrpcRouteInfo {
 }
 
 /// gRPC route match information
-#[derive(Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct GrpcMatchInfo {
-    /// Route namespace
     pub route_ns: String,
-    /// Route name
     pub route_name: String,
     /// Rule id in GRPCRoute
     pub rule_id: usize,
     /// Match id at rule id
     pub match_id: usize,
-    /// Match item (contains service/method in matched.method)
+    /// Matched item (contains service/method in matched.method)
     pub matched: GRPCRouteMatch,
+    /// Pre-compiled regex patterns for header matching (index corresponds to matched.headers)
+    /// None if match_type is not RegularExpression or if compilation failed
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub compiled_header_regexes: Vec<Option<Arc<Regex>>>,
 }
 
 impl GrpcMatchInfo {
@@ -35,37 +40,44 @@ impl GrpcMatchInfo {
         match_id: usize,
         matched: GRPCRouteMatch,
     ) -> Self {
+        // Pre-compile regex patterns for header matching
+        let compiled_header_regexes = if let Some(ref headers) = matched.headers {
+            headers
+                .iter()
+                .map(|header_match| {
+                    // Only compile if match_type is RegularExpression
+                    if header_match.match_type.as_deref() == Some("RegularExpression") {
+                        match Regex::new(&header_match.value) {
+                            Ok(re) => Some(Arc::new(re)),
+                            Err(e) => {
+                                tracing::warn!(
+                                    route = %format!("{}/{}", route_ns, route_name),
+                                    rule_id = rule_id,
+                                    match_id = match_id,
+                                    header = %header_match.name,
+                                    pattern = %header_match.value,
+                                    error = %e,
+                                    "Failed to compile header regex pattern, header match will fail"
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         Self {
             route_ns,
             route_name,
             rule_id,
             match_id,
             matched,
-        }
-    }
-}
-
-impl std::fmt::Display for GrpcMatchInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(ref method_match) = self.matched.method {
-            match (&method_match.service, &method_match.method) {
-                (Some(s), Some(m)) => write!(
-                    f,
-                    "{}/{} (rule:{}, match:{}, service:{}, method:{})",
-                    self.route_ns, self.route_name, self.rule_id, self.match_id, s, m
-                ),
-                _ => write!(
-                    f,
-                    "{}/{} (rule:{}, match:{})",
-                    self.route_ns, self.route_name, self.rule_id, self.match_id
-                ),
-            }
-        } else {
-            write!(
-                f,
-                "{}/{} (rule:{}, match:{})",
-                self.route_ns, self.route_name, self.rule_id, self.match_id
-            )
+            compiled_header_regexes,
         }
     }
 }
@@ -106,14 +118,13 @@ impl GrpcRouteRuleUnit {
     }
 
     /// Deep match: check hostname, section_name, and headers
-    pub fn deep_match(&self, session: &Session, listener_name: &str) -> Result<bool, EdError> {
+    pub fn deep_match(&self, session: &Session, listener_name: &str, hostname: &str) -> Result<bool, EdError> {
         let req_header = session.req_header();
 
         // Check Hostname (if route specifies hostnames)
         if let Some(ref route_hostnames) = self.route_info.hostnames {
             if !route_hostnames.is_empty() {
-                let req_hostname = Self::extract_hostname(req_header);
-                if !Self::match_hostname(&req_hostname, route_hostnames) {
+                if !Self::match_hostname(hostname, route_hostnames) {
                     return Ok(false);
                 }
             }
@@ -133,8 +144,9 @@ impl GrpcRouteRuleUnit {
 
         // Check Headers (if specified) - ALL must match (AND logic)
         if let Some(header_matches) = &self.matched_info.matched.headers {
-            for header_match in header_matches {
-                if !Self::match_header(req_header, header_match)? {
+            for (idx, header_match) in header_matches.iter().enumerate() {
+                let compiled_regex = self.matched_info.compiled_header_regexes.get(idx).and_then(|r| r.as_ref());
+                if !Self::match_header(req_header, header_match, compiled_regex)? {
                     tracing::trace!(
                         header = %header_match.name,
                         route = %self.identifier(),
@@ -146,16 +158,6 @@ impl GrpcRouteRuleUnit {
         }
 
         Ok(true)
-    }
-
-    /// Extract hostname from request header
-    fn extract_hostname(req_header: &pingora_http::RequestHeader) -> String {
-        // Try URI host (HTTP/2), then Host header (HTTP/1.1), then :authority (HTTP/2 fallback)
-        req_header.uri.host()
-            .map(|h| h.to_string())
-            .or_else(|| req_header.headers.get("host").and_then(|h| h.to_str().ok().map(|s| s.to_string())))
-            .or_else(|| req_header.headers.get(":authority").and_then(|h| h.to_str().ok().map(|s| s.to_string())))
-            .unwrap_or_default()
     }
 
     /// Match hostname against route hostnames (supports wildcards)
@@ -185,9 +187,11 @@ impl GrpcRouteRuleUnit {
     }
 
     /// Match gRPC header
+    /// Uses pre-compiled regex if provided, otherwise falls back to runtime compilation
     fn match_header(
         req_header: &pingora_http::RequestHeader,
         header_match: &crate::types::GRPCHeaderMatch,
+        compiled_regex: Option<&Arc<Regex>>,
     ) -> Result<bool, EdError> {
         let header_value = match req_header.headers.get(&header_match.name) {
             Some(value) => value.to_str().unwrap_or(""),
@@ -199,10 +203,20 @@ impl GrpcRouteRuleUnit {
         match match_type {
             "Exact" => Ok(header_value == header_match.value),
             "RegularExpression" => {
-                let re = Regex::new(&header_match.value).map_err(|e| {
-                    EdError::RouteMatchError(format!("Invalid regex: {}", e))
-                })?;
-                Ok(re.is_match(header_value))
+                // Use pre-compiled regex if available
+                if let Some(regex) = compiled_regex {
+                    Ok(regex.is_match(header_value))
+                } else {
+                    // Fallback: compile at runtime (should not happen if pre-compilation succeeded)
+                    tracing::warn!(
+                        header = %header_match.name,
+                        "Using runtime regex compilation for header match (pre-compilation failed)"
+                    );
+                    let re = Regex::new(&header_match.value).map_err(|e| {
+                        EdError::RouteMatchError(format!("Invalid regex: {}", e))
+                    })?;
+                    Ok(re.is_match(header_value))
+                }
             }
             _ => {
                 tracing::warn!(
@@ -214,9 +228,15 @@ impl GrpcRouteRuleUnit {
         }
     }
 
-    /// Get route identifier
+    /// Get route identifier with rule and match details
     pub fn identifier(&self) -> String {
-        format!("{}/{}", self.matched_info.route_ns, self.matched_info.route_name)
+        format!(
+            "{}/{} (rule:{}, match:{})",
+            self.matched_info.route_ns,
+            self.matched_info.route_name,
+            self.matched_info.rule_id,
+            self.matched_info.match_id
+        )
     }
 }
 
