@@ -29,7 +29,7 @@ impl GrpcMatchEngine {
         let mut regex_routes = Vec::new();
 
         for route in routes {
-            if let Some(ref grpc_method_match) = route.matched_info.m.method {
+            if let Some(ref grpc_method_match) = route.matched_info.matched.method {
                 use crate::types::GRPCMethodMatchType;
                 
                 let match_type = grpc_method_match
@@ -124,7 +124,7 @@ impl GrpcMatchEngine {
 
         // Priority 3: Try regex match (sequential)
         for route_unit in &self.regex_routes {
-            if let Some(ref grpc_method_match) = route_unit.matched_info.m.method {
+            if let Some(ref grpc_method_match) = route_unit.matched_info.matched.method {
                 if matches_regex(grpc_method_match, &service, &method)? {
                     if route_unit.deep_match(session)? {
                         tracing::debug!(
@@ -172,11 +172,11 @@ pub fn parse_grpc_path(path: &str) -> Result<(String, String), EdError> {
 
 /// RegularExpression match
 fn matches_regex(
-    grpc_match: &GRPCMethodMatch,
+    matched: &GRPCMethodMatch,
     service: &str,
     method: &str,
 ) -> Result<bool, EdError> {
-    let service_matches = match &grpc_match.service {
+    let service_matches = match &matched.service {
         Some(pattern) => {
             let re = Regex::new(pattern).map_err(|e| {
                 EdError::RouteMatchError(format!("Invalid service regex: {}", e))
@@ -186,7 +186,7 @@ fn matches_regex(
         None => true,
     };
 
-    let method_matches = match &grpc_match.method {
+    let method_matches = match &matched.method {
         Some(pattern) => {
             let re = Regex::new(pattern).map_err(|e| {
                 EdError::RouteMatchError(format!("Invalid method regex: {}", e))

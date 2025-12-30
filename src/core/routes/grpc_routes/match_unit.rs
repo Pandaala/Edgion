@@ -8,56 +8,56 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct GrpcMatchInfo {
     /// Route namespace
-    pub rns: String,
+    pub route_ns: String,
     /// Route name
-    pub rn: String,
+    pub route_name: String,
     /// Rule id in GRPCRoute
     pub rule_id: usize,
     /// Match id at rule id
     pub match_id: usize,
-    /// gRPC service (parsed from path)
-    pub service: Option<String>,
-    /// gRPC method (parsed from path)
-    pub method: Option<String>,
-    /// Match item
-    pub m: GRPCRouteMatch,
+    /// Match item (contains service/method in matched.method)
+    pub matched: GRPCRouteMatch,
 }
 
 impl GrpcMatchInfo {
     pub fn new(
-        rns: String,
-        rn: String,
+        route_ns: String,
+        route_name: String,
         rule_id: usize,
         match_id: usize,
-        service: Option<String>,
-        method: Option<String>,
-        m: GRPCRouteMatch,
+        matched: GRPCRouteMatch,
     ) -> Self {
         Self {
-            rns,
-            rn,
+            route_ns,
+            route_name,
             rule_id,
             match_id,
-            service,
-            method,
-            m,
+            matched,
         }
     }
 }
 
 impl std::fmt::Display for GrpcMatchInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match (&self.service, &self.method) {
-            (Some(s), Some(m)) => write!(
-                f,
-                "{}/{} (rule:{}, match:{}, service:{}, method:{})",
-                self.rns, self.rn, self.rule_id, self.match_id, s, m
-            ),
-            _ => write!(
+        if let Some(ref method_match) = self.matched.method {
+            match (&method_match.service, &method_match.method) {
+                (Some(s), Some(m)) => write!(
+                    f,
+                    "{}/{} (rule:{}, match:{}, service:{}, method:{})",
+                    self.route_ns, self.route_name, self.rule_id, self.match_id, s, m
+                ),
+                _ => write!(
+                    f,
+                    "{}/{} (rule:{}, match:{})",
+                    self.route_ns, self.route_name, self.rule_id, self.match_id
+                ),
+            }
+        } else {
+            write!(
                 f,
                 "{}/{} (rule:{}, match:{})",
-                self.rns, self.rn, self.rule_id, self.match_id
-            ),
+                self.route_ns, self.route_name, self.rule_id, self.match_id
+            )
         }
     }
 }
@@ -79,8 +79,6 @@ impl GrpcRouteRuleUnit {
         rule_id: usize,
         match_id: usize,
         resource_key: String,
-        service: Option<String>,
-        method: Option<String>,
         match_item: GRPCRouteMatch,
         rule: Arc<GRPCRouteRule>,
         hostnames: Option<Vec<String>>,
@@ -92,8 +90,6 @@ impl GrpcRouteRuleUnit {
                 name,
                 rule_id,
                 match_id,
-                service,
-                method,
                 match_item,
             ),
             rule,
@@ -122,7 +118,7 @@ impl GrpcRouteRuleUnit {
         }
 
         // Check Headers (if specified) - ALL must match (AND logic)
-        if let Some(header_matches) = &self.matched_info.m.headers {
+        if let Some(header_matches) = &self.matched_info.matched.headers {
             for header_match in header_matches {
                 if !Self::match_header(req_header, header_match)? {
                     tracing::trace!(
@@ -206,7 +202,7 @@ impl GrpcRouteRuleUnit {
 
     /// Get route identifier
     pub fn identifier(&self) -> String {
-        format!("{}/{}", self.matched_info.rns, self.matched_info.rn)
+        format!("{}/{}", self.matched_info.route_ns, self.matched_info.route_name)
     }
 }
 

@@ -125,16 +125,6 @@ impl GrpcRouteManager {
                     // Each rule may have multiple matches
                     if let Some(matches) = &rule.matches {
                         for (match_id, match_item) in matches.iter().enumerate() {
-                            // Extract service and method from match
-                            let service = match_item
-                                .method
-                                .as_ref()
-                                .and_then(|m| m.service.clone());
-                            let method = match_item
-                                .method
-                                .as_ref()
-                                .and_then(|m| m.method.clone());
-
                             // Create GrpcRouteRuleUnit
                             let unit = Arc::new(GrpcRouteRuleUnit::new(
                                 route_namespace.to_string(),
@@ -142,8 +132,6 @@ impl GrpcRouteManager {
                                 rule_id,
                                 match_id,
                                 resource_key.clone(),
-                                service,
-                                method,
                                 match_item.clone(),
                                 rule_arc.clone(),
                                 route.spec.hostnames.clone(),

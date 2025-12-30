@@ -242,7 +242,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
     let (name, namespace) = if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
         let ns = grpc_br.namespace.clone().unwrap_or_else(|| {
             ctx.grpc_route_unit.as_ref()
-                .map(|unit| unit.matched_info.rns.clone())
+                .map(|unit| unit.matched_info.route_ns.clone())
                 .unwrap_or_default()
         });
         (grpc_br.name.clone(), ns)
