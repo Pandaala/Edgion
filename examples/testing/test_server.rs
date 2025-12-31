@@ -40,6 +40,18 @@ struct Cli {
     #[arg(long, default_value = "30011")]
     udp_port: u16,
     
+    /// HTTPS 后端服务器端口（用于 Backend TLS 测试）
+    #[arg(long)]
+    https_backend_port: Option<u16>,
+    
+    /// TLS 证书文件路径
+    #[arg(long)]
+    cert_file: Option<String>,
+    
+    /// TLS 私钥文件路径
+    #[arg(long)]
+    key_file: Option<String>,
+    
     /// 日志级别
     #[arg(long, default_value = "info")]
     log_level: String,
@@ -47,6 +59,9 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize rustls crypto provider (required for TLS)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    
     let cli = Cli::parse();
     
     // 初始化日志
@@ -101,6 +116,20 @@ async fn main() -> Result<()> {
     // 启动 UDP 服务器
     let handle = tokio::spawn(start_udp_server(cli.udp_port));
     handles.push(handle);
+    
+    // 启动 HTTPS 后端服务器（如果配置了）
+    if let Some(https_port) = cli.https_backend_port {
+        if let (Some(cert), Some(key)) = (cli.cert_file.as_ref(), cli.key_file.as_ref()) {
+            let handle = tokio::spawn(start_https_backend_server(
+                https_port, 
+                cert.clone(), 
+                key.clone()
+            ));
+            handles.push(handle);
+        } else {
+            error!("HTTPS backend port specified but cert_file or key_file missing");
+        }
+    }
     
     info!("");
     info!("========================================");
@@ -425,5 +454,49 @@ async fn start_udp_server(port: u16) -> Result<()> {
             }
         }
     }
+}
+
+// ============================================================================
+// HTTPS Backend Server (for BackendTLSPolicy testing)
+// ============================================================================
+
+use axum_server::tls_rustls::RustlsConfig;
+
+async fn start_https_backend_server(port: u16, cert_path: String, key_path: String) -> Result<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let server_addr_str = format!("127.0.0.1:{}", port);
+    
+    // Load TLS configuration
+    let tls_config = match RustlsConfig::from_pem_file(&cert_path, &key_path).await {
+        Ok(config) => config,
+        Err(e) => {
+            error!("Failed to load TLS certificates: {}", e);
+            error!("  Cert file: {}", cert_path);
+            error!("  Key file: {}", key_path);
+            return Err(anyhow::anyhow!("TLS configuration error: {}", e));
+        }
+    };
+    
+    // Create router with same handlers as HTTP server
+    let app = Router::new()
+        .route("/health", get(health_handler))
+        .route("/echo", get(echo_handler).post(echo_post_handler))
+        .route("/headers", get(headers_handler))
+        .route("/status/{code}", get(status_handler))
+        .route("/delay/{seconds}", get(delay_handler))
+        .route("/{*path}", get(catch_all_handler))
+        .layer(Extension(server_addr_str.clone()));
+    
+    info!("✓ HTTPS backend server listening on https://{}", addr);
+    info!("  Certificate: {}", cert_path);
+    info!("  Private key: {}", key_path);
+    
+    // Start HTTPS server
+    let app_with_connect_info = app.into_make_service_with_connect_info::<SocketAddr>();
+    axum_server::bind_rustls(addr, tls_config)
+        .serve(app_with_connect_info)
+        .await?;
+    
+    Ok(())
 }
 

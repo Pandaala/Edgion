@@ -1,0 +1,18 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: test-backend-tls
+  namespace: edge
+  labels:
+    kubernetes.io/service-name: test-backend-tls
+addressType: IPv4
+ports:
+  - name: https
+    port: 30051
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+

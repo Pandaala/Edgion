@@ -187,7 +187,18 @@ else
 fi
 echo ""
 
-# 0.6 mTLS 配置说明
+# 0.6 生成后端 TLS 证书
+echo_info "Generating backend TLS certificates..."
+"${SCRIPT_DIR}/scripts/generate_backend_certs.sh"
+if [ $? -eq 0 ]; then
+    echo_success "Backend TLS certificates generated"
+else
+    echo_error "Failed to generate backend TLS certificates"
+    exit 1
+fi
+echo ""
+
+# 0.7 mTLS 配置说明
 # mTLS 测试配置（EdgionTls, Gateway, HTTPRoute）已在 examples/conf/ 中
 # 只有 Secret 文件需要动态生成（已在步骤 0.5 中完成）
 echo_info "mTLS test configs ready in examples/conf/"
@@ -196,14 +207,25 @@ echo ""
 # 1. 启动 test_server
 echo_info "Starting test_server..."
 cd "$PROJECT_DIR"
-cargo run --example test_server > "$TEST_SERVER_LOG" 2>&1 &
+cargo run --example test_server -- \
+  --https-backend-port 30051 \
+  --cert-file "${SCRIPT_DIR}/certs/backend/server.crt" \
+  --key-file "${SCRIPT_DIR}/certs/backend/server.key" \
+  > "$TEST_SERVER_LOG" 2>&1 &
 echo $! > "${PID_DIR}/test_server.pid"
 
 # Wait for HTTP server (30001) to be ready
 wait_for_port 30001 "test_server HTTP" "${PID_DIR}/test_server.pid" 30 || {
     echo_error "Failed to start test_server"
     echo "         Log: $TEST_SERVER_LOG"
-    echo "         Manual: cd $PROJECT_DIR && cargo run --example test_server"
+    echo "         Manual: cd $PROJECT_DIR && cargo run --example test_server -- --https-backend-port 30051 --cert-file ${SCRIPT_DIR}/certs/backend/server.crt --key-file ${SCRIPT_DIR}/certs/backend/server.key"
+    exit 1
+}
+
+# Wait for HTTPS backend server (30051) to be ready
+wait_for_port 30051 "test_server HTTPS backend" "${PID_DIR}/test_server.pid" 30 || {
+    echo_error "Failed to start test_server HTTPS backend"
+    echo "         Log: $TEST_SERVER_LOG"
     exit 1
 }
 

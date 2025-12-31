@@ -82,6 +82,7 @@ enum Commands {
     RealIp,
     Security,
     Mtls,  // mTLS tests
+    BackendTls,  // Backend TLS tests (BackendTLSPolicy)
     PluginLogs,  // Plugin logs tests
     LbPolicy,  // LB Policy tests with log analyzer
     Timeout,  // Timeout tests
@@ -241,6 +242,13 @@ async fn main() -> Result<()> {
             }
             runner.add_suite(Box::new(suites::MtlsTestSuite));
         }
+        Commands::BackendTls => {
+            if !cli.gateway {
+                eprintln!("Error: Backend TLS tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::BackendTlsTestSuite));
+        }
         Commands::PluginLogs => {
             if !cli.gateway {
                 eprintln!("Error: Plugin logs tests require --gateway flag");
@@ -283,6 +291,7 @@ async fn main() -> Result<()> {
                 runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
                 runner.add_suite(Box::new(suites::PluginLogsTestSuite));
                 runner.add_suite(Box::new(suites::LBPolicyTestSuite));
+                runner.add_suite(Box::new(suites::BackendTlsTestSuite));
             }
         }
     }
