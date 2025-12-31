@@ -67,12 +67,8 @@ impl PreflightHandler {
             // Run CORS plugin logic (this will set headers and may terminate request)
             let _result = cors_plugin.run_request(&mut adapter, &mut plugin_log).await;
 
-            // Log if there's any plugin log output
-            if let Some(log_str) = plugin_log.log {
-                tracing::debug!(log = %log_str, "Preflight handled by CORS plugin");
-            }
-
             // CORS plugin handles preflight, request is terminated
+            tracing::debug!("Preflight handled by CORS plugin");
             return Ok(true);
         }
 

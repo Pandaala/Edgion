@@ -91,7 +91,7 @@ impl RequestFilter for RequestRedirectFilter {
         let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::FOUND);
 
         // Log redirect operation (key point)
-        plugin_log.add_plugin_log(&format!("Redirect to {} [{}]; ", location, status.as_u16()));
+        plugin_log.push(&format!("Redirect to {} [{}]; ", location, status.as_u16()));
 
         // Build redirect response
         let mut resp = match ResponseHeader::build(status, None) {

@@ -43,7 +43,7 @@ impl ExtensionRefFilter {
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         if !self.is_edgion_plugins() {
-            log.add_plugin_log(&format!(
+            log.push(&format!(
                 "ExtensionRef kind '{}' not supported, skipping",
                 self.ext_ref.kind
             ));
@@ -55,7 +55,7 @@ impl ExtensionRefFilter {
 
         // Look up the EdgionPlugins in global store
         let Some(edgion_plugins) = store.get(&key) else {
-            log.add_plugin_log(&format!("EdgionPlugins '{}' not found, returning 500", key));
+            log.push(&format!("EdgionPlugins '{}' not found, returning 500", key));
             return PluginRunningResult::ErrTerminateRequest;
         };
 
@@ -67,7 +67,7 @@ impl ExtensionRefFilter {
             PluginRunningStage::Request => {
                 // Request stage plugins are async, cannot be called in sync context
                 // This is a design limitation - Request filters should only be called via run_extension_async
-                log.add_plugin_log("Warning: Request stage should use async path");
+                log.push("Warning: Request stage should use async path");
             }
             PluginRunningStage::UpstreamResponseFilter => {
                 // For sync response stage
@@ -75,9 +75,7 @@ impl ExtensionRefFilter {
                     let mut inner_log = PluginLog::new(plugin.name());
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
                     
-                    if let Some(inner_log_str) = &inner_log.log {
-                        log.add_plugin_log(inner_log_str);
-                    }
+                    // Inner plugin log is handled separately
                     
                     if result == PluginRunningResult::ErrTerminateRequest {
                         return result;
@@ -90,7 +88,7 @@ impl ExtensionRefFilter {
             }
         }
 
-        log.add_plugin_log(&format!("EdgionPlugins '{}' executed successfully", key));
+        log.push(&format!("EdgionPlugins '{}' executed successfully", key));
         PluginRunningResult::GoodNext
     }
 
@@ -102,7 +100,7 @@ impl ExtensionRefFilter {
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         if !self.is_edgion_plugins() {
-            log.add_plugin_log(&format!(
+            log.push(&format!(
                 "ExtensionRef kind '{}' not supported, skipping",
                 self.ext_ref.kind
             ));
@@ -113,7 +111,7 @@ impl ExtensionRefFilter {
         let store = get_global_plugin_store();
 
         let Some(edgion_plugins) = store.get(&key) else {
-            log.add_plugin_log(&format!("EdgionPlugins '{}' not found, returning 500", key));
+            log.push(&format!("EdgionPlugins '{}' not found, returning 500", key));
             return PluginRunningResult::ErrTerminateRequest;
         };
 
@@ -125,9 +123,7 @@ impl ExtensionRefFilter {
                     let mut inner_log = PluginLog::new(plugin.name());
                     let result = plugin.run_request(session, &mut inner_log).await;
                     
-                    if let Some(inner_log_str) = &inner_log.log {
-                        log.add_plugin_log(inner_log_str);
-                    }
+                    // Inner plugin log is handled separately
                     
                     if result == PluginRunningResult::ErrTerminateRequest {
                         return result;
@@ -139,9 +135,7 @@ impl ExtensionRefFilter {
                     let mut inner_log = PluginLog::new(plugin.name());
                     let result = plugin.run_upstream_response(session, &mut inner_log).await;
                     
-                    if let Some(inner_log_str) = &inner_log.log {
-                        log.add_plugin_log(inner_log_str);
-                    }
+                    // Inner plugin log is handled separately
                     
                     if result == PluginRunningResult::ErrTerminateRequest {
                         return result;
@@ -154,9 +148,7 @@ impl ExtensionRefFilter {
                     let mut inner_log = PluginLog::new(plugin.name());
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
                     
-                    if let Some(inner_log_str) = &inner_log.log {
-                        log.add_plugin_log(inner_log_str);
-                    }
+                    // Inner plugin log is handled separately
                     
                     if result == PluginRunningResult::ErrTerminateRequest {
                         return result;
@@ -165,7 +157,7 @@ impl ExtensionRefFilter {
             }
         }
 
-        log.add_plugin_log(&format!("EdgionPlugins '{}' executed successfully", key));
+        log.push(&format!("EdgionPlugins '{}' executed successfully", key));
         PluginRunningResult::GoodNext
     }
 }

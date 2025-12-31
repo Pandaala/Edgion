@@ -86,20 +86,20 @@ impl RequestFilter for IpRestriction {
         let client_ip = match self.get_client_ip(session) {
             Some(ip) => ip,
             None => {
-                plugin_log.add_plugin_log("Failed to get client IP\n");
+                plugin_log.push("Failed to get client IP\n");
                 // If we can't determine IP, allow by default (or could be configured)
                 return PluginRunningResult::GoodNext;
             }
         };
 
-        plugin_log.add_plugin_log(&format!("Client IP: {}\n", client_ip));
+        plugin_log.push(&format!("Client IP: {}\n", client_ip));
 
         // Check access using config's check_ip_access method
         if !self.config.check_ip_access(&client_ip) {
             let message = self.config.message.as_deref()
                 .unwrap_or("Your IP address is not allowed to access this resource");
 
-            plugin_log.add_plugin_log(&format!("Access DENIED for {}\n", client_ip));
+            plugin_log.push(&format!("Access DENIED for {}\n", client_ip));
 
             // Build error response
             let mut resp = Box::new(ResponseHeader::build(self.config.status, None).unwrap());
@@ -109,19 +109,19 @@ impl RequestFilter for IpRestriction {
 
             // Write response
             if let Err(e) = session.write_response_header(resp, false).await {
-                plugin_log.add_plugin_log(&format!("Failed to write response header: {}\n", e));
+                plugin_log.push(&format!("Failed to write response header: {}\n", e));
                 return PluginRunningResult::ErrTerminateRequest;
             }
 
             if let Err(e) = session.write_response_body(Some(body), true).await {
-                plugin_log.add_plugin_log(&format!("Failed to write response body: {}\n", e));
+                plugin_log.push(&format!("Failed to write response body: {}\n", e));
                 return PluginRunningResult::ErrTerminateRequest;
             }
 
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        plugin_log.add_plugin_log(&format!("Access ALLOWED for {}\n", client_ip));
+        plugin_log.push(&format!("Access ALLOWED for {}\n", client_ip));
         PluginRunningResult::GoodNext
     }
 }

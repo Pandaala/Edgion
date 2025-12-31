@@ -42,11 +42,11 @@ impl RequestFilter for Mock {
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
-        plugin_log.add_plugin_log(&format!("Returning mock response with status {}; ", self.config.status_code));
+        plugin_log.push(&format!("Returning mock response with status {}; ", self.config.status_code));
 
         // Apply delay if configured
         if let Some(delay_ms) = self.config.delay {
-            plugin_log.add_plugin_log(&format!("Delaying response by {}ms; ", delay_ms));
+            plugin_log.push(&format!("Delaying response by {}ms; ", delay_ms));
             sleep(Duration::from_millis(delay_ms)).await;
         }
 
@@ -54,14 +54,14 @@ impl RequestFilter for Mock {
         if let Some(ref headers) = self.config.headers {
             for (name, value) in headers {
                 if let Err(e) = session.set_response_header(name, value) {
-                    plugin_log.add_plugin_log(&format!("Failed to set header {}: {}; ", name, e));
+                    plugin_log.push(&format!("Failed to set header {}: {}; ", name, e));
                 }
             }
         }
 
         // Set Content-Type header
         if let Err(e) = session.set_response_header("Content-Type", &self.config.content_type) {
-            plugin_log.add_plugin_log(&format!("Failed to set Content-Type: {}; ", e));
+            plugin_log.push(&format!("Failed to set Content-Type: {}; ", e));
         }
 
         // Return mock response (terminates request, no upstream call)

@@ -71,13 +71,13 @@ impl Csrf {
                     .build();
 
                 if let Err(e) = session.set_response_header("Set-Cookie", &cookie.to_string()) {
-                    plugin_log.add_plugin_log(&format!("Failed to set cookie: {}; ", e));
+                    plugin_log.push(&format!("Failed to set cookie: {}; ", e));
                 } else {
-                    plugin_log.add_plugin_log("Token set in cookie; ");
+                    plugin_log.push("Token set in cookie; ");
                 }
             }
             Err(e) => {
-                plugin_log.add_plugin_log(&format!("Failed to encode token: {}; ", e));
+                plugin_log.push(&format!("Failed to encode token: {}; ", e));
             }
         }
     }
@@ -94,18 +94,18 @@ impl RequestFilter for Csrf {
 
         // For safe methods, skip validation but set cookie for future use
         if SAFE_METHODS.contains(&method.as_str()) {
-            plugin_log.add_plugin_log(&format!("Safe method {}, setting token; ", method));
+            plugin_log.push(&format!("Safe method {}, setting token; ", method));
             self.set_csrf_cookie(session, plugin_log);
             return PluginRunningResult::GoodNext;
         }
 
-        plugin_log.add_plugin_log(&format!("Checking token for method {}; ", method));
+        plugin_log.push(&format!("Checking token for method {}; ", method));
 
         // 1. Get token from HEADER
         let header_token = match session.header_value(&self.config.name) {
             Some(token) if !token.is_empty() => token,
             _ => {
-                plugin_log.add_plugin_log("No token in headers; ");
+                plugin_log.push("No token in headers; ");
                 return PluginRunningResult::ErrResponse {
                     status: 401,
                     body: Some(r#"{"error_msg":"no csrf token in headers"}"#.to_string()),
@@ -117,7 +117,7 @@ impl RequestFilter for Csrf {
         let cookie_token = match self.get_cookie_value(session, &self.config.name) {
             Some(token) => token,
             None => {
-                plugin_log.add_plugin_log("No csrf cookie; ");
+                plugin_log.push("No csrf cookie; ");
                 return PluginRunningResult::ErrResponse {
                     status: 401,
                     body: Some(r#"{"error_msg":"no csrf cookie"}"#.to_string()),
@@ -127,7 +127,7 @@ impl RequestFilter for Csrf {
 
         // 3. Tokens must MATCH (Double Submit Cookie Pattern)
         if header_token != cookie_token {
-            plugin_log.add_plugin_log("Token mismatch; ");
+            plugin_log.push("Token mismatch; ");
             return PluginRunningResult::ErrResponse {
                 status: 401,
                 body: Some(r#"{"error_msg":"csrf token mismatch"}"#.to_string()),
@@ -138,10 +138,10 @@ impl RequestFilter for Csrf {
         match CsrfToken::decode(&cookie_token) {
             Ok(token) => {
                 if token.verify(&self.config.key, self.config.expires) {
-                    plugin_log.add_plugin_log("Token verified successfully; ");
+                    plugin_log.push("Token verified successfully; ");
                     PluginRunningResult::GoodNext
                 } else {
-                    plugin_log.add_plugin_log("Failed to verify token signature; ");
+                    plugin_log.push("Failed to verify token signature; ");
                     PluginRunningResult::ErrResponse {
                         status: 401,
                         body: Some(r#"{"error_msg":"Failed to verify the csrf token signature"}"#.to_string()),
@@ -149,7 +149,7 @@ impl RequestFilter for Csrf {
                 }
             }
             Err(e) => {
-                plugin_log.add_plugin_log(&format!("Failed to decode token: {}; ", e));
+                plugin_log.push(&format!("Failed to decode token: {}; ", e));
                 PluginRunningResult::ErrResponse {
                     status: 401,
                     body: Some(r#"{"error_msg":"Failed to verify the csrf token signature"}"#.to_string()),

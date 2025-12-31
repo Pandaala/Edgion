@@ -200,7 +200,7 @@ impl BasicAuth {
 
     fn handle_anonymous_access(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> bool {
         if let Some(ref anonymous) = self.config.anonymous {
-            plugin_log.add_plugin_log(&format!("Allowing anonymous access as '{}'; ", anonymous));
+            plugin_log.push(&format!("Allowing anonymous access as '{}'; ", anonymous));
             let _ = session.set_request_header("X-Consumer-Username", anonymous);
             let _ = session.set_request_header("X-Anonymous-Consumer", "true");
             return true;
@@ -244,7 +244,7 @@ impl RequestFilter for BasicAuth {
         let username = match self.authenticate_request(session).await {
             Ok(user) => user,
             Err(e) => {
-                plugin_log.add_plugin_log(&format!("Authentication failed: {}; ", e));
+                plugin_log.push(&format!("Authentication failed: {}; ", e));
 
                 // Check if anonymous access is allowed
                 if self.handle_anonymous_access(session, plugin_log) {
@@ -261,17 +261,17 @@ impl RequestFilter for BasicAuth {
             }
         };
 
-        plugin_log.add_plugin_log(&format!("Auth successful for user: {}; ", username));
+        plugin_log.push(&format!("Auth successful for user: {}; ", username));
 
         // Set consumer headers for upstream
         if let Err(e) = self.set_consumer_headers(session, &username) {
-            plugin_log.add_plugin_log(&format!("Failed to set headers: {}; ", e));
+            plugin_log.push(&format!("Failed to set headers: {}; ", e));
         }
 
         // Hide credentials if configured
         if self.config.hide_credentials {
             if let Err(e) = session.remove_request_header("authorization") {
-                plugin_log.add_plugin_log(&format!("Failed to remove auth header: {}; ", e));
+                plugin_log.push(&format!("Failed to remove auth header: {}; ", e));
             }
         }
 
