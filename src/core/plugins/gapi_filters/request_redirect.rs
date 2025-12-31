@@ -42,11 +42,9 @@ impl RequestRedirectFilter {
                         let suffix = &original_path[len..];
                         format!("{}{}", replace_prefix, suffix)
                     } else {
-                        tracing::warn!("matched_path_len {} > original_path len {}", len, original_path.len());
                         replace_prefix.clone()
                     }
                 } else {
-                    tracing::warn!("replace_prefix_match configured but matched_path_len not available (likely not a PathPrefix match)");
                     replace_prefix.clone()
                 }
             } else {
@@ -66,7 +64,7 @@ impl RequestFilter for RequestRedirectFilter {
         "RequestRedirect"
     }
 
-    async fn run_request(&self, session: &mut dyn PluginSession, _log: &mut PluginLog) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Get original request info for building Location
         let original_host = session.header_value("host");
         let original_path = session.header_value(":path").unwrap_or_else(|| "/".to_string());
@@ -92,17 +90,30 @@ impl RequestFilter for RequestRedirectFilter {
         let status_code = self.config.status_code.unwrap_or(302) as u16;
         let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::FOUND);
 
+        // Log redirect operation (key point)
+        plugin_log.add_plugin_log(&format!("Redirect to {} [{}]; ", location, status.as_u16()));
+
         // Build redirect response
         let mut resp = match ResponseHeader::build(status, None) {
             Ok(r) => r,
-            Err(_) => return PluginRunningResult::ErrTerminateRequest,
+            Err(e) => {
+                tracing::error!("Failed to build redirect response: {:?}", e);
+                return PluginRunningResult::ErrTerminateRequest;
+            }
         };
 
-        let _ = resp.insert_header("Location", &location);
+        if let Err(e) = resp.insert_header("Location", &location) {
+            tracing::error!("Failed to insert Location header: {:?}", e);
+            return PluginRunningResult::ErrTerminateRequest;
+        }
+
         let _ = resp.insert_header("Content-Length", "0");
 
         // Send response and terminate request
-        let _ = session.write_response_header(Box::new(resp), true).await;
+        if let Err(e) = session.write_response_header(Box::new(resp), true).await {
+            tracing::error!("Failed to write redirect response: {:?}", e);
+            return PluginRunningResult::ErrTerminateRequest;
+        }
 
         PluginRunningResult::ErrTerminateRequest
     }
