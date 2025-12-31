@@ -92,7 +92,7 @@ impl ConfigClient {
         
         // Register ReferenceGrantStore as the handler for ReferenceGrant resources
         let reference_grants_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
-        let reference_grant_handler = crate::core::reference_grant::reference_grant_store::create_reference_grant_handler();
+        let reference_grant_handler = crate::core::ref_grant::create_reference_grant_handler();
         reference_grants_cache.set_conf_processor(reference_grant_handler);
         
         // Register BackendTLSPolicyStore as the handler for BackendTLSPolicy resources
