@@ -73,6 +73,9 @@ impl ConfigSyncClient {
         config_client.endpoints().set_grpc_client(client.clone()).await;
         config_client.edgion_tls().set_grpc_client(client.clone()).await;
         config_client.edgion_plugins().set_grpc_client(client.clone()).await;
+        config_client.edgion_stream_plugins().set_grpc_client(client.clone()).await;
+        config_client.reference_grants().set_grpc_client(client.clone()).await;
+        config_client.backend_tls_policies().set_grpc_client(client.clone()).await;
         config_client.plugin_metadata().set_grpc_client(client.clone()).await;
         // config_client.secrets().set_grpc_client(client.clone()).await;
 

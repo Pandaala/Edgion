@@ -81,7 +81,36 @@ pub async fn handle_grpc_upstream(
     };
 
     // Select gRPC backend
-    let backend_ref = GrpcRouteRules::select_backend(&grpc_route_unit.rule)?;
+    let mut backend_ref = GrpcRouteRules::select_backend(&grpc_route_unit.rule)?;
+    
+    // Query BackendTLSPolicy using route namespace for proper namespace inheritance
+    let service_group = backend_ref.group.as_deref().unwrap_or("");
+    let service_kind = backend_ref.kind.as_deref().unwrap_or("Service");
+    let service_name = &backend_ref.name;
+    // If backend_ref.namespace is None, inherit from route namespace
+    let service_namespace = backend_ref.namespace.as_deref().or(Some(grpc_route_unit.matched_info.route_ns.as_str()));
+    
+    backend_ref.backend_tls_policy = crate::core::backends::query_backend_tls_policy_for_service(
+        service_group,
+        service_kind,
+        service_name,
+        service_namespace,
+    );
+    
+    if let Some(ref policy) = backend_ref.backend_tls_policy {
+        tracing::debug!(
+            policy = %format!("{}/{}", 
+                policy.namespace().unwrap_or(""), 
+                policy.name()
+            ),
+            service = %format!("{}/{}", 
+                service_namespace.unwrap_or(""), 
+                service_name
+            ),
+            sni = %policy.spec.validation.hostname,
+            "BackendTLSPolicy found for selected gRPC backend"
+        );
+    }
 
     // Run backend-level request edgion_plugins
     // todo need keep here or change to run before route plugin run?

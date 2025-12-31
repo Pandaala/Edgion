@@ -147,7 +147,7 @@ pub async fn select_http_backend(
         }
     };
 
-    let backend_ref = match RouteRules::select_backend(&route_unit.rule) {
+    let mut backend_ref = match RouteRules::select_backend(&route_unit.rule) {
         Ok(backend) => backend,
         Err(e) => {
             tracing::error!("Failed to select backend: {:?}", e);
@@ -160,6 +160,35 @@ pub async fn select_http_backend(
             return Err(PingoraError::new(ErrorType::InternalError));
         }
     };
+    
+    // Query BackendTLSPolicy using route namespace for proper namespace inheritance
+    let service_group = backend_ref.group.as_deref().unwrap_or("");
+    let service_kind = backend_ref.kind.as_deref().unwrap_or("Service");
+    let service_name = &backend_ref.name;
+    // If backend_ref.namespace is None, inherit from route namespace
+    let service_namespace = backend_ref.namespace.as_deref().or(Some(route_unit.matched_info.rns.as_str()));
+    
+    backend_ref.backend_tls_policy = crate::core::backends::query_backend_tls_policy_for_service(
+        service_group,
+        service_kind,
+        service_name,
+        service_namespace,
+    );
+    
+    if let Some(ref policy) = backend_ref.backend_tls_policy {
+        tracing::debug!(
+            policy = %format!("{}/{}", 
+                policy.namespace().unwrap_or(""), 
+                policy.name()
+            ),
+            service = %format!("{}/{}", 
+                service_namespace.unwrap_or(""), 
+                service_name
+            ),
+            sni = %policy.spec.validation.hostname,
+            "BackendTLSPolicy found for selected backend"
+        );
+    }
     
     tracing::info!("Selected HTTP backend: {:?}", backend_ref);
     

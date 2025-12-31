@@ -64,7 +64,7 @@ impl RouteRules {
         }
 
         // Select backend
-        let mut backend_ref = rule.backend_finder.select().map_err(|err_code| {
+        let backend_ref = rule.backend_finder.select().map_err(|err_code| {
             match err_code {
                 ERR_NO_BACKEND_REFS => EdError::BackendNotFound(),
                 ERR_INCONSISTENT_WEIGHT => EdError::InconsistentWeight(),
@@ -72,33 +72,8 @@ impl RouteRules {
             }
         })?;
         
-        // Query BackendTLSPolicy for the selected backend
-        let service_group = backend_ref.group.as_deref().unwrap_or("");
-        let service_kind = backend_ref.kind.as_deref().unwrap_or("Service");
-        let service_name = &backend_ref.name;
-        let service_namespace = backend_ref.namespace.as_deref();
-        
-        backend_ref.backend_tls_policy = crate::core::backends::query_backend_tls_policy_for_service(
-            service_group,
-            service_kind,
-            service_name,
-            service_namespace,
-        );
-        
-        if let Some(ref policy) = backend_ref.backend_tls_policy {
-            tracing::debug!(
-                policy = %format!("{}/{}", 
-                    policy.namespace().unwrap_or(""), 
-                    policy.name()
-                ),
-                service = %format!("{}/{}", 
-                    service_namespace.unwrap_or(""), 
-                    service_name
-                ),
-                sni = %policy.spec.validation.hostname,
-                "BackendTLSPolicy found for selected backend"
-            );
-        }
+        // Note: BackendTLSPolicy query is performed in pg_upstream_peer.rs
+        // where route namespace is available for proper namespace inheritance
         
         Ok(backend_ref)
     }

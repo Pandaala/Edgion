@@ -1,0 +1,7 @@
+apiVersion: gateway.edgion.io/v1alpha1
+kind: DebugAccessLogToHeader
+metadata:
+  name: debug-backend-tls
+spec:
+  enabled: true
+

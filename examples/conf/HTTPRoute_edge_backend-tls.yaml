@@ -14,6 +14,12 @@ spec:
         - path:
             type: PathPrefix
             value: /backend-tls/
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: gateway.edgion.io
+            kind: DebugAccessLogToHeader
+            name: debug-backend-tls
       backendRefs:
         - name: test-backend-tls
           port: 30051

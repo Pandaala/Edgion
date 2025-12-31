@@ -212,12 +212,22 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 (false, String::new())
             };
             
-            // Store backend address and LB policy in context for connection counting
+            // Store backend address, LB policy, and TLS info in context
             let addr_clone = addr.clone();
             let lb_policy_clone = lb_policy.clone();
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.backend_addr = Some(addr_clone);
                 upstream.lb_policy = lb_policy_clone;
+                
+                // Record TLS configuration if enabled
+                if use_tls {
+                    upstream.tls = Some(crate::types::BackendTlsInfo {
+                        sni: if sni.is_empty() { None } else { Some(sni.clone()) },
+                        handshake_ok: None, // Will be updated after connection
+                        protocol: None,
+                        cipher: None,
+                    });
+                }
             }
             
             Ok(Box::new(HttpPeer::new(addr, use_tls, sni)))
@@ -265,6 +275,18 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 (false, String::new())
             };
             
+            // Record TLS configuration if enabled
+            if use_tls {
+                if let Some(upstream) = ctx.get_current_upstream_mut() {
+                    upstream.tls = Some(crate::types::BackendTlsInfo {
+                        sni: if sni.is_empty() { None } else { Some(sni.clone()) },
+                        handshake_ok: None, // Will be updated after connection
+                        protocol: None,
+                        cipher: None,
+                    });
+                }
+            }
+            
             Ok(Box::new(HttpPeer::new(addr, use_tls, sni)))
         }
         
@@ -309,6 +331,18 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             } else {
                 (false, String::new())
             };
+            
+            // Record TLS configuration if enabled
+            if use_tls {
+                if let Some(upstream) = ctx.get_current_upstream_mut() {
+                    upstream.tls = Some(crate::types::BackendTlsInfo {
+                        sni: if sni.is_empty() { None } else { Some(sni.clone()) },
+                        handshake_ok: None, // Will be updated after connection
+                        protocol: None,
+                        cipher: None,
+                    });
+                }
+            }
             
             Ok(Box::new(HttpPeer::new(addr, use_tls, sni)))
         }

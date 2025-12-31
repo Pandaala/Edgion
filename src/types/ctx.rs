@@ -104,6 +104,23 @@ pub struct RequestInfo {
     pub client_cert_info: Option<ClientCertInfo>,
 }
 
+/// Backend TLS connection information
+#[derive(Debug, Clone, Serialize)]
+pub struct BackendTlsInfo {
+    /// SNI (Server Name Indication) sent to backend
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sni: Option<String>,
+    /// TLS handshake success
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handshake_ok: Option<bool>,
+    /// TLS protocol version (e.g., "TLSv1.3")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    /// Cipher suite used
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cipher: Option<String>,
+}
+
 /// Upstream connection information for a single connection attempt
 #[derive(Debug, Clone, Serialize)]
 pub struct UpstreamInfo {
@@ -140,6 +157,9 @@ pub struct UpstreamInfo {
     /// LB policy used for this upstream selection
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lb_policy: Option<ParsedLBPolicy>,
+    /// Backend TLS connection information
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls: Option<BackendTlsInfo>,
 }
 
 /// Backend context containing service info and upstream attempt history
@@ -248,6 +268,7 @@ impl EdgionHttpContext {
                 err: Vec::new(),
                 backend_addr: None,
                 lb_policy: None,
+                tls: None,
             });
             bc.current_upstream_id = Some(bc.upstreams.len() - 1);
         }
