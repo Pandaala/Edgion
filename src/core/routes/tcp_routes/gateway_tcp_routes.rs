@@ -61,11 +61,11 @@ impl GatewayTcpRoutes {
     /// # Arguments
     /// * `listener_routes` - Map of listener_name -> routes to update. Empty Vec means clear that listener.
     pub(crate) fn update_listeners_incremental(&self, listener_routes: HashMap<String, Vec<Arc<TCPRoute>>>) {
-        // Load current map (Arc<HashMap>)
-        let current_arc = (*self.listener_routes_map.load()).clone();
+        // Load current map (Arc<Arc<HashMap>>)
+        let current_arc = self.listener_routes_map.load();
         
         // Clone inner HashMap and apply incremental updates
-        let mut new_map: HashMap<String, Vec<Arc<TCPRoute>>> = (**current_arc).clone();
+        let mut new_map = (***current_arc).clone();
         
         for (listener_name, routes) in listener_routes {
             if routes.is_empty() {
@@ -77,7 +77,7 @@ impl GatewayTcpRoutes {
             }
         }
         
-        // Atomically swap to new map
+        // Atomically swap to new map (double-Arc for ArcSwap<Arc<T>>)
         self.listener_routes_map.store(Arc::new(Arc::new(new_map)));
     }
     
@@ -100,7 +100,7 @@ mod tests {
     use crate::types::resources::tcp_route::*;
     use crate::types::resources::common::ParentReference;
     
-    fn create_test_tcp_route(namespace: &str, name: &str, port: i32) -> TCPRoute {
+    fn create_test_tcp_route(namespace: &str, name: &str, listener_name: &str, port: i32) -> TCPRoute {
         TCPRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),
@@ -113,7 +113,7 @@ mod tests {
                     kind: Some("Gateway".to_string()),
                     namespace: Some(namespace.to_string()),
                     name: "test-gateway".to_string(),
-                    section_name: None,
+                    section_name: Some(listener_name.to_string()),
                     port: Some(port),
                 }]),
                 rules: Some(vec![]),
@@ -125,25 +125,25 @@ mod tests {
     fn test_gateway_tcp_routes_match() {
         let gateway_routes = GatewayTcpRoutes::new();
         
-        let route1 = Arc::new(create_test_tcp_route("default", "route1", 9000));
-        let route2 = Arc::new(create_test_tcp_route("default", "route2", 9001));
+        let route1 = Arc::new(create_test_tcp_route("default", "route1", "tcp-9000", 9000));
+        let route2 = Arc::new(create_test_tcp_route("default", "route2", "tcp-9001", 9001));
         
         let mut routes_map = HashMap::new();
-        routes_map.insert(9000, vec![route1.clone()]);
-        routes_map.insert(9001, vec![route2.clone()]);
+        routes_map.insert("tcp-9000".to_string(), vec![route1.clone()]);
+        routes_map.insert("tcp-9001".to_string(), vec![route2.clone()]);
         
         gateway_routes.update_routes(routes_map);
         
-        assert!(gateway_routes.match_route(9000).is_some());
-        assert!(gateway_routes.match_route(9001).is_some());
-        assert!(gateway_routes.match_route(9002).is_none());
+        assert!(gateway_routes.match_route("tcp-9000", 9000).is_some());
+        assert!(gateway_routes.match_route("tcp-9001", 9001).is_some());
+        assert!(gateway_routes.match_route("tcp-9002", 9002).is_none());
     }
     
     #[test]
     fn test_gateway_tcp_routes_empty() {
         let gateway_routes = GatewayTcpRoutes::new();
         assert!(gateway_routes.is_empty());
-        assert!(gateway_routes.match_route(9000).is_none());
+        assert!(gateway_routes.match_route("tcp-9000", 9000).is_none());
     }
 }
 

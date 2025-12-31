@@ -165,7 +165,7 @@ mod tests {
     use crate::types::ResourceMeta;
     use crate::types::resources::common::ParentReference;
     
-    fn create_test_tcp_route(namespace: &str, name: &str, gateway: &str, port: i32) -> TCPRoute {
+    fn create_test_tcp_route(namespace: &str, name: &str, gateway: &str, listener_name: &str, port: i32) -> TCPRoute {
         use crate::types::resources::tcp_route::*;
         
         TCPRoute {
@@ -180,7 +180,7 @@ mod tests {
                     kind: Some("Gateway".to_string()),
                     namespace: Some(namespace.to_string()),
                     name: gateway.to_string(),
-                    section_name: None,
+                    section_name: Some(listener_name.to_string()),
                     port: Some(port),
                 }]),
                 rules: Some(vec![TCPRouteRule {
@@ -204,8 +204,8 @@ mod tests {
         let manager = TcpRouteManager::new();
         
         let mut data = HashMap::new();
-        let route1 = create_test_tcp_route("default", "route1", "gateway1", 9000);
-        let route2 = create_test_tcp_route("default", "route2", "gateway1", 9001);
+        let route1 = create_test_tcp_route("default", "route1", "gateway1", "tcp-9000", 9000);
+        let route2 = create_test_tcp_route("default", "route2", "gateway1", "tcp-9001", 9001);
         
         data.insert("default/route1".to_string(), route1);
         data.insert("default/route2".to_string(), route2);
@@ -214,9 +214,9 @@ mod tests {
         
         // Test via GatewayTcpRoutes
         let gateway_routes = manager.get_or_create_gateway_tcp_routes("default", "gateway1");
-        assert!(gateway_routes.match_route(9000).is_some());
-        assert!(gateway_routes.match_route(9001).is_some());
-        assert!(gateway_routes.match_route(9002).is_none());
+        assert!(gateway_routes.match_route("tcp-9000", 9000).is_some());
+        assert!(gateway_routes.match_route("tcp-9001", 9001).is_some());
+        assert!(gateway_routes.match_route("tcp-9002", 9002).is_none());
     }
     
     #[test]
@@ -225,20 +225,20 @@ mod tests {
         
         // Add a route
         let mut add = HashMap::new();
-        let route1 = create_test_tcp_route("default", "route1", "gateway1", 9000);
+        let route1 = create_test_tcp_route("default", "route1", "gateway1", "tcp-9000", 9000);
         add.insert("default/route1".to_string(), route1);
         
         manager.partial_update(add, HashMap::new(), HashSet::new());
         
         // Test via GatewayTcpRoutes
         let gateway_routes = manager.get_or_create_gateway_tcp_routes("default", "gateway1");
-        assert!(gateway_routes.match_route(9000).is_some());
+        assert!(gateway_routes.match_route("tcp-9000", 9000).is_some());
         
         // Remove the route
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
         manager.partial_update(HashMap::new(), HashMap::new(), remove);
-        assert!(gateway_routes.match_route(9000).is_none());
+        assert!(gateway_routes.match_route("tcp-9000", 9000).is_none());
     }
 }
 

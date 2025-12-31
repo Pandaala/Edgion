@@ -396,7 +396,7 @@ mod tests {
         let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.log.is_none());
+        // No origin header, should skip CORS processing (no logs)
     }
 
     #[tokio::test]

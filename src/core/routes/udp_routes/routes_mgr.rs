@@ -104,6 +104,11 @@ impl UdpRouteManager {
         // Rebuild only affected listeners for this gateway
         let mut listener_routes: HashMap<String, Vec<Arc<UDPRoute>>> = HashMap::new();
         
+        // Initialize all affected listeners with empty vectors
+        for listener_name in affected_listeners {
+            listener_routes.insert(listener_name.clone(), Vec::new());
+        }
+        
         // Collect routes for this gateway's affected listeners
         for entry in self.routes_by_key.iter() {
             let route_key = entry.key();
@@ -120,22 +125,25 @@ impl UdpRouteManager {
             for (gw_key, listener_name) in gateway_listeners {
                 if gw_key == gateway_key && affected_listeners.contains(&listener_name) {
                     listener_routes
-                        .entry(listener_name)
-                        .or_insert_with(Vec::new)
+                        .get_mut(&listener_name)
+                        .unwrap()
                         .push(route.clone());
                 }
             }
         }
         
-        // Update only affected listeners in the gateway
-        if let Some(gateway_udp_routes) = self.gateway_udp_routes_map.get(gateway_key) {
-            gateway_udp_routes.update_listeners_incremental(listener_routes);
-            tracing::debug!(
-                gateway_key = %gateway_key,
-                listeners = affected_listeners.len(),
-                "Incrementally updated UDPRoute listeners"
-            );
-        }
+        // Update only affected listeners in the gateway (create if not exists)
+        let gateway_udp_routes = self.gateway_udp_routes_map
+            .entry(gateway_key.to_string())
+            .or_insert_with(|| Arc::new(GatewayUdpRoutes::new()))
+            .clone();
+        
+        gateway_udp_routes.update_listeners_incremental(listener_routes);
+        tracing::debug!(
+            gateway_key = %gateway_key,
+            listeners = affected_listeners.len(),
+            "Incrementally updated UDPRoute listeners"
+        );
     }
     
     /// Rebuild gateway routes maps after route changes (full rebuild, used for replace_all)
@@ -197,13 +205,19 @@ impl UdpRouteManager {
     pub fn add_route(&self, route: Arc<UDPRoute>) {
         let resource_key = route.key_name();
         
-        // Calculate affected gateways/listeners BEFORE insertion
-        let mut changed_keys = HashSet::new();
-        changed_keys.insert(resource_key.clone());
-        let affected = self.build_affected_gateway_listeners(&changed_keys, &HashSet::new());
+        // Extract affected gateway/listeners from the route directly
+        let gateway_listeners = self.extract_gateway_listener_pairs_from_route(&route);
         
         // Store by resource key
         self.routes_by_key.insert(resource_key.clone(), route);
+        
+        // Group by gateway_key
+        let mut affected: HashMap<String, HashSet<String>> = HashMap::new();
+        for (gateway_key, listener_name) in gateway_listeners {
+            affected.entry(gateway_key)
+                .or_insert_with(HashSet::new)
+                .insert(listener_name);
+        }
         
         let affected_count = affected.len();
         
