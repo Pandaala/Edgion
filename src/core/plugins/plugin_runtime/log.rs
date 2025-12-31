@@ -159,6 +159,26 @@ impl PluginLog {
         self.ulog.get_or_insert_with(ULogBuffer::new).push(log);
     }
 
+    /// Helper method for tests: checks if log buffer contains a substring
+    #[cfg(test)]
+    pub fn contains(&self, substr: &str) -> bool {
+        if let Some(ref log_buf) = self.log {
+            // Check in fixed-size buffer
+            if let Ok(content) = std::str::from_utf8(&log_buf.buffer) {
+                if content.contains(substr) {
+                    return true;
+                }
+            }
+        }
+        if let Some(ref ulog_buf) = self.ulog {
+            // Check in unlimited buffer
+            if ulog_buf.buffer.contains(substr) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Legacy method for backward compatibility (deprecated, use push() instead)
     #[inline]
     #[deprecated(note = "Use push() instead")]

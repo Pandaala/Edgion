@@ -86,20 +86,18 @@ impl RequestFilter for IpRestriction {
         let client_ip = match self.get_client_ip(session) {
             Some(ip) => ip,
             None => {
-                plugin_log.push("Failed to get client IP\n");
+                plugin_log.push("No client IP; ");
                 // If we can't determine IP, allow by default (or could be configured)
                 return PluginRunningResult::GoodNext;
             }
         };
-
-        plugin_log.push(&format!("Client IP: {}\n", client_ip));
 
         // Check access using config's check_ip_access method
         if !self.config.check_ip_access(&client_ip) {
             let message = self.config.message.as_deref()
                 .unwrap_or("Your IP address is not allowed to access this resource");
 
-            plugin_log.push(&format!("Access DENIED for {}\n", client_ip));
+            plugin_log.push("Denied; ");
 
             // Build error response
             let mut resp = Box::new(ResponseHeader::build(self.config.status, None).unwrap());
@@ -108,20 +106,18 @@ impl RequestFilter for IpRestriction {
             let body = Bytes::from(format!(r#"{{"message":"{}"}}"#, message));
 
             // Write response
-            if let Err(e) = session.write_response_header(resp, false).await {
-                plugin_log.push(&format!("Failed to write response header: {}\n", e));
+            if let Err(_e) = session.write_response_header(resp, false).await {
                 return PluginRunningResult::ErrTerminateRequest;
             }
 
-            if let Err(e) = session.write_response_body(Some(body), true).await {
-                plugin_log.push(&format!("Failed to write response body: {}\n", e));
+            if let Err(_e) = session.write_response_body(Some(body), true).await {
                 return PluginRunningResult::ErrTerminateRequest;
             }
 
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        plugin_log.push(&format!("Access ALLOWED for {}\n", client_ip));
+        plugin_log.push("Allowed; ");
         PluginRunningResult::GoodNext
     }
 }
@@ -174,7 +170,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.log.as_ref().unwrap().contains("ALLOWED"));
+        assert!(plugin_log.contains("Allowed"));
     }
 
     #[tokio::test]
@@ -197,7 +193,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.log.as_ref().unwrap().contains("DENIED"));
+        assert!(plugin_log.contains("Denied"));
     }
 
     #[tokio::test]
@@ -220,7 +216,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.log.as_ref().unwrap().contains("DENIED"));
+        assert!(plugin_log.contains("Denied"));
     }
 
     #[tokio::test]
@@ -237,7 +233,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.log.as_ref().unwrap().contains("ALLOWED"));
+        assert!(plugin_log.contains("Allowed"));
     }
 
     #[tokio::test]
@@ -254,6 +250,6 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.log.as_ref().unwrap().contains("Failed to get client IP"));
+        assert!(plugin_log.contains("No client IP"));
     }
 }

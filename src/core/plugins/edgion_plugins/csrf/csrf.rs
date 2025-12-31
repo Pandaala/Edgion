@@ -70,14 +70,14 @@ impl Csrf {
                     .http_only(false) // Intentionally false so JS can read to set header
                     .build();
 
-                if let Err(e) = session.set_response_header("Set-Cookie", &cookie.to_string()) {
-                    plugin_log.push(&format!("Failed to set cookie: {}; ", e));
+                if let Err(_e) = session.set_response_header("Set-Cookie", &cookie.to_string()) {
+                    plugin_log.push("Token set failed; ");
                 } else {
-                    plugin_log.push("Token set in cookie; ");
+                    plugin_log.push("Token set; ");
                 }
             }
-            Err(e) => {
-                plugin_log.push(&format!("Failed to encode token: {}; ", e));
+            Err(_e) => {
+                plugin_log.push("Token encode failed; ");
             }
         }
     }
@@ -94,18 +94,15 @@ impl RequestFilter for Csrf {
 
         // For safe methods, skip validation but set cookie for future use
         if SAFE_METHODS.contains(&method.as_str()) {
-            plugin_log.push(&format!("Safe method {}, setting token; ", method));
             self.set_csrf_cookie(session, plugin_log);
             return PluginRunningResult::GoodNext;
         }
-
-        plugin_log.push(&format!("Checking token for method {}; ", method));
 
         // 1. Get token from HEADER
         let header_token = match session.header_value(&self.config.name) {
             Some(token) if !token.is_empty() => token,
             _ => {
-                plugin_log.push("No token in headers; ");
+                plugin_log.push("No token in header; ");
                 return PluginRunningResult::ErrResponse {
                     status: 401,
                     body: Some(r#"{"error_msg":"no csrf token in headers"}"#.to_string()),
@@ -117,7 +114,7 @@ impl RequestFilter for Csrf {
         let cookie_token = match self.get_cookie_value(session, &self.config.name) {
             Some(token) => token,
             None => {
-                plugin_log.push("No csrf cookie; ");
+                plugin_log.push("No token in cookie; ");
                 return PluginRunningResult::ErrResponse {
                     status: 401,
                     body: Some(r#"{"error_msg":"no csrf cookie"}"#.to_string()),
@@ -138,18 +135,18 @@ impl RequestFilter for Csrf {
         match CsrfToken::decode(&cookie_token) {
             Ok(token) => {
                 if token.verify(&self.config.key, self.config.expires) {
-                    plugin_log.push("Token verified successfully; ");
+                    plugin_log.push("Token verified; ");
                     PluginRunningResult::GoodNext
                 } else {
-                    plugin_log.push("Failed to verify token signature; ");
+                    plugin_log.push("Token invalid; ");
                     PluginRunningResult::ErrResponse {
                         status: 401,
                         body: Some(r#"{"error_msg":"Failed to verify the csrf token signature"}"#.to_string()),
                     }
                 }
             }
-            Err(e) => {
-                plugin_log.push(&format!("Failed to decode token: {}; ", e));
+            Err(_e) => {
+                plugin_log.push("Token decode failed; ");
                 PluginRunningResult::ErrResponse {
                     status: 401,
                     body: Some(r#"{"error_msg":"Failed to verify the csrf token signature"}"#.to_string()),
@@ -185,7 +182,7 @@ mod tests {
         let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.log.as_ref().unwrap().contains("Safe method"));
+        assert!(plugin_log.contains("Token set"));
     }
 
     #[tokio::test]
@@ -209,7 +206,7 @@ mod tests {
             }
             _ => panic!("Expected ErrResponse"),
         }
-        assert!(plugin_log.log.as_ref().unwrap().contains("No token in headers"));
+        assert!(plugin_log.contains("No token in header"));
     }
 
     #[tokio::test]
@@ -237,7 +234,7 @@ mod tests {
             }
             _ => panic!("Expected ErrResponse"),
         }
-        assert!(plugin_log.log.as_ref().unwrap().contains("No csrf cookie"));
+        assert!(plugin_log.contains("No token in cookie"));
     }
 
     #[tokio::test]
@@ -266,6 +263,6 @@ mod tests {
             }
             _ => panic!("Expected ErrResponse"),
         }
-        assert!(plugin_log.log.as_ref().unwrap().contains("Token mismatch"));
+        assert!(plugin_log.contains("Token mismatch"));
     }
 }

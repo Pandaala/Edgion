@@ -63,19 +63,12 @@ impl CsrfToken {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
 
         if max_expires > 0 && now - self.expires > max_expires {
-            tracing::debug!(
-                "CSRF: Token expired (now: {}, expires: {}, max: {})",
-                now,
-                self.expires,
-                max_expires
-            );
             return false;
         }
 
         // Verify signature
         let expected_sign = Self::gen_sign(&self.random, self.expires, key);
         if self.sign != expected_sign {
-            tracing::debug!("CSRF: Invalid signature");
             return false;
         }
 

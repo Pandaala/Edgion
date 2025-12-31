@@ -217,36 +217,32 @@ impl RequestFilter for Cors {
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
         // Check if there's an Origin header (CORS indicator)
-        let origin_header = match session.header_value("origin") {
-            Some(origin) => origin,
-            None => {
-                // No Origin header means same-origin request, skip CORS
-                return PluginRunningResult::GoodNext;
-            }
-        };
+        if session.header_value("origin").is_none() {
+            // No Origin header means same-origin request, skip CORS
+            return PluginRunningResult::GoodNext;
+        }
 
         // Validate origin
         let allowed_origin = match self.get_validated_origin(session) {
             Some(origin) => origin,
             None => {
                 // Origin not allowed, don't set CORS headers (browser will block)
-                plugin_log.push(&format!("Rejecting request from origin '{}'; ", origin_header));
+                plugin_log.push("Origin rejected; ");
                 return PluginRunningResult::GoodNext;
             }
         };
 
         // Check if this is a preflight request
         if self.is_preflight_request(session) {
-            plugin_log.push(&format!("Handling preflight request from '{}'; ", origin_header));
-
-            if let Err(e) = self.handle_preflight(session, &allowed_origin).await {
-                plugin_log.push(&format!("Failed to handle preflight: {}; ", e));
+            if let Err(_e) = self.handle_preflight(session, &allowed_origin).await {
+                plugin_log.push("Preflight failed; ");
                 return PluginRunningResult::ErrTerminateRequest;
             }
 
+            plugin_log.push("Preflight handled; ");
+
             // If preflight_continue is true, continue to upstream
             if self.config.preflight_continue {
-                plugin_log.push("Forwarding preflight request to upstream; ");
                 return PluginRunningResult::GoodNext;
             }
 
@@ -254,11 +250,11 @@ impl RequestFilter for Cors {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        // Normal CORS request
-        plugin_log.push(&format!("Handling normal request from '{}'; ", origin_header));
-
-        if let Err(e) = self.handle_normal_request(session, &allowed_origin) {
-            plugin_log.push(&format!("Failed to set headers: {}; ", e));
+        // Normal CORS request - set response headers
+        if let Err(_e) = self.handle_normal_request(session, &allowed_origin) {
+            plugin_log.push("CORS set failed; ");
+        } else {
+            plugin_log.push("CORS resp set; ");
         }
 
         // Continue processing
@@ -330,7 +326,7 @@ mod tests {
         let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.log.as_ref().unwrap().contains("preflight"));
+        assert!(plugin_log.contains("Preflight handled"));
     }
 
     #[tokio::test]
@@ -363,7 +359,7 @@ mod tests {
         let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.log.as_ref().unwrap().contains("normal request"));
+        assert!(plugin_log.contains("CORS resp set"));
     }
 
     #[tokio::test]
@@ -382,7 +378,7 @@ mod tests {
         let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.log.as_ref().unwrap().contains("Rejecting"));
+        assert!(plugin_log.contains("Origin rejected"));
     }
 
     #[tokio::test]
@@ -438,6 +434,6 @@ mod tests {
         let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.log.as_ref().unwrap().contains("Forwarding preflight"));
+        assert!(plugin_log.contains("Preflight handled"));
     }
 }
