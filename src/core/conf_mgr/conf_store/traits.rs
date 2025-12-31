@@ -47,6 +47,9 @@ pub trait ConfStore: Send + Sync {
     
     /// List all configurations (for initialization)
     async fn list_all(&self) -> Result<Vec<ConfEntry>, ConfStoreError>;
+    
+    /// Enable downcasting to concrete types
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// Configuration entry with metadata and content

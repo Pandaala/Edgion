@@ -328,6 +328,10 @@ impl ConfStore for FileSystemStore {
         
         Ok(count)
     }
+    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// Build resource file path: Kind_namespace_name.yaml or Kind__name.yaml
