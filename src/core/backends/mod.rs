@@ -1,11 +1,14 @@
 pub mod services;
 pub mod endpoint_slice;
 pub mod endpoint;
+pub mod backend_tls;
 
 pub use services::{ServiceStore, get_global_service_store, create_service_handler};
 pub use endpoint_slice::{EpSliceStore, get_roundrobin_store, get_consistent_store, get_leastconn_store, get_ewma_store, create_ep_slice_handler};
 pub use endpoint::{EndpointStore, get_endpoint_roundrobin_store, get_endpoint_consistent_store, get_endpoint_leastconn_store, get_endpoint_ewma_store, create_endpoint_handler};
+pub use backend_tls::{BackendTLSPolicyStore, get_global_backend_tls_policy_store, create_backend_tls_policy_handler};
 
+use std::sync::Arc;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error as PingoraError, ErrorType};
@@ -13,6 +16,7 @@ use pingora_proxy::Session;
 use crate::core::gateway::end_response_503;
 use crate::core::utils::net::is_localhost;
 use crate::types::edgion_status::EdgionStatus;
+use crate::types::resources::BackendTLSPolicy;
 use crate::types::{ConsistentHashOn, EdgionHttpContext, HTTPBackendRef, ParsedLBPolicy};
 
 /// EdgionService defines the types of backend services
@@ -127,16 +131,28 @@ fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Ve
 /// Internal: try to get peer, returns Result with EdgionStatus on error
 fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -> Result<Box<HttpPeer>, EdgionStatus> {
     // Extract needed fields from backend_ref to avoid clone and borrow checker issues
-    let (br_name, br_port, br_kind, lb_policy) = if is_grpc {
+    let (br_name, br_port, br_kind, lb_policy, backend_tls_policy) = if is_grpc {
         // gRPC backend
         let grpc_br = ctx.selected_grpc_backend.as_ref()
             .ok_or(EdgionStatus::GrpcUpstreamNotBackendRefs)?;
-        (&grpc_br.name, grpc_br.port, grpc_br.kind.as_ref(), &grpc_br.extension_info.lb_policy)
+        (
+            &grpc_br.name, 
+            grpc_br.port, 
+            grpc_br.kind.as_ref(), 
+            &grpc_br.extension_info.lb_policy,
+            &grpc_br.backend_tls_policy,
+        )
     } else {
         // HTTP backend
         let http_br = ctx.selected_backend.as_ref()
             .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
-        (&http_br.name, http_br.port, http_br.kind.as_ref(), &http_br.extension_info.lb_policy)
+        (
+            &http_br.name, 
+            http_br.port, 
+            http_br.kind.as_ref(), 
+            &http_br.extension_info.lb_policy,
+            &http_br.backend_tls_policy,
+        )
     };
     
     let service_type = EdgionService::from_kind(br_kind);
@@ -189,6 +205,13 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 addr.set_port(port as u16);
             }
             
+            // Extract TLS configuration from BackendTLSPolicy
+            let (use_tls, sni) = if let Some(ref policy) = backend_tls_policy {
+                (true, policy.spec.validation.hostname.clone())
+            } else {
+                (false, String::new())
+            };
+            
             // Store backend address and LB policy in context for connection counting
             let addr_clone = addr.clone();
             let lb_policy_clone = lb_policy.clone();
@@ -197,7 +220,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 upstream.lb_policy = lb_policy_clone;
             }
             
-            Ok(Box::new(HttpPeer::new(addr, false, String::new())))
+            Ok(Box::new(HttpPeer::new(addr, use_tls, sni)))
         }
         
         EdgionService::ServiceClusterIp => {
@@ -235,7 +258,14 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 return Err(EdgionStatus::BackendLocalhostNotAllowed);
             }
             
-            Ok(Box::new(HttpPeer::new(addr, false, String::new())))
+            // Extract TLS configuration from BackendTLSPolicy
+            let (use_tls, sni) = if let Some(ref policy) = backend_tls_policy {
+                (true, policy.spec.validation.hostname.clone())
+            } else {
+                (false, String::new())
+            };
+            
+            Ok(Box::new(HttpPeer::new(addr, use_tls, sni)))
         }
         
         EdgionService::ServiceExternalName => {
@@ -273,7 +303,14 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 return Err(EdgionStatus::BackendLocalhostNotAllowed);
             }
             
-            Ok(Box::new(HttpPeer::new(addr, false, String::new())))
+            // Extract TLS configuration from BackendTLSPolicy
+            let (use_tls, sni) = if let Some(ref policy) = backend_tls_policy {
+                (true, policy.spec.validation.hostname.clone())
+            } else {
+                (false, String::new())
+            };
+            
+            Ok(Box::new(HttpPeer::new(addr, use_tls, sni)))
         }
         
         EdgionService::ServiceImport => {
@@ -281,6 +318,27 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             Err(EdgionStatus::BackendServiceImportNotImplemented)
         }
     }
+}
+
+/// Query BackendTLSPolicy for a given Service
+/// 
+/// Performs reverse lookup: finds all BackendTLSPolicies whose targetRefs point to the given Service.
+/// Returns the highest priority policy (sorted by Gateway API precedence rules).
+pub fn query_backend_tls_policy_for_service(
+    group: &str,
+    kind: &str,
+    name: &str,
+    namespace: Option<&str>,
+) -> Option<Arc<BackendTLSPolicy>> {
+    let policy_store = get_global_backend_tls_policy_store();
+    let policies = policy_store.get_policies_for_target(group, kind, name, namespace);
+    
+    if policies.is_empty() {
+        return None;
+    }
+    
+    // Return the highest priority policy (first one, already sorted)
+    policies.into_iter().next()
 }
 
 /// Get HTTP peer from service and endpoint slice stores using load balancing

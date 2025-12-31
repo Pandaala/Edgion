@@ -235,6 +235,12 @@ pub struct HTTPBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
+
+    /// BackendTLSPolicy for this backend (runtime only, not serialized)
+    /// Queried and populated during select_backend
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub backend_tls_policy: Option<Arc<crate::types::resources::BackendTLSPolicy>>,
 }
 
 /// HTTPRouteFilter defines processing steps that must be completed during the request/response lifecycle

@@ -12,5 +12,4 @@ pub mod observe;
 pub mod link_sys;
 pub mod api;
 pub mod ref_grant;
-pub mod backend_tls;
 mod gateway;

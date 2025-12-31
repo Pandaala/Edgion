@@ -2,6 +2,7 @@
 //!
 //! BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
 
+use std::collections::HashMap;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,11 @@ pub struct BackendTLSPolicySpec {
 
     /// Validation contains backend TLS validation configuration.
     pub validation: BackendTLSPolicyValidation,
+
+    /// Options are a list of key/value pairs to enable extended TLS configuration.
+    /// Implementation-specific field for configuring TLS options like minimum TLS version or cipher suites.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<HashMap<String, String>>,
 }
 
 /// BackendTLSPolicyTargetRef identifies an API object to apply policy to.
@@ -69,6 +75,12 @@ pub struct BackendTLSPolicyValidation {
     ///    served by the matching backend.
     pub hostname: String,
 
+    /// SubjectAltNames contains one or more Subject Alternative Names.
+    /// When specified, the certificate served from the backend MUST have at least one
+    /// Subject Alternative Name matching one of the specified SubjectAltNames.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_alt_names: Option<Vec<SubjectAltName>>,
+
     /// WellKnownCACertificates specifies whether system CA certificates may be used
     /// in the TLS handshake between the gateway and backend pod.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -94,6 +106,34 @@ pub struct BackendTLSPolicyCACertificateRef {
     /// namespace is inferred.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
+}
+
+/// SubjectAltName represents a Subject Alternative Name.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubjectAltName {
+    /// Type determines the format of the Subject Alternative Name.
+    #[serde(rename = "type")]
+    pub san_type: SubjectAltNameType,
+
+    /// Hostname contains Subject Alternative Name specified in DNS name format.
+    /// Required when Type is set to Hostname, ignored otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+
+    /// URI contains Subject Alternative Name specified in a full URI format.
+    /// Required when Type is set to URI, ignored otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+}
+
+/// SubjectAltNameType specifies the type of Subject Alternative Name.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+pub enum SubjectAltNameType {
+    /// Hostname type - DNS name format
+    Hostname,
+    /// URI type - full URI format (e.g., SPIFFE ID)
+    URI,
 }
 
 /// WellKnownCACertificates specifies whether system CA certificates may be used.

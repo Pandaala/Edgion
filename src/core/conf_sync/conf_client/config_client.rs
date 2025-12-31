@@ -97,7 +97,7 @@ impl ConfigClient {
         
         // Register BackendTLSPolicyStore as the handler for BackendTLSPolicy resources
         let backend_tls_policies_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
-        let backend_tls_policy_handler = crate::core::backend_tls::backend_tls_policy_store::create_backend_tls_policy_handler();
+        let backend_tls_policy_handler = crate::core::backends::create_backend_tls_policy_handler();
         backend_tls_policies_cache.set_conf_processor(backend_tls_policy_handler);
         
         Self {
