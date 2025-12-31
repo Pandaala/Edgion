@@ -235,6 +235,41 @@ impl ReferenceGrantStore {
         self.grants_by_to_namespace.store(Arc::new(new_index));
     }
 
+    /// Identify all namespaces affected by this update (public for conf_handler_impl)
+    pub(crate) fn identify_affected_namespaces(
+        &self,
+        add: &HashMap<String, ReferenceGrant>,
+        update: &HashMap<String, ReferenceGrant>,
+        remove: &std::collections::HashSet<String>,
+    ) -> std::collections::HashSet<String> {
+        let grants = self.grants.read().unwrap();
+        let mut affected = std::collections::HashSet::new();
+        
+        // Extract from new/updated grants
+        for grant in add.values().chain(update.values()) {
+            if let Some(ns) = grant.namespace() {
+                affected.insert(ns.to_string());
+            }
+            for from in &grant.spec.from {
+                affected.insert(from.namespace.clone());
+            }
+        }
+        
+        // Extract from removed grants
+        for key in remove {
+            if let Some(grant) = grants.get(key) {
+                if let Some(ns) = grant.namespace() {
+                    affected.insert(ns.to_string());
+                }
+                for from in &grant.spec.from {
+                    affected.insert(from.namespace.clone());
+                }
+            }
+        }
+        
+        affected
+    }
+
     /// Get all grants (for testing/debugging)
     #[cfg(test)]
     pub fn get_all(&self) -> HashMap<String, Arc<ReferenceGrant>> {

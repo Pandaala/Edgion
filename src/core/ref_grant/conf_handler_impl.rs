@@ -46,7 +46,10 @@ impl ConfHandler<ReferenceGrant> for Arc<ReferenceGrantStore> {
             "partial update"
         );
 
-        // Combine add and update into a single map
+        // 1. Identify affected namespaces before updating
+        let affected_namespaces = self.identify_affected_namespaces(&add, &update, &remove);
+
+        // 2. Combine add and update into a single map
         let mut add_or_update = HashMap::new();
         
         for (k, v) in add {
@@ -64,8 +67,20 @@ impl ConfHandler<ReferenceGrant> for Arc<ReferenceGrantStore> {
             tracing::debug!(key = %key, "Removing ReferenceGrant");
         }
 
-        // Perform incremental update
+        // 3. Perform incremental update
         self.update_incremental(add_or_update, &remove);
+
+        // 4. Dispatch event to trigger revalidation
+        if !affected_namespaces.is_empty() {
+            let event = super::events::ReferenceGrantChangedEvent { affected_namespaces: affected_namespaces.clone() };
+            super::events::get_global_dispatcher().dispatch(&event);
+            
+            tracing::info!(
+                component = "ref_grant_store",
+                affected_ns = ?affected_namespaces,
+                "ReferenceGrant changed, event dispatched"
+            );
+        }
     }
 }
 

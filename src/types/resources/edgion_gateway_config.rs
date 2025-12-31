@@ -49,6 +49,12 @@ pub struct EdgionGatewayConfigSpec {
     /// Preflight request handling policy
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preflight_policy: Option<PreflightPolicy>,
+
+    /// Enable ReferenceGrant validation for cross-namespace references (default: false)
+    /// When enabled, cross-namespace references in Routes and Gateways will be validated
+    /// against ReferenceGrant policies
+    #[serde(default)]
+    pub enable_reference_grant_validation: bool,
 }
 
 // ============================================

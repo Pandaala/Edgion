@@ -7,6 +7,10 @@
 
 mod store;
 mod conf_handler_impl;
+mod validator;
+pub mod events;
 
 pub use store::{ReferenceGrantStore, get_global_reference_grant_store};
 pub use conf_handler_impl::create_reference_grant_handler;
+pub use validator::CrossNamespaceValidator;
+pub use events::{ReferenceGrantChangedEvent, RevalidationListener, get_global_dispatcher};

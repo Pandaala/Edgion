@@ -1,0 +1,25 @@
+apiVersion: edgion.com/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: edgion-gateway-config-with-ref-grant
+spec:
+  # Enable ReferenceGrant validation for cross-namespace references
+  # Default: false (disabled)
+  # When enabled, cross-namespace references in Routes and Gateways will be 
+  # validated against ReferenceGrant policies
+  enableReferenceGrantValidation: true
+  
+  # Other gateway configurations
+  maxRetries: 3
+  
+  httpTimeout:
+    readTimeout: 30s
+    writeTimeout: 30s
+    idleTimeout: 120s
+  
+  realIp:
+    from:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+    header: X-Forwarded-For
+
