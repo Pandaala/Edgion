@@ -359,13 +359,11 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
 /// Performs reverse lookup: finds all BackendTLSPolicies whose targetRefs point to the given Service.
 /// Returns the highest priority policy (sorted by Gateway API precedence rules).
 pub fn query_backend_tls_policy_for_service(
-    group: &str,
-    kind: &str,
     name: &str,
     namespace: Option<&str>,
 ) -> Option<Arc<BackendTLSPolicy>> {
     let policy_store = get_global_backend_tls_policy_store();
-    let policies = policy_store.get_policies_for_target(group, kind, name, namespace);
+    let policies = policy_store.get_policies_for_target(name, namespace);
     
     if policies.is_empty() {
         return None;

@@ -109,16 +109,15 @@ impl BackendTLSPolicyStore {
     }
 
     /// Build a target key from target reference components
+    /// Key format: namespace/name
     #[inline]
     fn build_target_key(
         policy_namespace: &str,
         target_ref: &crate::types::resources::backend_tls_policy::BackendTLSPolicyTargetRef,
     ) -> String {
         let target_namespace = target_ref.namespace.as_deref().unwrap_or(policy_namespace);
-        let target_group = &target_ref.group;
-        let target_kind = &target_ref.kind;
         let target_name = &target_ref.name;
-        format!("{}/{}/{}/{}", target_namespace, target_group, target_kind, target_name)
+        format!("{}/{}", target_namespace, target_name)
     }
 
     /// Extract all target keys from a policy
@@ -311,16 +310,14 @@ impl BackendTLSPolicyStore {
     /// 2. Alphabetically by name (on ties)
     pub fn get_policies_for_target(
         &self,
-        group: &str,
-        kind: &str,
         name: &str,
         namespace: Option<&str>,
     ) -> Vec<Arc<BackendTLSPolicy>> {
         let index = self.reverse_index.load();
         
-        // Build target key
+        // Build target key (namespace/name)
         let target_namespace = namespace.unwrap_or("");
-        let target_key = format!("{}/{}/{}/{}", target_namespace, group, kind, name);
+        let target_key = format!("{}/{}", target_namespace, name);
         
         // O(1) lookup in reverse index
         index

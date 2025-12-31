@@ -175,7 +175,7 @@ mod tests {
         store.full_set(&data);
         
         // Should find both policies for svc1
-        let policies = store.get_policies_for_target("", "Service", "svc1", Some("default"));
+        let policies = store.get_policies_for_target("svc1", Some("default"));
         assert_eq!(policies.len(), 2);
     }
 

@@ -41,6 +41,46 @@ echo_error() {
     echo -e "${RED}[✗]${NC} $1"
 }
 
+# 参数解析
+SERVER_ONLY_MODE=false
+show_help() {
+    cat << EOF
+Usage: $0 [OPTIONS]
+
+Options:
+  -s, --server-only    Start services only (for manual testing)
+  -h, --help          Show this help message
+
+Examples:
+  $0                   # Run full integration test
+  $0 --server-only     # Start services and wait for manual testing
+
+EOF
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -s|--server-only)
+            SERVER_ONLY_MODE=true
+            shift
+            ;;
+        -h|--help)
+            show_help
+            ;;
+        *)
+            echo_error "Unknown option: $1"
+            show_help
+            ;;
+    esac
+done
+
+if [ "$SERVER_ONLY_MODE" = true ]; then
+    echo_info "Mode: Server-Only (manual testing)"
+else
+    echo_info "Mode: Full Integration Test"
+fi
+
 echo_info "Test run ID: ${TEST_RUN_ID}"
 echo_info "Logs will be saved to: ${LOG_DIR}"
 
@@ -258,6 +298,43 @@ wait_for_port 10080 "edgion-gateway" "${PID_DIR}/gateway.pid" 30 || {
     echo "         Manual: cd $PROJECT_DIR && EDGION_ACCESS_LOG=$ACCESS_LOG EDGION_TEST_ACCESS_LOG_PATH=$ACCESS_LOG cargo run --bin edgion-gateway"
     exit 1
 }
+
+# Server-only mode: display info and wait
+if [ "$SERVER_ONLY_MODE" = true ]; then
+    echo ""
+    echo "=========================================="
+    echo "  Services Ready (Server-Only Mode)"
+    echo "=========================================="
+    echo ""
+    echo_success "All services are running!"
+    echo ""
+    echo_info "Log files:"
+    echo "  - Controller:  $CONTROLLER_LOG"
+    echo "  - Gateway:     $GATEWAY_LOG"
+    echo "  - Test Server: $TEST_SERVER_LOG"
+    echo "  - Access Log:  $ACCESS_LOG"
+    echo ""
+    echo_info "To run tests manually:"
+    echo ""
+    echo "  # HTTP tests"
+    echo "  cargo run --example test_client -- --gateway http"
+    echo ""
+    echo "  # Backend TLS tests"
+    echo "  cargo run --example test_client -- --gateway backend-tls"
+    echo ""
+    echo "  # All gateway tests"
+    echo "  cargo run --example test_client -- --gateway all"
+    echo ""
+    echo_warn "Press Ctrl+C to stop all services and exit"
+    echo ""
+    
+    # Wait indefinitely until user interrupts
+    trap "echo ''; echo_info 'Stopping all services...'; ${SCRIPT_DIR}/kill_all.sh; echo_success 'All services stopped'; exit 0" SIGINT SIGTERM
+    
+    while true; do
+        sleep 1
+    done
+fi
 
 # 4. Verify configuration loading
 echo ""

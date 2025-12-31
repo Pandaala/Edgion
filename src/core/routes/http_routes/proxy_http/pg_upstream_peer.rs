@@ -162,15 +162,11 @@ pub async fn select_http_backend(
     };
     
     // Query BackendTLSPolicy using route namespace for proper namespace inheritance
-    let service_group = backend_ref.group.as_deref().unwrap_or("");
-    let service_kind = backend_ref.kind.as_deref().unwrap_or("Service");
     let service_name = &backend_ref.name;
     // If backend_ref.namespace is None, inherit from route namespace
     let service_namespace = backend_ref.namespace.as_deref().or(Some(route_unit.matched_info.rns.as_str()));
     
     backend_ref.backend_tls_policy = crate::core::backends::query_backend_tls_policy_for_service(
-        service_group,
-        service_kind,
         service_name,
         service_namespace,
     );
