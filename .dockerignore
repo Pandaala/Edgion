@@ -1,0 +1,75 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+**/*.pdb
+
+# Cargo files (except Cargo.toml and Cargo.lock which are needed)
+.cargo/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.iml
+.project
+.settings/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and runtime files
+logs/
+*.log
+examples/testing/logs_*/
+runtime/
+
+# Test reports
+test_report.json
+*_report.json
+*.txt
+
+# Test certificates (auto-generated)
+examples/testing/certs/
+examples/conf/Secret_*.yaml
+
+# Documentation (not needed in image)
+docs/
+*.md
+!README.md
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Development tools
+Makefile
+scripts/
+
+# Examples and testing
+examples/
+tests/
+
+# License files
+LICENSE
+LICENSE-*
+
+# Backup files
+*.bak
+*.backup
+*.old
+
