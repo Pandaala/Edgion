@@ -216,18 +216,7 @@ else
 fi
 echo ""
 
-# 0.5 生成 mTLS 证书
-echo_info "Generating mTLS certificates..."
-"${SCRIPT_DIR}/scripts/generate_mtls_certs.sh"
-if [ $? -eq 0 ]; then
-    echo_success "mTLS certificates generated"
-else
-    echo_error "Failed to generate mTLS certificates"
-    exit 1
-fi
-echo ""
-
-# 0.6 生成后端 TLS 证书
+# 0.5 生成后端 TLS 证书
 echo_info "Generating backend TLS certificates..."
 "${SCRIPT_DIR}/scripts/generate_backend_certs.sh"
 if [ $? -eq 0 ]; then
@@ -238,15 +227,10 @@ else
 fi
 echo ""
 
-# 0.7 mTLS 配置说明
-# mTLS 测试配置（EdgionTls, Gateway, HTTPRoute）已在 examples/conf/ 中
-# 只有 Secret 文件需要动态生成（已在步骤 0.5 中完成）
-echo_info "mTLS test configs ready in examples/conf/"
-echo ""
-
 # 1. 启动 test_server
-echo_info "Starting test_server..."
+echo_info "Starting test_server with Backend TLS support..."
 cd "$PROJECT_DIR"
+
 cargo run --example test_server -- \
   --https-backend-port 30051 \
   --cert-file "${SCRIPT_DIR}/certs/backend/server.crt" \
