@@ -169,11 +169,9 @@ impl ConfigSyncClient {
     pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
         // Watch all resources including base_conf resources
         let resource_kinds = vec![
-            // Base conf resources (now watched for dynamic updates)
             GatewayClass,
             EdgionGatewayConfig,
             Gateway,
-            // Other resources
             HTTPRoute,
             GRPCRoute,
             TCPRoute,

@@ -59,6 +59,34 @@ console = true
 buffer_size = 10000
 
 # ================================================================================
+# Pingora Server Configuration
+# ================================================================================
+[server]
+# Number of worker threads (default: number of CPU cores)
+# 工作线程数，建议设置为 CPU 核心数
+# threads = 4
+
+# Enable work stealing (default: true)
+# 启用工作窃取调度，提高负载均衡性能
+# work_stealing = true
+
+# Grace period for shutdown in seconds (default: 30)
+# 优雅关闭的宽限期，允许现有连接完成处理
+# grace_period_seconds = 30
+
+# Graceful shutdown timeout in seconds (default: 10)
+# 优雅关闭超时时间，超时后强制关闭连接
+# graceful_shutdown_timeout_seconds = 10
+
+# Upstream keepalive pool size (default: 128)
+# 上游连接池大小，复用到后端服务的连接
+# upstream_keepalive_pool_size = 128
+
+# Error log file path (optional)
+# Pingora 内部错误日志路径
+# error_log = "logs/pingora_error.log"
+
+# ================================================================================
 # Access Log Configuration
 # ================================================================================
 # Access log 支持多种输出目标：LocalFile, Elasticsearch, Kafka 等

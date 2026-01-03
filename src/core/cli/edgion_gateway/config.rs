@@ -30,6 +30,10 @@ pub struct EdgionGatewayConfig {
     #[command(flatten)]
     #[serde(default)]
     pub access_log: AccessLogConfig,
+
+    #[command(flatten)]
+    #[serde(default)]
+    pub server: ServerConfig,
 }
 
 fn default_prefix_dir() -> PathBuf {
@@ -64,6 +68,53 @@ impl Default for AccessLogConfig {
     fn default() -> Self {
         Self {
             output: StringOutput::default(),
+        }
+    }
+}
+
+/// Pingora server configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Args)]
+pub struct ServerConfig {
+    /// Number of worker threads (default: number of CPU cores)
+    #[arg(long = "threads", value_name = "NUM")]
+    #[serde(default)]
+    pub threads: Option<usize>,
+    
+    /// Enable work stealing (default: true)
+    #[arg(long = "work-stealing")]
+    #[serde(default)]
+    pub work_stealing: Option<bool>,
+    
+    /// Grace period for shutdown in seconds (default: 30)
+    #[arg(long = "grace-period", value_name = "SECS")]
+    #[serde(default)]
+    pub grace_period_seconds: Option<u64>,
+    
+    /// Graceful shutdown timeout in seconds (default: 10)
+    #[arg(long = "graceful-shutdown-timeout", value_name = "SECS")]
+    #[serde(default)]
+    pub graceful_shutdown_timeout_seconds: Option<u64>,
+    
+    /// Upstream keepalive pool size (default: 128)
+    #[arg(long = "upstream-keepalive-pool-size", value_name = "SIZE")]
+    #[serde(default)]
+    pub upstream_keepalive_pool_size: Option<usize>,
+    
+    /// Error log file path (optional)
+    #[arg(long = "error-log", value_name = "FILE")]
+    #[serde(default)]
+    pub error_log: Option<String>,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            threads: None,
+            work_stealing: None,
+            grace_period_seconds: None,
+            graceful_shutdown_timeout_seconds: None,
+            upstream_keepalive_pool_size: None,
+            error_log: None,
         }
     }
 }

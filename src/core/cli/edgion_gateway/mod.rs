@@ -1,5 +1,5 @@
 use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
-use crate::core::gateway::gateway_base::GatewayBase;
+use crate::core::observe::access_log::init_access_logger;
 use crate::core::observe::init_logging;
 use crate::types::prefix_dir;
 use anyhow::{anyhow, Result};
@@ -8,8 +8,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub mod config;
+mod pingora;
 
 use config::EdgionGatewayConfig;
+use crate::core::cli::edgion_gateway::pingora::{create_and_configure_server, run_server};
+use crate::core::api::gateway;
+use crate::core::conf_sync::init_global_config_client;
+use crate::core::lb::leastconn::BackendCleaner;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -51,14 +56,14 @@ impl EdgionGatewayCli {
         Self::spawn_config_printer(config_client.clone());
         
         // Start backend cleaner
-        let cleaner = crate::core::lb::leastconn::BackendCleaner::new();
+        let cleaner = BackendCleaner::new();
         cleaner.start();
         tracing::info!("Backend cleaner task started for LeastConnection LB");
         
         // Spawn Admin API server
         let config_client_for_admin = config_client.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::core::api::gateway::serve(config_client_for_admin, 5900).await {
+            if let Err(e) = gateway::serve(config_client_for_admin, 5900).await {
                 tracing::error!(
                     component = "admin_api_gateway",
                     event = "server_error",
@@ -146,7 +151,7 @@ impl EdgionGatewayCli {
         let config_client = sync_client.get_config_client();
         
         // 4. Set global config client
-        crate::core::conf_sync::init_global_config_client(config_client.clone())
+        init_global_config_client(config_client.clone())
             .map_err(|e| anyhow!("Failed to initialize global config client: {}", e))?;
         
         // 5. Start watching all resources
@@ -159,29 +164,25 @@ impl EdgionGatewayCli {
         // 7. Wait for all resources ready (including Gateway/GatewayClass/EdgionGatewayConfig)
         runtime.block_on(Self::wait_for_ready(config_client.clone()))?;
         
-        // 8. Create AccessLogger
-        let access_logger = runtime.block_on(
-            crate::core::gateway::gateway_base::create_access_logger(&config.access_log)
-        )?;
+        // 8. Initialize global AccessLogger
+        runtime.block_on(init_access_logger(&config.access_log))?;
         
-        // 9. Create GatewayBase
-        let gateway = Arc::new(GatewayBase::new(config_client, access_logger));
-        
-        // 10. Bootstrap gateway (must be in Tokio runtime context for UDP listeners)
-        runtime.block_on(async {
-            gateway.bootstrap()
+        // 9. Create and configure Pingora server (in Tokio runtime context for UDP listeners)
+        let pingora_server = runtime.block_on(async {
+            tokio::task::spawn_blocking(move || {
+                create_and_configure_server(config_client, &config)
+            }).await.expect("Failed to spawn blocking task")
         })?;
-        tracing::info!("Gateway bootstrap completed");
         
-        // 11. Move runtime to background thread
+        // 10. Move runtime to background thread to keep async tasks running
         std::thread::spawn(move || {
             runtime.block_on(async {
                 std::future::pending::<()>().await;
             });
         });
         
-        // 12. Run Pingora in main thread (blocks until shutdown)
-        gateway.run_forever();
+        // 11. Run Pingora server (blocks until shutdown)
+        run_server(pingora_server);
         
         Ok(())
     }
