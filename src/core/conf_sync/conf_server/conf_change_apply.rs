@@ -15,9 +15,27 @@ where
 }
 
 impl ConfigServer {
+    /// Check if a Gateway exists in the gateway cache
+    fn has_gateway(&self, namespace: Option<&String>, name: Option<&String>) -> bool {
+        if let Some(name_str) = name {
+            let gateways = self.gateways.list_owned();
+            gateways.data.iter().any(|gw| {
+                let gw_name_matches = gw.metadata.name.as_ref() == Some(name_str);
+                let gw_namespace_matches = match (namespace, &gw.metadata.namespace) {
+                    (Some(ns), Some(gw_ns)) => ns == gw_ns,
+                    (None, None) => true,
+                    _ => false,
+                };
+                gw_name_matches && gw_namespace_matches
+            })
+        } else {
+            false
+        }
+    }
+
     /// Apply HTTPRoute change with gateway validation
     pub fn apply_http_route_change(&self, change: ResourceChange, resource: HTTPRoute) {
-        // Check if HTTPRoute references a gateway that exists in base_conf
+        // Check if HTTPRoute references a gateway that exists
         let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
             if let Some(first_ref) = parent_refs.first() {
                 let gateway_namespace = first_ref
@@ -26,8 +44,7 @@ impl ConfigServer {
                     .or_else(|| resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
-                let base_conf_guard = self.base_conf.read().unwrap();
-                base_conf_guard.has_gateway(gateway_namespace, gateway_name)
+                self.has_gateway(gateway_namespace, gateway_name)
             } else {
                 false
             }
@@ -43,7 +60,7 @@ impl ConfigServer {
                         first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
-                    (info, "HTTPRoute references a Gateway that does not exist in base_conf, skipping")
+                    (info, "HTTPRoute references a Gateway that does not exist, skipping")
                 } else {
                     ("no parent_refs".to_string(), "HTTPRoute has empty parent_refs, skipping")
                 }
@@ -83,8 +100,7 @@ impl ConfigServer {
                     .or_else(|| resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
-                let base_conf_guard = self.base_conf.read().unwrap();
-                base_conf_guard.has_gateway(gateway_namespace, gateway_name)
+                self.has_gateway(gateway_namespace, gateway_name)
             } else {
                 false
             }
@@ -100,7 +116,7 @@ impl ConfigServer {
                         first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
-                    (info, "GRPCRoute references a Gateway that does not exist in base_conf, skipping")
+                    (info, "GRPCRoute references a Gateway that does not exist, skipping")
                 } else {
                     ("no parent_refs".to_string(), "GRPCRoute has empty parent_refs, skipping")
                 }
@@ -140,8 +156,7 @@ impl ConfigServer {
                     .or_else(|| resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
-                let base_conf_guard = self.base_conf.read().unwrap();
-                base_conf_guard.has_gateway(gateway_namespace, gateway_name)
+                self.has_gateway(gateway_namespace, gateway_name)
             } else {
                 false
             }
@@ -157,7 +172,7 @@ impl ConfigServer {
                         first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
-                    (info, "TCPRoute references a Gateway that does not exist in base_conf, skipping")
+                    (info, "TCPRoute references a Gateway that does not exist, skipping")
                 } else {
                     ("no parent_refs".to_string(), "TCPRoute has empty parent_refs, skipping")
                 }
@@ -197,8 +212,7 @@ impl ConfigServer {
                     .or_else(|| resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
-                let base_conf_guard = self.base_conf.read().unwrap();
-                base_conf_guard.has_gateway(gateway_namespace, gateway_name)
+                self.has_gateway(gateway_namespace, gateway_name)
             } else {
                 false
             }
@@ -214,7 +228,7 @@ impl ConfigServer {
                         first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
-                    (info, "UDPRoute references a Gateway that does not exist in base_conf, skipping")
+                    (info, "UDPRoute references a Gateway that does not exist, skipping")
                 } else {
                     ("no parent_refs".to_string(), "UDPRoute has empty parent_refs, skipping")
                 }
@@ -254,8 +268,7 @@ impl ConfigServer {
                     .or_else(|| resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
-                let base_conf_guard = self.base_conf.read().unwrap();
-                base_conf_guard.has_gateway(gateway_namespace, gateway_name)
+                self.has_gateway(gateway_namespace, gateway_name)
             } else {
                 false
             }
@@ -270,7 +283,7 @@ impl ConfigServer {
                 kind = "TLSRoute",
                 route_name = ?resource.metadata.name,
                 route_namespace = ?resource.metadata.namespace,
-                "TLSRoute references a Gateway that does not exist in base_conf, skipping"
+                "TLSRoute references a Gateway that does not exist, skipping"
             );
             return;
         }
@@ -295,8 +308,7 @@ impl ConfigServer {
                     .or_else(|| resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
-                let base_conf_guard = self.base_conf.read().unwrap();
-                base_conf_guard.has_gateway(gateway_namespace, gateway_name)
+                self.has_gateway(gateway_namespace, gateway_name)
             } else {
                 false
             }
@@ -312,7 +324,7 @@ impl ConfigServer {
                         first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
-                    (info, "EdgionTls references a Gateway that does not exist in base_conf, skipping")
+                    (info, "EdgionTls references a Gateway that does not exist, skipping")
                 } else {
                     ("no parent_refs".to_string(), "EdgionTls has empty parent_refs, skipping")
                 }

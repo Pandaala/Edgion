@@ -39,11 +39,6 @@ fn default_prefix_dir() -> PathBuf {
 /// Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
 pub struct GatewayConfig {
-    /// Gateway class name
-    #[arg(long = "gateway-class", value_name = "NAME")]
-    #[serde(default)]
-    pub gateway_class: Option<String>,
-
     /// Operator gRPC address (e.g., http://127.0.0.1:50051)
     #[arg(long = "server-addr", value_name = "ADDR")]
     #[serde(default)]
@@ -129,7 +124,6 @@ fn default_buffer_size() -> usize {
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
-            gateway_class: None,
             server_addr: None,
             admin_listen: None,
         }
@@ -179,9 +173,6 @@ impl EdgionGatewayConfig {
         }
         
         // Gateway config
-        if cli.gateway.gateway_class.is_some() {
-            base.gateway.gateway_class = cli.gateway.gateway_class.clone();
-        }
         if cli.gateway.server_addr.is_some() {
             base.gateway.server_addr = cli.gateway.server_addr.clone();
         }
@@ -202,11 +193,6 @@ impl EdgionGatewayConfig {
 
         // Access log config (CLI doesn't support overriding, only from file)
         // No merge needed as there are no CLI args for access_log
-    }
-
-    /// Get gateway_class
-    pub fn gateway_class(&self) -> Option<String> {
-        self.gateway.gateway_class.clone()
     }
 
     /// Get server_addr

@@ -18,9 +18,6 @@ where
     // gRPC conf_client (optional, for sync/watch)
     pub(crate) grpc_client: Arc<AsyncRwLock<Option<ConfigSyncClientService<Channel>>>>,
 
-    // gateway class key
-    pub(crate) gateway_class_key: Arc<String>,
-
     // conf_client identification
     pub(crate) client_id: Arc<String>,
     pub(crate) client_name: Arc<String>,
@@ -31,7 +28,6 @@ impl<T: kube::Resource> Clone for ClientCache<T> {
         Self {
             cache_data: self.cache_data.clone(),
             grpc_client: self.grpc_client.clone(),
-            gateway_class_key: self.gateway_class_key.clone(),
             client_id: self.client_id.clone(),
             client_name: self.client_name.clone(),
         }
@@ -39,11 +35,10 @@ impl<T: kube::Resource> Clone for ClientCache<T> {
 }
 
 impl<T: ResourceMeta + Resource> ClientCache<T> {
-    pub fn new(gateway_class_key: String, client_id: String, client_name: String) -> Self {
+    pub fn new(client_id: String, client_name: String) -> Self {
         Self {
             cache_data: Arc::new(RwLock::new(CacheData::new())),
             grpc_client: Arc::new(AsyncRwLock::new(None)),
-            gateway_class_key: Arc::new(gateway_class_key),
             client_id: Arc::new(client_id),
             client_name: Arc::new(client_name),
         }

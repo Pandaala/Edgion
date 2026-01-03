@@ -51,14 +51,21 @@ impl KubernetesController {
         // Run all watchers concurrently
         // Note: If any watcher fails, all will be cancelled
         tokio::try_join!(
+            // Base conf resources
+            self.watch_gateway_classes(),
+            self.watch_gateways(),
+            self.watch_edgion_gateway_configs(),
+            // Route resources
             self.watch_http_routes(),
             self.watch_grpc_routes(),
             self.watch_tcp_routes(),
             self.watch_udp_routes(),
             self.watch_tls_routes(),
+            // Backend resources
             self.watch_services(),
             self.watch_endpoints(),
             self.watch_endpoint_slices(),
+            // Other resources
             self.watch_secrets(),
             self.watch_reference_grants(),
             self.watch_edgion_plugins(),
@@ -307,6 +314,44 @@ impl KubernetesController {
         while let Some(event) = watcher.try_next().await? {
             self.handle_event(event, "LinkSys", |server, change, resource| {
                 server.link_sys.apply_change(change, resource);
+            }).await?;
+        }
+        Ok(())
+    }
+    
+    // Base conf resources watchers
+    
+    async fn watch_gateway_classes(&self) -> Result<()> {
+        let api: Api<GatewayClass> = Api::all(self.client.clone());
+        let watcher = watcher(api, Default::default());
+        tokio::pin!(watcher);
+        while let Some(event) = watcher.try_next().await? {
+            self.handle_event(event, "GatewayClass", |server, change, resource| {
+                server.gateway_classes.apply_change(change, resource);
+            }).await?;
+        }
+        Ok(())
+    }
+    
+    async fn watch_gateways(&self) -> Result<()> {
+        let api: Api<Gateway> = Api::all(self.client.clone());
+        let watcher = watcher(api, Default::default());
+        tokio::pin!(watcher);
+        while let Some(event) = watcher.try_next().await? {
+            self.handle_event(event, "Gateway", |server, change, resource| {
+                server.gateways.apply_change(change, resource);
+            }).await?;
+        }
+        Ok(())
+    }
+    
+    async fn watch_edgion_gateway_configs(&self) -> Result<()> {
+        let api: Api<EdgionGatewayConfig> = Api::all(self.client.clone());
+        let watcher = watcher(api, Default::default());
+        tokio::pin!(watcher);
+        while let Some(event) = watcher.try_next().await? {
+            self.handle_event(event, "EdgionGatewayConfig", |server, change, resource| {
+                server.edgion_gateway_configs.apply_change(change, resource);
             }).await?;
         }
         Ok(())

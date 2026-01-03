@@ -1,11 +1,9 @@
 use crate::core::conf_sync::conf_client::ConfigClient;
 use crate::core::conf_sync::proto::{
-    config_sync_client::ConfigSyncClient as ConfigSyncClientService, GetBaseConfRequest,
+    config_sync_client::ConfigSyncClient as ConfigSyncClientService,
 };
 use crate::types::prelude_resources::*;
-use crate::types::GatewayBaseConf;
 use crate::types::ResourceKind::*;
-use rand::Rng;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;
@@ -23,13 +21,11 @@ impl ConfigSyncClient {
     /// Uses lazy connection to allow cold start even if the server is not available immediately.
     pub async fn new(
         grpc_server_addr: &str,
-        gateway_class_key: String,
         client_name: String,
         timeout: Duration,
     ) -> Result<Self, tonic::transport::Error> {
         let client_id = Uuid::new_v4().to_string();
         let config_client = Arc::new(ConfigClient::new(
-            gateway_class_key,
             client_id.clone(),
             client_name.clone(),
         ));
@@ -62,6 +58,9 @@ impl ConfigSyncClient {
 
         // Set gRPC conf_client for each cache immediately
         // Since it's a lazy channel, these calls won't fail due to connection issues
+        config_client.gateway_classes().set_grpc_client(client.clone()).await;
+        config_client.gateways().set_grpc_client(client.clone()).await;
+        config_client.edgion_gateway_configs().set_grpc_client(client.clone()).await;
         config_client.routes().set_grpc_client(client.clone()).await;
         config_client.grpc_routes().set_grpc_client(client.clone()).await;
         config_client.tcp_routes().set_grpc_client(client.clone()).await;
@@ -90,82 +89,6 @@ impl ConfigSyncClient {
         self.config_client.clone()
     }
 
-    /// Fetch and initialize base configuration from conf_server
-    /// This method will block and retry infinitely until the base configuration is successfully fetched.
-    async fn fetch_and_init_base_conf(&mut self, gateway_class_key: &str) -> Result<(), tonic::Status> {
-        // Loop until success
-        loop {
-            // Clone request for potential retries (Request is consumed by call)
-            // Note: In tonic, Request cannot be easily cloned if it contains metadata/extensions that are not cloneable.
-            // But here GetBaseConfRequest is a simple proto struct, so we can just recreate it.
-            let req = tonic::Request::new(GetBaseConfRequest {
-                gateway_class: gateway_class_key.to_string(),
-            });
-
-            match self.conf_client_handle.get_base_conf(req).await {
-                Ok(response) => {
-                    let base_conf_response = response.into_inner();
-                    tracing::info!(base_conf_bytes = base_conf_response.base_conf.len(), "Init base_conf");
-
-                    // Parse GatewayBaseConf
-                    if !base_conf_response.base_conf.is_empty() {
-                        match serde_json::from_str::<GatewayBaseConf>(&base_conf_response.base_conf) {
-                            Ok(mut base_conf) => {
-                                // Rebuild gateway_map after deserialization
-                                base_conf.rebuild_gateway_map();
-
-                                println!("[ConfigClient] Parsed GatewayBaseConf");
-                                self.config_client.init_base_conf(base_conf);
-                                tracing::info!("Base configuration initialized");
-                                return Ok(());
-                            }
-                            Err(e) => {
-                                tracing::error!(error = %e, "Failed to parse base conf, will retry");
-                                // If parsing fails, it might be a data issue, but we still retry in case it's transient
-                                // or if we want to wait for a fix on the server side.
-                            }
-                        }
-                    } else {
-                        tracing::warn!("Received empty base configuration, will retry");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to fetch base conf, will retry");
-                }
-            }
-
-            // Wait before retrying: 2s + Jitter
-            let jitter_ms = rand::thread_rng().gen_range(0..1000);
-            let sleep_duration = Duration::from_millis(2000 + jitter_ms);
-
-            tracing::info!(
-                retry_in_ms = sleep_duration.as_millis(),
-                "Waiting for controller to become available..."
-            );
-            tokio::time::sleep(sleep_duration).await;
-        }
-    }
-
-    pub async fn init_base_conf(&mut self) -> Result<(), tonic::Status> {
-        let key = self.config_client.get_gateway_class_key().clone();
-        self.fetch_and_init_base_conf(&key).await?;
-        tracing::info!("Base Conf Initialized.");
-
-        // Print base_conf as pretty JSON for debugging
-        if let Some(base_conf) = self.config_client.get_base_conf() {
-            match serde_json::to_string_pretty(&base_conf) {
-                Ok(json) => {
-                    tracing::info!("Base Configuration:\n{}", json);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to serialize base_conf to JSON: {}", e);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     /// Start watching a specific resource kind and automatically sync to ConfigHub
     pub async fn start_watch_sync(&mut self, _key: String, kind: ResourceKind) -> Result<(), tonic::Status> {
         match kind {
@@ -174,11 +97,15 @@ impl ConfigSyncClient {
                     "Cannot watch unspecified resource kind",
                 ));
             }
-            // Base conf resources should not be watched
-            GatewayClass | EdgionGatewayConfig | Gateway => {
-                return Err(tonic::Status::invalid_argument(
-                    "Base conf resources should not be watched",
-                ));
+            // Base conf resources can now be watched
+            GatewayClass => {
+                self.config_client.gateway_classes().start_watch().await?;
+            }
+            EdgionGatewayConfig => {
+                self.config_client.edgion_gateway_configs().start_watch().await?;
+            }
+            Gateway => {
+                self.config_client.gateways().start_watch().await?;
             }
             HTTPRoute => {
                 self.config_client.routes().start_watch().await?;
@@ -240,11 +167,13 @@ impl ConfigSyncClient {
 
     /// Start watching all resource types
     pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
-        let hub = &self.config_client;
-        let key = hub.get_gateway_class_key().clone();
-
-        // Watch all non-base_conf resources
+        // Watch all resources including base_conf resources
         let resource_kinds = vec![
+            // Base conf resources (now watched for dynamic updates)
+            GatewayClass,
+            EdgionGatewayConfig,
+            Gateway,
+            // Other resources
             HTTPRoute,
             GRPCRoute,
             TCPRoute,
@@ -264,7 +193,7 @@ impl ConfigSyncClient {
         ];
 
         for kind in resource_kinds {
-            if let Err(e) = self.start_watch_sync(key.clone(), kind).await {
+            if let Err(e) = self.start_watch_sync(String::new(), kind).await {
                 tracing::error!(kind = ?kind, error = %e, "Failed to start watch");
             }
         }

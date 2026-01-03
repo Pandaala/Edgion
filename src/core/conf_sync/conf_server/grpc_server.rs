@@ -4,7 +4,7 @@ use tonic::{Request, Response, Status};
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
-    GetBaseConfRequest, GetBaseConfResponse, ListRequest, ListResponse, WatchRequest, WatchResponse,
+    ListRequest, ListResponse, WatchRequest, WatchResponse,
 };
 use crate::types::prelude_resources::*;
 
@@ -134,24 +134,6 @@ impl ConfigSync for ConfigSyncServer {
         });
 
         Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
-    }
-
-    async fn get_base_conf(
-        &self,
-        request: Request<GetBaseConfRequest>,
-    ) -> Result<Response<GetBaseConfResponse>, Status> {
-        let req = request.into_inner();
-
-        println!("[ConfigSyncServer::get_base_conf] gateway_class={}", req.gateway_class);
-
-        let base_conf_data = self
-            .config_server
-            .get_base_conf(&req.gateway_class)
-            .map_err(|e| Status::internal(format!("Failed to get base conf: {}", e)))?;
-
-        Ok(Response::new(GetBaseConfResponse {
-            base_conf: base_conf_data.base_conf,
-        }))
     }
 }
 

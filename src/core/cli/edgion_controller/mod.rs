@@ -1,6 +1,6 @@
 use crate::core::cli::config::EdgionControllerConfig;
 use crate::core::conf_sync::{ConfigServer, ConfigSyncServer};
-use crate::core::conf_mgr::{FileSystemStore, KubernetesStore, ConfStore, load_all_resources_from_store, load_base_conf_from_store, ResourceMgrAPI, SchemaValidator};
+use crate::core::conf_mgr::{FileSystemStore, KubernetesStore, ConfStore, load_all_resources_from_store, ResourceMgrAPI, SchemaValidator};
 use crate::core::observe::init_logging;
 use crate::core::utils;
 use crate::types::{prefix_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
@@ -90,36 +90,15 @@ impl EdgionControllerCli {
             FileSystemStore::new(&conf_dir) as Arc<dyn ConfStore>
         };
         
-        // Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway)
+        // Create ConfigServer without base_conf (resources will be loaded dynamically)
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
-            event = "load_base_start",
+            event = "config_server_init",
             gateway_class = gateway_class_name,
-            k8s_mode = k8s_mode,
-            "Loading base configuration"
+            "Initializing ConfigServer"
         );
         
-        let base_conf = load_base_conf_from_store(store.clone(), &gateway_class_name).await?;
-
-        // Print base configuration as pretty JSON
-        if let Ok(json) = serde_json::to_string_pretty(&base_conf) {
-            tracing::info!("Base configuration loaded successfully:\n{}", json);
-        }
-
-        // Validate base configuration schema
-        if let Err(e) = base_conf.validate_schema() {
-            tracing::error!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                event = "schema_validation_failed",
-                error = %e,
-                "Base configuration schema validation failed: {}. Process will exit in 5 seconds.",
-                e
-            );
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-            std::process::exit(1);
-        }
-
-        let config_server = Arc::new(ConfigServer::new(base_conf, &config.conf_sync));
+        let config_server = Arc::new(ConfigServer::new(&config.conf_sync));
         let sync_server = ConfigSyncServer::new(config_server.clone());
         
         // Create ResourceMgrAPI and register backend

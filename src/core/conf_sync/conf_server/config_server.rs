@@ -1,6 +1,6 @@
 use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use super::secret_ref::SecretRefManager;
@@ -9,7 +9,6 @@ use crate::core::conf_sync::traits::CacheEventDispatch;
 use crate::core::conf_sync::types::{ListData, WatchResponse};
 use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
-use crate::types::GatewayBaseConf;
 use anyhow::Result;
 
 // internal key
@@ -41,7 +40,10 @@ pub enum ResourceItem {
 // 2、内部不做细分的全新配置，实际的权限配置全部由RBAC来控制他能取到哪些，取到哪些，就把哪些全部同步到对应的网关。（此处如果给予全部service/secret可见，那么对应的网关就可见）
 // 3、只会处理对应route信息里的有些parentRefs是对应的，不然就不会处理
 pub struct ConfigServer {
-    pub base_conf: RwLock<GatewayBaseConf>,
+    // Base conf resources now use dedicated ServerCache (same as other resources)
+    pub gateway_classes: ServerCache<GatewayClass>,
+    pub gateways: ServerCache<Gateway>,
+    pub edgion_gateway_configs: ServerCache<EdgionGatewayConfig>,
     pub routes: ServerCache<HTTPRoute>,
     pub grpc_routes: ServerCache<GRPCRoute>,
     pub tcp_routes: ServerCache<TCPRoute>,
@@ -72,14 +74,12 @@ pub struct EventDataSimple {
     pub err: Option<String>,
 }
 
-pub struct BaseConfData {
-    pub base_conf: String,
-}
-
 impl ConfigServer {
-    pub fn new(base_conf: GatewayBaseConf, conf_sync_config: &crate::core::cli::config::ConfSyncConfig) -> Self {
+    pub fn new(conf_sync_config: &crate::core::cli::config::ConfSyncConfig) -> Self {
         Self {
-            base_conf: RwLock::new(base_conf),
+            gateway_classes: ServerCache::new(conf_sync_config.gateway_classes_capacity),
+            gateways: ServerCache::new(conf_sync_config.gateways_capacity),
+            edgion_gateway_configs: ServerCache::new(conf_sync_config.edgion_gateway_configs_capacity),
             routes: ServerCache::new(conf_sync_config.routes_capacity),
             grpc_routes: ServerCache::new(conf_sync_config.grpc_routes_capacity),
             tcp_routes: ServerCache::new(conf_sync_config.tcp_routes_capacity),
@@ -100,12 +100,6 @@ impl ConfigServer {
         }
     }
 
-    /// Get the configured gateway class name from base_conf
-    pub fn gateway_class(&self) -> Option<String> {
-        let base_conf_guard = self.base_conf.read().unwrap();
-        base_conf_guard.gateway_class_name().map(|s| s.clone())
-    }
-
     /// Get SecretRefManager statistics for monitoring
     pub fn secret_ref_stats(&self) -> super::secret_ref::RefManagerStats {
         self.secret_ref_manager.stats()
@@ -124,36 +118,28 @@ impl ConfigServer {
         );
     }
 
-    /// Get base configuration for a specific gateway class
-    /// Returns the base conf data as JSON string
-    pub fn get_base_conf(&self, gateway_class: &str) -> Result<BaseConfData, String> {
-        let base_conf_guard = self.base_conf.read().unwrap();
-
-        // Verify gateway class matches if configured
-        if let Some(configured_gc) = base_conf_guard.gateway_class_name() {
-            if configured_gc != gateway_class {
-                return Err(format!(
-                    "Gateway class mismatch: expected {}, got {}",
-                    configured_gc, gateway_class
-                ));
-            }
-        }
-
-        let base_conf_json =
-            serde_json::to_string(&*base_conf_guard).map_err(|e| format!("Failed to serialize base conf: {}", e))?;
-
-        Ok(BaseConfData {
-            base_conf: base_conf_json,
-        })
-    }
-
     pub fn list(&self, kind: &ResourceKind) -> Result<ListDataSimple, String> {
         let (data_json, resource_version) = match kind {
             ResourceKind::Unspecified => {
                 return Err("Resource kind unspecified".to_string());
             }
-            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
-                return Err("Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are not available via list/watch API".to_string());
+            ResourceKind::GatewayClass => {
+                let list_data = self.list_gateway_classes();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize GatewayClass data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::EdgionGatewayConfig => {
+                let list_data = self.list_edgion_gateway_configs();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize EdgionGatewayConfig data: {}", e))?;
+                (json, list_data.resource_version)
+            }
+            ResourceKind::Gateway => {
+                let list_data = self.list_gateways();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize Gateway data: {}", e))?;
+                (json, list_data.resource_version)
             }
             ResourceKind::HTTPRoute => {
                 let list_data = self.list_routes();
@@ -277,8 +263,89 @@ impl ConfigServer {
             ResourceKind::Unspecified => {
                 return Err("Resource kind unspecified".to_string());
             }
-            ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
-                return Err("Base conf resources (GatewayClass, EdgionGatewayConfig, Gateway) are not available via list/watch API".to_string());
+            ResourceKind::GatewayClass => {
+                let mut receiver = self.watch_gateway_classes(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize GatewayClass events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::EdgionGatewayConfig => {
+                let mut receiver = self.watch_edgion_gateway_configs(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize EdgionGatewayConfig events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            ResourceKind::Gateway => {
+                let mut receiver = self.watch_gateways(client_id, client_name, from_version);
+                tokio::spawn(async move {
+                    while let Some(response) = receiver.recv().await {
+                        let WatchResponse {
+                            events,
+                            resource_version,
+                            err,
+                        } = response;
+
+                        let events_json = match serde_json::to_string(&events) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize Gateway events: {}", e);
+                                continue;
+                            }
+                        };
+                        let event_data = EventDataSimple {
+                            data: events_json,
+                            resource_version,
+                            err,
+                        };
+                        if tx.send(event_data).await.is_err() {
+                            break;
+                        }
+                    }
+                });
             }
             ResourceKind::GRPCRoute => {
                 let mut receiver = self.watch_grpc_routes(client_id, client_name, from_version);
@@ -969,25 +1036,36 @@ impl ConfigServer {
     pub async fn print_config(&self) {
         println!("\n==========================");
 
-        // Base conf resources are stored in base_conf
-        let base_conf_guard = self.base_conf.read().unwrap();
-        println!("GatewayClass:");
-        println!("  [0] {}", format_resource_info(base_conf_guard.gateway_class()));
-
-        println!("EdgionGatewayConfig:");
+        // Base conf resources are now stored in ServerCache (like other resources)
+        let list_data = self.list_gateway_classes();
         println!(
-            "  [0] {}",
-            format_resource_info(base_conf_guard.edgion_gateway_config())
+            "GatewayClass (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
         );
-
-        let gateways = base_conf_guard.gateways();
-        if !gateways.is_empty() {
-            println!("Gateways (count: {}):", gateways.len());
-            for (idx, gw) in gateways.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(gw));
-            }
+        for (idx, gc) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(gc));
         }
-        drop(base_conf_guard);
+
+        let list_data = self.list_edgion_gateway_configs();
+        println!(
+            "EdgionGatewayConfig (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, egwc) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(egwc));
+        }
+
+        let list_data = self.list_gateways();
+        println!(
+            "Gateway (count: {}, version: {}):",
+            list_data.data.len(),
+            list_data.resource_version
+        );
+        for (idx, gw) in list_data.data.iter().enumerate() {
+            println!("  [{}] {}", idx, format_resource_info(gw));
+        }
 
         println!(""); // Empty line before user conf resources
 
@@ -1155,6 +1233,9 @@ impl ConfigServer {
 
     /// Set all caches to ready state
     pub fn set_ready(&self) {
+        self.gateway_classes.set_ready();
+        self.gateways.set_ready();
+        self.edgion_gateway_configs.set_ready();
         self.routes.set_ready();
         self.grpc_routes.set_ready();
         self.tcp_routes.set_ready();
@@ -1167,5 +1248,52 @@ impl ConfigServer {
         self.edgion_plugins.set_ready();
         self.plugin_metadata.set_ready();
         self.secrets.set_ready();
+    }
+
+    // Helper methods for base conf resources
+    
+    /// List all GatewayClass resources
+    pub fn list_gateway_classes(&self) -> ListData<GatewayClass> {
+        self.gateway_classes.list_owned()
+    }
+
+    /// Watch GatewayClass resources
+    pub fn watch_gateway_classes(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<GatewayClass>> {
+        self.gateway_classes.watch(client_id, client_name, from_version)
+    }
+
+    /// List all Gateway resources
+    pub fn list_gateways(&self) -> ListData<Gateway> {
+        self.gateways.list_owned()
+    }
+
+    /// Watch Gateway resources
+    pub fn watch_gateways(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<Gateway>> {
+        self.gateways.watch(client_id, client_name, from_version)
+    }
+
+    /// List all EdgionGatewayConfig resources
+    pub fn list_edgion_gateway_configs(&self) -> ListData<EdgionGatewayConfig> {
+        self.edgion_gateway_configs.list_owned()
+    }
+
+    /// Watch EdgionGatewayConfig resources
+    pub fn watch_edgion_gateway_configs(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<EdgionGatewayConfig>> {
+        self.edgion_gateway_configs.watch(client_id, client_name, from_version)
     }
 }

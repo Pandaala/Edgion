@@ -7,10 +7,10 @@
 #      ./edgion-gateway --config /usr/local/edgion/config/edgion-gateway.toml
 #   
 #   2. 使用默认配置 (不指定 --config):
-#      ./edgion-gateway --gateway-class public-gateway --server-addr http://127.0.0.1:50051
+#      ./edgion-gateway --server-addr http://127.0.0.1:50051
 #   
 #   3. 命令行参数覆盖配置文件:
-#      ./edgion-gateway --config /usr/local/edgion/config/edgion-gateway.toml --gateway-class my-gateway
+#      ./edgion-gateway --config /usr/local/edgion/config/edgion-gateway.toml --server-addr http://192.168.1.100:50051
 #
 # ================================================================================
 
@@ -21,10 +21,6 @@
 prefix_dir = "."
 
 [gateway]
-# Gateway class name that this gateway instance will handle
-# 指定此 gateway 实例将处理的 gateway class 名称
-gateway_class = "public-gateway"
-
 # Operator gRPC server address
 # Gateway 连接到此地址以获取配置
 # 格式: http://host:port 或 https://host:port

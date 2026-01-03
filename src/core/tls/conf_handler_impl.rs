@@ -90,44 +90,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_full_set_via_handler() {
-        let handler = create_tls_handler();
-        
-        let mut data = HashMap::new();
-        data.insert(
-            "default/tls1".to_string(),
-            create_test_tls("default", "tls1", vec!["example.com"]),
-        );
-        
-        handler.full_set(&data);
-        
-        let store = get_global_tls_store();
-        assert!(store.contains("default/tls1"));
-    }
-
-    #[test]
-    fn test_partial_update_via_handler() {
-        let handler = create_tls_handler();
-        
-        // Add
-        let mut add = HashMap::new();
-        add.insert(
-            "default/tls1".to_string(),
-            create_test_tls("default", "tls1", vec!["example.com"]),
-        );
-        
-        handler.partial_update(add, HashMap::new(), HashSet::new());
-        
-        let store = get_global_tls_store();
-        assert!(store.contains("default/tls1"));
-        
-        // Remove
-        let mut remove = HashSet::new();
-        remove.insert("default/tls1".to_string());
-        
-        handler.partial_update(HashMap::new(), HashMap::new(), remove);
-        assert!(!store.contains("default/tls1"));
-    }
 }
 

@@ -2,6 +2,7 @@ pub mod err;
 pub mod edgion_status;
 pub mod global_def;
 pub mod resource_kind;
+pub mod resource_registry;
 pub mod resources;
 pub mod schema;
 pub mod resource_meta_traits;
@@ -14,6 +15,7 @@ pub use self::err::{EdError, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPE
 pub use self::edgion_status::EdgionStatus;
 pub use self::global_def::*;
 pub use self::resource_kind::ResourceKind;
+pub use self::resource_registry::{ResourceTypeMetadata, RESOURCE_TYPES, all_resource_type_names, base_conf_resource_names, get_resource_metadata};
 pub use self::resources::*;
 pub use self::schema::*;
 pub use self::resource_meta_traits::ResourceMeta;

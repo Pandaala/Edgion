@@ -105,7 +105,6 @@ where
     pub async fn start_watch(&self) -> Result<(), tonic::Status> {
         let grpc_client = self.grpc_client.clone();
         let cache_data = self.cache_data.clone();
-        let gck = self.gateway_class_key.clone();
         let client_id = self.client_id.clone();
         let client_name = self.client_name.clone();
 
@@ -128,7 +127,7 @@ where
                 };
 
                 // Perform list_and_reset to get latest resource version
-                let from_version = match Self::list_and_reset(client, gck.as_ref(), &cache_data, "watch relist").await {
+                let from_version = match Self::list_and_reset(client, "", &cache_data, "watch relist").await {
                     Ok(resource_version) => {
                         let count = {
                             let cache = cache_data.read().unwrap();
@@ -176,7 +175,7 @@ where
                     };
 
                     let request = tonic::Request::new(crate::core::conf_sync::proto::WatchRequest {
-                        key: gck.as_ref().clone(),
+                        key: String::new(),
                         kind: T::resource_kind() as i32,
                         client_id: client_id.as_ref().clone(),
                         client_name: client_name.as_ref().clone(),

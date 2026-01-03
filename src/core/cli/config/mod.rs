@@ -119,6 +119,21 @@ pub struct DebugConfig {
 /// Configuration synchronization configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
 pub struct ConfSyncConfig {
+    /// EventStore capacity for GatewayClass resources
+    #[arg(skip)]
+    #[serde(default = "default_small_capacity")]
+    pub gateway_classes_capacity: u32,
+
+    /// EventStore capacity for Gateway resources
+    #[arg(skip)]
+    #[serde(default = "default_capacity")]
+    pub gateways_capacity: u32,
+
+    /// EventStore capacity for EdgionGatewayConfig resources
+    #[arg(skip)]
+    #[serde(default = "default_small_capacity")]
+    pub edgion_gateway_configs_capacity: u32,
+
     /// EventStore capacity for HTTPRoute resources
     #[arg(skip)]
     #[serde(default = "default_capacity")]
@@ -209,6 +224,10 @@ fn default_admin_listen() -> String {
     "0.0.0.0:8080".to_string()
 }
 
+fn default_small_capacity() -> u32 {
+    50 // GatewayClass and EdgionGatewayConfig are typically few in number
+}
+
 fn default_log_dir() -> String {
     "logs".to_string()
 }
@@ -276,6 +295,9 @@ impl Default for DebugConfig {
 impl Default for ConfSyncConfig {
     fn default() -> Self {
         Self {
+            gateway_classes_capacity: default_small_capacity(),
+            gateways_capacity: default_capacity(),
+            edgion_gateway_configs_capacity: default_small_capacity(),
             routes_capacity: default_capacity(),
             grpc_routes_capacity: default_capacity(),
             tcp_routes_capacity: default_capacity(),

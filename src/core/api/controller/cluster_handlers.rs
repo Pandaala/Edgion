@@ -58,17 +58,18 @@ pub async fn create_cluster(
     let metadata = crate::core::utils::extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
     let name = metadata.name.ok_or(StatusCode::BAD_REQUEST)?;
     
-    // Check if resource already exists in ConfigServer base_conf
+    // Check if resource already exists in ConfigServer
     let exists = {
-        let base_conf_guard = state.config_server.base_conf.read().unwrap();
         match kind {
             crate::types::ResourceKind::GatewayClass => {
                 use kube::ResourceExt;
-                base_conf_guard.gateway_class().name_any() == name
+                let list = state.config_server.list_gateway_classes();
+                list.data.iter().any(|gc| gc.name_any() == name)
             }
             crate::types::ResourceKind::EdgionGatewayConfig => {
                 use kube::ResourceExt;
-                base_conf_guard.edgion_gateway_config().name_any() == name
+                let list = state.config_server.list_edgion_gateway_configs();
+                list.data.iter().any(|cfg| cfg.name_any() == name)
             }
             _ => return Err(StatusCode::BAD_REQUEST),
         }
@@ -189,17 +190,18 @@ pub async fn delete_cluster(
     
     let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     
-    // Check if resource exists in ConfigServer base_conf
+    // Check if resource exists in ConfigServer
     let exists = {
-        let base_conf_guard = state.config_server.base_conf.read().unwrap();
         match kind {
             crate::types::ResourceKind::GatewayClass => {
                 use kube::ResourceExt;
-                base_conf_guard.gateway_class().name_any() == name
+                let list = state.config_server.list_gateway_classes();
+                list.data.iter().any(|gc| gc.name_any() == name)
             }
             crate::types::ResourceKind::EdgionGatewayConfig => {
                 use kube::ResourceExt;
-                base_conf_guard.edgion_gateway_config().name_any() == name
+                let list = state.config_server.list_edgion_gateway_configs();
+                list.data.iter().any(|cfg| cfg.name_any() == name)
             }
             _ => return Err(StatusCode::BAD_REQUEST),
         }
@@ -219,9 +221,8 @@ pub async fn delete_cluster(
     // Delete from persistence (ignore error if not in filesystem)
     let _ = resource_mgr.delete_one(&kind_str, None, &name).await;
     
-    // Note: Cluster-scoped resources in base_conf cannot be removed from cache
-    // as they are loaded from configuration files at startup.
-    // This is a design limitation - cluster resources should be managed via config files.
+    // Note: Cluster-scoped resources can be removed from cache via resource change events.
+    // This is handled through the watch mechanism.
     
     tracing::info!(
         component = "unified_api",

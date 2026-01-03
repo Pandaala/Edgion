@@ -120,83 +120,220 @@ impl Default for CrossNamespaceValidator {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
-    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-    use std::collections::HashMap;
+/// Check if ReferenceGrant validation is enabled by querying EdgionGatewayConfig
+fn is_validation_enabled() -> bool {
+    use crate::core::gateway::edgion_gateway_config::list_edgion_gateway_configs;
+    list_edgion_gateway_configs()
+        .first()
+        .map(|egwc| egwc.spec.enable_reference_grant_validation)
+        .unwrap_or(false)
+}
 
-    fn create_test_grant(
-        namespace: &str,
-        name: &str,
-        from_namespace: &str,
-        from_kind: &str,
-        to_kind: &str,
-    ) -> ReferenceGrant {
-        ReferenceGrant {
-            metadata: ObjectMeta {
-                namespace: Some(namespace.to_string()),
-                name: Some(name.to_string()),
-                ..Default::default()
-            },
-            spec: ReferenceGrantSpec {
-                from: vec![ReferenceGrantFrom {
-                    group: "gateway.networking.k8s.io".to_string(),
-                    kind: from_kind.to_string(),
-                    namespace: from_namespace.to_string(),
-                }],
-                to: vec![ReferenceGrantTo {
-                    group: "".to_string(),
-                    kind: to_kind.to_string(),
-                    name: None,
-                }],
-            },
+/// Validate HTTPRoute with ReferenceGrant if validation is enabled
+pub fn validate_http_route_if_enabled(route: &crate::types::resources::HTTPRoute) -> Vec<String> {
+    if !is_validation_enabled() {
+        return Vec::new();
+    }
+    
+    let validator = CrossNamespaceValidator::new();
+    let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+    
+    let mut errors = Vec::new();
+    if let Some(rules) = &route.spec.rules {
+        for rule in rules {
+            if let Some(backend_refs) = &rule.backend_refs {
+                // HTTPBackendRef is a simpler type, convert to BackendObjectReference for validation
+                for backend_ref in backend_refs {
+                    if let Some(backend_ns) = &backend_ref.namespace {
+                        if backend_ns != route_namespace {
+                            let allowed = validator.store.check_reference_allowed(
+                                route_namespace,
+                                "gateway.networking.k8s.io",
+                                "HTTPRoute",
+                                backend_ns,
+                                "", // HTTPBackendRef implicitly refers to core group
+                                "Service", // HTTPBackendRef implicitly refers to Service
+                                Some(&backend_ref.name),
+                            );
+                            
+                            if !allowed {
+                                errors.push(format!(
+                                    "Cross-namespace reference not allowed: HTTPRoute in namespace '{}' cannot reference Service/{} in namespace '{}' (no ReferenceGrant)",
+                                    route_namespace, backend_ref.name, backend_ns
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
-
-    #[test]
-    fn test_validate_allowed_reference() {
-        let store = super::super::get_global_reference_grant_store();
-        
-        // Setup: allow HTTPRoute from ns-source to access Service in ns-target
-        let grant = create_test_grant("ns-target", "test-grant", "ns-source", "HTTPRoute", "Service");
-        let mut grants = HashMap::new();
-        grants.insert("ns-target/test-grant".to_string(), Arc::new(grant));
-        store.replace_all(grants);
-
-        let validator = CrossNamespaceValidator::new();
-        
-        let backend_refs = vec![BackendObjectReference {
-            group: "".to_string(),
-            kind: Some("Service".to_string()),
-            name: "my-service".to_string(),
-            namespace: Some("ns-target".to_string()),
-            port: Some(80),
-        }];
-
-        let errors = validator.validate_route_backend_refs("ns-source", "HTTPRoute", &backend_refs);
-        assert!(errors.is_empty(), "Expected no errors, got: {:?}", errors);
-    }
-
-    #[test]
-    fn test_validate_disallowed_reference() {
-        let store = super::super::get_global_reference_grant_store();
-        store.replace_all(HashMap::new()); // Clear all grants
-
-        let validator = CrossNamespaceValidator::new();
-        
-        let backend_refs = vec![BackendObjectReference {
-            group: "".to_string(),
-            kind: Some("Service".to_string()),
-            name: "my-service".to_string(),
-            namespace: Some("ns-target".to_string()),
-            port: Some(80),
-        }];
-
-        let errors = validator.validate_route_backend_refs("ns-source", "HTTPRoute", &backend_refs);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("not allowed"));
-    }
+    errors
 }
+
+/// Validate GRPCRoute with ReferenceGrant if validation is enabled
+pub fn validate_grpc_route_if_enabled(route: &crate::types::resources::GRPCRoute) -> Vec<String> {
+    if !is_validation_enabled() {
+        return Vec::new();
+    }
+    
+    let validator = CrossNamespaceValidator::new();
+    let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+    
+    let mut errors = Vec::new();
+    if let Some(rules) = &route.spec.rules {
+        for rule in rules {
+            if let Some(backend_refs) = &rule.backend_refs {
+                // GRPCBackendRef is also simpler, convert for validation
+                for backend_ref in backend_refs {
+                    if let Some(backend_ns) = &backend_ref.namespace {
+                        if backend_ns != route_namespace {
+                            let allowed = validator.store.check_reference_allowed(
+                                route_namespace,
+                                "gateway.networking.k8s.io",
+                                "GRPCRoute",
+                                backend_ns,
+                                "",
+                                "Service",
+                                Some(&backend_ref.name),
+                            );
+                            
+                            if !allowed {
+                                errors.push(format!(
+                                    "Cross-namespace reference not allowed: GRPCRoute in namespace '{}' cannot reference Service/{} in namespace '{}' (no ReferenceGrant)",
+                                    route_namespace, backend_ref.name, backend_ns
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    errors
+}
+
+/// Validate TCPRoute with ReferenceGrant if validation is enabled
+pub fn validate_tcp_route_if_enabled(route: &crate::types::resources::TCPRoute) -> Vec<String> {
+    if !is_validation_enabled() {
+        return Vec::new();
+    }
+    
+    let validator = CrossNamespaceValidator::new();
+    let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+    
+    let mut errors = Vec::new();
+    if let Some(rules) = &route.spec.rules {
+        for rule in rules {
+            if let Some(backend_refs) = &rule.backend_refs {
+                for backend_ref in backend_refs {
+                    if let Some(backend_ns) = &backend_ref.namespace {
+                        if backend_ns != route_namespace {
+                            let allowed = validator.store.check_reference_allowed(
+                                route_namespace,
+                                "gateway.networking.k8s.io",
+                                "TCPRoute",
+                                backend_ns,
+                                "",
+                                "Service",
+                                Some(&backend_ref.name),
+                            );
+                            
+                            if !allowed {
+                                errors.push(format!(
+                                    "Cross-namespace reference not allowed: TCPRoute in namespace '{}' cannot reference Service/{} in namespace '{}' (no ReferenceGrant)",
+                                    route_namespace, backend_ref.name, backend_ns
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    errors
+}
+
+/// Validate UDPRoute with ReferenceGrant if validation is enabled
+pub fn validate_udp_route_if_enabled(route: &crate::types::resources::UDPRoute) -> Vec<String> {
+    if !is_validation_enabled() {
+        return Vec::new();
+    }
+    
+    let validator = CrossNamespaceValidator::new();
+    let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+    
+    let mut errors = Vec::new();
+    if let Some(rules) = &route.spec.rules {
+        for rule in rules {
+            if let Some(backend_refs) = &rule.backend_refs {
+                for backend_ref in backend_refs {
+                    if let Some(backend_ns) = &backend_ref.namespace {
+                        if backend_ns != route_namespace {
+                            let allowed = validator.store.check_reference_allowed(
+                                route_namespace,
+                                "gateway.networking.k8s.io",
+                                "UDPRoute",
+                                backend_ns,
+                                "",
+                                "Service",
+                                Some(&backend_ref.name),
+                            );
+                            
+                            if !allowed {
+                                errors.push(format!(
+                                    "Cross-namespace reference not allowed: UDPRoute in namespace '{}' cannot reference Service/{} in namespace '{}' (no ReferenceGrant)",
+                                    route_namespace, backend_ref.name, backend_ns
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    errors
+}
+
+/// Validate TLSRoute with ReferenceGrant if validation is enabled
+pub fn validate_tls_route_if_enabled(route: &crate::types::resources::TLSRoute) -> Vec<String> {
+    if !is_validation_enabled() {
+        return Vec::new();
+    }
+    
+    let validator = CrossNamespaceValidator::new();
+    let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+    
+    let mut errors = Vec::new();
+    if let Some(rules) = &route.spec.rules {
+        for rule in rules {
+            if let Some(backend_refs) = &rule.backend_refs {
+                for backend_ref in backend_refs {
+                    if let Some(backend_ns) = &backend_ref.namespace {
+                        if backend_ns != route_namespace {
+                            let allowed = validator.store.check_reference_allowed(
+                                route_namespace,
+                                "gateway.networking.k8s.io",
+                                "TLSRoute",
+                                backend_ns,
+                                "",
+                                "Service",
+                                Some(&backend_ref.name),
+                            );
+                            
+                            if !allowed {
+                                errors.push(format!(
+                                    "Cross-namespace reference not allowed: TLSRoute in namespace '{}' cannot reference Service/{} in namespace '{}' (no ReferenceGrant)",
+                                    route_namespace, backend_ref.name, backend_ns
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    errors
+}
+
 

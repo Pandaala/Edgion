@@ -12,5 +12,12 @@ pub mod events;
 
 pub use store::{ReferenceGrantStore, get_global_reference_grant_store};
 pub use conf_handler_impl::create_reference_grant_handler;
-pub use validator::CrossNamespaceValidator;
+pub use validator::{
+    CrossNamespaceValidator,
+    validate_http_route_if_enabled,
+    validate_grpc_route_if_enabled,
+    validate_tcp_route_if_enabled,
+    validate_udp_route_if_enabled,
+    validate_tls_route_if_enabled,
+};
 pub use events::{ReferenceGrantChangedEvent, RevalidationListener, get_global_dispatcher};

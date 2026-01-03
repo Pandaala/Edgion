@@ -22,25 +22,7 @@ pub async fn load_all_resources_from_store(
     tracing::info!(
         component = "conf_store",
         event = "init_load_start",
-        "Loading all resources from store (unified single-pass)..."
-    );
-    
-    // Check if ReferenceGrant validation is enabled
-    let enable_validation = {
-        let base_conf = config_server.base_conf.read().unwrap();
-        base_conf.edgion_gateway_config().spec.enable_reference_grant_validation
-    };
-    
-    let validator = if enable_validation {
-        Some(crate::core::ref_grant::CrossNamespaceValidator::new())
-    } else {
-        None
-    };
-    
-    tracing::info!(
-        component = "conf_store",
-        enable_reference_grant_validation = enable_validation,
-        "ReferenceGrant validation status"
+        "Loading all resources from store..."
     );
     
     // Load all resources from store
@@ -52,48 +34,103 @@ pub async fn load_all_resources_from_store(
     let mut loaded_count = 0;
     let mut error_count = 0;
     
-    // Single pass: process all resources
+    // Single pass: process all resources uniformly
     for resource in all_resources {
         let kind = ResourceKind::from_content(&resource.content);
         
         match kind {
+            Some(ResourceKind::GatewayClass) => {
+                match serde_yaml::from_str::<GatewayClass>(&resource.content) {
+                    Ok(gc) => {
+                        config_server.gateway_classes.apply_change(
+                            ResourceChange::InitAdd,
+                            gc
+                        );
+                        loaded_count += 1;
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        tracing::error!(
+                            component = "conf_store",
+                            name = %resource.name,
+                            error = %e,
+                            "Failed to parse GatewayClass"
+                        );
+                    }
+                }
+            }
+            Some(ResourceKind::Gateway) => {
+                match serde_yaml::from_str::<Gateway>(&resource.content) {
+                    Ok(gateway) => {
+                        config_server.gateways.apply_change(
+                            ResourceChange::InitAdd,
+                            gateway
+                        );
+                        loaded_count += 1;
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        tracing::error!(
+                            component = "conf_store",
+                            name = %resource.name,
+                            error = %e,
+                            "Failed to parse Gateway"
+                        );
+                    }
+                }
+            }
+            Some(ResourceKind::EdgionGatewayConfig) => {
+                match serde_yaml::from_str::<EdgionGatewayConfig>(&resource.content) {
+                    Ok(egwc) => {
+                        config_server.edgion_gateway_configs.apply_change(
+                            ResourceChange::InitAdd,
+                            egwc
+                        );
+                        loaded_count += 1;
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        tracing::error!(
+                            component = "conf_store",
+                            name = %resource.name,
+                            error = %e,
+                            "Failed to parse EdgionGatewayConfig"
+                        );
+                    }
+                }
+            }
             Some(ResourceKind::ReferenceGrant) => {
-                // ReferenceGrant: load through ConfHandler (triggers events & updates global store)
-                if enable_validation {
-                    match serde_yaml::from_str::<ReferenceGrant>(&resource.content) {
-                        Ok(grant) => {
-                            config_server.reference_grants.apply_change(
-                                ResourceChange::InitAdd,
-                                grant
-                            );
-                            loaded_count += 1;
-                        }
-                        Err(e) => {
-                            error_count += 1;
-                            tracing::error!(
-                                component = "conf_store",
-                                name = %resource.name,
-                                error = %e,
-                                "Failed to parse ReferenceGrant"
-                            );
-                        }
+                match serde_yaml::from_str::<ReferenceGrant>(&resource.content) {
+                    Ok(grant) => {
+                        config_server.reference_grants.apply_change(
+                            ResourceChange::InitAdd,
+                            grant
+                        );
+                        loaded_count += 1;
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        tracing::error!(
+                            component = "conf_store",
+                            name = %resource.name,
+                            error = %e,
+                            "Failed to parse ReferenceGrant"
+                        );
                     }
                 }
             }
             Some(ResourceKind::HTTPRoute) => {
                 match serde_yaml::from_str::<HTTPRoute>(&resource.content) {
                     Ok(route) => {
-                        // Validate if validator is present
-                        if let Some(ref validator) = validator {
-                            let errors = validate_http_route(validator, &route);
-                            for err in errors {
-                                tracing::warn!(
-                                    component = "conf_store",
-                                    route = route.name_any(),
-                                    warning = %err,
-                                    "Cross-namespace validation warning"
-                                );
-                            }
+                        // Validate using ref_grant module (checks enabled status internally)
+                        let errors = crate::core::ref_grant::validate_http_route_if_enabled(&route);
+                        for err in errors {
+                            tracing::warn!(
+                                component = "conf_store",
+                                route = route.name_any(),
+                                warning = %err,
+                                "Cross-namespace validation warning"
+                            );
                         }
                         config_server.routes.apply_change(ResourceChange::InitAdd, route);
                         loaded_count += 1;
@@ -112,16 +149,14 @@ pub async fn load_all_resources_from_store(
             Some(ResourceKind::GRPCRoute) => {
                 match serde_yaml::from_str::<GRPCRoute>(&resource.content) {
                     Ok(route) => {
-                        if let Some(ref validator) = validator {
-                            let errors = validate_grpc_route(validator, &route);
-                            for err in errors {
-                                tracing::warn!(
-                                    component = "conf_store",
-                                    route = route.name_any(),
-                                    warning = %err,
-                                    "Cross-namespace validation warning"
-                                );
-                            }
+                        let errors = crate::core::ref_grant::validate_grpc_route_if_enabled(&route);
+                        for err in errors {
+                            tracing::warn!(
+                                component = "conf_store",
+                                route = route.name_any(),
+                                warning = %err,
+                                "Cross-namespace validation warning"
+                            );
                         }
                         config_server.grpc_routes.apply_change(ResourceChange::InitAdd, route);
                         loaded_count += 1;
@@ -140,16 +175,14 @@ pub async fn load_all_resources_from_store(
             Some(ResourceKind::TCPRoute) => {
                 match serde_yaml::from_str::<TCPRoute>(&resource.content) {
                     Ok(route) => {
-                        if let Some(ref validator) = validator {
-                            let errors = validate_tcp_route(validator, &route);
-                            for err in errors {
-                                tracing::warn!(
-                                    component = "conf_store",
-                                    route = route.name_any(),
-                                    warning = %err,
-                                    "Cross-namespace validation warning"
-                                );
-                            }
+                        let errors = crate::core::ref_grant::validate_tcp_route_if_enabled(&route);
+                        for err in errors {
+                            tracing::warn!(
+                                component = "conf_store",
+                                route = route.name_any(),
+                                warning = %err,
+                                "Cross-namespace validation warning"
+                            );
                         }
                         config_server.tcp_routes.apply_change(ResourceChange::InitAdd, route);
                         loaded_count += 1;
@@ -168,16 +201,14 @@ pub async fn load_all_resources_from_store(
             Some(ResourceKind::UDPRoute) => {
                 match serde_yaml::from_str::<UDPRoute>(&resource.content) {
                     Ok(route) => {
-                        if let Some(ref validator) = validator {
-                            let errors = validate_udp_route(validator, &route);
-                            for err in errors {
-                                tracing::warn!(
-                                    component = "conf_store",
-                                    route = route.name_any(),
-                                    warning = %err,
-                                    "Cross-namespace validation warning"
-                                );
-                            }
+                        let errors = crate::core::ref_grant::validate_udp_route_if_enabled(&route);
+                        for err in errors {
+                            tracing::warn!(
+                                component = "conf_store",
+                                route = route.name_any(),
+                                warning = %err,
+                                "Cross-namespace validation warning"
+                            );
                         }
                         config_server.udp_routes.apply_change(ResourceChange::InitAdd, route);
                         loaded_count += 1;
@@ -196,16 +227,14 @@ pub async fn load_all_resources_from_store(
             Some(ResourceKind::TLSRoute) => {
                 match serde_yaml::from_str::<TLSRoute>(&resource.content) {
                     Ok(route) => {
-                        if let Some(ref validator) = validator {
-                            let errors = validate_tls_route(validator, &route);
-                            for err in errors {
-                                tracing::warn!(
-                                    component = "conf_store",
-                                    route = route.name_any(),
-                                    warning = %err,
-                                    "Cross-namespace validation warning"
-                                );
-                            }
+                        let errors = crate::core::ref_grant::validate_tls_route_if_enabled(&route);
+                        for err in errors {
+                            tracing::warn!(
+                                component = "conf_store",
+                                route = route.name_any(),
+                                warning = %err,
+                                "Cross-namespace validation warning"
+                            );
                         }
                         config_server.tls_routes.apply_change(ResourceChange::InitAdd, route);
                         loaded_count += 1;
@@ -411,48 +440,4 @@ pub async fn load_all_resources_from_store(
     );
     
     Ok(())
-}
-
-// Helper validation functions
-// Note: Validation logic simplified for K8s controller initial implementation
-// Full cross-namespace validation will be implemented in future updates
-
-fn validate_http_route(
-    _validator: &crate::core::ref_grant::CrossNamespaceValidator,
-    _route: &HTTPRoute,
-) -> Vec<String> {
-    // TODO: Implement full cross-namespace validation
-    Vec::new()
-}
-
-fn validate_grpc_route(
-    _validator: &crate::core::ref_grant::CrossNamespaceValidator,
-    _route: &GRPCRoute,
-) -> Vec<String> {
-    // TODO: Implement full cross-namespace validation
-    Vec::new()
-}
-
-fn validate_tcp_route(
-    _validator: &crate::core::ref_grant::CrossNamespaceValidator,
-    _route: &TCPRoute,
-) -> Vec<String> {
-    // TODO: Implement full cross-namespace validation
-    Vec::new()
-}
-
-fn validate_udp_route(
-    _validator: &crate::core::ref_grant::CrossNamespaceValidator,
-    _route: &UDPRoute,
-) -> Vec<String> {
-    // TODO: Implement full cross-namespace validation
-    Vec::new()
-}
-
-fn validate_tls_route(
-    _validator: &crate::core::ref_grant::CrossNamespaceValidator,
-    _route: &TLSRoute,
-) -> Vec<String> {
-    // TODO: Implement full cross-namespace validation
-    Vec::new()
 }

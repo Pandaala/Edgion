@@ -1,7 +1,7 @@
-use crate::types::{GatewayBaseConf, ResourceMeta};
+use crate::types::{GatewayBaseConf, ResourceMeta, all_resource_type_names};
 use crate::core::conf_sync::cache_client::ClientCache;
 use crate::core::conf_sync::types::ListData;
-use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
+use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange, ConfHandler};
 use crate::core::utils::format_resource_info;
 use crate::core::routes::create_route_manager_handler;
 use crate::core::backends::{create_service_handler, create_ep_slice_handler, create_endpoint_handler};
@@ -13,8 +13,11 @@ use kube::Resource;
 use std::sync::RwLock;
 
 pub struct ConfigClient {
-    gateway_class_key: String,
     pub base_conf: RwLock<Option<GatewayBaseConf>>,
+    // Base conf resources now have dedicated caches
+    gateway_classes: ClientCache<GatewayClass>,
+    gateways: ClientCache<Gateway>,
+    edgion_gateway_configs: ClientCache<EdgionGatewayConfig>,
     routes: ClientCache<HTTPRoute>,
     grpc_routes: ClientCache<GRPCRoute>,
     tcp_routes: ClientCache<TCPRoute>,
@@ -34,81 +37,97 @@ pub struct ConfigClient {
 }
 
 impl ConfigClient {
-    pub fn new(gateway_class_key: String, client_id: String, client_name: String) -> Self {
+    pub fn new(client_id: String, client_name: String) -> Self {
         // Register RouteManager as the handler for HTTPRoute resources
-        let routes_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let route_handler = create_route_manager_handler();
         routes_cache.set_conf_processor(route_handler);
 
         // Register ServiceStore as the handler for Service resources
-        let services_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let services_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let service_handler = create_service_handler();
         services_cache.set_conf_processor(service_handler);
 
         // Register EpSliceHandler as the handler for EndpointSlice resources
-        let endpoint_slices_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let endpoint_slices_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let ep_slice_handler = create_ep_slice_handler();
         endpoint_slices_cache.set_conf_processor(ep_slice_handler);
 
         // Register EndpointHandler as the handler for Endpoints resources
-        let endpoints_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let endpoints_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let endpoint_handler = create_endpoint_handler();
         endpoints_cache.set_conf_processor(endpoint_handler);
 
         // Register PluginStore as the handler for EdgionPlugins resources
-        let plugins_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let plugin_handler = crate::core::plugins::edgion_plugins::create_plugin_handler();
         plugins_cache.set_conf_processor(plugin_handler);
         
         // Register TcpRouteManager as the handler for TCPRoute resources
-        let tcp_routes_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let tcp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tcp_route_handler = crate::core::routes::tcp_routes::create_tcp_route_handler();
         tcp_routes_cache.set_conf_processor(tcp_route_handler);
         
         // Register UdpRouteManager as the handler for UDPRoute resources
-        let udp_routes_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let udp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let udp_route_handler = crate::core::routes::udp_routes::create_udp_route_handler();
         udp_routes_cache.set_conf_processor(udp_route_handler);
         
         // Register GrpcRouteManager as the handler for GRPCRoute resources
-        let grpc_routes_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let grpc_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let grpc_route_handler = crate::core::routes::grpc_routes::create_grpc_route_handler();
         grpc_routes_cache.set_conf_processor(grpc_route_handler);
         
         // Register TlsRouteManager as the handler for TLSRoute resources
-        let tls_routes_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let tls_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_route_handler = crate::core::routes::tls_routes::create_tls_route_handler();
         tls_routes_cache.set_conf_processor(tls_route_handler);
         
         // Register TlsStore as the handler for EdgionTls resources
-        let edgion_tls_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let edgion_tls_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_handler = crate::core::tls::create_tls_handler();
         edgion_tls_cache.set_conf_processor(tls_handler);
         
         // Register StreamPluginStore as the handler for EdgionStreamPlugins resources
-        let stream_plugins_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let stream_plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let stream_plugin_handler = crate::core::plugins::edgion_stream_plugins::create_stream_plugin_handler();
         stream_plugins_cache.set_conf_processor(stream_plugin_handler);
         
         // Register ReferenceGrantStore as the handler for ReferenceGrant resources
-        let reference_grants_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let reference_grants_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let reference_grant_handler = crate::core::ref_grant::create_reference_grant_handler();
         reference_grants_cache.set_conf_processor(reference_grant_handler);
         
         // Register BackendTLSPolicyStore as the handler for BackendTLSPolicy resources
-        let backend_tls_policies_cache = ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone());
+        let backend_tls_policies_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let backend_tls_policy_handler = crate::core::backends::create_backend_tls_policy_handler();
         backend_tls_policies_cache.set_conf_processor(backend_tls_policy_handler);
         
+        // Register handlers for base conf resources
+        let gateway_classes_cache = ClientCache::new(client_id.clone(), client_name.clone());
+        let gateway_class_handler = crate::core::gateway::gateway_class::create_gateway_class_handler();
+        gateway_classes_cache.set_conf_processor(gateway_class_handler);
+        
+        let gateways_cache = ClientCache::new(client_id.clone(), client_name.clone());
+        let gateway_handler = crate::core::gateway::gateway::create_gateway_handler();
+        gateways_cache.set_conf_processor(gateway_handler);
+        
+        let edgion_gateway_configs_cache = ClientCache::new(client_id.clone(), client_name.clone());
+        let edgion_gateway_config_handler = crate::core::gateway::edgion_gateway_config::create_edgion_gateway_config_handler();
+        edgion_gateway_configs_cache.set_conf_processor(edgion_gateway_config_handler);
+        
         Self {
-            gateway_class_key: gateway_class_key.clone(),
             base_conf: RwLock::new(None),
+            // Base conf caches with handlers registered
+            gateway_classes: gateway_classes_cache,
+            gateways: gateways_cache,
+            edgion_gateway_configs: edgion_gateway_configs_cache,
             routes: routes_cache,
             grpc_routes: grpc_routes_cache,
             tcp_routes: tcp_routes_cache,
             udp_routes: udp_routes_cache,
             tls_routes: tls_routes_cache,
-            link_sys: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
+            link_sys: ClientCache::new(client_id.clone(), client_name.clone()),
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,
             endpoints: endpoints_cache,
@@ -117,8 +136,8 @@ impl ConfigClient {
             edgion_stream_plugins: stream_plugins_cache,
             reference_grants: reference_grants_cache,
             backend_tls_policies: backend_tls_policies_cache,
-            plugin_metadata: ClientCache::new(gateway_class_key.clone(), client_id.clone(), client_name.clone()),
-            // secrets: ClientCache::new(gateway_class_key, client_id, client_name),
+            plugin_metadata: ClientCache::new(client_id, client_name),
+            // secrets: ClientCache::new(client_id, client_name),
         }
     }
 
@@ -197,56 +216,71 @@ impl ConfigClient {
         &self.plugin_metadata
     }
 
+    /// Get gateway_classes cache for direct access
+    pub fn gateway_classes(&self) -> &ClientCache<GatewayClass> {
+        &self.gateway_classes
+    }
+
+    /// Get gateways cache for direct access
+    pub fn gateways(&self) -> &ClientCache<Gateway> {
+        &self.gateways
+    }
+
+    /// Get edgion_gateway_configs cache for direct access
+    pub fn edgion_gateway_configs(&self) -> &ClientCache<EdgionGatewayConfig> {
+        &self.edgion_gateway_configs
+    }
+
     // /// Get secrets cache for direct access
     // pub fn secrets(&self) -> &ClientCache<Secret> {
     //     &self.secrets
     // }
 
-    pub fn get_gateway_class_key(&self) -> &String {
-        &self.gateway_class_key
+    /// Get cache ready status by name
+    /// Returns None if the cache name is not recognized
+    fn get_cache_status(&self, name: &str) -> Option<bool> {
+        match name {
+            "gateway_classes" => Some(self.gateway_classes.is_ready()),
+            "gateways" => Some(self.gateways.is_ready()),
+            "edgion_gateway_configs" => Some(self.edgion_gateway_configs.is_ready()),
+            "routes" => Some(self.routes.is_ready()),
+            "grpc_routes" => Some(self.grpc_routes.is_ready()),
+            "tcp_routes" => Some(self.tcp_routes.is_ready()),
+            "udp_routes" => Some(self.udp_routes.is_ready()),
+            "tls_routes" => Some(self.tls_routes.is_ready()),
+            "link_sys" => Some(self.link_sys.is_ready()),
+            "services" => Some(self.services.is_ready()),
+            "endpoint_slices" => Some(self.endpoint_slices.is_ready()),
+            "endpoints" => Some(self.endpoints.is_ready()),
+            "edgion_tls" => Some(self.edgion_tls.is_ready()),
+            "edgion_plugins" => Some(self.edgion_plugins.is_ready()),
+            "edgion_stream_plugins" => Some(self.edgion_stream_plugins.is_ready()),
+            "reference_grants" => Some(self.reference_grants.is_ready()),
+            "backend_tls_policies" => Some(self.backend_tls_policies.is_ready()),
+            "plugin_metadata" => Some(self.plugin_metadata.is_ready()),
+            // "secrets" => Some(self.secrets.is_ready()),  // Secret follows related resources
+            _ => None,
+        }
+    }
+
+    /// Get all caches status based on global resource registry
+    /// Returns a list of tuples: (cache_name, is_ready)
+    fn all_caches_status(&self) -> Vec<(&'static str, bool)> {
+        all_resource_type_names()
+            .into_iter()
+            .filter_map(|name| {
+                self.get_cache_status(name).map(|ready| (name, ready))
+            })
+            .collect()
     }
 
     /// Check if all caches are ready
     /// Returns Ok(()) if all caches are ready, Err with waiting message otherwise
     pub fn is_ready(&self) -> Result<(), String> {
-        let mut not_ready = Vec::new();
-        
-        if !self.routes.is_ready() {
-            not_ready.push("routes");
-        }
-        if !self.grpc_routes.is_ready() {
-            not_ready.push("grpc_routes");
-        }
-        if !self.tcp_routes.is_ready() {
-            not_ready.push("tcp_routes");
-        }
-        if !self.udp_routes.is_ready() {
-            not_ready.push("udp_routes");
-        }
-        if !self.tls_routes.is_ready() {
-            not_ready.push("tls_routes");
-        }
-        if !self.link_sys.is_ready() {
-            not_ready.push("link_sys");
-        }
-        if !self.services.is_ready() {
-            not_ready.push("services");
-        }
-        if !self.endpoint_slices.is_ready() {
-            not_ready.push("endpoint_slices");
-        }
-        if !self.edgion_tls.is_ready() {
-            not_ready.push("edgion_tls");
-        }
-        if !self.edgion_plugins.is_ready() {
-            not_ready.push("edgion_plugins");
-        }
-        if !self.plugin_metadata.is_ready() {
-            not_ready.push("plugin_metadata");
-        }
-        // if !self.secrets.is_ready() {
-        //     not_ready.push("secrets");
-        // }
+        let not_ready: Vec<&str> = self.all_caches_status()
+            .into_iter()
+            .filter_map(|(name, ready)| if !ready { Some(name) } else { None })
+            .collect();
         
         if not_ready.is_empty() {
             Ok(())
@@ -256,17 +290,6 @@ impl ConfigClient {
     }
 
     /// Initialize base configuration with parsed objects
-    pub fn init_base_conf(&self, new_base_conf: GatewayBaseConf) {
-        let mut base_conf = self.base_conf.write().unwrap();
-        *base_conf = Some(new_base_conf);
-    }
-
-    /// Get a copy of the current base configuration
-    pub fn get_base_conf(&self) -> Option<GatewayBaseConf> {
-        let base_conf = self.base_conf.read().unwrap();
-        base_conf.clone()
-    }
-
     fn apply_change_to_cache<T>(cache: &ClientCache<T>, change: ResourceChange, resource: T)
     where
         T: Clone + ResourceMeta + Resource + Send + 'static,
@@ -275,52 +298,27 @@ impl ConfigClient {
     }
 
     pub fn list(&self, key: &String, kind: &ResourceKind) -> Result<ListDataSimple, String> {
-        if key != &self.gateway_class_key {
-            return Err(format!(
-                "Key mismatch: expected {}, got {}",
-                self.gateway_class_key, key
-            ));
-        }
-
         let (data_json, resource_version) = match kind {
             ResourceKind::Unspecified => {
                 return Err("Resource kind unspecified".to_string());
             }
             ResourceKind::GatewayClass => {
-                let base_conf_guard = self.base_conf.read().unwrap();
-                let data: Vec<GatewayClass> = if let Some(ref base_conf) = *base_conf_guard {
-                    vec![base_conf.gateway_class().clone()]
-                } else {
-                    vec![]
-                };
-                let json = serde_json::to_string(&data)
+                let list_data = self.gateway_classes.list();
+                let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize GatewayClass data: {}", e))?;
-                // Base conf resources don't have version tracking, use 0
-                (json, 0)
+                (json, list_data.resource_version)
             }
             ResourceKind::EdgionGatewayConfig => {
-                let base_conf_guard = self.base_conf.read().unwrap();
-                let data: Vec<EdgionGatewayConfig> = if let Some(ref base_conf) = *base_conf_guard {
-                    vec![base_conf.edgion_gateway_config().clone()]
-                } else {
-                    vec![]
-                };
-                let json = serde_json::to_string(&data)
+                let list_data = self.edgion_gateway_configs.list();
+                let json = serde_json::to_string(&list_data.data)
                     .map_err(|e| format!("Failed to serialize EdgionGatewayConfig data: {}", e))?;
-                // Base conf resources don't have version tracking, use 0
-                (json, 0)
+                (json, list_data.resource_version)
             }
             ResourceKind::Gateway => {
-                let base_conf_guard = self.base_conf.read().unwrap();
-                let data = if let Some(ref base_conf) = *base_conf_guard {
-                    base_conf.gateways().clone()
-                } else {
-                    vec![]
-                };
-                let json =
-                    serde_json::to_string(&data).map_err(|e| format!("Failed to serialize Gateway data: {}", e))?;
-                // Base conf resources don't have version tracking, use 0
-                (json, 0)
+                let list_data = self.gateways.list();
+                let json = serde_json::to_string(&list_data.data)
+                    .map_err(|e| format!("Failed to serialize Gateway data: {}", e))?;
+                (json, list_data.resource_version)
             }
             ResourceKind::HTTPRoute => {
                 let list_data = self.routes.list();
@@ -485,6 +483,39 @@ impl ConfigClient {
         self.plugin_metadata.list_owned()
     }
 
+    /// List GatewayClasses
+    pub fn list_gateway_classes(&self) -> ListData<GatewayClass> {
+        self.gateway_classes.list_owned()
+    }
+
+    /// List Gateways
+    pub fn list_gateways(&self) -> ListData<Gateway> {
+        self.gateways.list_owned()
+    }
+
+    /// List EdgionGatewayConfigs
+    pub fn list_edgion_gateway_configs(&self) -> ListData<EdgionGatewayConfig> {
+        self.edgion_gateway_configs.list_owned()
+    }
+
+    /// Get a Gateway by namespace and name
+    pub fn get_gateway(&self, namespace: &str, name: &str) -> Option<Gateway> {
+        let key = format!("{}/{}", namespace, name);
+        self.gateways.get(&key)
+    }
+
+    /// Get a GatewayClass by name
+    pub fn get_gateway_class(&self, name: &str) -> Option<GatewayClass> {
+        // GatewayClass is cluster-scoped (no namespace)
+        self.gateway_classes.get(name)
+    }
+
+    /// Get an EdgionGatewayConfig by name
+    pub fn get_edgion_gateway_config(&self, name: &str) -> Option<EdgionGatewayConfig> {
+        // EdgionGatewayConfig is cluster-scoped (no namespace)
+        self.edgion_gateway_configs.get(name)
+    }
+
     // /// List secrets
     // pub fn list_secrets(&self) -> ListData<Secret> {
     //     self.secrets.list_owned()
@@ -495,34 +526,55 @@ impl ConfigClient {
         self.endpoint_slices.trigger_update_event_by_key(key);
     }
 
-    /// Print all configuration for the gateway class key
+    /// Print all configuration
     /// Format is identical to ConfigCenter::print_config
     pub fn print_config(&self) {
-        let key = &self.gateway_class_key;
-        println!("=== ConfigHub Config for GatewayClassKey: {} ===", key);
+        println!("=== ConfigHub Config ===");
 
-        // Base conf resources are stored in base_conf
-        let base_conf_guard = self.base_conf.read().unwrap();
-        if let Some(ref base_conf) = *base_conf_guard {
-            println!("GatewayClass:");
-            println!("  [0] {}", format_resource_info(base_conf.gateway_class()));
-
-            println!("EdgionGatewayConfig:");
-            println!("  [0] {}", format_resource_info(base_conf.edgion_gateway_config()));
-
-            let gateways = base_conf.gateways();
-            if !gateways.is_empty() {
-                println!("Gateways (count: {}):", gateways.len());
-                for (idx, gw) in gateways.iter().enumerate() {
-                    println!("  [{}] {}", idx, format_resource_info(gw));
-                }
-            } else {
-                println!("Gateways: not found");
+        // GatewayClass resources from cache
+        let gateway_classes = self.list_gateway_classes();
+        if !gateway_classes.data.is_empty() {
+            println!(
+                "GatewayClasses (count: {}, version: {}):",
+                gateway_classes.data.len(),
+                gateway_classes.resource_version
+            );
+            for (idx, gc) in gateway_classes.data.iter().enumerate() {
+                println!("  [{}] {}", idx, format_resource_info(gc));
             }
         } else {
-            println!("Base configuration not initialized");
+            println!("GatewayClasses: not found");
         }
-        drop(base_conf_guard);
+
+        // EdgionGatewayConfig resources from cache
+        let edgion_gateway_configs = self.list_edgion_gateway_configs();
+        if !edgion_gateway_configs.data.is_empty() {
+            println!(
+                "EdgionGatewayConfigs (count: {}, version: {}):",
+                edgion_gateway_configs.data.len(),
+                edgion_gateway_configs.resource_version
+            );
+            for (idx, egwc) in edgion_gateway_configs.data.iter().enumerate() {
+                println!("  [{}] {}", idx, format_resource_info(egwc));
+            }
+        } else {
+            println!("EdgionGatewayConfigs: not found");
+        }
+
+        // Gateway resources from cache
+        let gateways = self.list_gateways();
+        if !gateways.data.is_empty() {
+            println!(
+                "Gateways (count: {}, version: {}):",
+                gateways.data.len(),
+                gateways.resource_version
+            );
+            for (idx, gw) in gateways.data.iter().enumerate() {
+                println!("  [{}] {}", idx, format_resource_info(gw));
+            }
+        } else {
+            println!("Gateways: not found");
+        }
 
         // HTTP Routes
         let list_data = self.list_routes();
@@ -797,9 +849,27 @@ impl ConfigClientEventDispatcher for ConfigClient {
             //     }
             //     Err(e) => log_error("Secret", &e),
             // },
-            ResourceKind::Secret | ResourceKind::GatewayClass | ResourceKind::EdgionGatewayConfig | ResourceKind::Gateway => {
-                tracing::warn!("skip resource change {:?}", change);
+            ResourceKind::Secret => {
+                tracing::warn!("skip resource change {:?} for Secret", change);
             }
+            ResourceKind::GatewayClass => match serde_yaml::from_str::<GatewayClass>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.gateway_classes, change, resource);
+                }
+                Err(e) => log_error("GatewayClass", &e),
+            },
+            ResourceKind::Gateway => match serde_yaml::from_str::<Gateway>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.gateways, change, resource);
+                }
+                Err(e) => log_error("Gateway", &e),
+            },
+            ResourceKind::EdgionGatewayConfig => match serde_yaml::from_str::<EdgionGatewayConfig>(&data) {
+                Ok(resource) => {
+                    Self::apply_change_to_cache(&self.edgion_gateway_configs, change, resource);
+                }
+                Err(e) => log_error("EdgionGatewayConfig", &e),
+            },
         }
     }
 }
