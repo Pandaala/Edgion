@@ -12,57 +12,17 @@ pub const EDGION_TLS_GROUP: &str = "edgion.io";
 /// Kind for EdgionTls
 pub const EDGION_TLS_KIND: &str = "EdgionTls";
 
-/// TLS protocol version
+/// TLS protocol version (similar to Cloudflare's Minimum TLS Version)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum TlsVersion {
+    #[serde(rename = "TLS1_0")]
+    Tls10,
+    #[serde(rename = "TLS1_1")]
+    Tls11,
     #[serde(rename = "TLS1_2")]
     Tls12,
     #[serde(rename = "TLS1_3")]
     Tls13,
-}
-
-/// TLS version configuration
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TlsVersionConfig {
-    /// Minimum TLS version (default: TLS 1.2)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub min_version: Option<TlsVersion>,
-    /// Maximum TLS version (default: TLS 1.3)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_version: Option<TlsVersion>,
-}
-
-/// Cipher suite profile (predefined security levels)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum CipherSuiteProfile {
-    /// Modern profile: TLS 1.3 only, strongest ciphers
-    /// Recommended for modern clients (2020+)
-    Modern,
-    /// Intermediate profile: TLS 1.2+, balanced security and compatibility
-    /// Recommended for most use cases (default)
-    Intermediate,
-    /// Old profile: TLS 1.0+, maximum compatibility
-    /// Only use if you must support very old clients
-    Old,
-    /// Custom cipher suite list
-    /// Specify exact cipher suites to use
-    Custom(Vec<String>),
-}
-
-impl Default for CipherSuiteProfile {
-    fn default() -> Self {
-        CipherSuiteProfile::Intermediate
-    }
-}
-
-/// Cipher suite configuration
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CipherSuiteConfig {
-    /// Cipher suite profile or custom list
-    #[serde(default)]
-    pub profile: CipherSuiteProfile,
 }
 
 /// Client authentication mode for mTLS
@@ -145,12 +105,16 @@ pub struct EdgionTlsSpec {
     /// mTLS client authentication configuration (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_auth: Option<ClientAuthConfig>,
-    /// TLS version configuration (optional)
+    /// Minimum TLS version (optional, similar to Cloudflare's Minimum TLS Version)
+    /// Options: TLS1_0, TLS1_1, TLS1_2, TLS1_3
+    /// If not configured, uses BoringSSL default
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tls_versions: Option<TlsVersionConfig>,
-    /// Cipher suite configuration (optional)
+    pub min_tls_version: Option<TlsVersion>,
+    /// Cipher list in OpenSSL format (optional, similar to Nginx ssl_ciphers)
+    /// Example: ["ECDHE-RSA-AES256-GCM-SHA384", "ECDHE-RSA-AES128-GCM-SHA256"]
+    /// If not configured, uses BoringSSL default ciphers
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cipher_suites: Option<CipherSuiteConfig>,
+    pub ciphers: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub secret: Option<Secret>,
 }
@@ -364,8 +328,8 @@ mod tests {
                     namespace: Some("default".to_string()),
                 },
                 client_auth: None,
-                tls_versions: None,
-                cipher_suites: None,
+                min_tls_version: None,
+                ciphers: None,
                 secret: None,
             },
             status: None,
@@ -443,8 +407,8 @@ spec:
                     namespace: Some("default".to_string()),
                 },
                 client_auth: None,
-                tls_versions: None,
-                cipher_suites: None,
+                min_tls_version: None,
+                ciphers: None,
                 secret: None,
             },
             status: None,

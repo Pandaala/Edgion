@@ -400,8 +400,8 @@ mod tests {
                     namespace: Some("default".to_string()),
                 },
                 client_auth: None,
-                tls_versions: None,
-                cipher_suites: None,
+                min_tls_version: None,
+                ciphers: None,
                 secret: Some(Secret {
                     data: Some(data),
                     ..Default::default()

@@ -699,7 +699,7 @@ A: `*.example.com` 匹配 `sub.example.com`，但不匹配 `example.com` 或 `su
 
 ### TLS 版本控制
 
-限制允许的 TLS 协议版本，增强安全性。
+设置最小 TLS 版本，类似 Cloudflare 的 Minimum TLS Version 设置。
 
 **配置示例**：
 
@@ -715,25 +715,30 @@ spec:
   secretRef:
     name: secure-tls-secret
     namespace: default
-  tlsVersions:
-    minVersion: TLS1_2  # 最低 TLS 1.2
-    maxVersion: TLS1_3  # 最高 TLS 1.3
+  minTlsVersion: TLS1_2  # 最小 TLS 版本
 ```
 
 **支持的版本**：
-- `TLS1_2`: TLS 1.2
-- `TLS1_3`: TLS 1.3
+
+| 值 | 说明 | 推荐度 |
+|-----|------|--------|
+| `TLS1_0` | TLS 1.0 | ⚠️ 不推荐（已废弃） |
+| `TLS1_1` | TLS 1.1 | ⚠️ 不推荐（已废弃） |
+| `TLS1_2` | TLS 1.2 | ✅ 推荐 |
+| `TLS1_3` | TLS 1.3 | ✅ 最安全 |
 
 **使用场景**：
-- 🔒 **仅 TLS 1.3**: 设置 `minVersion: TLS1_3` 和 `maxVersion: TLS1_3`，适用于现代客户端
-- 🔄 **兼容模式**: 设置 `minVersion: TLS1_2`，支持更广泛的客户端
-- 🚫 **禁用旧协议**: 不支持 TLS 1.0/1.1（已被废弃）
+- 🔒 **仅 TLS 1.3**: 设置 `minTlsVersion: TLS1_3`，适用于现代客户端
+- 🔄 **兼容模式**: 设置 `minTlsVersion: TLS1_2`（推荐）
+- ⚠️ **旧客户端兼容**: 设置 `minTlsVersion: TLS1_0`（不推荐）
+
+不配置时使用 BoringSSL 默认值。
 
 ---
 
 ### 密码套件配置
 
-控制允许的加密算法，平衡安全性和兼容性。
+控制允许的加密算法，类似 Nginx 的 `ssl_ciphers` 指令。
 
 **配置示例**：
 
@@ -741,7 +746,7 @@ spec:
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: cipher-suite-config
+  name: cipher-config
   namespace: default
 spec:
   hosts:
@@ -749,37 +754,38 @@ spec:
   secretRef:
     name: secure-tls-secret
     namespace: default
-  cipherSuites:
-    profile: Intermediate  # Modern, Intermediate, Old
+  ciphers:
+    - ECDHE-RSA-AES256-GCM-SHA384
+    - ECDHE-RSA-AES128-GCM-SHA256
+    - ECDHE-RSA-CHACHA20-POLY1305
 ```
 
-**预定义配置文件**：
+**重要说明**：
 
-| 配置文件 | TLS 版本 | 安全性 | 兼容性 | 适用场景 |
-|---------|---------|--------|--------|---------|
-| **Modern** | TLS 1.3 only | ⭐⭐⭐⭐⭐ | ⭐⭐ | 现代客户端 (2020+) |
-| **Intermediate** | TLS 1.2+ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 大多数场景（推荐） |
-| **Old** | TLS 1.0+ | ⭐⭐ | ⭐⭐⭐⭐⭐ | 必须支持旧客户端 |
+| TLS 版本 | cipher 是否可配置 | 说明 |
+|---------|------------------|------|
+| TLS 1.0 | ✅ 可配置 | 通过 `ciphers` 字段配置 |
+| TLS 1.1 | ✅ 可配置 | 通过 `ciphers` 字段配置 |
+| TLS 1.2 | ✅ 可配置 | 通过 `ciphers` 字段配置 |
+| TLS 1.3 | ❌ 不可配置 | BoringSSL 硬编码 |
 
-**Modern 配置文件**：
-- 仅 TLS 1.3 密码套件
-- 最强加密算法
-- 适合内部服务或现代应用
+**TLS 1.3 固定使用以下 cipher**（无法更改）：
+- `TLS_AES_128_GCM_SHA256`
+- `TLS_AES_256_GCM_SHA384`
+- `TLS_CHACHA20_POLY1305_SHA256`
 
-**Intermediate 配置文件**（默认）：
-- TLS 1.2 和 TLS 1.3 密码套件
-- 平衡安全性和兼容性
-- 适合大多数生产环境
+**推荐的 TLS 1.2 cipher 列表**：
+```yaml
+ciphers:
+  - ECDHE-ECDSA-AES128-GCM-SHA256
+  - ECDHE-RSA-AES128-GCM-SHA256
+  - ECDHE-ECDSA-AES256-GCM-SHA384
+  - ECDHE-RSA-AES256-GCM-SHA384
+  - ECDHE-ECDSA-CHACHA20-POLY1305
+  - ECDHE-RSA-CHACHA20-POLY1305
+```
 
-**Old 配置文件**：
-- 包含旧版密码套件
-- 最大兼容性
-- 仅在必须支持旧客户端时使用
-
-**注意事项**：
-- ⚠️ 密码套件配置当前需要 Pingora API 增强才能完全生效
-- 📝 配置会被记录但可能不会立即应用
-- 🔄 建议结合 TLS 版本控制一起使用
+不配置时使用 BoringSSL 默认 cipher
 
 ---
 

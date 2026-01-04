@@ -1,3 +1,4 @@
+use crate::core::observe::ssl_log::{log_ssl, SslLogEntry};
 use crate::core::tls::tls_cert_matcher::match_sni;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
@@ -20,18 +21,9 @@ pub struct TlsCallback {
 #[async_trait::async_trait]
 impl TlsAccept for TlsCallback {
     async fn certificate_callback(&self, ssl: &mut TlsRef) {
-        if let Err(e) = self.load_cert_from_sni(ssl).await {
-            // Extract SNI for logging context
-            let sni = ssl.servername(NameType::HOST_NAME)
-                .unwrap_or("<no-sni>");
-            
-            tracing::error!(
-                component = "tls_callback",
-                sni = %sni,
-                error = %e,
-                "Failed to load certificate during TLS handshake"
-            );
-        }
+        let mut entry = SslLogEntry::new();
+        self.load_cert_from_sni(ssl, &mut entry).await;
+        log_ssl(&entry);
     }
 }
 
@@ -58,12 +50,8 @@ impl TlsCallback {
         Ok(settings)
     }
 
-    async fn load_cert_from_sni(&self, ssl: &mut SslRef) -> Result<(), Box<PingoraError>> {
-        // TODO(observability): Add metrics for:
-        // - tls_cert_load_total counter (with status label: success/failure)
-        // - tls_cert_load_duration_seconds histogram
-        tracing::debug!("Loading TLS certificates");
-
+    /// Load certificate from SNI and populate log entry
+    async fn load_cert_from_sni(&self, ssl: &mut SslRef, entry: &mut SslLogEntry) {
         // Get SNI from SSL context, with fallback support
         let sni = match ssl.servername(NameType::HOST_NAME) {
             Some(s) => s.to_string(),
@@ -71,68 +59,87 @@ impl TlsCallback {
                 // Try to use fallback SNI from config
                 if let Some(ref security_protect) = self.edgion_gateway_config.spec.security_protect {
                     if let Some(ref fallback) = security_protect.fallback_sni {
-                        tracing::info!("No SNI provided by client, using fallback SNI: {}", fallback);
                         fallback.clone()
                     } else {
-                        return Err(PingoraError::explain(
-                            ErrorType::InvalidCert,
-                            "No SNI was provided and no fallback SNI configured"
-                        ));
+                        entry.error("No SNI provided and no fallback configured");
+                        return;
                     }
                 } else {
-                    return Err(PingoraError::explain(
-                        ErrorType::InvalidCert,
-                        "No SNI was provided and no security protection config"
-                    ));
+                    entry.error("No SNI provided and no security config");
+                    return;
                 }
             }
         };
-
-        tracing::debug!("Using SNI: {}", sni);
+        entry.sni(&sni);
 
         // Match certificate by SNI
-        let edgion_tls = match_sni(&sni)
-            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Certificate not found: {}", e)))?;
+        let edgion_tls = match match_sni(&sni) {
+            Ok(tls) => tls,
+            Err(e) => {
+                entry.error(format!("Certificate not found: {}", e));
+                return;
+            }
+        };
 
-        // Load certificate FIRST
-        let cert_pem = edgion_tls
-            .cert_pem()
-            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to get cert PEM: {}", e)))?;
-        let cert = X509::from_pem(cert_pem.as_bytes())
-            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Invalid certificate PEM: {}", e)))?;
+        // Record matched certificate
+        let ns = edgion_tls.metadata.namespace.as_deref().unwrap_or("-");
+        let name = edgion_tls.metadata.name.as_deref().unwrap_or("-");
+        entry.cert(format!("{}/{}", ns, name));
 
-        pingora_core::tls::ext::ssl_use_certificate(ssl, &cert)
-            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to use certificate: {}", e)))?;
+        // Record mTLS mode
+        entry.mtls(edgion_tls.spec.client_auth.is_some());
+
+        // Load certificate
+        let cert_pem = match edgion_tls.cert_pem() {
+            Ok(pem) => pem,
+            Err(e) => { entry.error(format!("Failed to get cert: {}", e)); return; }
+        };
+        let cert = match X509::from_pem(cert_pem.as_bytes()) {
+            Ok(c) => c,
+            Err(e) => { entry.error(format!("Invalid cert PEM: {}", e)); return; }
+        };
+        if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
+            entry.error(format!("Failed to use cert: {}", e));
+            return;
+        }
 
         // Load private key
-        let key_pem = edgion_tls
-            .key_pem()
-            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to get key PEM: {}", e)))?;
-        let key = PKey::private_key_from_pem(key_pem.as_bytes())
-            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Invalid private key PEM: {}", e)))?;
+        let key_pem = match edgion_tls.key_pem() {
+            Ok(pem) => pem,
+            Err(e) => { entry.error(format!("Failed to get key: {}", e)); return; }
+        };
+        let key = match PKey::private_key_from_pem(key_pem.as_bytes()) {
+            Ok(k) => k,
+            Err(e) => { entry.error(format!("Invalid key PEM: {}", e)); return; }
+        };
+        if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &key) {
+            entry.error(format!("Failed to use key: {}", e));
+            return;
+        }
 
-        pingora_core::tls::ext::ssl_use_private_key(ssl, &key)
-            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to use private key: {}", e)))?;
-
-        tracing::debug!("Successfully loaded TLS certificate and key for SNI: {}", sni);
-
-        // Configure mTLS AFTER loading server certificates
-        // This is OK because SSL_set_verify can be called during the handshake
+        // Configure mTLS
         if let Some(ref client_auth) = edgion_tls.spec.client_auth {
-            self.configure_mtls(ssl, client_auth, &edgion_tls)?;
-        }
-        
-        // Configure TLS version constraints
-        if let Some(ref tls_versions) = edgion_tls.spec.tls_versions {
-            self.configure_tls_versions(ssl, tls_versions)?;
-        }
-        
-        // Configure cipher suites
-        if let Some(ref cipher_suites) = edgion_tls.spec.cipher_suites {
-            self.configure_cipher_suites(ssl, cipher_suites)?;
+            if let Err(e) = self.configure_mtls(ssl, client_auth, &edgion_tls) {
+                entry.error(format!("mTLS config failed: {}", e));
+                return;
+            }
         }
 
-        Ok(())
+        // Configure minimum TLS version
+        if let Some(min_version) = edgion_tls.spec.min_tls_version {
+            if let Err(e) = self.configure_min_tls_version(ssl, min_version) {
+                entry.error(format!("TLS version config failed: {}", e));
+                return;
+            }
+        }
+
+        // Configure cipher list
+        if let Some(ref ciphers) = edgion_tls.spec.ciphers {
+            if let Err(e) = self.configure_ciphers(ssl, ciphers) {
+                entry.error(format!("Cipher config failed: {}", e));
+                return;
+            }
+        }
     }
 
     /// Configure mTLS (mutual TLS) client certificate verification
@@ -254,115 +261,101 @@ impl TlsCallback {
         Ok(())
     }
     
-    /// Configure TLS version constraints
-    fn configure_tls_versions(
+    /// Configure minimum TLS version (similar to Cloudflare's Minimum TLS Version)
+    fn configure_min_tls_version(
         &self,
         ssl: &mut SslRef,
-        tls_versions: &crate::types::resources::edgion_tls::TlsVersionConfig,
+        min_version: crate::types::resources::edgion_tls::TlsVersion,
     ) -> Result<(), Box<PingoraError>> {
+        use crate::types::resources::edgion_tls::TlsVersion;
         use pingora_core::tls::ssl::SslVersion;
-        
-        // Set minimum TLS version
-        if let Some(min_version) = tls_versions.min_version {
-            let ssl_min_version = match min_version {
-                crate::types::resources::edgion_tls::TlsVersion::Tls12 => SslVersion::TLS1_2,
-                crate::types::resources::edgion_tls::TlsVersion::Tls13 => SslVersion::TLS1_3,
-            };
-            
-            ssl.set_min_proto_version(Some(ssl_min_version)).map_err(|e| {
-                PingoraError::explain(
-                    ErrorType::InternalError,
-                    format!("Failed to set min TLS version: {}", e),
-                )
-            })?;
-            
-            tracing::debug!("Set minimum TLS version to: {:?}", min_version);
+
+        // Warn about deprecated TLS versions
+        if matches!(min_version, TlsVersion::Tls10 | TlsVersion::Tls11) {
+            tracing::warn!(
+                min_version = ?min_version,
+                "TLS 1.0/1.1 are deprecated and have known vulnerabilities. Consider using TLS 1.2+"
+            );
         }
-        
-        // Set maximum TLS version
-        if let Some(max_version) = tls_versions.max_version {
-            let ssl_max_version = match max_version {
-                crate::types::resources::edgion_tls::TlsVersion::Tls12 => SslVersion::TLS1_2,
-                crate::types::resources::edgion_tls::TlsVersion::Tls13 => SslVersion::TLS1_3,
-            };
-            
-            ssl.set_max_proto_version(Some(ssl_max_version)).map_err(|e| {
-                PingoraError::explain(
-                    ErrorType::InternalError,
-                    format!("Failed to set max TLS version: {}", e),
-                )
-            })?;
-            
-            tracing::debug!("Set maximum TLS version to: {:?}", max_version);
-        }
-        
+
+        let ssl_version = match min_version {
+            TlsVersion::Tls10 => SslVersion::TLS1,
+            TlsVersion::Tls11 => SslVersion::TLS1_1,
+            TlsVersion::Tls12 => SslVersion::TLS1_2,
+            TlsVersion::Tls13 => SslVersion::TLS1_3,
+        };
+
+        ssl.set_min_proto_version(Some(ssl_version)).map_err(|e| {
+            PingoraError::explain(
+                ErrorType::InternalError,
+                format!("Failed to set min TLS version: {}", e),
+            )
+        })?;
+
+        tracing::debug!(min_version = ?min_version, "Configured minimum TLS version");
         Ok(())
     }
     
-    /// Configure cipher suites based on profile or custom list
-    fn configure_cipher_suites(
+    /// Configure cipher list (similar to Nginx ssl_ciphers directive)
+    ///
+    /// Takes a list of cipher names in OpenSSL format and applies them via BoringSSL FFI.
+    /// If configuration fails, logs a warning and continues with default ciphers.
+    ///
+    /// Note: TLS 1.3 ciphers are hardcoded in BoringSSL and cannot be configured.
+    fn configure_ciphers(
         &self,
-        _ssl: &mut SslRef,
-        cipher_config: &crate::types::resources::edgion_tls::CipherSuiteConfig,
+        ssl: &mut SslRef,
+        ciphers: &[String],
     ) -> Result<(), Box<PingoraError>> {
-        use crate::types::resources::edgion_tls::CipherSuiteProfile;
-        
-        let cipher_list = match &cipher_config.profile {
-            CipherSuiteProfile::Modern => {
-                // Mozilla Modern profile: TLS 1.3 only
-                // https://wiki.mozilla.org/Security/Server_Side_TLS
-                "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256"
+        if ciphers.is_empty() {
+            return Ok(());
+        }
+
+        let cipher_list = ciphers.join(":");
+
+        #[cfg(feature = "boringssl")]
+        {
+            use std::ffi::CString;
+
+            let cipher_cstr = match CString::new(cipher_list.as_str()) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Invalid cipher list (contains null byte), using default ciphers"
+                    );
+                    return Ok(());
+                }
+            };
+
+            // SAFETY: SslRef -> SSL* conversion for FFI call
+            // ssl is valid during this function, cipher_cstr lifetime extends past FFI call
+            unsafe {
+                let ssl_ptr = ssl as *mut SslRef as *mut boring_sys::SSL;
+                let ret = boring_sys::SSL_set_strict_cipher_list(ssl_ptr, cipher_cstr.as_ptr());
+
+                if ret != 1 {
+                    tracing::warn!(
+                        cipher_list = %cipher_list,
+                        "Failed to set cipher list, using default ciphers. \
+                         Check if cipher names are valid for BoringSSL."
+                    );
+                    return Ok(());
+                }
             }
-            CipherSuiteProfile::Intermediate => {
-                // Mozilla Intermediate profile: TLS 1.2+
-                // Balanced security and compatibility
-                "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:\
-                 ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:\
-                 ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:\
-                 DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:\
-                 TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256"
-            }
-            CipherSuiteProfile::Old => {
-                // Mozilla Old profile: maximum compatibility
-                // Includes older ciphers for legacy clients
-                "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:\
-                 ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:\
-                 ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:\
-                 DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:\
-                 DHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-SHA256:\
-                 ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:\
-                 ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA384:\
-                 ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA:\
-                 ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA256:\
-                 DHE-RSA-AES256-SHA256:AES128-GCM-SHA256:AES256-GCM-SHA384:\
-                 AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:\
-                 DES-CBC3-SHA:\
-                 TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256"
-            }
-            CipherSuiteProfile::Custom(ciphers) => {
-                // User-specified custom cipher list
-                // Join with colons as required by OpenSSL
-                &ciphers.join(":")
-            }
-        };
-        
-        // Set cipher list (applies to TLS 1.2 and below, and TLS 1.3)
-        // Note: Pingora/BoringSSL doesn't expose set_cipher_list in safe API
-        // For now, we log the configuration but cannot apply it directly
-        // This would require either:
-        // 1. Pingora to expose set_cipher_list API
-        // 2. Using unsafe FFI with proper foreign_types handling
-        // 3. Configuring at SSL_CTX level before handshake (not possible with dynamic SNI)
-        tracing::warn!(
-            "Cipher suite configuration is not fully supported yet. \
-             Profile={:?}, List={}. \
-             This requires Pingora API enhancement.",
-            cipher_config.profile,
-            cipher_list
-        );
-        
-        tracing::debug!("Set cipher suites: profile={:?}", cipher_config.profile);
-        
+
+            tracing::debug!(cipher_list = %cipher_list, "Configured cipher list");
+        }
+
+        #[cfg(not(feature = "boringssl"))]
+        {
+            tracing::warn!(
+                cipher_list = %cipher_list,
+                "Cipher configuration requires BoringSSL backend"
+            );
+            let _ = ssl;
+        }
+
         Ok(())
     }
 }

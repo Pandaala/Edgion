@@ -1,5 +1,6 @@
 use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
 use crate::core::observe::access_log::init_access_logger;
+use crate::core::observe::ssl_log::init_ssl_logger;
 use crate::core::observe::init_logging;
 use crate::types::prefix_dir;
 use anyhow::{anyhow, Result};
@@ -166,6 +167,26 @@ impl EdgionGatewayCli {
         
         // 8. Initialize global AccessLogger
         runtime.block_on(init_access_logger(&config.access_log))?;
+        
+        // 8.1 Initialize SSL logger (for TLS handshake events)
+        // Derive ssl.log path from access.log path
+        let ssl_log_path = {
+            let access_path = &config.access_log.output;
+            match access_path {
+                crate::types::link_sys::StringOutput::LocalFile(file_cfg) => {
+                    if let Some(parent) = std::path::Path::new(&file_cfg.path).parent() {
+                        parent.join("ssl.log").to_string_lossy().to_string()
+                    } else {
+                        "logs/ssl.log".to_string()
+                    }
+                }
+            }
+        };
+        if let Err(e) = init_ssl_logger(&ssl_log_path) {
+            tracing::warn!("Failed to initialize SSL logger: {}, TLS handshake events will not be logged", e);
+        } else {
+            tracing::info!("SSL logger initialized: {}", ssl_log_path);
+        }
         
         // 9. Create and configure Pingora server (in Tokio runtime context for UDP listeners)
         let pingora_server = runtime.block_on(async {
