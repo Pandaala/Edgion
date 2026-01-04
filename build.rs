@@ -10,12 +10,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .file_descriptor_set_path(out_dir.join("config_sync_descriptor.bin"))
         .compile_protos(&[format!("{}/config_sync.proto", proto_dir)], &[proto_dir])?;
 
-    // Compile test_service.proto for examples
-    let test_proto_dir = "examples/proto";
-    tonic_build::configure()
-        .build_server(true)
-        .build_client(true)
-        .compile_protos(&[format!("{}/test_service.proto", test_proto_dir)], &[test_proto_dir])?;
-
     Ok(())
 }
