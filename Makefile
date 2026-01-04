@@ -28,7 +28,7 @@ CTL_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-ctl:latest
 
 # Docker build common flags
 DOCKER_BUILD_FLAGS := --build-arg RUST_VERSION=$(RUST_VERSION) --build-arg FEATURES=$(FEATURES)
-DOCKER_BUILDX_PLATFORMS := linux/amd64
+DOCKER_BUILDX_PLATFORMS := linux/amd64,linux/arm64
 
 # Colors for output
 RED := \033[0;31m
