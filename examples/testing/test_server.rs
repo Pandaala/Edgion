@@ -271,7 +271,7 @@ async fn catch_all_handler(
 // ============================================================================
 // Use pre-generated proto code instead of build-time generation
 #[path = "proto_gen/test.rs"]
-pub mod test
+pub mod test;
 
 use test::test_service_server::{TestService, TestServiceServer};
 use test::{HelloRequest, HelloResponse, NumberRequest, NumberResponse};
