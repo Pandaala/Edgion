@@ -21,6 +21,10 @@ name = "edgion-ctl"
 path = "src/bin/edgion_ctl.rs"
 
 [[example]]
+name = "build_test_proto"
+path = "examples/testing/build_test_proto.rs"
+
+[[example]]
 name = "test_server"
 path = "examples/testing/test_server.rs"
 
@@ -168,3 +172,4 @@ tonic-build = "0.12"
 tempfile = "3"
 tokio-tungstenite = "0.24"
 base64 = "0.22"
+tonic-build = "0.12"
