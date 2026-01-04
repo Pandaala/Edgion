@@ -19,10 +19,9 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::time::Instant;
 
-// 引入 proto 生成的代码
-pub mod test {
-    tonic::include_proto!("test");
-}
+// Use pre-generated proto code
+#[path = "../../proto_gen/test.rs"]
+pub mod test;
 
 use test::test_service_client::TestServiceClient;
 use test::HelloRequest;
