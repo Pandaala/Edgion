@@ -42,18 +42,15 @@ RUN cargo chef prepare --recipe-path recipe.json
 # =============================================================================
 # Stage 3: Builder - Build dependencies and application
 # =============================================================================
-FROM rust:${RUST_VERSION}-slim AS builder
+FROM rust:${RUST_VERSION} AS builder
 
 WORKDIR /app
 
-# Install build dependencies
+# Install additional build dependencies (base image already has gcc, make, perl, etc.)
 RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
     cmake \
-    clang \
-    llvm-dev \
     libclang-dev \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 # Install cargo-chef
@@ -132,4 +129,3 @@ LABEL maintainer="Edgion Team"
 LABEL org.opencontainers.image.source="https://github.com/your-org/Edgion"
 LABEL org.opencontainers.image.description="Edgion Gateway - Kubernetes Gateway API Implementation"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
-
