@@ -8,14 +8,14 @@ use std::sync::mpsc::SyncSender;
 
 use crate::core::utils::available_cpu_cores;
 use crate::types::link_sys::{LocalFileWriterConfig, RotationConfig};
-use crate::types::prefix_dir;
+use crate::types::work_dir;
 
 /// Local file writer that implements DataSender
 /// 
 /// Uses a background thread to write log entries (avoids blocking tokio runtime)
 /// Supports daily/hourly rotation with automatic cleanup of old files
 pub struct LocalFileWriter {
-    /// Relative path (will be joined with prefix_dir)
+    /// Relative path (will be resolved against work_dir)
     relative_path: String,
     /// Queue size for the write queue
     queue_size: Option<usize>,
@@ -48,9 +48,9 @@ impl LocalFileWriter {
         }
     }
     
-    /// Get full path by joining prefix_dir with relative path
+    /// Get full path by resolving relative path against work_dir
     pub(super) fn full_path(&self) -> PathBuf {
-        prefix_dir().join(&self.relative_path)
+        work_dir().resolve(&self.relative_path)
     }
     
     /// Get the queue size, using default if not configured

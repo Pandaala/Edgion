@@ -14,11 +14,30 @@
 #
 # ================================================================================
 
-# Prefix directory for Edgion runtime files
-# 运行时文件存储目录（包含配置、状态等）
-# 开发环境建议使用相对路径，生产环境使用绝对路径
-# 设置为 "." 表示当前目录
-prefix_dir = "."
+# ============================================================================
+# Working Directory Configuration
+# ============================================================================
+# All relative paths in this configuration file will be relative to work_dir.
+# Absolute paths will be used as-is.
+#
+# Priority order:
+#   1. Command line: --work-dir /path
+#   2. Environment:  EDGION_WORK_DIR=/path
+#   3. Config file:  work_dir = "/path"
+#   4. Default:      "." (current directory)
+#
+# Standard directory layout:
+#   work_dir/
+#   ├── logs/        # Log files
+#   ├── runtime/     # Runtime state
+#   └── config/      # Configuration files
+#
+# Examples:
+#   Development:  work_dir = "."
+#   Production:   work_dir = "/usr/local/edgion"
+#   Container:    work_dir = "/usr/local/edgion"
+# ============================================================================
+work_dir = "."
 
 [gateway]
 # Operator gRPC server address
@@ -93,7 +112,7 @@ buffer_size = 10000
 # 当前使用 LocalFile 输出到本地文件
 
 [access_log.output.localFile]
-# Access log 文件路径（相对于 prefix_dir）
+# Access log 文件路径（相对于 work_dir，或使用绝对路径）
 path = "logs/edgion_access.log"
 
 # 可选：队列大小

@@ -14,10 +14,30 @@
 #
 # ================================================================================
 
-# Prefix directory for Edgion runtime files
-# 运行时文件存储目录（包含配置、状态等）
-# 开发环境建议使用相对路径，生产环境使用绝对路径
-prefix_dir = "runtime"
+# ============================================================================
+# Working Directory Configuration
+# ============================================================================
+# All relative paths in this configuration file will be relative to work_dir.
+# Absolute paths will be used as-is.
+#
+# Priority order:
+#   1. Command line: --work-dir /path
+#   2. Environment:  EDGION_WORK_DIR=/path
+#   3. Config file:  work_dir = "/path"
+#   4. Default:      "." (current directory)
+#
+# Standard directory layout:
+#   work_dir/
+#   ├── logs/        # Log files
+#   ├── runtime/     # Runtime state
+#   └── config/      # Configuration files
+#
+# Examples:
+#   Development:  work_dir = "."
+#   Production:   work_dir = "/usr/local/edgion"
+#   Container:    work_dir = "/usr/local/edgion"
+# ============================================================================
+work_dir = "."
 
 # K8s mode (optional, can also use CLI --k8s-mode or auto-detect via env)
 # K8s 模式（可选，也可使用 CLI --k8s-mode 或通过环境变量自动检测）

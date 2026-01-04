@@ -2,7 +2,8 @@ use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
 use crate::core::observe::access_log::init_access_logger;
 use crate::core::observe::ssl_log::init_ssl_logger;
 use crate::core::observe::init_logging;
-use crate::types::prefix_dir;
+use crate::types::{init_work_dir, work_dir};
+use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::sync::Arc;
@@ -134,9 +135,27 @@ impl EdgionGatewayCli {
         
         // 1. Load configuration (synchronous)
         let config = EdgionGatewayConfig::load(self.config.clone())?;
-        let _ = prefix_dir();
         
-        // 2. Initialize logging (at outermost level, keep WorkerGuard alive)
+        // 2. Determine work_dir (按优先级：CLI > ENV > Config > Default)
+        let work_dir_path = self.config.work_dir
+            .clone()
+            .or_else(|| std::env::var("EDGION_WORK_DIR").ok().map(PathBuf::from))
+            .or_else(|| config.work_dir.clone())
+            .unwrap_or_else(|| PathBuf::from("."));
+        
+        // 3. Initialize and validate work_dir
+        init_work_dir(work_dir_path)
+            .map_err(|e| anyhow!("Failed to initialize work directory: {}", e))?;
+        let wd = work_dir();
+        wd.validate()
+            .map_err(|e| anyhow!("Work directory validation failed: {}", e))?;
+        
+        tracing::info!(
+            work_dir = %wd.base().display(),
+            "Work directory initialized"
+        );
+        
+        // 4. Initialize logging (at outermost level, keep WorkerGuard alive)
         let log_config = config.to_log_config();
         let _log_guard = runtime.block_on(init_logging(log_config))?;
         
@@ -174,18 +193,19 @@ impl EdgionGatewayCli {
             let access_path = &config.access_log.output;
             match access_path {
                 crate::types::link_sys::StringOutput::LocalFile(file_cfg) => {
-                    if let Some(parent) = std::path::Path::new(&file_cfg.path).parent() {
-                        parent.join("ssl.log").to_string_lossy().to_string()
+                    let access_full = wd.resolve(&file_cfg.path);
+                    if let Some(parent) = access_full.parent() {
+                        parent.join("ssl.log").to_path_buf()
                     } else {
-                        "logs/ssl.log".to_string()
+                        wd.logs().join("ssl.log")
                     }
                 }
             }
         };
-        if let Err(e) = init_ssl_logger(&ssl_log_path) {
+        if let Err(e) = init_ssl_logger(ssl_log_path.to_str().unwrap_or("logs/ssl.log")) {
             tracing::warn!("Failed to initialize SSL logger: {}, TLS handshake events will not be logged", e);
         } else {
-            tracing::info!("SSL logger initialized: {}", ssl_log_path);
+            tracing::info!("SSL logger initialized: {}", ssl_log_path.display());
         }
         
         // 9. Create and configure Pingora server (in Tokio runtime context for UDP listeners)

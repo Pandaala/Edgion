@@ -3,7 +3,8 @@ use crate::core::conf_sync::{ConfigServer, ConfigSyncServer};
 use crate::core::conf_mgr::{FileSystemStore, KubernetesStore, ConfStore, load_all_resources_from_store, ResourceMgrAPI, SchemaValidator};
 use crate::core::observe::init_logging;
 use crate::core::utils;
-use crate::types::{prefix_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
+use crate::types::{init_work_dir, work_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
+use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::sync::Arc;
@@ -46,8 +47,24 @@ impl EdgionControllerCli {
         let k8s_mode = utils::detect_k8s_mode(self.config.k8s_mode, config.k8s_mode);
         utils::set_k8s_mode(k8s_mode);
 
-        // Initialize prefix directory (LazyLock auto-initializes on first access)
-        let _ = prefix_dir();
+        // Determine work_dir (按优先级：CLI > ENV > Config > Default)
+        let work_dir_path = self.config.work_dir
+            .clone()
+            .or_else(|| std::env::var("EDGION_WORK_DIR").ok().map(PathBuf::from))
+            .or_else(|| config.work_dir.clone())
+            .unwrap_or_else(|| PathBuf::from("."));
+        
+        // Initialize and validate work_dir
+        init_work_dir(work_dir_path)
+            .map_err(|e| anyhow!("Failed to initialize work directory: {}", e))?;
+        let wd = work_dir();
+        wd.validate()
+            .map_err(|e| anyhow!("Work directory validation failed: {}", e))?;
+        
+        tracing::info!(
+            work_dir = %wd.base().display(),
+            "Work directory initialized"
+        );
 
         // Initialize logging system
         let log_config = config.to_log_config();

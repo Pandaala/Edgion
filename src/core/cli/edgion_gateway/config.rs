@@ -2,17 +2,25 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use crate::types::DEFAULT_PREFIX_DIR;
 use crate::types::link_sys::StringOutput;
 
 /// Edgion Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
 #[serde(default)]
 pub struct EdgionGatewayConfig {
-    /// Prefix directory for Edgion (default: /usr/local/edgion)
-    #[arg(short = 'p', long, value_name = "DIR", default_value = DEFAULT_PREFIX_DIR)]
-    #[serde(default = "default_prefix_dir")]
-    pub prefix_dir: PathBuf,
+    /// Working directory for Edgion runtime files
+    /// Priority: CLI --work-dir > ENV EDGION_WORK_DIR > Config > Default (".")
+    /// All relative paths in configuration will be relative to this directory.
+    #[arg(
+        short = 'w',
+        long,
+        value_name = "DIR",
+        help = "Working directory for Edgion runtime files\n\
+                Priority: CLI > ENV (EDGION_WORK_DIR) > Config > Default\n\
+                Example: --work-dir /usr/local/edgion"
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_dir: Option<PathBuf>,
 
     /// Configuration file path (TOML format)
     #[arg(short = 'c', long = "config-file", value_name = "FILE", default_value = "config/edgion-gateway.toml")]
@@ -36,9 +44,6 @@ pub struct EdgionGatewayConfig {
     pub server: ServerConfig,
 }
 
-fn default_prefix_dir() -> PathBuf {
-    PathBuf::from(DEFAULT_PREFIX_DIR)
-}
 
 /// Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
@@ -217,10 +222,9 @@ impl EdgionGatewayConfig {
 
     /// Merge CLI config into file config (CLI takes precedence)
     fn merge(base: &mut Self, cli: &Self) {
-        // Prefix directory: only override if CLI value differs from default
-        // This allows config file to set prefix_dir
-        if cli.prefix_dir != PathBuf::from(DEFAULT_PREFIX_DIR) {
-            base.prefix_dir = cli.prefix_dir.clone();
+        // Work directory: CLI value takes precedence if provided
+        if cli.work_dir.is_some() {
+            base.work_dir = cli.work_dir.clone();
         }
         
         // Gateway config
