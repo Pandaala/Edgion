@@ -1,11 +1,9 @@
-use super::discovery_impl::{EndpointSliceExt, EndpointSliceLoadBalancer};
 use super::{get_consistent_store, get_ewma_store, get_leastconn_store, get_roundrobin_store};
 use crate::core::conf_sync::traits::ConfHandler;
 use crate::core::lb::lb_policy::{get_global_policy_store, LbPolicy};
 use crate::types::ResourceMeta;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 /// Handler for EndpointSlice configuration updates
 /// Manages multiple stores for different LB algorithms

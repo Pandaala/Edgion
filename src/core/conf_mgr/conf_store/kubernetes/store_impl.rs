@@ -17,6 +17,7 @@ use crate::core::conf_mgr::conf_store::{ConfEntry, ConfStore, ConfStoreError};
 /// The cache is updated by the KubernetesController which watches for resource changes.
 #[derive(Clone)]
 pub struct KubernetesStore {
+    #[allow(dead_code)]
     pub(crate) client: Client,
     /// Internal cache: key = "kind/namespace/name" or "kind//name" for cluster-scoped
     cache: Arc<RwLock<HashMap<String, ConfEntry>>>,

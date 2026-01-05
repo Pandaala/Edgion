@@ -11,6 +11,7 @@ use uuid::Uuid;
 /// gRPC conf_client for ConfigSync service
 pub struct ConfigSyncClient {
     config_client: Arc<ConfigClient>,
+    #[allow(dead_code)]
     conf_client_handle: ConfigSyncClientService<Channel>,
 }
 

@@ -1,6 +1,6 @@
 //! Unified logger factory for creating different types of loggers
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::sync::Arc;
 
 use crate::core::link_sys::local_file::LogType;

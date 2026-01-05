@@ -42,4 +42,5 @@ where
 }
 
 /// Type alias for string-based data senders (most common case)
+#[allow(dead_code)]
 pub type StringDataSender = dyn DataSender<String>;

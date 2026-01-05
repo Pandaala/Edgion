@@ -236,6 +236,7 @@ where
     S::Iter: pingora_load_balancing::selection::BackendIter,
 {
     /// The discovery implementation (either single or multi)
+    #[allow(dead_code)]
     discovery: Arc<dyn ServiceDiscovery + Send + Sync>,
     /// The load balancer using the discovery
     lb: LoadBalancer<S>,
