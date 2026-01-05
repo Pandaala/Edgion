@@ -3,7 +3,6 @@
 //! This filter handles references to EdgionPlugins resources.
 
 use async_trait::async_trait;
-use std::future::Future;
 
 use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 use crate::core::plugins::plugin_runtime::log::PluginLog;
@@ -11,8 +10,8 @@ use crate::core::plugins::plugin_runtime::traits::{PluginSession, RequestFilter,
 use crate::types::filters::{PluginRunningResult, PluginRunningStage};
 use crate::types::resources::LocalObjectReference;
 
-/// Maximum allowed nested plugin references to avoid infinite loops
-const MAX_PLUGIN_REF_DEPTH: usize = 5;
+/// Default maximum allowed nested plugin references to avoid infinite loops
+pub const DEFAULT_PLUGIN_REF_DEPTH: usize = 5;
 
 /// Filter that handles ExtensionRef to EdgionPlugins
 #[derive(Clone)]
@@ -21,32 +20,21 @@ pub struct ExtensionRefFilter {
     namespace: String,
     /// The extension reference configuration
     ext_ref: LocalObjectReference,
+    /// Max depth allowed for this filter instance
+    max_depth: usize,
 }
 
 impl ExtensionRefFilter {
-    pub fn new(namespace: String, ext_ref: LocalObjectReference) -> Self {
-        Self { namespace, ext_ref }
+    pub fn new(namespace: String, ext_ref: LocalObjectReference, max_depth: usize) -> Self {
+        Self {
+            namespace,
+            ext_ref,
+            max_depth,
+        }
     }
 
-    /// Execute a closure with push/pop guard to ensure stack is balanced
-    fn with_ref_guard<F>(session: &mut dyn PluginSession, key: String, f: F) -> PluginRunningResult
-    where
-        F: FnOnce(&mut dyn PluginSession) -> PluginRunningResult,
-    {
-        session.push_plugin_ref(key);
-        let result = f(session);
-        session.pop_plugin_ref();
-        result
-    }
-
-    /// Async version of with_ref_guard
-    async fn with_ref_guard_async<F, Fut>(session: &mut dyn PluginSession, key: String, f: F) -> PluginRunningResult
-    where
-        F: FnOnce(&mut dyn PluginSession) -> Fut,
-        Fut: Future<Output = PluginRunningResult>,
-    {
-        session.push_plugin_ref(key);
-        let result = f(session).await;
+    #[inline]
+    fn finish(session: &mut dyn PluginSession, result: PluginRunningResult) -> PluginRunningResult {
         session.pop_plugin_ref();
         result
     }
@@ -84,55 +72,55 @@ impl ExtensionRefFilter {
             log.push(&format!("Detected cyclic plugin reference '{}'", key));
             return PluginRunningResult::ErrTerminateRequest;
         }
-        if session.plugin_ref_depth() >= MAX_PLUGIN_REF_DEPTH {
+        if session.plugin_ref_depth() >= self.max_depth {
             log.push(&format!(
                 "Plugin reference depth exceeded {} while resolving '{}'",
-                MAX_PLUGIN_REF_DEPTH, key
+                self.max_depth, key
             ));
             return PluginRunningResult::ErrTerminateRequest;
         }
-        Self::with_ref_guard(session, key.clone(), |session| {
-            // Look up the EdgionPlugins in global store
-            let Some(edgion_plugins) = store.get(&key) else {
-                log.push(&format!("EdgionPlugins '{}' not found, returning 500", key));
-                return PluginRunningResult::ErrTerminateRequest;
-            };
+        session.push_plugin_ref(key.clone());
 
-            // Get the pre-compiled plugin runtime
-            let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
+        // Look up the EdgionPlugins in global store
+        let Some(edgion_plugins) = store.get(&key) else {
+            log.push(&format!("EdgionPlugins '{}' not found, returning 500", key));
+            return Self::finish(session, PluginRunningResult::ErrTerminateRequest);
+        };
 
-            // Run edgion_plugins based on stage
-            let result = match stage {
-                PluginRunningStage::Request => {
-                    log.push("Warning: Request stage should use async path");
-                    PluginRunningResult::GoodNext
-                }
-                PluginRunningStage::UpstreamResponseFilter => {
-                    for plugin in plugin_runtime.upstream_response_plugins_iter() {
-                        let mut inner_log = PluginLog::new(plugin.name());
-                        let result = plugin.run_upstream_response_filter(session, &mut inner_log);
+        // Get the pre-compiled plugin runtime
+        let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
 
-                        if result == PluginRunningResult::ErrTerminateRequest {
-                            return result;
-                        }
+        // Run edgion_plugins based on stage
+        let result = match stage {
+            PluginRunningStage::Request => {
+                log.push("Warning: Request stage should use async path");
+                PluginRunningResult::GoodNext
+            }
+            PluginRunningStage::UpstreamResponseFilter => {
+                for plugin in plugin_runtime.upstream_response_plugins_iter() {
+                    let mut inner_log = PluginLog::new(plugin.name());
+                    let result = plugin.run_upstream_response_filter(session, &mut inner_log);
+
+                    if result == PluginRunningResult::ErrTerminateRequest {
+                        return Self::finish(session, result);
                     }
-                    PluginRunningResult::GoodNext
                 }
-                PluginRunningStage::UpstreamResponse => {
-                    // Not executed in sync path
-                    PluginRunningResult::GoodNext
-                }
-            };
+                Self::finish(session, PluginRunningResult::GoodNext)
+            }
+            PluginRunningStage::UpstreamResponse => {
+                // Not executed in sync path
+                Self::finish(session, PluginRunningResult::GoodNext)
+            }
+        };
 
-            log.push(&format!(
-                "EdgionPlugins '{}' executed successfully (req={}, resp_sync={}, resp_async={})",
-                key,
-                plugin_runtime.request_plugins_iter().count(),
-                plugin_runtime.upstream_response_plugins_iter().count(),
-                plugin_runtime.upstream_response_async_plugins_iter().count()
-            ));
-            result
-        })
+        log.push(&format!(
+            "EdgionPlugins '{}' executed successfully (req={}, resp_sync={}, resp_async={})",
+            key,
+            plugin_runtime.request_plugins_iter().count(),
+            plugin_runtime.upstream_response_plugins_iter().count(),
+            plugin_runtime.upstream_response_async_plugins_iter().count()
+        ));
+        result
     }
 
     /// Async version for stages that require it
@@ -157,66 +145,66 @@ impl ExtensionRefFilter {
             log.push(&format!("Detected cyclic plugin reference '{}'", key));
             return PluginRunningResult::ErrTerminateRequest;
         }
-        if session.plugin_ref_depth() >= MAX_PLUGIN_REF_DEPTH {
+        if session.plugin_ref_depth() >= self.max_depth {
             log.push(&format!(
                 "Plugin reference depth exceeded {} while resolving '{}'",
-                MAX_PLUGIN_REF_DEPTH, key
+                self.max_depth, key
             ));
             return PluginRunningResult::ErrTerminateRequest;
         }
-        Self::with_ref_guard_async(session, key.clone(), |session| async move {
-            let Some(edgion_plugins) = store.get(&key) else {
-                log.push(&format!("EdgionPlugins '{}' not found, returning 500", key));
-                return PluginRunningResult::ErrTerminateRequest;
-            };
+        session.push_plugin_ref(key.clone());
 
-            let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
+        let Some(edgion_plugins) = store.get(&key) else {
+            log.push(&format!("EdgionPlugins '{}' not found, returning 500", key));
+            return Self::finish(session, PluginRunningResult::ErrTerminateRequest);
+        };
 
-            let result = match stage {
-                PluginRunningStage::Request => {
-                    for plugin in plugin_runtime.request_plugins_iter() {
-                        let mut inner_log = PluginLog::new(plugin.name());
-                        let result = plugin.run_request(session, &mut inner_log).await;
+        let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
 
-                        if result == PluginRunningResult::ErrTerminateRequest {
-                            return result;
-                        }
+        let result = match stage {
+            PluginRunningStage::Request => {
+                for plugin in plugin_runtime.request_plugins_iter() {
+                    let mut inner_log = PluginLog::new(plugin.name());
+                    let result = plugin.run_request(session, &mut inner_log).await;
+
+                    if result == PluginRunningResult::ErrTerminateRequest {
+                        return Self::finish(session, result);
                     }
-                    PluginRunningResult::GoodNext
                 }
-                PluginRunningStage::UpstreamResponse => {
-                    for plugin in plugin_runtime.upstream_response_async_plugins_iter() {
-                        let mut inner_log = PluginLog::new(plugin.name());
-                        let result = plugin.run_upstream_response(session, &mut inner_log).await;
+                Self::finish(session, PluginRunningResult::GoodNext)
+            }
+            PluginRunningStage::UpstreamResponse => {
+                for plugin in plugin_runtime.upstream_response_async_plugins_iter() {
+                    let mut inner_log = PluginLog::new(plugin.name());
+                    let result = plugin.run_upstream_response(session, &mut inner_log).await;
 
-                        if result == PluginRunningResult::ErrTerminateRequest {
-                            return result;
-                        }
+                    if result == PluginRunningResult::ErrTerminateRequest {
+                        return Self::finish(session, result);
                     }
-                    PluginRunningResult::GoodNext
                 }
-                PluginRunningStage::UpstreamResponseFilter => {
-                    for plugin in plugin_runtime.upstream_response_plugins_iter() {
-                        let mut inner_log = PluginLog::new(plugin.name());
-                        let result = plugin.run_upstream_response_filter(session, &mut inner_log);
+                Self::finish(session, PluginRunningResult::GoodNext)
+            }
+            PluginRunningStage::UpstreamResponseFilter => {
+                for plugin in plugin_runtime.upstream_response_plugins_iter() {
+                    let mut inner_log = PluginLog::new(plugin.name());
+                    let result = plugin.run_upstream_response_filter(session, &mut inner_log);
 
-                        if result == PluginRunningResult::ErrTerminateRequest {
-                            return result;
-                        }
+                    if result == PluginRunningResult::ErrTerminateRequest {
+                        return Self::finish(session, result);
                     }
-                    PluginRunningResult::GoodNext
                 }
-            };
+                Self::finish(session, PluginRunningResult::GoodNext)
+            }
+        };
 
-            log.push(&format!(
-                "EdgionPlugins '{}' executed successfully (req={}, resp_sync={}, resp_async={})",
-                key,
-                plugin_runtime.request_plugins_iter().count(),
-                plugin_runtime.upstream_response_plugins_iter().count(),
-                plugin_runtime.upstream_response_async_plugins_iter().count()
-            ));
-            result
-        })
+        log.push(&format!(
+            "EdgionPlugins '{}' executed successfully (req={}, resp_sync={}, resp_async={})",
+            key,
+            plugin_runtime.request_plugins_iter().count(),
+            plugin_runtime.upstream_response_plugins_iter().count(),
+            plugin_runtime.upstream_response_async_plugins_iter().count()
+        ));
+        result
     }
 }
 
@@ -250,8 +238,7 @@ impl UpstreamResponseFilter for ExtensionRefFilter {
 mod tests {
     use super::*;
     use crate::core::plugins::edgion_plugins::get_global_plugin_store;
-    use crate::core::plugins::edgion_plugins::plugin_store::PluginStore;
-    use crate::core::plugins::plugin_runtime::traits::MockPluginSession;
+    use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
     use crate::types::resources::edgion_plugins::{EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry};
     use crate::types::resources::gateway_api_plugins::EdgionPlugin;
     use crate::types::resources::http_route::HTTPHeaderFilter;
@@ -298,6 +285,7 @@ mod tests {
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
             },
+            DEFAULT_PLUGIN_REF_DEPTH,
         );
         let mut log = PluginLog::new("test");
         let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
@@ -308,9 +296,7 @@ mod tests {
     fn test_depth_exceeded() {
         let mut session = MockPluginSession::new();
         session.expect_has_plugin_ref().with(eq("ns/p1")).return_const(false);
-        session
-            .expect_plugin_ref_depth()
-            .return_const(super::MAX_PLUGIN_REF_DEPTH);
+        session.expect_plugin_ref_depth().return_const(DEFAULT_PLUGIN_REF_DEPTH);
         let filter = ExtensionRefFilter::new(
             "ns".to_string(),
             LocalObjectReference {
@@ -318,6 +304,7 @@ mod tests {
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
             },
+            DEFAULT_PLUGIN_REF_DEPTH,
         );
         let mut log = PluginLog::new("test");
         let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
@@ -342,6 +329,7 @@ mod tests {
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
             },
+            DEFAULT_PLUGIN_REF_DEPTH,
         );
         let mut log = PluginLog::new("test");
         let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);

@@ -272,6 +272,10 @@ pub struct HTTPRouteFilter {
     /// ExtensionRef is an optional, implementation-specific extension to the "filter" behavior
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension_ref: Option<LocalObjectReference>,
+
+    /// Max depth for nested ExtensionRef plugin resolution (default 5)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension_ref_max_depth: Option<usize>,
 }
 
 /// HTTPRouteFilterType identifies a type of HTTPRoute filter

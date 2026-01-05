@@ -18,6 +18,7 @@ use crate::core::plugins::edgion_plugins::cors::Cors;
 use crate::core::plugins::edgion_plugins::csrf::Csrf;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::mock::Mock;
+use crate::core::plugins::gapi_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
 use crate::core::plugins::gapi_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter,
     ResponseHeaderModifierFilter,
@@ -93,7 +94,8 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                        let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);
+                        let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
                         self.add_request_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_filter(Box::new(ext_filter));
                     }
@@ -126,7 +128,8 @@ impl PluginRuntime {
                 }
                 GRPCRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                        let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);
+                        let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
                         self.add_request_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_filter(Box::new(ext_filter));
                     }
@@ -182,7 +185,8 @@ impl PluginRuntime {
             EdgionPlugin::IpRestriction(config) => Some(IpRestriction::new(config)),
             EdgionPlugin::Mock(config) => Some(Box::new(Mock::new(config))),
             EdgionPlugin::ExtensionRef(ext_ref) => {
-                let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                let ext_filter =
+                    ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
                 Some(Box::new(ext_filter))
             }
             _ => None,
@@ -200,7 +204,8 @@ impl PluginRuntime {
             }
             EdgionPlugin::DebugAccessLogToHeader(config) => Some(Box::new(DebugAccessLogToHeaderFilter::new(config))),
             EdgionPlugin::ExtensionRef(ext_ref) => {
-                let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                let ext_filter =
+                    ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
                 Some(Box::new(ext_filter))
             }
             _ => None,

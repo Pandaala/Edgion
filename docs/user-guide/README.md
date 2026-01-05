@@ -34,6 +34,7 @@
 
 - 🔐 mTLS 配置指南
 - 🚀 性能优化指南
+- 🧩 ExtensionRef 深度控制：`extensionRefMaxDepth` 可配置（默认 5），用于限制插件引用链深度，避免循环。
 
 ---
 
