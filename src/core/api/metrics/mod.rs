@@ -13,25 +13,25 @@ static PROMETHEUS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 /// Initialize the Prometheus metrics exporter
 pub fn init_metrics_exporter() -> Result<(), String> {
     let builder = PrometheusBuilder::new();
-    
+
     // Set prefix for all metrics
     let builder = builder.add_global_label("service", "edgion-gateway");
-    
+
     // Build and install the recorder
     let handle = builder
         .install_recorder()
         .map_err(|e| format!("Failed to install Prometheus recorder: {}", e))?;
-    
+
     PROMETHEUS_HANDLE
         .set(handle)
         .map_err(|_| "Prometheus handle already initialized".to_string())?;
-    
+
     tracing::info!(
         component = "metrics",
         event = "exporter_initialized",
         "Prometheus metrics exporter initialized"
     );
-    
+
     Ok(())
 }
 
@@ -52,11 +52,7 @@ async fn metrics_handler() -> Response {
             )
                 .into_response()
         }
-        None => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Metrics exporter not initialized",
-        )
-            .into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "Metrics exporter not initialized").into_response(),
     }
 }
 
@@ -76,24 +72,22 @@ pub fn create_metrics_router() -> Router {
 pub async fn serve(port: u16) -> anyhow::Result<()> {
     // Initialize metrics exporter if not already done
     if PROMETHEUS_HANDLE.get().is_none() {
-        init_metrics_exporter()
-            .map_err(|e| anyhow::anyhow!("Failed to initialize metrics exporter: {}", e))?;
+        init_metrics_exporter().map_err(|e| anyhow::anyhow!("Failed to initialize metrics exporter: {}", e))?;
     }
-    
+
     let app = create_metrics_router();
     let addr_str = format!("0.0.0.0:{}", port);
     let addr: std::net::SocketAddr = addr_str.parse()?;
-    
+
     tracing::info!(
         component = "metrics_api",
         event = "server_starting",
         addr = %addr,
         "Metrics API server listening"
     );
-    
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
-    
+
     Ok(())
 }
-

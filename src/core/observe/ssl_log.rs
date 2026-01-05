@@ -85,17 +85,17 @@ impl SslLogger {
     /// Create a new SSL logger with LocalFileWriter backend
     pub fn new(writer: LocalFileWriter) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        
+
         // Spawn async task to forward logs to LocalFileWriter
         tokio::spawn(async move {
             let mut writer = writer;
-            
+
             // Initialize the writer
             if let Err(e) = writer.init().await {
                 tracing::error!("Failed to initialize SSL log writer: {}", e);
                 return;
             }
-            
+
             // Forward logs from channel to writer
             while let Some(log) = rx.recv().await {
                 // LocalFileWriter handles:
@@ -105,10 +105,10 @@ impl SslLogger {
                 let _ = writer.send(log).await;
             }
         });
-        
+
         Self { tx }
     }
-    
+
     /// Log an entry (guaranteed non-blocking, always safe to call from TLS callback)
     #[inline]
     pub fn log(&self, entry: &SslLogEntry) {
@@ -121,14 +121,15 @@ impl SslLogger {
 /// Initialize the global SSL logger with a LocalFileWriter
 pub async fn init_ssl_logger(writer: LocalFileWriter) -> anyhow::Result<()> {
     let logger = SslLogger::new(writer);
-    SSL_LOGGER.set(logger)
+    SSL_LOGGER
+        .set(logger)
         .map_err(|_| anyhow::anyhow!("SSL logger already initialized"))?;
     tracing::info!("SSL callback logger initialized with enhanced features");
     Ok(())
 }
 
 /// Log an SSL callback entry (guaranteed non-blocking)
-/// 
+///
 /// This function is safe to call from any context, including TLS callbacks.
 /// It uses an unbounded channel internally to ensure no blocking occurs.
 #[inline]

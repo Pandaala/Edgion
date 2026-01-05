@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
 
-use crate::core::plugins::plugin_runtime::{RequestFilter, PluginSession, PluginLog};
+use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::CorsConfig;
 
@@ -44,8 +44,7 @@ impl Cors {
             return false;
         }
 
-        session.header_value("origin").is_some()
-            && session.header_value("access-control-request-method").is_some()
+        session.header_value("origin").is_some() && session.header_value("access-control-request-method").is_some()
     }
 
     /// Get the validated origin (returns Some(origin) if allowed, None if rejected)
@@ -72,11 +71,7 @@ impl Cors {
     }
 
     /// Set CORS headers on the response
-    fn set_cors_headers(
-        &self,
-        session: &mut dyn PluginSession,
-        allowed_origin: &str,
-    ) -> CorsResult<()> {
+    fn set_cors_headers(&self, session: &mut dyn PluginSession, allowed_origin: &str) -> CorsResult<()> {
         // Access-Control-Allow-Origin (required)
         session.set_response_header("Access-Control-Allow-Origin", allowed_origin)?;
 
@@ -103,10 +98,7 @@ impl Cors {
         // Access-Control-Max-Age (for preflight, only if configured)
         if self.is_preflight_request(session) {
             if let Some(max_age) = self.config.max_age {
-                session.set_response_header(
-                    "Access-Control-Max-Age",
-                    &max_age.to_string(),
-                )?;
+                session.set_response_header("Access-Control-Max-Age", &max_age.to_string())?;
             }
         }
 
@@ -119,11 +111,7 @@ impl Cors {
     }
 
     /// Set Timing-Allow-Origin header if configured
-    fn set_timing_headers(
-        &self,
-        session: &mut dyn PluginSession,
-        origin: &str,
-    ) -> CorsResult<()> {
+    fn set_timing_headers(&self, session: &mut dyn PluginSession, origin: &str) -> CorsResult<()> {
         if self.config.is_timing_origin_allowed(origin) {
             // Determine what value to set
             let timing_value = if let Some(ref timing_origins) = self.config.timing_allow_origins {
@@ -149,11 +137,7 @@ impl Cors {
     }
 
     /// Handle preflight request
-    async fn handle_preflight(
-        &self,
-        session: &mut dyn PluginSession,
-        allowed_origin: &str,
-    ) -> CorsResult<()> {
+    async fn handle_preflight(&self, session: &mut dyn PluginSession, allowed_origin: &str) -> CorsResult<()> {
         // Set all CORS headers
         self.set_cors_headers(session, allowed_origin)?;
 
@@ -188,11 +172,7 @@ impl Cors {
     }
 
     /// Handle normal CORS request (non-preflight)
-    fn handle_normal_request(
-        &self,
-        session: &mut dyn PluginSession,
-        allowed_origin: &str,
-    ) -> CorsResult<()> {
+    fn handle_normal_request(&self, session: &mut dyn PluginSession, allowed_origin: &str) -> CorsResult<()> {
         // Set CORS headers
         self.set_cors_headers(session, allowed_origin)?;
 
@@ -211,11 +191,7 @@ impl RequestFilter for Cors {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        plugin_log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Check if there's an Origin header (CORS indicator)
         if session.header_value("origin").is_none() {
             // No Origin header means same-origin request, skip CORS
@@ -310,18 +286,10 @@ mod tests {
             .expect_header_value()
             .with(mockall::predicate::eq("access-control-request-private-network"))
             .returning(|_| None);
-        mock_session
-            .expect_set_response_header()
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_append_response_header()
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_write_response_header()
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_write_response_body()
-            .returning(|_, _| Ok(()));
+        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
 
         let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -349,12 +317,8 @@ mod tests {
             .expect_header_value()
             .with(mockall::predicate::eq("access-control-request-headers"))
             .returning(|_| None);
-        mock_session
-            .expect_set_response_header()
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_append_response_header()
-            .returning(|_, _| Ok(()));
+        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
 
         let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -424,12 +388,8 @@ mod tests {
             .expect_header_value()
             .with(mockall::predicate::eq("access-control-request-private-network"))
             .returning(|_| None);
-        mock_session
-            .expect_set_response_header()
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_append_response_header()
-            .returning(|_, _| Ok(()));
+        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
 
         let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 

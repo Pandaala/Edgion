@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use super::tls_store::{get_global_tls_store, TlsStore};
 use crate::core::conf_sync::traits::ConfHandler;
 use crate::types::EdgionTls;
-use super::tls_store::{TlsStore, get_global_tls_store};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Implement ConfHandler for Arc<TlsStore>
 impl ConfHandler<EdgionTls> for Arc<TlsStore> {
@@ -44,11 +44,11 @@ pub fn create_tls_handler() -> Box<dyn ConfHandler<EdgionTls> + Send + Sync> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::resources::edgion_tls::EdgionTlsSpec;
+    use crate::types::resources::gateway::SecretObjectReference;
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use k8s_openapi::ByteString;
-    use crate::types::resources::edgion_tls::EdgionTlsSpec;
-    use crate::types::resources::gateway::SecretObjectReference;
 
     fn create_test_tls(namespace: &str, name: &str, hosts: Vec<&str>) -> EdgionTls {
         let secret = Some(Secret {
@@ -89,6 +89,4 @@ mod tests {
             status: None,
         }
     }
-
 }
-

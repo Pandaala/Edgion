@@ -5,7 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 /// Represents a CIDR (Classless Inter-Domain Routing) notation
-/// 
+///
 /// Supports both IPv4 and IPv6 CIDR notations:
 /// - IPv4: "192.168.1.0/24", "10.0.0.0/8"
 /// - IPv6: "2001:db8::/32", "fe80::/10"
@@ -29,18 +29,18 @@ pub enum IpCidr {
 
 impl IpCidr {
     /// Parse a CIDR string into IpCidr
-    /// 
+    ///
     /// # Examples
     /// ```
     /// use edgion::core::matcher::ip_radix_tree::types::IpCidr;
-    /// 
+    ///
     /// let cidr_v4 = IpCidr::parse("192.168.1.0/24").unwrap();
     /// let cidr_v6 = IpCidr::parse("2001:db8::/32").unwrap();
     /// ```
     pub fn parse(cidr_str: &str) -> Result<Self, IpRadixError> {
         // Split by '/'
         let parts: Vec<&str> = cidr_str.split('/').collect();
-        
+
         if parts.len() != 2 {
             return Err(IpRadixError::InvalidCidr {
                 input: cidr_str.to_string(),
@@ -66,14 +66,11 @@ impl IpCidr {
         match ip {
             IpAddr::V4(ipv4) => {
                 if prefix_len > 32 {
-                    return Err(IpRadixError::PrefixTooLong {
-                        prefix_len,
-                        max: 32,
-                    });
+                    return Err(IpRadixError::PrefixTooLong { prefix_len, max: 32 });
                 }
-                
+
                 let addr = u32::from(ipv4);
-                
+
                 // Normalize: zero out bits beyond prefix length
                 let normalized_addr = if prefix_len == 0 {
                     0
@@ -83,7 +80,7 @@ impl IpCidr {
                     let mask = !0u32 << (32 - prefix_len);
                     addr & mask
                 };
-                
+
                 Ok(IpCidr::V4 {
                     addr: normalized_addr,
                     prefix_len,
@@ -91,14 +88,11 @@ impl IpCidr {
             }
             IpAddr::V6(ipv6) => {
                 if prefix_len > 128 {
-                    return Err(IpRadixError::PrefixTooLong {
-                        prefix_len,
-                        max: 128,
-                    });
+                    return Err(IpRadixError::PrefixTooLong { prefix_len, max: 128 });
                 }
-                
+
                 let addr = u128::from(ipv6);
-                
+
                 // Normalize: zero out bits beyond prefix length
                 let normalized_addr = if prefix_len == 0 {
                     0
@@ -108,7 +102,7 @@ impl IpCidr {
                     let mask = !0u128 << (128 - prefix_len);
                     addr & mask
                 };
-                
+
                 Ok(IpCidr::V6 {
                     addr: normalized_addr,
                     prefix_len,
@@ -198,7 +192,10 @@ mod tests {
         let result = IpCidr::parse("192.168.1.0/33");
         assert!(matches!(
             result,
-            Err(IpRadixError::PrefixTooLong { prefix_len: 33, max: 32 })
+            Err(IpRadixError::PrefixTooLong {
+                prefix_len: 33,
+                max: 32
+            })
         ));
     }
 }

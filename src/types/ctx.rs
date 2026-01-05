@@ -1,14 +1,14 @@
+use crate::core::plugins::PluginLogs;
+use crate::core::routes::grpc_routes::GrpcRouteRuleUnit;
+use crate::core::routes::HttpRouteRuleUnit;
+use crate::types::filters::PluginRunningResult;
+use crate::types::resources::http_route_preparse::ParsedLBPolicy;
+use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};
+use pingora_core::protocols::l4::socket::SocketAddr;
+use serde::Serialize;
+use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
-use std::fmt;
-use serde::Serialize;
-use crate::types::{EdgionStatus, HTTPBackendRef, GRPCBackendRef, HTTPRouteMatch};
-use crate::types::filters::{PluginRunningResult};
-use crate::types::resources::http_route_preparse::ParsedLBPolicy;
-use crate::core::plugins::PluginLogs;
-use crate::core::routes::HttpRouteRuleUnit;
-use crate::core::routes::grpc_routes::GrpcRouteRuleUnit;
-use pingora_core::protocols::l4::socket::SocketAddr;
 
 #[derive(Clone, Serialize)]
 pub struct MatchInfo {
@@ -28,18 +28,24 @@ pub struct MatchInfo {
 }
 
 impl MatchInfo {
-    pub fn new(rns: String,
-               rn: String,
-               rule_id: usize,
-               match_id: usize,
-               m: HTTPRouteMatch) -> Self {
-        Self { rns, rn, m, rule_id, match_id }
+    pub fn new(rns: String, rn: String, rule_id: usize, match_id: usize, m: HTTPRouteMatch) -> Self {
+        Self {
+            rns,
+            rn,
+            m,
+            rule_id,
+            match_id,
+        }
     }
 }
 
 impl fmt::Display for MatchInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{} (rule:{}, match:{})", self.rns, self.rn, self.rule_id, self.match_id)
+        write!(
+            f,
+            "{}/{} (rule:{}, match:{})",
+            self.rns, self.rn, self.rule_id, self.match_id
+        )
     }
 }
 
@@ -208,12 +214,16 @@ pub struct EdgionHttpContext {
     /// Plugin execution logs (grouped by stage)
     pub plugin_logs: Vec<PluginLogs>,
 
+    /// Tracking stack for nested plugin references to prevent cycles
+    #[serde(skip)]
+    pub plugin_ref_stack: Vec<String>,
+
     /// Plugin running result
     pub plugin_running_result: PluginRunningResult,
-    
+
     /// Number of connection attempts to backends
     pub try_cnt: u32,
-    
+
     /// Time when first upstream connection was initiated
     /// Set only once on first connection attempt
     pub upstream_start_time: Option<Instant>,
@@ -232,6 +242,7 @@ impl EdgionHttpContext {
             is_grpc_route_matched: false,
             backend_context: None,
             plugin_logs: Vec::with_capacity(3),
+            plugin_ref_stack: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
             try_cnt: 0,
             upstream_start_time: None,
@@ -276,13 +287,35 @@ impl EdgionHttpContext {
 
     /// Get mutable reference to current upstream
     pub fn get_current_upstream_mut(&mut self) -> Option<&mut UpstreamInfo> {
-        self.backend_context.as_mut()
+        self.backend_context
+            .as_mut()
             .and_then(|bc| bc.current_upstream_id.and_then(|id| bc.upstreams.get_mut(id)))
     }
 
     /// Get reference to current upstream
     pub fn get_current_upstream(&self) -> Option<&UpstreamInfo> {
-        self.backend_context.as_ref()
+        self.backend_context
+            .as_ref()
             .and_then(|bc| bc.current_upstream_id.and_then(|id| bc.upstreams.get(id)))
+    }
+
+    /// Push a plugin reference path onto the stack
+    pub fn push_plugin_ref(&mut self, key: String) {
+        self.plugin_ref_stack.push(key);
+    }
+
+    /// Pop a plugin reference path from the stack
+    pub fn pop_plugin_ref(&mut self) {
+        self.plugin_ref_stack.pop();
+    }
+
+    /// Current depth of nested plugin references
+    pub fn plugin_ref_depth(&self) -> usize {
+        self.plugin_ref_stack.len()
+    }
+
+    /// Whether the stack already contains the given reference key (for cycle detection)
+    pub fn has_plugin_ref(&self, key: &str) -> bool {
+        self.plugin_ref_stack.iter().any(|k| k == key)
     }
 }

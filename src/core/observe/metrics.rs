@@ -3,8 +3,8 @@
 //! Centralized metrics for monitoring gateway performance.
 //! Uses the `metrics` crate for thread-safe, high-performance counters.
 
-use std::sync::LazyLock;
 use metrics::{counter, gauge, Counter, Gauge};
+use std::sync::LazyLock;
 
 /// Metric names as constants for consistency
 pub mod names {
@@ -16,8 +16,7 @@ pub mod names {
 }
 
 /// Global metrics singleton
-static GLOBAL_METRICS: LazyLock<GatewayMetrics> = 
-    LazyLock::new(|| GatewayMetrics::new());
+static GLOBAL_METRICS: LazyLock<GatewayMetrics> = LazyLock::new(|| GatewayMetrics::new());
 
 /// Get the global metrics instance
 pub fn global_metrics() -> &'static GatewayMetrics {
@@ -25,7 +24,7 @@ pub fn global_metrics() -> &'static GatewayMetrics {
 }
 
 /// Gateway metrics collection
-/// 
+///
 /// Provides high-performance, thread-safe metrics using sharded counters.
 /// All metrics are automatically exported via the metrics facade.
 pub struct GatewayMetrics {
@@ -85,4 +84,3 @@ impl GatewayMetrics {
         self.access_log_dropped.increment(1);
     }
 }
-

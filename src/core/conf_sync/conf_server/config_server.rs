@@ -1251,7 +1251,7 @@ impl ConfigServer {
     }
 
     // Helper methods for base conf resources
-    
+
     /// List all GatewayClass resources
     pub fn list_gateway_classes(&self) -> ListData<GatewayClass> {
         self.gateway_classes.list_owned()

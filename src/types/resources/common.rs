@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// ParentReference identifies a parent resource (usually Gateway)
-/// 
+///
 /// This type is shared across all route resources and follows the
 /// Gateway API specification for parent references.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -39,18 +39,15 @@ pub struct ParentReference {
 
 impl ParentReference {
     /// Build parent key (gateway key) from parent_ref and route metadata
-    /// 
+    ///
     /// Priority:
     /// 1. parent_ref.namespace if present
     /// 2. route_namespace if present
     /// 3. "default" as fallback
-    /// 
+    ///
     /// Returns: "{namespace}/{name}"
     pub fn build_parent_key(&self, route_namespace: Option<&str>) -> String {
-        let namespace = self.namespace.as_deref()
-            .or(route_namespace)
-            .unwrap_or("default");
+        let namespace = self.namespace.as_deref().or(route_namespace).unwrap_or("default");
         format!("{}/{}", namespace, self.name)
     }
 }
-

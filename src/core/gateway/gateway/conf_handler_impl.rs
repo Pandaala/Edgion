@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 /// Global store for Gateway resources
-static GATEWAY_STORE: std::sync::LazyLock<Arc<RwLock<Vec<Gateway>>>> = 
+static GATEWAY_STORE: std::sync::LazyLock<Arc<RwLock<Vec<Gateway>>>> =
     std::sync::LazyLock::new(|| Arc::new(RwLock::new(Vec::new())));
 
 /// Get a reference to the global Gateway store
@@ -16,9 +16,10 @@ pub fn get_gateway_store() -> Arc<RwLock<Vec<Gateway>>> {
 /// Query Gateway by namespace and name
 pub fn get_gateway_by_name(namespace: Option<&str>, name: &str) -> Option<Gateway> {
     let store = GATEWAY_STORE.read().unwrap();
-    store.iter().find(|gw| {
-        gw.name_any() == name && gw.namespace().as_deref() == namespace
-    }).cloned()
+    store
+        .iter()
+        .find(|gw| gw.name_any() == name && gw.namespace().as_deref() == namespace)
+        .cloned()
 }
 
 /// List all Gateway resources
@@ -44,7 +45,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
             "Gateway full_set: received {} Gateway resources",
             data.len()
         );
-        
+
         // Update global store
         let mut store = GATEWAY_STORE.write().unwrap();
         store.clear();
@@ -62,14 +63,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
         }
     }
 
-    fn partial_update(
-        &self,
-        add: HashMap<String, Gateway>,
-        update: HashMap<String, Gateway>,
-        remove: HashSet<String>,
-    ) {
+    fn partial_update(&self, add: HashMap<String, Gateway>, update: HashMap<String, Gateway>, remove: HashSet<String>) {
         let mut store = GATEWAY_STORE.write().unwrap();
-        
+
         if !add.is_empty() {
             tracing::info!(
                 count = add.len(),
@@ -106,15 +102,15 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     listeners = listener_count,
                     "Gateway updated (dynamic listener/TLS update not yet implemented)"
                 );
-                
+
                 // Find and update existing gateway
-                if let Some(existing) = store.iter_mut().find(|gw| {
-                    gw.name_any() == gateway.name_any() && 
-                    gw.namespace() == gateway.namespace()
-                }) {
+                if let Some(existing) = store
+                    .iter_mut()
+                    .find(|gw| gw.name_any() == gateway.name_any() && gw.namespace() == gateway.namespace())
+                {
                     *existing = gateway;
                 }
-                
+
                 // TODO: Detect listener changes
                 // TODO: Detect TLS certificateRefs changes and update GatewayTlsCertMatcher
                 // TODO: Detect hostname changes and update route matching
@@ -133,13 +129,13 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     "Gateway removed (dynamic listener removal not yet implemented)"
                 );
             }
-            
+
             // Remove gateways whose key is in the remove set
             store.retain(|gw| {
                 let gw_key = format!("{}/{}", gw.namespace().unwrap_or_default(), gw.name_any());
                 !remove.contains(&gw_key) && !remove.contains(&gw.name_any())
             });
-            
+
             // TODO: Clean up listeners (requires Pingora support or hot reload)
         }
     }
@@ -149,4 +145,3 @@ impl ConfHandler<Gateway> for GatewayHandler {
 pub fn create_gateway_handler() -> Box<dyn ConfHandler<Gateway>> {
     Box::new(GatewayHandler::new())
 }
-

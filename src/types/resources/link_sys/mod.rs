@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 
 // Submodules
 pub mod common;
-pub mod redis;
 pub mod etcd;
+pub mod redis;
 
 // Re-export common types for convenient access
 pub use common::SecretReference;
-pub use redis::RedisClientConfig;
 pub use etcd::EtcdClientConfig;
+pub use redis::RedisClientConfig;
 
 /// API group for LinkSys
 pub const LINK_SYS_GROUP: &str = "edgion.io";
@@ -104,4 +104,3 @@ pub enum SystemType {
     Elasticsearch,
     Kafka,
 }
-

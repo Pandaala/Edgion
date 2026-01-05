@@ -11,7 +11,7 @@ use crate::types::link_sys::{LocalFileWriterConfig, RotationConfig};
 use crate::types::work_dir;
 
 /// Local file writer that implements DataSender
-/// 
+///
 /// Uses a background thread to write log entries (avoids blocking tokio runtime)
 /// Supports daily/hourly rotation with automatic cleanup of old files
 pub struct LocalFileWriter {
@@ -36,7 +36,7 @@ impl LocalFileWriter {
             healthy: false,
         }
     }
-    
+
     /// Create with simple relative path
     pub fn with_path(path: impl Into<String>) -> Self {
         Self {
@@ -47,12 +47,12 @@ impl LocalFileWriter {
             healthy: false,
         }
     }
-    
+
     /// Get full path by resolving relative path against work_dir
     pub(super) fn full_path(&self) -> PathBuf {
         work_dir().resolve(&self.relative_path)
     }
-    
+
     /// Get the queue size, using default if not configured
     pub(super) fn get_queue_size(&self) -> usize {
         self.queue_size.unwrap_or_else(|| available_cpu_cores() * 10_000)

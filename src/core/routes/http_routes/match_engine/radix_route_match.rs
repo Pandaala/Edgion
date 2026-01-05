@@ -1,8 +1,8 @@
 use super::radix_path::RadixPath;
+use crate::core::matcher::radix_tree::{RadixTree, RadixTreeBuilder, RouterError};
+use crate::core::routes::http_routes::HttpRouteRuleUnit;
 use crate::types::err::EdError;
 use crate::types::err::EdError::RouteNotFound;
-use crate::core::matcher::radix_tree::{RadixTreeBuilder, RadixTree, RouterError};
-use crate::core::routes::http_routes::HttpRouteRuleUnit;
 use pingora_proxy::Session;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -31,7 +31,9 @@ impl RadixRouteMatchEngine {
     /// Build a new RadixRouteMatchEngine with the given route runtimes
     pub fn build(route_runtimes: Vec<Arc<HttpRouteRuleUnit>>) -> Result<Self, EdError> {
         let mut engine = Self {
-            tree: RadixTreeBuilder::new().freeze().expect("Failed to create empty radix tree"),
+            tree: RadixTreeBuilder::new()
+                .freeze()
+                .expect("Failed to create empty radix tree"),
             routes: Vec::new(),
             radix_paths: Vec::new(),
             tree_value_to_path_idx: HashMap::new(),
@@ -78,7 +80,11 @@ impl RadixRouteMatchEngine {
 
     /// Try exact match for the request path
     /// Returns matched route if found, None if no exact match
-    pub fn exact_match(&self, session: &mut Session, listener_name: &str) -> Result<Option<Arc<HttpRouteRuleUnit>>, EdError> {
+    pub fn exact_match(
+        &self,
+        session: &mut Session,
+        listener_name: &str,
+    ) -> Result<Option<Arc<HttpRouteRuleUnit>>, EdError> {
         let path = session.req_header().uri.path();
 
         tracing::trace!("[exact_match] Trying exact match for '{}'...", path);
@@ -91,7 +97,10 @@ impl RadixRouteMatchEngine {
                         if let Some(radix_path) = self.radix_paths.get(path_idx) {
                             tracing::trace!(
                                 "Checking: original='{}', radix_key='{}', is_prefix={}, route_idx={}",
-                                radix_path.original, radix_path.radix_key, radix_path.is_prefix_match, radix_path.route_idx
+                                radix_path.original,
+                                radix_path.radix_key,
+                                radix_path.is_prefix_match,
+                                radix_path.route_idx
                             );
                             // Skip paths with variables - they should be handled by prefix_match
                             if !radix_path.match_segments.is_empty() {
@@ -103,7 +112,9 @@ impl RadixRouteMatchEngine {
                                 continue;
                             }
                             tracing::trace!("Pattern matched, trying deep match...");
-                            if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session, listener_name)? {
+                            if let Some(runtime) =
+                                self.try_route_deep_match(radix_path.route_idx, session, listener_name)?
+                            {
                                 tracing::debug!("Exact match succeeded");
                                 return Ok(Some(runtime));
                             }
@@ -140,7 +151,10 @@ impl RadixRouteMatchEngine {
                     if let Some(radix_path) = self.radix_paths.get(path_idx) {
                         tracing::trace!(
                             "Testing: original='{}', radix_key='{}', is_prefix={}, route_idx={}",
-                            radix_path.original, radix_path.radix_key, radix_path.is_prefix_match, radix_path.route_idx
+                            radix_path.original,
+                            radix_path.radix_key,
+                            radix_path.is_prefix_match,
+                            radix_path.route_idx
                         );
                         if radix_path.matches(&path) {
                             tracing::trace!("Pattern matched");
@@ -168,9 +182,19 @@ impl RadixRouteMatchEngine {
         for (i, path_idx) in matched_paths.iter().enumerate() {
             let radix_path = &self.radix_paths[*path_idx];
             tracing::trace!(
-                "[{}] Trying: original='{}', priority={}, route_idx={}", i + 1,radix_path.original, radix_path.priority_weight, radix_path.route_idx);
+                "[{}] Trying: original='{}', priority={}, route_idx={}",
+                i + 1,
+                radix_path.original,
+                radix_path.priority_weight,
+                radix_path.route_idx
+            );
             if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session, listener_name)? {
-                tracing::debug!("Prefix match succeeded,original='{}', priority={}, route_idx={}", radix_path.original,radix_path.priority_weight, radix_path.route_idx);
+                tracing::debug!(
+                    "Prefix match succeeded,original='{}', priority={}, route_idx={}",
+                    radix_path.original,
+                    radix_path.priority_weight,
+                    radix_path.route_idx
+                );
                 return Ok(runtime);
             }
         }
@@ -238,7 +262,8 @@ impl RadixRouteMatchEngine {
                 let tree_value = if let Some(&existing_value) = radix_key_to_value.get(&radix_key) {
                     tracing::debug!(
                         "    Reusing tree value: {} for radix_key: '{}'",
-                        existing_value, radix_key
+                        existing_value,
+                        radix_key
                     );
                     existing_value
                 } else {
@@ -276,9 +301,9 @@ impl RadixRouteMatchEngine {
 
         // Freeze the builder to create the immutable tree
         tracing::debug!("Freezing radix tree...");
-        self.tree = builder.freeze().map_err(|e: RouterError| {
-            EdError::InternalError(format!("Failed to freeze radix tree: {}", e))
-        })?;
+        self.tree = builder
+            .freeze()
+            .map_err(|e: RouterError| EdError::InternalError(format!("Failed to freeze radix tree: {}", e)))?;
 
         tracing::debug!("========== Initialization Complete ==========");
         tracing::debug!(

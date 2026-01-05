@@ -1,8 +1,8 @@
-use pingora_core::{Error, ErrorType, ErrorSource, HTTPStatus, ReadError, WriteError, ConnectionClosed};
-use pingora_proxy::{Session, FailToProxy};
-use tracing::log::error;
-use crate::types::EdgionHttpContext;
 use super::EdgionHttp;
+use crate::types::EdgionHttpContext;
+use pingora_core::{ConnectionClosed, Error, ErrorSource, ErrorType, HTTPStatus, ReadError, WriteError};
+use pingora_proxy::{FailToProxy, Session};
+use tracing::log::error;
 
 #[inline]
 pub async fn fail_to_proxy(
@@ -16,12 +16,12 @@ pub async fn fail_to_proxy(
         // Check for timeout errors - distinguish between client and backend timeouts
         ErrorType::ReadTimedout | ErrorType::WriteTimedout => {
             match e.esource() {
-                ErrorSource::Downstream => 499,  // Client closed request (client timeout)
-                ErrorSource::Upstream => 504,     // Gateway timeout (backend timeout)
-                _ => 504,  // Default to 504 for other timeout sources
+                ErrorSource::Downstream => 499, // Client closed request (client timeout)
+                ErrorSource::Upstream => 504,   // Gateway timeout (backend timeout)
+                _ => 504,                       // Default to 504 for other timeout sources
             }
         }
-        ErrorType::ConnectTimedout | ErrorType::TLSHandshakeTimedout => 504,  // Backend connection timeouts
+        ErrorType::ConnectTimedout | ErrorType::TLSHandshakeTimedout => 504, // Backend connection timeouts
         _ => {
             match e.esource() {
                 ErrorSource::Upstream => 502,
@@ -64,9 +64,12 @@ pub async fn fail_to_proxy(
         edgion_http.server_header_opts.apply_to_response(&mut resp);
 
         // Write error response
-        session.write_error_response(resp, bytes::Bytes::default()).await.unwrap_or_else(|e| {
-            error!("failed to send error response to downstream: {e}");
-        });
+        session
+            .write_error_response(resp, bytes::Bytes::default())
+            .await
+            .unwrap_or_else(|e| {
+                error!("failed to send error response to downstream: {e}");
+            });
     }
 
     FailToProxy {
@@ -75,4 +78,3 @@ pub async fn fail_to_proxy(
         can_reuse_downstream: false,
     }
 }
-

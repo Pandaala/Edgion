@@ -8,19 +8,17 @@ pub mod duration;
 pub use duration::parse_duration;
 
 pub mod global_state;
-pub use global_state::{detect_k8s_mode, set_k8s_mode, is_k8s_mode};
+pub use global_state::{detect_k8s_mode, is_k8s_mode, set_k8s_mode};
 
 pub mod real_ip_extractor;
-pub use real_ip_extractor::{RealIpExtractor, extract_ip_string};
+pub use real_ip_extractor::{extract_ip_string, RealIpExtractor};
 
 /// Get the number of available CPU cores on the system
-/// 
+///
 /// Returns the number of logical CPU cores available to the current process.
 /// This can be used for sizing thread pools, buffers, etc.
 pub fn available_cpu_cores() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
 }
 
 static LAST_VERSION: AtomicU64 = AtomicU64::new(0);

@@ -1,5 +1,5 @@
 //! Service discovery implementation for Kubernetes Endpoints
-//! 
+//!
 //! This module implements Pingora's ServiceDiscovery trait directly for Endpoints,
 //! allowing it to be used with Pingora's load balancing infrastructure.
 
@@ -9,8 +9,8 @@ use k8s_openapi::api::core::v1::Endpoints;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_load_balancing::discovery::ServiceDiscovery;
 use pingora_load_balancing::selection::BackendSelection;
-use pingora_load_balancing::{Backends, LoadBalancer};
 use pingora_load_balancing::Backend;
+use pingora_load_balancing::{Backends, LoadBalancer};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
@@ -23,7 +23,7 @@ pub trait EndpointExt {
 impl EndpointExt for Endpoints {
     fn build_backends(&self, port: u16) -> BTreeSet<Backend> {
         let mut backends = BTreeSet::new();
-        
+
         // Iterate through all subsets in Endpoints
         if let Some(subsets) = &self.subsets {
             for subset in subsets {
@@ -33,7 +33,7 @@ impl EndpointExt for Endpoints {
                 } else {
                     continue;
                 };
-                
+
                 // Check if we should use a specific port from subset.ports
                 // If port is provided, use it; otherwise try to find matching port in subset
                 let target_port = if port != 80 {
@@ -41,20 +41,18 @@ impl EndpointExt for Endpoints {
                     port
                 } else if let Some(ports) = &subset.ports {
                     // Use first port from subset
-                    ports.first()
-                        .and_then(|p| Some(p.port as u16))
-                        .unwrap_or(port)
+                    ports.first().and_then(|p| Some(p.port as u16)).unwrap_or(port)
                 } else {
                     port
                 };
-                
+
                 // Add all ready addresses from this subset
                 for address in addresses {
                     let ip = &address.ip;
-                    
+
                     // Determine if this is IPv6
                     let is_ipv6 = ip.contains(':');
-                    
+
                     // Format address with port, IPv6 addresses need brackets
                     let addr_with_port = if is_ipv6 {
                         // IPv6 address - wrap in brackets
@@ -63,15 +61,15 @@ impl EndpointExt for Endpoints {
                         // IPv4 address
                         format!("{}:{}", ip, target_port)
                     };
-                    
+
                     if let Ok(socket_addr) = addr_with_port.parse::<SocketAddr>() {
                         let backend = Backend {
                             addr: socket_addr,
-                            weight: 1, // Default weight
+                            weight: 1,               // Default weight
                             ext: Default::default(), // Extension data
                         };
                         backends.insert(backend);
-                        
+
                         tracing::debug!(
                             endpoint = %ip,
                             port = target_port,
@@ -81,7 +79,7 @@ impl EndpointExt for Endpoints {
                 }
             }
         }
-        
+
         if backends.is_empty() {
             tracing::warn!(
                 endpoint = ?self.metadata.name,
@@ -94,13 +92,13 @@ impl EndpointExt for Endpoints {
                 "Built backends from Endpoints"
             );
         }
-        
+
         backends
     }
 }
 
 /// Wrapper for Endpoints that implements ServiceDiscovery
-/// 
+///
 /// This allows using Endpoints directly with Pingora's load balancing.
 /// Provides interior mutability for Endpoints updates without cloning.
 /// Note: This struct is typically wrapped in Arc at the storage layer.
@@ -118,7 +116,7 @@ impl EndpointDiscovery {
             endpoint: Arc::new(RwLock::new(endpoint)),
         }
     }
-    
+
     /// Get the port from Endpoints (returns first port or 80 as default)
     fn get_port(&self) -> u16 {
         let ep = self.endpoint.read().unwrap();
@@ -130,18 +128,17 @@ impl EndpointDiscovery {
             .map(|p| p.port as u16)
             .unwrap_or(80)
     }
-    
 
     /// Update the Endpoints data in-place
     /// This updates the Endpoints without replacing the entire EndpointDiscovery
     pub fn update(&self, new_endpoint: Endpoints) -> Result<(), String> {
         // Update endpoint
         *self.endpoint.write().unwrap() = new_endpoint;
-        
+
         tracing::debug!("Updated EndpointDiscovery in-place");
         Ok(())
     }
-    
+
     /// Execute a function with read access to the underlying Endpoints
     pub fn with_endpoint<F, R>(&self, f: F) -> R
     where
@@ -150,29 +147,27 @@ impl EndpointDiscovery {
         let ep = self.endpoint.read().unwrap();
         f(&ep)
     }
-    
+
     /// Get a clone of the underlying Endpoints
     pub fn endpoint(&self) -> Endpoints {
         self.endpoint.read().unwrap().clone()
     }
-    
 }
-
 
 #[async_trait]
 impl ServiceDiscovery for EndpointDiscovery {
     /// Discover backends from Endpoints
-    /// 
+    ///
     /// This method is called by Pingora's load balancer to get the current
     /// list of available backends based on the Endpoints data.
     async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>), Box<pingora_core::Error>> {
         let ep = self.endpoint.read().unwrap();
         let port = self.get_port();
         let backends = ep.build_backends(port);
-        
+
         // Return empty health map - all backends default to healthy
         let health = HashMap::new();
-        
+
         Ok((backends, health))
     }
 }
@@ -201,10 +196,10 @@ where
     /// Returns Arc<Self> since it's typically used with Arc at storage layer
     pub fn new(endpoint: Endpoints) -> Arc<Self> {
         let discovery = EndpointDiscovery::new(endpoint);
-        
+
         let backends = Backends::new(Box::new(discovery.clone()));
         let lb = LoadBalancer::from_backends(backends);
-        
+
         // Initialize backends by calling update once
         // This triggers the first discovery to populate backends
         match lb.update().now_or_never() {
@@ -229,33 +224,31 @@ where
             }
         }
 
-        Arc::new(Self {
-            discovery,
-            lb,
-        })
+        Arc::new(Self { discovery, lb })
     }
-    
+
     /// Update the Endpoints data in-place
     pub fn update(&self, new_endpoint: Endpoints) -> Result<(), String> {
         self.discovery.update(new_endpoint)
     }
-    
+
     /// Trigger LoadBalancer update
     /// Calls lb.update() which will refresh backends from discovery
     pub async fn update_load_balancer(&self) -> Result<(), String> {
-        self.lb.update()
+        self.lb
+            .update()
             .await
             .map_err(|e| format!("Failed to update LoadBalancer: {}", e))?;
-        
+
         tracing::debug!("LoadBalancer updated");
         Ok(())
     }
-    
+
     /// Get a reference to the load balancer
     pub fn load_balancer(&self) -> &LoadBalancer<S> {
         &self.lb
     }
-    
+
     /// Execute a function with read access to the underlying Endpoints
     pub fn with_endpoint<F, R>(&self, f: F) -> R
     where
@@ -263,10 +256,9 @@ where
     {
         self.discovery.with_endpoint(f)
     }
-    
+
     /// Get a clone of the underlying Endpoints
     pub fn endpoint(&self) -> Endpoints {
         self.discovery.endpoint()
     }
 }
-

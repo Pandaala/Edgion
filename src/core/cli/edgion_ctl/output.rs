@@ -1,9 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
-use tabled::{
-    settings::Style,
-    Table, Tabled,
-};
+use tabled::{settings::Style, Table, Tabled};
 
 /// Output format options
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -53,20 +50,16 @@ pub fn print_resource_list(data: &Value, format: OutputFormat) -> Result<()> {
                     println!("No resources found.");
                     return Ok(());
                 }
-                
+
                 let mut rows = Vec::new();
                 for item in items {
                     let name = extract_name(item).unwrap_or("unknown".to_string());
                     let namespace = extract_namespace(item).unwrap_or("".to_string());
                     let kind = extract_kind(item).unwrap_or("unknown".to_string());
-                    
-                    rows.push(ResourceRow {
-                        name,
-                        namespace,
-                        kind,
-                    });
+
+                    rows.push(ResourceRow { name, namespace, kind });
                 }
-                
+
                 let mut table = Table::new(rows);
                 table.with(Style::modern());
                 println!("{}", table);
@@ -131,9 +124,5 @@ fn extract_namespace(resource: &Value) -> Option<String> {
 
 /// Extract kind from resource
 fn extract_kind(resource: &Value) -> Option<String> {
-    resource
-        .get("kind")
-        .and_then(|k| k.as_str())
-        .map(|s| s.to_string())
+    resource.get("kind").and_then(|k| k.as_str()).map(|s| s.to_string())
 }
-

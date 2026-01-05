@@ -1,16 +1,16 @@
+use crate::core::conf_sync::ConfigClient;
+use crate::types::prelude_resources::*;
 use axum::{
     extract::{Query, State},
     response::Json,
     routing::get,
     Router,
 };
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use crate::core::conf_sync::ConfigClient;
-use crate::types::prelude_resources::*;
 use k8s_openapi::api::core::v1::{Endpoints, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::ResourceExt;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Query parameters for resource lookup
 #[derive(Deserialize)]
@@ -107,19 +107,19 @@ async fn get_httproute(
     let list_data = client.routes().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(route) => Json(ApiResponse::success(route)),
         None => Json(ApiResponse::error(format!("HTTPRoute not found: {}", key))),
     }
 }
 
 /// List all HTTPRoute resources
-async fn list_httproute(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<HTTPRoute>> {
+async fn list_httproute(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<HTTPRoute>> {
     let list_data = client.routes().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -137,19 +137,19 @@ async fn get_grpcroute(
     let list_data = client.grpc_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(route) => Json(ApiResponse::success(route)),
         None => Json(ApiResponse::error(format!("GRPCRoute not found: {}", key))),
     }
 }
 
 /// List all GRPCRoute resources
-async fn list_grpcroute(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<GRPCRoute>> {
+async fn list_grpcroute(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<GRPCRoute>> {
     let list_data = client.grpc_routes().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -167,19 +167,19 @@ async fn get_tcproute(
     let list_data = client.tcp_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(route) => Json(ApiResponse::success(route)),
         None => Json(ApiResponse::error(format!("TCPRoute not found: {}", key))),
     }
 }
 
 /// List all TCPRoute resources
-async fn list_tcproute(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<TCPRoute>> {
+async fn list_tcproute(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<TCPRoute>> {
     let list_data = client.tcp_routes().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -197,19 +197,19 @@ async fn get_udproute(
     let list_data = client.udp_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(route) => Json(ApiResponse::success(route)),
         None => Json(ApiResponse::error(format!("UDPRoute not found: {}", key))),
     }
 }
 
 /// List all UDPRoute resources
-async fn list_udproute(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<UDPRoute>> {
+async fn list_udproute(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<UDPRoute>> {
     let list_data = client.udp_routes().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -227,19 +227,19 @@ async fn get_tlsroute(
     let list_data = client.tls_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(route) => Json(ApiResponse::success(route)),
         None => Json(ApiResponse::error(format!("TLSRoute not found: {}", key))),
     }
 }
 
 /// List all TLSRoute resources
-async fn list_tlsroute(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<TLSRoute>> {
+async fn list_tlsroute(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<TLSRoute>> {
     let list_data = client.tls_routes().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -257,19 +257,19 @@ async fn get_service(
     let list_data = client.services().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(service) => Json(ApiResponse::success(service)),
         None => Json(ApiResponse::error(format!("Service not found: {}", key))),
     }
 }
 
 /// List all Service resources
-async fn list_service(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<Service>> {
+async fn list_service(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<Service>> {
     let list_data = client.services().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -287,19 +287,19 @@ async fn get_endpointslice(
     let list_data = client.endpoint_slices().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(ep) => Json(ApiResponse::success(ep)),
         None => Json(ApiResponse::error(format!("EndpointSlice not found: {}", key))),
     }
 }
 
 /// List all EndpointSlice resources
-async fn list_endpointslice(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<EndpointSlice>> {
+async fn list_endpointslice(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<EndpointSlice>> {
     let list_data = client.endpoint_slices().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -317,19 +317,19 @@ async fn get_endpoints(
     let list_data = client.endpoints().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(endpoint) => Json(ApiResponse::success(endpoint)),
         None => Json(ApiResponse::error(format!("Endpoints not found: {}", key))),
     }
 }
 
 /// List all Endpoints resources
-async fn list_endpoints(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<Endpoints>> {
+async fn list_endpoints(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<Endpoints>> {
     let list_data = client.endpoints().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -347,19 +347,19 @@ async fn get_edgiontls(
     let list_data = client.edgion_tls().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(tls) => Json(ApiResponse::success(tls)),
         None => Json(ApiResponse::error(format!("EdgionTls not found: {}", key))),
     }
 }
 
 /// List all EdgionTls resources
-async fn list_edgiontls(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<EdgionTls>> {
+async fn list_edgiontls(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<EdgionTls>> {
     let list_data = client.edgion_tls().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -377,19 +377,19 @@ async fn get_edgionplugins(
     let list_data = client.edgion_plugins().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(plugins) => Json(ApiResponse::success(plugins)),
         None => Json(ApiResponse::error(format!("EdgionPlugins not found: {}", key))),
     }
 }
 
 /// List all EdgionPlugins resources
-async fn list_edgionplugins(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<EdgionPlugins>> {
+async fn list_edgionplugins(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<EdgionPlugins>> {
     let list_data = client.edgion_plugins().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -407,19 +407,19 @@ async fn get_edgionstreamplugins(
     let list_data = client.edgion_stream_plugins().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(resource) => Json(ApiResponse::success(resource)),
         None => Json(ApiResponse::error(format!("EdgionStreamPlugins not found: {}", key))),
     }
 }
 
 /// List all EdgionStreamPlugins resources
-async fn list_edgionstreamplugins(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<EdgionStreamPlugins>> {
+async fn list_edgionstreamplugins(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<EdgionStreamPlugins>> {
     let list_data = client.edgion_stream_plugins().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -437,19 +437,19 @@ async fn get_referencegrants(
     let list_data = client.reference_grants().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(resource) => Json(ApiResponse::success(resource)),
         None => Json(ApiResponse::error(format!("ReferenceGrant not found: {}", key))),
     }
 }
 
 /// List all ReferenceGrant resources
-async fn list_referencegrants(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<ReferenceGrant>> {
+async fn list_referencegrants(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<ReferenceGrant>> {
     let list_data = client.reference_grants().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -467,19 +467,19 @@ async fn get_backendtlspolicies(
     let list_data = client.backend_tls_policies().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(resource) => Json(ApiResponse::success(resource)),
         None => Json(ApiResponse::error(format!("BackendTLSPolicy not found: {}", key))),
     }
 }
 
 /// List all BackendTLSPolicy resources
-async fn list_backendtlspolicies(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<BackendTLSPolicy>> {
+async fn list_backendtlspolicies(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<BackendTLSPolicy>> {
     let list_data = client.backend_tls_policies().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -497,19 +497,19 @@ async fn get_pluginmetadata(
     let list_data = client.plugin_metadata().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(metadata) => Json(ApiResponse::success(metadata)),
         None => Json(ApiResponse::error(format!("PluginMetaData not found: {}", key))),
     }
 }
 
 /// List all PluginMetaData resources
-async fn list_pluginmetadata(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<PluginMetaData>> {
+async fn list_pluginmetadata(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<PluginMetaData>> {
     let list_data = client.plugin_metadata().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -527,19 +527,19 @@ async fn get_linksys(
     let list_data = client.link_sys().list();
     let name = query.name.as_ref().unwrap().as_str();
     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
-    match list_data.data.into_iter().find(|r| {
-        r.name_any() == name && r.namespace().as_deref() == namespace
-    }) {
+
+    match list_data
+        .data
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+    {
         Some(linksys) => Json(ApiResponse::success(linksys)),
         None => Json(ApiResponse::error(format!("LinkSys not found: {}", key))),
     }
 }
 
 /// List all LinkSys resources
-async fn list_linksys(
-    State(client): State<Arc<ConfigClient>>,
-) -> Json<ListResponse<LinkSys>> {
+async fn list_linksys(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<LinkSys>> {
     let list_data = client.link_sys().list();
     Json(ListResponse::success(list_data.data))
 }
@@ -557,7 +557,7 @@ async fn list_linksys(
 //     let list_data = client.secrets().list();
 //     let name = query.name.as_ref().unwrap().as_str();
 //     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-    
+
 //     match list_data.data.into_iter().find(|r| {
 //         r.name_any() == name && r.namespace().as_deref() == namespace
 //     }) {
@@ -635,17 +635,16 @@ pub async fn serve(config_client: Arc<ConfigClient>, port: u16) -> anyhow::Resul
     let app = create_admin_router(config_client);
     let addr_str = format!("0.0.0.0:{}", port);
     let addr: std::net::SocketAddr = addr_str.parse()?;
-    
+
     tracing::info!(
         component = "admin_api_gateway",
         event = "server_starting",
         addr = %addr,
         "Gateway Admin API server listening"
     );
-    
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
-    
+
     Ok(())
 }
-

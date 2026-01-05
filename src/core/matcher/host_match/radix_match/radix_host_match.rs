@@ -1,5 +1,5 @@
 use super::radix_host::RadixHost;
-use crate::core::matcher::radix_tree::{RadixTreeBuilder, RadixTree, RouterError};
+use crate::core::matcher::radix_tree::{RadixTree, RadixTreeBuilder, RouterError};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -45,7 +45,7 @@ impl<T> RadixHostMatchEngine<T> {
     pub fn tree(&self) -> &RadixTree {
         &self.tree
     }
-    
+
     /// Export all RadixHost instances (clones Arc pointers for efficiency)
     /// This is useful for incremental updates where most hosts remain unchanged
     pub fn export_hosts(&self) -> Vec<RadixHost<T>> {
@@ -64,8 +64,12 @@ impl<T> RadixHostMatchEngine<T> {
         let reversed = RadixHost::<T>::reverse_hostname(&hostname_lower);
 
         tracing::trace!("========== Radix Host Matching ==========");
-        tracing::trace!("Request Hostname: '{}', Reversed: '{}', Available hosts: {}",
-            hostname, reversed, self.hosts.len());
+        tracing::trace!(
+            "Request Hostname: '{}', Reversed: '{}', Available hosts: {}",
+            hostname,
+            reversed,
+            self.hosts.len()
+        );
 
         // Get all matching prefixes (returns shortest to longest)
         tracing::trace!("[Step 1] Searching in radix tree...");
@@ -76,7 +80,10 @@ impl<T> RadixHostMatchEngine<T> {
             return None;
         }
 
-        tracing::trace!("Found {} value(s), checking from longest to shortest...", all_values.len());
+        tracing::trace!(
+            "Found {} value(s), checking from longest to shortest...",
+            all_values.len()
+        );
 
         // Iterate from longest to shortest (reverse order since API returns shortest to longest)
         let mut match_count = 0;
@@ -90,7 +97,9 @@ impl<T> RadixHostMatchEngine<T> {
                     if let Some(radix_host) = self.hosts.get(host_idx) {
                         tracing::trace!(
                             "      Testing: original='{}', radix_key='{}', is_wildcard={}",
-                            radix_host.original, radix_host.radix_key, radix_host.is_wildcard
+                            radix_host.original,
+                            radix_host.radix_key,
+                            radix_host.is_wildcard
                         );
                         if radix_host.matches(hostname) {
                             tracing::trace!("      Matched!");
@@ -129,7 +138,10 @@ impl<T> RadixHostMatchEngine<T> {
         for radix_host in hosts {
             tracing::debug!(
                 "  [Host] pattern='{}', radix_key='{}', is_wildcard={}, wildcard_count={}",
-                radix_host.original, radix_host.radix_key, radix_host.is_wildcard, radix_host.wildcard_count
+                radix_host.original,
+                radix_host.radix_key,
+                radix_host.is_wildcard,
+                radix_host.wildcard_count
             );
 
             let radix_key = radix_host.radix_key.clone();
@@ -138,7 +150,8 @@ impl<T> RadixHostMatchEngine<T> {
             let tree_value = if let Some(&existing_value) = radix_key_to_value.get(&radix_key) {
                 tracing::debug!(
                     "    Reusing tree value: {} for radix_key: '{}'",
-                    existing_value, radix_key
+                    existing_value,
+                    radix_key
                 );
                 existing_value
             } else {
@@ -170,9 +183,9 @@ impl<T> RadixHostMatchEngine<T> {
 
         // Freeze the builder to create the immutable tree
         tracing::debug!("Freezing radix tree...");
-        self.tree = builder.freeze().map_err(|e: RouterError| {
-            format!("Failed to freeze radix tree: {}", e)
-        })?;
+        self.tree = builder
+            .freeze()
+            .map_err(|e: RouterError| format!("Failed to freeze radix tree: {}", e))?;
 
         tracing::debug!("========== Initialization Complete ==========");
         tracing::debug!(

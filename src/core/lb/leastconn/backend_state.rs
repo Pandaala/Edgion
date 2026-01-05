@@ -3,8 +3,8 @@
 //! Manages backend states during graceful shutdown and reactivation scenarios.
 
 use dashmap::DashMap;
-use std::sync::LazyLock;
 use pingora_core::protocols::l4::socket::SocketAddr;
+use std::sync::LazyLock;
 
 /// Backend lifecycle states
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,8 +18,7 @@ pub enum BackendState {
 }
 
 /// Global backend state tracker
-static BACKEND_STATES: LazyLock<DashMap<SocketAddr, BackendState>> = 
-    LazyLock::new(DashMap::new);
+static BACKEND_STATES: LazyLock<DashMap<SocketAddr, BackendState>> = LazyLock::new(DashMap::new);
 
 /// Set backend state
 pub fn set_state(addr: &SocketAddr, state: BackendState) {
@@ -28,10 +27,7 @@ pub fn set_state(addr: &SocketAddr, state: BackendState) {
 
 /// Get backend state (default: Active for new backends)
 pub fn get_state(addr: &SocketAddr) -> BackendState {
-    BACKEND_STATES
-        .get(addr)
-        .map(|s| *s)
-        .unwrap_or(BackendState::Active)
+    BACKEND_STATES.get(addr).map(|s| *s).unwrap_or(BackendState::Active)
 }
 
 /// Check if backend is active (can accept new connections)
@@ -106,7 +102,7 @@ mod tests {
         let addr = make_addr(9993);
         mark_draining(&addr);
         assert!(!is_active(&addr));
-        
+
         reactivate(&addr);
         assert_eq!(get_state(&addr), BackendState::Active);
         assert!(is_active(&addr));
@@ -117,7 +113,7 @@ mod tests {
         let addr = make_addr(9994);
         set_state(&addr, BackendState::Draining);
         assert_eq!(get_state(&addr), BackendState::Draining);
-        
+
         remove(&addr);
         // After removal, should return default (Active)
         assert_eq!(get_state(&addr), BackendState::Active);
@@ -128,33 +124,31 @@ mod tests {
         let addr1 = make_addr(19995);
         let addr2 = make_addr(19996);
         let addr3 = make_addr(19997);
-        
+
         // Clean up any previous state
         remove(&addr1);
         remove(&addr2);
         remove(&addr3);
-        
+
         mark_draining(&addr1);
         set_state(&addr2, BackendState::Active);
         mark_draining(&addr3);
-        
+
         let draining = get_draining_backends();
         // Filter to only our test addresses
-        let test_draining: Vec<_> = draining.iter()
-            .filter(|addr| {
-                matches!(addr, SocketAddr::Inet(sa) if sa.port() >= 19995 && sa.port() <= 19997)
-            })
+        let test_draining: Vec<_> = draining
+            .iter()
+            .filter(|addr| matches!(addr, SocketAddr::Inet(sa) if sa.port() >= 19995 && sa.port() <= 19997))
             .collect();
-        
+
         assert_eq!(test_draining.len(), 2);
         assert!(draining.contains(&addr1));
         assert!(draining.contains(&addr3));
         assert!(!draining.contains(&addr2));
-        
+
         // Cleanup
         remove(&addr1);
         remove(&addr2);
         remove(&addr3);
     }
 }
-

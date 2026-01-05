@@ -5,8 +5,8 @@
 
 use crate::types::EdgionTls;
 use std::fmt;
-use x509_parser::prelude::*;
 use x509_parser::pem::Pem;
+use x509_parser::prelude::*;
 
 /// Result of certificate validation
 #[derive(Debug, Clone)]
@@ -51,10 +51,7 @@ pub enum CertValidationError {
         current: String,
     },
     /// Certificate SAN does not match declared hosts
-    SanMismatch {
-        declared: Vec<String>,
-        actual: Vec<String>,
-    },
+    SanMismatch { declared: Vec<String>, actual: Vec<String> },
     /// Private key does not match certificate public key
     KeyMismatch(String),
     /// mTLS: CA Secret reference is required when mode is Mutual/OptionalMutual
@@ -79,7 +76,11 @@ impl fmt::Display for CertValidationError {
             Self::KeyNotFound => write!(f, "Private key (tls.key) not found in Secret"),
             Self::CertParseError(msg) => write!(f, "Certificate parse error: {}", msg),
             Self::KeyParseError(msg) => write!(f, "Private key parse error: {}", msg),
-            Self::CertExpired { not_before, not_after, current } => {
+            Self::CertExpired {
+                not_before,
+                not_after,
+                current,
+            } => {
                 write!(
                     f,
                     "Certificate expired or not yet valid (valid: {} - {}, current: {})",
@@ -87,17 +88,17 @@ impl fmt::Display for CertValidationError {
                 )
             }
             Self::SanMismatch { declared, actual } => {
-                write!(
-                    f,
-                    "SAN mismatch (declared: {:?}, actual: {:?})",
-                    declared, actual
-                )
+                write!(f, "SAN mismatch (declared: {:?}, actual: {:?})", declared, actual)
             }
             Self::KeyMismatch(msg) => write!(f, "Key mismatch: {}", msg),
-            Self::MtlsCaSecretRefRequired => write!(f, "mTLS: caSecretRef is required when mode is Mutual or OptionalMutual"),
+            Self::MtlsCaSecretRefRequired => {
+                write!(f, "mTLS: caSecretRef is required when mode is Mutual or OptionalMutual")
+            }
             Self::MtlsCaCertNotFound => write!(f, "mTLS: CA certificate (ca.crt) not found in CA Secret"),
             Self::MtlsCaCertParseError(msg) => write!(f, "mTLS: CA certificate parse error: {}", msg),
-            Self::MtlsVerifyDepthOutOfRange(depth) => write!(f, "mTLS: verify_depth {} is out of range (must be 1-9)", depth),
+            Self::MtlsVerifyDepthOutOfRange(depth) => {
+                write!(f, "mTLS: verify_depth {} is out of range (must be 1-9)", depth)
+            }
             Self::MtlsInvalidSanPattern(pattern) => write!(f, "mTLS: invalid SAN pattern: {}", pattern),
             Self::MtlsInvalidCnPattern(pattern) => write!(f, "mTLS: invalid CN pattern: {}", pattern),
         }
@@ -191,8 +192,7 @@ fn parse_and_validate_cert(pem_str: &str) -> Result<(Vec<u8>, String, String), S
 
     // Parse X.509
     let der_data = pem.contents.to_vec();
-    let (_, cert) = X509Certificate::from_der(&der_data)
-        .map_err(|e| format!("X.509 parse error: {}", e))?;
+    let (_, cert) = X509Certificate::from_der(&der_data).map_err(|e| format!("X.509 parse error: {}", e))?;
 
     // Extract validity dates
     let not_before = cert.validity().not_before.to_string();
@@ -202,10 +202,7 @@ fn parse_and_validate_cert(pem_str: &str) -> Result<(Vec<u8>, String, String), S
 }
 
 /// Check if certificate is expired or not yet valid from string dates
-fn check_expiration_from_strings(
-    not_before_str: &str,
-    not_after_str: &str,
-) -> Result<(), CertValidationError> {
+fn check_expiration_from_strings(not_before_str: &str, not_after_str: &str) -> Result<(), CertValidationError> {
     // For simplicity, we skip actual date parsing in this implementation
     // In production, you would parse these dates and compare with current time
     // For now, we just validate the certificate can be parsed (done in parse step)
@@ -214,10 +211,7 @@ fn check_expiration_from_strings(
 }
 
 /// Check if certificate SAN matches declared hosts from DER data
-fn check_san_matches_from_der(
-    der_data: &[u8],
-    declared_hosts: &[String],
-) -> Result<(), CertValidationError> {
+fn check_san_matches_from_der(der_data: &[u8], declared_hosts: &[String]) -> Result<(), CertValidationError> {
     // Parse certificate again for SAN check
     let (_, cert) = X509Certificate::from_der(der_data)
         .map_err(|e| CertValidationError::CertParseError(format!("Failed to re-parse cert: {}", e)))?;
@@ -313,9 +307,7 @@ fn check_key_valid(key_pem: &str) -> Result<(), CertValidationError> {
 
     // Basic validation: check if key PEM is valid
     if key_pem_obj.contents.is_empty() {
-        return Err(CertValidationError::KeyParseError(
-            "Empty key content".to_string(),
-        ));
+        return Err(CertValidationError::KeyParseError("Empty key content".to_string()));
     }
 
     // Note: Full key-certificate matching requires cryptographic operations
@@ -358,7 +350,7 @@ fn validate_mtls_config(
             }
         }
     }
-    
+
     // 4. Validate allowed_cns patterns (if configured)
     if let Some(allowed_cns) = &client_auth.allowed_cns {
         for cn in allowed_cns {
@@ -438,7 +430,10 @@ mod tests {
         let result = validate_cert(&tls);
         assert!(!result.is_valid);
         // Should have KeyNotFound and CertParseError (because "fake-cert" is not valid PEM)
-        assert!(result.errors.iter().any(|e| matches!(e, CertValidationError::KeyNotFound)));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CertValidationError::KeyNotFound)));
     }
 
     #[test]
@@ -451,15 +446,15 @@ mod tests {
 
         let result = validate_cert(&tls);
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| matches!(e, CertValidationError::CertParseError(_))));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CertValidationError::CertParseError(_))));
     }
 
     #[test]
     fn test_is_host_covered() {
-        let san_list = vec![
-            "example.com".to_string(),
-            "*.api.example.com".to_string(),
-        ];
+        let san_list = vec!["example.com".to_string(), "*.api.example.com".to_string()];
 
         // Exact match
         assert!(is_host_covered("example.com", &san_list));
@@ -491,7 +486,9 @@ mod tests {
         validate_mtls_config(&config, &mut errors);
 
         assert!(!errors.is_empty());
-        assert!(errors.iter().any(|e| matches!(e, CertValidationError::MtlsCaSecretRefRequired)));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, CertValidationError::MtlsCaSecretRefRequired)));
     }
 
     #[test]
@@ -517,7 +514,9 @@ mod tests {
         validate_mtls_config(&config, &mut errors);
 
         assert!(!errors.is_empty());
-        assert!(errors.iter().any(|e| matches!(e, CertValidationError::MtlsVerifyDepthOutOfRange(10))));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, CertValidationError::MtlsVerifyDepthOutOfRange(10))));
     }
 
     #[test]
@@ -543,7 +542,9 @@ mod tests {
         validate_mtls_config(&config, &mut errors);
 
         assert!(!errors.is_empty());
-        assert!(errors.iter().any(|e| matches!(e, CertValidationError::MtlsInvalidSanPattern(_))));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, CertValidationError::MtlsInvalidSanPattern(_))));
     }
 
     #[test]
@@ -590,4 +591,3 @@ mod tests {
         assert!(errors.is_empty(), "Terminate mode should not require CA Secret");
     }
 }
-

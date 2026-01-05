@@ -260,4 +260,3 @@ pub struct RedisLogging {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slow_log_threshold: Option<u64>,
 }
-

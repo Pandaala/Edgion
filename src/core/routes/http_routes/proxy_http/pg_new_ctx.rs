@@ -1,6 +1,6 @@
-use crate::types::EdgionHttpContext;
-use crate::core::observe::global_metrics;
 use super::EdgionHttp;
+use crate::core::observe::global_metrics;
+use crate::types::EdgionHttpContext;
 
 #[inline]
 pub fn new_ctx(_edgion_http: &EdgionHttp) -> EdgionHttpContext {
@@ -8,4 +8,3 @@ pub fn new_ctx(_edgion_http: &EdgionHttp) -> EdgionHttpContext {
     global_metrics().ctx_created();
     ctx
 }
-

@@ -1,21 +1,21 @@
+use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::select;
-use async_trait::async_trait;
 
 use pingora_core::apps::ServerApp;
 use pingora_core::connectors::TransportConnector;
 use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
-use pingora_core::upstreams::peer::BasicPeer;
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 use pingora_core::tls::ssl::NameType;
+use pingora_core::upstreams::peer::BasicPeer;
 
+use crate::core::backends::endpoint_slice::get_roundrobin_store;
 use crate::core::observe::AccessLogger;
 use crate::core::routes::tls_routes::GatewayTlsRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::core::backends::endpoint_slice::get_roundrobin_store;
 
 /// TLS connection context
 pub struct TlsContext {
@@ -57,11 +57,7 @@ pub struct EdgionTls {
 
 #[async_trait]
 impl ServerApp for EdgionTls {
-    async fn process_new(
-        self: &Arc<Self>,
-        mut downstream: Stream,
-        _shutdown: &ShutdownWatch,
-    ) -> Option<Stream> {
+    async fn process_new(self: &Arc<Self>, mut downstream: Stream, _shutdown: &ShutdownWatch) -> Option<Stream> {
         // Create context
         let mut ctx = TlsContext {
             listener_port: self.listener_port,
@@ -75,7 +71,7 @@ impl ServerApp for EdgionTls {
             status: TlsStatus::Success,
             connection_established: false,
         };
-        
+
         // Extract SNI from TLS stream
         let sni_hostname = match Self::extract_sni(&mut downstream) {
             Some(sni) => {
@@ -88,28 +84,25 @@ impl ServerApp for EdgionTls {
                 return None;
             }
         };
-        
+
         // Handle connection (context will be updated regardless of success or failure)
         self.handle_connection(downstream, &mut ctx, &sni_hostname).await;
-        
+
         // Only log if connection was actually established
         if ctx.connection_established {
             self.log_connection(&ctx).await;
         }
-        
+
         None
     }
 }
 
 impl EdgionTls {
     /// Extract SNI hostname from TLS stream
-    /// 
+    ///
     /// For Pingora's Stream type, if it's already TLS-terminated,
     /// we can access the SSL context to get the SNI.
-    fn extract_sni(
-        #[allow(unused_variables)]
-        stream: &mut Stream
-    ) -> Option<String> {
+    fn extract_sni(#[allow(unused_variables)] stream: &mut Stream) -> Option<String> {
         #[cfg(any(feature = "boringssl", feature = "openssl"))]
         {
             // Try to get SSL reference from the stream
@@ -122,7 +115,7 @@ impl EdgionTls {
         }
         None
     }
-    
+
     /// Core logic for handling TLS-terminated connections
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni_hostname: &str) {
         // 1. Match TLSRoute based on SNI
@@ -137,32 +130,30 @@ impl EdgionTls {
                 return;
             }
         };
-        
+
         // 2. Select backend
-        let backend_ref = match tls_route.spec.rules.as_ref()
-            .and_then(|rules| rules.first())
-        {
-            Some(rule) => {
-                match rule.backend_finder.select() {
-                    Ok(backend) => backend,
-                    Err(_) => {
-                        ctx.status = TlsStatus::UpstreamConnectionFailed;
-                        return;
-                    }
+        let backend_ref = match tls_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
+            Some(rule) => match rule.backend_finder.select() {
+                Ok(backend) => backend,
+                Err(_) => {
+                    ctx.status = TlsStatus::UpstreamConnectionFailed;
+                    return;
                 }
-            }
+            },
             None => {
                 ctx.status = TlsStatus::UpstreamConnectionFailed;
                 return;
             }
         };
-        
+
         // 3. Resolve backend address via EndpointSlice
-        let namespace = backend_ref.namespace.as_deref()
+        let namespace = backend_ref
+            .namespace
+            .as_deref()
             .or_else(|| tls_route.metadata.namespace.as_deref())
             .unwrap_or("default");
         let service_key = format!("{}/{}", namespace, &backend_ref.name);
-        
+
         // Select backend from EndpointSlice store
         let ep_store = get_roundrobin_store();
         let backend = match ep_store.select_peer(&service_key, b"", 256) {
@@ -176,7 +167,7 @@ impl EdgionTls {
                 return;
             }
         };
-        
+
         // 4. Build upstream address (using actual IP address)
         let mut upstream_addr = backend.addr;
         if let Some(port) = backend_ref.port {
@@ -184,7 +175,7 @@ impl EdgionTls {
         }
         let upstream_addr_str = upstream_addr.to_string();
         ctx.upstream_addr = Some(upstream_addr_str.clone());
-        
+
         // 5. Connect to upstream TCP backend
         let peer = BasicPeer::new(&upstream_addr_str);
         let upstream = match self.connector.new_stream(&peer).await {
@@ -199,35 +190,30 @@ impl EdgionTls {
                 return;
             }
         };
-        
+
         // Mark connection as established
         ctx.connection_established = true;
-        
+
         tracing::debug!(
             sni = %sni_hostname,
             upstream = %upstream_addr_str,
             "TLS terminated, forwarding to TCP backend"
         );
-        
+
         // 6. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx).await;
-        
+
         // Note: TLS routes currently use RoundRobin only
         // When LeastConnection support is added, increment/decrement should be called here
         // based on the selected LB policy
     }
-    
+
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)
-    async fn duplex(
-        &self,
-        mut downstream: Stream,
-        mut upstream: Stream,
-        ctx: &mut TlsContext,
-    ) {
+    async fn duplex(&self, mut downstream: Stream, mut upstream: Stream, ctx: &mut TlsContext) {
         const BUFFER_SIZE: usize = 8192;
         let mut upstream_buf = vec![0u8; BUFFER_SIZE];
         let mut downstream_buf = vec![0u8; BUFFER_SIZE];
-        
+
         loop {
             select! {
                 // Client → Upstream
@@ -279,11 +265,11 @@ impl EdgionTls {
             }
         }
     }
-    
+
     /// Log access record
     async fn log_connection(&self, ctx: &TlsContext) {
         let duration_ms = ctx.start_time.elapsed().as_millis() as u64;
-        
+
         let log_entry = serde_json::json!({
             "ts": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -300,8 +286,7 @@ impl EdgionTls {
             "bytes_received": ctx.bytes_received,
             "status": format!("{:?}", ctx.status),
         });
-        
+
         self.access_logger.send(log_entry.to_string()).await;
     }
 }
-

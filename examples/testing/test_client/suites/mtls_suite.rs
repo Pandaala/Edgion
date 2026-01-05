@@ -14,7 +14,7 @@
 // - Secret_edge_client-ca.yaml                # 客户端 CA 证书 Secret
 // - Secret_edge_ca-chain.yaml                 # 中间 CA 证书链 Secret
 // - GatewayClass__public-gateway.yaml         # GatewayClass 配置
-// 
+//
 // 生成的证书文件（由 generate_mtls_certs.sh 生成）：
 // - examples/testing/certs/mtls/valid-client.crt          # 有效客户端证书
 // - examples/testing/certs/mtls/valid-client.key          # 有效客户端私钥
@@ -34,25 +34,22 @@ pub struct MtlsTestSuite;
 
 // Helper function to load client certificate and key
 fn load_client_identity(cert_path: &str, key_path: &str) -> Result<reqwest::Identity, String> {
-    let cert = fs::read(cert_path)
-        .map_err(|e| format!("Failed to read cert {}: {}", cert_path, e))?;
-    let key = fs::read(key_path)
-        .map_err(|e| format!("Failed to read key {}: {}", key_path, e))?;
-    
+    let cert = fs::read(cert_path).map_err(|e| format!("Failed to read cert {}: {}", cert_path, e))?;
+    let key = fs::read(key_path).map_err(|e| format!("Failed to read key {}: {}", key_path, e))?;
+
     // Combine cert and key in PEM format
     let mut pem = cert.clone();
     pem.extend_from_slice(&key);
-    
-    reqwest::Identity::from_pem(&pem)
-        .map_err(|e| format!("Failed to parse identity: {}", e))
+
+    reqwest::Identity::from_pem(&pem).map_err(|e| format!("Failed to parse identity: {}", e))
 }
 
 // Helper function to create HTTP client without client certificate (for SNI only)
 fn create_client_with_sni(hostname: &str, ip: &str) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .danger_accept_invalid_certs(true)  // Accept self-signed server certs
-        .resolve(hostname, format!("{}:10444", ip).parse().unwrap())  // Set SNI via DNS resolution
+        .danger_accept_invalid_certs(true) // Accept self-signed server certs
+        .resolve(hostname, format!("{}:10444", ip).parse().unwrap()) // Set SNI via DNS resolution
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))
 }
@@ -60,12 +57,12 @@ fn create_client_with_sni(hostname: &str, ip: &str) -> Result<reqwest::Client, S
 // Helper function to create HTTP client with client certificate
 fn create_mtls_client(cert_path: &str, key_path: &str, hostname: &str, ip: &str) -> Result<reqwest::Client, String> {
     let identity = load_client_identity(cert_path, key_path)?;
-    
+
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .danger_accept_invalid_certs(true)  // Accept self-signed server certs
+        .danger_accept_invalid_certs(true) // Accept self-signed server certs
         .identity(identity)
-        .resolve(hostname, format!("{}:10444", ip).parse().unwrap())  // Set SNI via DNS resolution
+        .resolve(hostname, format!("{}:10444", ip).parse().unwrap()) // Set SNI via DNS resolution
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))
 }
@@ -76,337 +73,350 @@ impl MtlsTestSuite {
         TestCase::new(
             "mtls_mutual_valid_cert",
             "Mutual TLS：带有效客户端证书（应成功）",
-            |ctx: TestContext| Box::pin(async move {
-                let start = Instant::now();
-                
-                let cert_path = "examples/testing/certs/mtls/valid-client.crt";
-                let key_path = "examples/testing/certs/mtls/valid-client.key";
-                let hostname = "mtls.example.com";
-                
-                let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
-                    Ok(c) => c,
-                    Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to create mTLS client: {}", e)),
-                };
-                
-                let url = format!("https://{}:{}/health", hostname, 10444);
-                let request = client.get(&url)
-                    .header("Host", hostname);
-                
-                match request.send().await {
-                    Ok(response) => {
-                        let status = response.status();
-                        if status.is_success() {
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("Status: {}, mTLS handshake successful", status)
-                            )
-                        } else {
-                            TestResult::failed(
-                                start.elapsed(),
-                                format!("Expected 200, got {}", status)
-                            )
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let cert_path = "examples/testing/certs/mtls/valid-client.crt";
+                    let key_path = "examples/testing/certs/mtls/valid-client.key";
+                    let hostname = "mtls.example.com";
+
+                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to create mTLS client: {}", e))
                         }
-                    },
-                    Err(e) => TestResult::failed(
-                        start.elapsed(),
-                        format!("Request failed: {}", e)
-                    ),
-                }
-            })
+                    };
+
+                    let url = format!("https://{}:{}/health", hostname, 10444);
+                    let request = client.get(&url).header("Host", hostname);
+
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status();
+                            if status.is_success() {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Status: {}, mTLS handshake successful", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
         )
     }
-    
+
     // Test 2: Mutual TLS without client certificate - should fail
     fn test_mutual_without_cert() -> TestCase {
         TestCase::new(
             "mtls_mutual_no_cert",
             "Mutual TLS：不带客户端证书（应失败）",
-            |ctx: TestContext| Box::pin(async move {
-                let start = Instant::now();
-                let hostname = "mtls.example.com";
-                
-                // Use regular client without cert but with correct SNI
-                let client = match create_client_with_sni(hostname, &ctx.target_host) {
-                    Ok(c) => c,
-                    Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e)),
-                };
-                
-                let url = format!("https://{}:{}/health", hostname, 10444);
-                let request = client.get(&url).header("Host", hostname);
-                
-                match request.send().await {
-                    Ok(response) => TestResult::failed(
-                        start.elapsed(),
-                        format!("Expected TLS handshake failure, but got status: {}", response.status())
-                    ),
-                    Err(e) => {
-                        // Expected error - TLS handshake should fail
-                        let error_msg = e.to_string();
-                        if error_msg.contains("tls") || error_msg.contains("handshake") || error_msg.contains("certificate") {
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                "TLS handshake failed as expected (no client cert)".to_string()
-                            )
-                        } else {
-                            TestResult::failed(
-                                start.elapsed(),
-                                format!("Unexpected error: {}", error_msg)
-                            )
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let hostname = "mtls.example.com";
+
+                    // Use regular client without cert but with correct SNI
+                    let client = match create_client_with_sni(hostname, &ctx.target_host) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
                         }
-                    },
-                }
-            })
+                    };
+
+                    let url = format!("https://{}:{}/health", hostname, 10444);
+                    let request = client.get(&url).header("Host", hostname);
+
+                    match request.send().await {
+                        Ok(response) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected TLS handshake failure, but got status: {}", response.status()),
+                        ),
+                        Err(e) => {
+                            // Expected error - TLS handshake should fail
+                            let error_msg = e.to_string();
+                            if error_msg.contains("tls")
+                                || error_msg.contains("handshake")
+                                || error_msg.contains("certificate")
+                            {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "TLS handshake failed as expected (no client cert)".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Unexpected error: {}", error_msg))
+                            }
+                        }
+                    }
+                })
+            },
         )
     }
-    
+
     // Test 3: Mutual TLS with invalid (untrusted) client certificate - should fail
     fn test_mutual_with_invalid_cert() -> TestCase {
         TestCase::new(
             "mtls_mutual_invalid_cert",
             "Mutual TLS：带无效证书（应失败）",
-            |ctx: TestContext| Box::pin(async move {
-                let start = Instant::now();
-                
-                let cert_path = "examples/testing/certs/mtls/invalid-client.crt";
-                let key_path = "examples/testing/certs/mtls/invalid-client.key";
-                let hostname = "mtls.example.com";
-                
-                let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
-                    Ok(c) => c,
-                    Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e)),
-                };
-                
-                let url = format!("https://{}:{}/health", hostname, 10444);
-                let request = client.get(&url).header("Host", hostname);
-                
-                match request.send().await {
-                    Ok(response) => TestResult::failed(
-                        start.elapsed(),
-                        format!("Expected certificate verification failure, but got status: {}", response.status())
-                    ),
-                    Err(e) => {
-                        // Expected error - certificate should be rejected
-                        TestResult::passed_with_message(
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let cert_path = "examples/testing/certs/mtls/invalid-client.crt";
+                    let key_path = "examples/testing/certs/mtls/invalid-client.key";
+                    let hostname = "mtls.example.com";
+
+                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
+                        }
+                    };
+
+                    let url = format!("https://{}:{}/health", hostname, 10444);
+                    let request = client.get(&url).header("Host", hostname);
+
+                    match request.send().await {
+                        Ok(response) => TestResult::failed(
                             start.elapsed(),
-                            format!("Certificate verification failed as expected: {}", e)
-                        )
-                    },
-                }
-            })
+                            format!(
+                                "Expected certificate verification failure, but got status: {}",
+                                response.status()
+                            ),
+                        ),
+                        Err(e) => {
+                            // Expected error - certificate should be rejected
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("Certificate verification failed as expected: {}", e),
+                            )
+                        }
+                    }
+                })
+            },
         )
     }
-    
+
     // Test 4: Optional Mutual TLS with client certificate - should succeed
     fn test_optional_with_cert() -> TestCase {
         TestCase::new(
             "mtls_optional_with_cert",
             "Optional Mutual TLS：带证书（应成功）",
-            |ctx: TestContext| Box::pin(async move {
-                let start = Instant::now();
-                
-                let cert_path = "examples/testing/certs/mtls/valid-client.crt";
-                let key_path = "examples/testing/certs/mtls/valid-client.key";
-                let hostname = "mtls-optional.example.com";
-                
-                let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
-                    Ok(c) => c,
-                    Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e)),
-                };
-                
-                let url = format!("https://{}:{}/health", hostname, 10444);
-                let request = client.get(&url).header("Host", hostname);
-                
-                match request.send().await {
-                    Ok(response) => {
-                        let status = response.status();
-                        if status.is_success() {
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("Status: {}, Optional mTLS with cert", status)
-                            )
-                        } else {
-                            TestResult::failed(
-                                start.elapsed(),
-                                format!("Expected 200, got {}", status)
-                            )
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let cert_path = "examples/testing/certs/mtls/valid-client.crt";
+                    let key_path = "examples/testing/certs/mtls/valid-client.key";
+                    let hostname = "mtls-optional.example.com";
+
+                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
                         }
-                    },
-                    Err(e) => TestResult::failed(
-                        start.elapsed(),
-                        format!("Request failed: {}", e)
-                    ),
-                }
-            })
+                    };
+
+                    let url = format!("https://{}:{}/health", hostname, 10444);
+                    let request = client.get(&url).header("Host", hostname);
+
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status();
+                            if status.is_success() {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Status: {}, Optional mTLS with cert", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
         )
     }
-    
+
     // Test 5: Optional Mutual TLS without client certificate - should succeed
     fn test_optional_without_cert() -> TestCase {
         TestCase::new(
             "mtls_optional_no_cert",
             "Optional Mutual TLS：不带证书（应成功）",
-            |ctx: TestContext| Box::pin(async move {
-                let start = Instant::now();
-                let hostname = "mtls-optional.example.com";
-                
-                // Use regular client without cert - should succeed with optional mTLS
-                let client = match create_client_with_sni(hostname, &ctx.target_host) {
-                    Ok(c) => c,
-                    Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e)),
-                };
-                
-                let url = format!("https://{}:{}/health", hostname, 10444);
-                let request = client.get(&url).header("Host", hostname);
-                
-                match request.send().await {
-                    Ok(response) => {
-                        let status = response.status();
-                        if status.is_success() {
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("Status: {}, Optional mTLS without cert (degraded to single-way TLS)", status)
-                            )
-                        } else {
-                            TestResult::failed(
-                                start.elapsed(),
-                                format!("Expected 200, got {}", status)
-                            )
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let hostname = "mtls-optional.example.com";
+
+                    // Use regular client without cert - should succeed with optional mTLS
+                    let client = match create_client_with_sni(hostname, &ctx.target_host) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
                         }
-                    },
-                    Err(e) => TestResult::failed(
-                        start.elapsed(),
-                        format!("Request failed (should succeed without cert): {}", e)
-                    ),
-                }
-            })
+                    };
+
+                    let url = format!("https://{}:{}/health", hostname, 10444);
+                    let request = client.get(&url).header("Host", hostname);
+
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status();
+                            if status.is_success() {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!(
+                                        "Status: {}, Optional mTLS without cert (degraded to single-way TLS)",
+                                        status
+                                    ),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Request failed (should succeed without cert): {}", e),
+                        ),
+                    }
+                })
+            },
         )
     }
-    
+
     // Test 6: SAN whitelist - matching SAN - should succeed
     fn test_san_whitelist_matching() -> TestCase {
         TestCase::new(
             "mtls_san_whitelist_match",
             "SAN 白名单：匹配的 SAN（应成功）",
-            |ctx: TestContext| Box::pin(async move {
-                let start = Instant::now();
-                
-                // valid-client has SAN=client1.example.com which matches whitelist
-                let cert_path = "examples/testing/certs/mtls/valid-client.crt";
-                let key_path = "examples/testing/certs/mtls/valid-client.key";
-                let hostname = "mtls-san.example.com";
-                
-                let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
-                    Ok(c) => c,
-                    Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e)),
-                };
-                
-                let url = format!("https://{}:{}/health", hostname, 10444);
-                let request = client.get(&url).header("Host", hostname);
-                
-                match request.send().await {
-                    Ok(response) => {
-                        let status = response.status();
-                        if status.is_success() {
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("Status: {}, SAN matched whitelist", status)
-                            )
-                        } else {
-                            TestResult::failed(
-                                start.elapsed(),
-                                format!("Expected 200, got {}", status)
-                            )
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    // valid-client has SAN=client1.example.com which matches whitelist
+                    let cert_path = "examples/testing/certs/mtls/valid-client.crt";
+                    let key_path = "examples/testing/certs/mtls/valid-client.key";
+                    let hostname = "mtls-san.example.com";
+
+                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
                         }
-                    },
-                    Err(e) => TestResult::failed(
-                        start.elapsed(),
-                        format!("Request failed: {}", e)
-                    ),
-                }
-            })
+                    };
+
+                    let url = format!("https://{}:{}/health", hostname, 10444);
+                    let request = client.get(&url).header("Host", hostname);
+
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status();
+                            if status.is_success() {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Status: {}, SAN matched whitelist", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
         )
     }
-    
+
     // Test 7: SAN whitelist - non-matching SAN - should fail
     fn test_san_whitelist_non_matching() -> TestCase {
         TestCase::new(
             "mtls_san_whitelist_no_match",
             "SAN 白名单：不匹配的 SAN（应失败）",
-            |ctx: TestContext| Box::pin(async move {
-                let start = Instant::now();
-                
-                // nonmatching-client has SAN=notinwhitelist.example.com which doesn't match
-                let cert_path = "examples/testing/certs/mtls/nonmatching-client.crt";
-                let key_path = "examples/testing/certs/mtls/nonmatching-client.key";
-                let hostname = "mtls-san.example.com";
-                
-                let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
-                    Ok(c) => c,
-                    Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e)),
-                };
-                
-                let url = format!("https://{}:{}/health", hostname, 10444);
-                let request = client.get(&url).header("Host", hostname);
-                
-                match request.send().await {
-                    Ok(response) => TestResult::failed(
-                        start.elapsed(),
-                        format!("Expected SAN verification failure, but got status: {}", response.status())
-                    ),
-                    Err(e) => {
-                        // Expected error - SAN should not match whitelist
-                        TestResult::passed_with_message(
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    // nonmatching-client has SAN=notinwhitelist.example.com which doesn't match
+                    let cert_path = "examples/testing/certs/mtls/nonmatching-client.crt";
+                    let key_path = "examples/testing/certs/mtls/nonmatching-client.key";
+                    let hostname = "mtls-san.example.com";
+
+                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
+                        }
+                    };
+
+                    let url = format!("https://{}:{}/health", hostname, 10444);
+                    let request = client.get(&url).header("Host", hostname);
+
+                    match request.send().await {
+                        Ok(response) => TestResult::failed(
                             start.elapsed(),
-                            format!("SAN verification failed as expected: {}", e)
-                        )
-                    },
-                }
-            })
+                            format!(
+                                "Expected SAN verification failure, but got status: {}",
+                                response.status()
+                            ),
+                        ),
+                        Err(e) => {
+                            // Expected error - SAN should not match whitelist
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("SAN verification failed as expected: {}", e),
+                            )
+                        }
+                    }
+                })
+            },
         )
     }
-    
+
     // Test 8: Certificate chain with verifyDepth=2 - should succeed
     fn test_cert_chain_depth() -> TestCase {
         TestCase::new(
             "mtls_cert_chain_depth",
             "证书链：verifyDepth=2（应成功）",
-            |ctx: TestContext| Box::pin(async move {
-                let start = Instant::now();
-                
-                // chain-client-bundle contains client cert + intermediate CA
-                let cert_path = "examples/testing/certs/mtls/chain-client-bundle.crt";
-                let key_path = "examples/testing/certs/mtls/chain-client.key";
-                let hostname = "mtls-chain.example.com";
-                
-                let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
-                    Ok(c) => c,
-                    Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e)),
-                };
-                
-                let url = format!("https://{}:{}/health", hostname, 10444);
-                let request = client.get(&url).header("Host", hostname);
-                
-                match request.send().await {
-                    Ok(response) => {
-                        let status = response.status();
-                        if status.is_success() {
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("Status: {}, Certificate chain verified (depth=2)", status)
-                            )
-                        } else {
-                            TestResult::failed(
-                                start.elapsed(),
-                                format!("Expected 200, got {}", status)
-                            )
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    // chain-client-bundle contains client cert + intermediate CA
+                    let cert_path = "examples/testing/certs/mtls/chain-client-bundle.crt";
+                    let key_path = "examples/testing/certs/mtls/chain-client.key";
+                    let hostname = "mtls-chain.example.com";
+
+                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
                         }
-                    },
-                    Err(e) => TestResult::failed(
-                        start.elapsed(),
-                        format!("Request failed: {}", e)
-                    ),
-                }
-            })
+                    };
+
+                    let url = format!("https://{}:{}/health", hostname, 10444);
+                    let request = client.get(&url).header("Host", hostname);
+
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status();
+                            if status.is_success() {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Status: {}, Certificate chain verified (depth=2)", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
         )
     }
 }
@@ -416,21 +426,19 @@ impl TestSuite for MtlsTestSuite {
     fn name(&self) -> &'static str {
         "mTLS Tests"
     }
-    
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             // Basic mTLS mode tests (CA verification only)
             Self::test_mutual_with_valid_cert(),
-            Self::test_mutual_without_cert(),        // Mutual mode should reject clients without cert
-            Self::test_mutual_with_invalid_cert(),   // Mutual mode should reject invalid certs
+            Self::test_mutual_without_cert(), // Mutual mode should reject clients without cert
+            Self::test_mutual_with_invalid_cert(), // Mutual mode should reject invalid certs
             Self::test_optional_with_cert(),
             Self::test_optional_without_cert(),
             Self::test_cert_chain_depth(),
-            
             // SAN/CN whitelist validation tests (now implemented at TLS layer)
             Self::test_san_whitelist_matching(),     // SAN whitelist matching
             Self::test_san_whitelist_non_matching(), // SAN whitelist non-matching
         ]
     }
 }
-

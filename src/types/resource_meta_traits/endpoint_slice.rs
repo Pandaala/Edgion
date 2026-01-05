@@ -10,15 +10,15 @@ impl ResourceMeta for EndpointSlice {
     fn get_version(&self) -> u64 {
         extract_version(&self.metadata)
     }
-    
+
     fn resource_kind() -> ResourceKind {
         ResourceKind::EndpointSlice
     }
-    
+
     fn kind_name() -> &'static str {
         "EndpointSlice"
     }
-    
+
     fn key_name(&self) -> String {
         if let Some(namespace) = &self.metadata.namespace {
             format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
@@ -27,4 +27,3 @@ impl ResourceMeta for EndpointSlice {
         }
     }
 }
-

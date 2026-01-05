@@ -325,4 +325,3 @@ impl UpstreamResponseEntry {
         self.plugin.type_name()
     }
 }
-

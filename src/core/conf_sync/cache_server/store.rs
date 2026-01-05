@@ -199,11 +199,11 @@ mod tests {
         fn get_version(&self) -> u64 {
             0 // Test resource doesn't track versions
         }
-        
+
         fn resource_kind() -> ResourceKind {
             ResourceKind::Unspecified
         }
-        
+
         fn kind_name() -> &'static str {
             "TestResource"
         }

@@ -1,13 +1,13 @@
 //! Access Log Analyzer for Backend Resolver Testing
-//! 
+//!
 //! Parses and analyzes JSON access logs to verify LB policy usage
 
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, BufRead};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use anyhow::{Result, anyhow};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LogEntry {
@@ -54,7 +54,9 @@ pub struct AccessLogAnalyzer {
 
 impl AccessLogAnalyzer {
     pub fn new(log_path: impl Into<PathBuf>) -> Self {
-        Self { log_path: log_path.into() }
+        Self {
+            log_path: log_path.into(),
+        }
     }
 
     fn parse_log(&self) -> Result<Vec<LogEntry>> {
@@ -113,14 +115,18 @@ impl AccessLogAnalyzer {
                                 None => "RoundRobin".to_string(),
                             };
                             *result.lb_policy_counts.entry(policy_str).or_insert(0) += 1;
-                            
+
                             let backend_addr = format!("{}:{}", upstream.ip, upstream.port);
                             *result.backend_counts.entry(backend_addr).or_insert(0) += 1;
                         } else {
-                            result.errors.push(format!("No upstream info for trace_id: {}", trace_id));
+                            result
+                                .errors
+                                .push(format!("No upstream info for trace_id: {}", trace_id));
                         }
                     } else {
-                        result.errors.push(format!("No backend context for trace_id: {}", trace_id));
+                        result
+                            .errors
+                            .push(format!("No backend context for trace_id: {}", trace_id));
                     }
                 }
             }
@@ -135,13 +141,22 @@ impl AccessLogAnalyzer {
         report.push_str("============================================================\n\n");
 
         for res in results {
-            report.push_str(&format!("📊 {} 测试 ({})\n", res.test_type.replace("-", ""), res.test_type));
+            report.push_str(&format!(
+                "📊 {} 测试 ({})\n",
+                res.test_type.replace("-", ""),
+                res.test_type
+            ));
             report.push_str(&format!("   总请求数: {}\n", res.total_requests));
-            
+
             if !res.lb_policy_counts.is_empty() {
                 report.push_str("   LB 策略分布:\n");
                 for (policy, count) in &res.lb_policy_counts {
-                    report.push_str(&format!("     - {}: {} ({:.1}%)\n", policy, count, (*count as f64 / res.total_requests as f64) * 100.0));
+                    report.push_str(&format!(
+                        "     - {}: {} ({:.1}%)\n",
+                        policy,
+                        count,
+                        (*count as f64 / res.total_requests as f64) * 100.0
+                    ));
                 }
             } else {
                 report.push_str("   LB 策略分布: 未记录\n");
@@ -150,7 +165,12 @@ impl AccessLogAnalyzer {
             if !res.backend_counts.is_empty() {
                 report.push_str("   后端分布:\n");
                 for (backend, count) in &res.backend_counts {
-                    report.push_str(&format!("     - {}: {} ({:.1}%)\n", backend, count, (*count as f64 / res.total_requests as f64) * 100.0));
+                    report.push_str(&format!(
+                        "     - {}: {} ({:.1}%)\n",
+                        backend,
+                        count,
+                        (*count as f64 / res.total_requests as f64) * 100.0
+                    ));
                 }
             } else {
                 report.push_str("   后端分布: 未记录\n");
@@ -168,9 +188,16 @@ impl AccessLogAnalyzer {
         report.push_str("总结:\n");
         for res in results {
             if res.errors.is_empty() {
-                report.push_str(&format!("  ✅ {} 测试: 通过 - LB 策略被正确识别\n", res.test_type.replace("-", "")));
+                report.push_str(&format!(
+                    "  ✅ {} 测试: 通过 - LB 策略被正确识别\n",
+                    res.test_type.replace("-", "")
+                ));
             } else {
-                report.push_str(&format!("  ❌ {} 测试: 失败 - {:?}\n", res.test_type.replace("-", ""), res.errors));
+                report.push_str(&format!(
+                    "  ❌ {} 测试: 失败 - {:?}\n",
+                    res.test_type.replace("-", ""),
+                    res.errors
+                ));
             }
         }
         report.push_str("============================================================\n");

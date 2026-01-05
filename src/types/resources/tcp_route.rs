@@ -2,15 +2,15 @@
 //!
 //! TCPRoute defines TCP rules for mapping requests to backends
 
-use std::fmt;
-use std::sync::Arc;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::Arc;
 
+use super::common::ParentReference;
 use crate::core::lb::BackendSelector;
 use crate::core::plugins::StreamPluginRuntime;
-use super::common::ParentReference;
 
 /// API group for TCPRoute
 pub const TCP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -105,4 +105,3 @@ pub struct TCPBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
 }
-

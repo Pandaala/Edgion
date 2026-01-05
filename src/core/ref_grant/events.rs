@@ -2,8 +2,8 @@
 //!
 //! Provides event-driven revalidation when ReferenceGrants are modified
 
-use std::sync::{Arc, RwLock, OnceLock};
 use std::collections::HashSet;
+use std::sync::{Arc, OnceLock, RwLock};
 
 /// ReferenceGrant changed event
 #[derive(Debug, Clone)]
@@ -30,17 +30,14 @@ impl ReferenceGrantEventDispatcher {
             listeners: RwLock::new(Vec::new()),
         }
     }
-    
+
     /// Register a listener
     pub fn register_listener(&self, listener: Arc<dyn RevalidationListener>) {
         let mut listeners = self.listeners.write().unwrap();
         listeners.push(listener);
-        tracing::debug!(
-            component = "ref_grant_events",
-            "Registered revalidation listener"
-        );
+        tracing::debug!(component = "ref_grant_events", "Registered revalidation listener");
     }
-    
+
     /// Dispatch event to all listeners
     pub fn dispatch(&self, event: &ReferenceGrantChangedEvent) {
         let listeners = self.listeners.read().unwrap();
@@ -50,7 +47,7 @@ impl ReferenceGrantEventDispatcher {
             listener_count = listeners.len(),
             "Dispatching ReferenceGrantChanged event"
         );
-        
+
         for listener in listeners.iter() {
             listener.on_reference_grant_changed(event);
         }
@@ -93,16 +90,15 @@ mod tests {
         let listener = Arc::new(TestListener {
             call_count: AtomicUsize::new(0),
         });
-        
+
         dispatcher.register_listener(listener.clone());
-        
+
         let event = ReferenceGrantChangedEvent {
             affected_namespaces: HashSet::new(),
         };
-        
+
         dispatcher.dispatch(&event);
-        
+
         assert_eq!(listener.call_count.load(Ordering::SeqCst), 1);
     }
 }
-

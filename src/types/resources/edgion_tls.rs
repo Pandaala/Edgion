@@ -1,5 +1,5 @@
-use super::gateway::SecretObjectReference;
 use super::common::ParentReference;
+use super::gateway::SecretObjectReference;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
@@ -49,28 +49,28 @@ pub struct ClientAuthConfig {
     /// TLS mode (default: Terminate)
     #[serde(default)]
     pub mode: ClientAuthMode,
-    
+
     /// CA certificate Secret reference (required when mode=Mutual/OptionalMutual)
     /// Secret must contain ca.crt field
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_secret_ref: Option<SecretObjectReference>,
-    
+
     /// Certificate chain verification depth (1-9, default: 1)
     #[serde(default = "default_verify_depth", skip_serializing_if = "is_default_verify_depth")]
     pub verify_depth: u8,
-    
+
     /// CA Secret data (filled by controller, not from YAML)
     /// Note: This field is serialized for controller->gateway communication,
     /// but should be skipped when deserializing from YAML files
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ca_secret: Option<Secret>,
-    
+
     /// Optional Subject Alternative Names whitelist
     /// If configured, client certificate SAN must match one of these
     /// Validation happens at application layer after TLS handshake
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_sans: Option<Vec<String>>,
-    
+
     /// Optional Common Name whitelist
     /// If configured, client certificate CN must match one of these
     /// Validation happens at application layer after TLS handshake
@@ -245,7 +245,6 @@ pub struct EarlyDataConfig {
     pub reject_on_replay: bool,
 }
 
-
 #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
 pub struct EdgionTlsStatus {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -263,55 +262,74 @@ impl EdgionTls {
 
     /// Extract certificate PEM from the secret
     pub fn cert_pem(&self) -> anyhow::Result<String> {
-        let secret = self.spec.secret.as_ref()
+        let secret = self
+            .spec
+            .secret
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Secret not found in EdgionTls"))?;
-        
-        let data = secret.data.as_ref()
+
+        let data = secret
+            .data
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Secret data not found"))?;
-        
-        let cert_pem = data.get("tls.crt")
+
+        let cert_pem = data
+            .get("tls.crt")
             .ok_or_else(|| anyhow::anyhow!("Secret data tls.crt not found"))?;
-        
-        String::from_utf8(cert_pem.0.clone())
-            .map_err(|e| anyhow::anyhow!("Failed to decode cert PEM: {}", e))
+
+        String::from_utf8(cert_pem.0.clone()).map_err(|e| anyhow::anyhow!("Failed to decode cert PEM: {}", e))
     }
 
     /// Extract private key PEM from the secret
     pub fn key_pem(&self) -> anyhow::Result<String> {
-        let secret = self.spec.secret.as_ref()
+        let secret = self
+            .spec
+            .secret
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Secret not found in EdgionTls"))?;
-        
-        let data = secret.data.as_ref()
+
+        let data = secret
+            .data
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Secret data not found"))?;
-        
-        let key_pem = data.get("tls.key")
+
+        let key_pem = data
+            .get("tls.key")
             .ok_or_else(|| anyhow::anyhow!("Secret data tls.key not found"))?;
-        
-        String::from_utf8(key_pem.0.clone())
-            .map_err(|e| anyhow::anyhow!("Failed to decode key PEM: {}", e))
+
+        String::from_utf8(key_pem.0.clone()).map_err(|e| anyhow::anyhow!("Failed to decode key PEM: {}", e))
     }
 
     /// Extract CA certificate PEM from the CA secret (for mTLS)
     pub fn ca_cert_pem(&self) -> anyhow::Result<String> {
-        let client_auth = self.spec.client_auth.as_ref()
+        let client_auth = self
+            .spec
+            .client_auth
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("clientAuth not configured"))?;
-        
-        let ca_secret = client_auth.ca_secret.as_ref()
+
+        let ca_secret = client_auth
+            .ca_secret
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("CA secret not loaded by controller"))?;
-        
-        let data = ca_secret.data.as_ref()
+
+        let data = ca_secret
+            .data
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("CA secret data not found"))?;
-        
-        let ca_cert_pem = data.get("ca.crt")
+
+        let ca_cert_pem = data
+            .get("ca.crt")
             .ok_or_else(|| anyhow::anyhow!("CA secret data ca.crt not found"))?;
-        
-        String::from_utf8(ca_cert_pem.0.clone())
-            .map_err(|e| anyhow::anyhow!("Failed to decode CA cert PEM: {}", e))
+
+        String::from_utf8(ca_cert_pem.0.clone()).map_err(|e| anyhow::anyhow!("Failed to decode CA cert PEM: {}", e))
     }
 
     /// Get client authentication mode
     pub fn client_auth_mode(&self) -> ClientAuthMode {
-        self.spec.client_auth.as_ref()
+        self.spec
+            .client_auth
+            .as_ref()
             .map(|ca| ca.mode.clone())
             .unwrap_or_default()
     }
@@ -486,23 +504,23 @@ spec:
 
         let tls: Result<EdgionTls, _> = serde_yaml::from_str(yaml);
         assert!(tls.is_ok(), "Failed to deserialize YAML: {:?}", tls.err());
-        
+
         let tls = tls.unwrap();
         assert_eq!(tls.metadata.name, Some("test-tls".to_string()));
         assert_eq!(tls.metadata.namespace, Some("default".to_string()));
-        
+
         // Verify parentRefs
         assert!(tls.spec.parent_refs.is_some());
         let parent_refs = tls.spec.parent_refs.as_ref().unwrap();
         assert_eq!(parent_refs.len(), 1);
         assert_eq!(parent_refs[0].name, "example-gateway");
         assert_eq!(parent_refs[0].namespace, Some("default".to_string()));
-        
+
         // Verify hosts
         assert_eq!(tls.spec.hosts.len(), 2);
         assert_eq!(tls.spec.hosts[0], "example.com");
         assert_eq!(tls.spec.hosts[1], "*.example.com");
-        
+
         // Verify secretRef
         assert_eq!(tls.spec.secret_ref.name, "test-secret");
         assert_eq!(tls.spec.secret_ref.namespace, Some("default".to_string()));
@@ -542,14 +560,26 @@ spec:
         };
 
         let yaml = serde_yaml::to_string(&tls).expect("Failed to serialize to YAML");
-        
+
         // Verify camelCase field names in serialized YAML
-        assert!(yaml.contains("parentRefs:"), "Serialized YAML should contain 'parentRefs'");
-        assert!(yaml.contains("secretRef:"), "Serialized YAML should contain 'secretRef'");
-        
+        assert!(
+            yaml.contains("parentRefs:"),
+            "Serialized YAML should contain 'parentRefs'"
+        );
+        assert!(
+            yaml.contains("secretRef:"),
+            "Serialized YAML should contain 'secretRef'"
+        );
+
         // Verify snake_case is NOT present
-        assert!(!yaml.contains("parent_refs:"), "Serialized YAML should NOT contain 'parent_refs'");
-        assert!(!yaml.contains("secret_ref:"), "Serialized YAML should NOT contain 'secret_ref'");
+        assert!(
+            !yaml.contains("parent_refs:"),
+            "Serialized YAML should NOT contain 'parent_refs'"
+        );
+        assert!(
+            !yaml.contains("secret_ref:"),
+            "Serialized YAML should NOT contain 'secret_ref'"
+        );
     }
 
     #[test]
@@ -573,21 +603,18 @@ spec:
     namespace: default
 "#;
 
-        let tls: EdgionTls = serde_yaml::from_str(original_yaml)
-            .expect("Failed to deserialize original YAML");
-        
-        let serialized = serde_yaml::to_string(&tls)
-            .expect("Failed to serialize back to YAML");
-        
-        let tls2: EdgionTls = serde_yaml::from_str(&serialized)
-            .expect("Failed to deserialize serialized YAML");
-        
+        let tls: EdgionTls = serde_yaml::from_str(original_yaml).expect("Failed to deserialize original YAML");
+
+        let serialized = serde_yaml::to_string(&tls).expect("Failed to serialize back to YAML");
+
+        let tls2: EdgionTls = serde_yaml::from_str(&serialized).expect("Failed to deserialize serialized YAML");
+
         // Verify data integrity
         assert_eq!(tls.metadata.name, tls2.metadata.name);
         assert_eq!(tls.metadata.namespace, tls2.metadata.namespace);
         assert_eq!(tls.spec.hosts, tls2.spec.hosts);
         assert_eq!(tls.spec.secret_ref.name, tls2.spec.secret_ref.name);
-        
+
         if let (Some(pr1), Some(pr2)) = (&tls.spec.parent_refs, &tls2.spec.parent_refs) {
             assert_eq!(pr1.len(), pr2.len());
             assert_eq!(pr1[0].name, pr2[0].name);
@@ -616,15 +643,17 @@ spec:
 "#;
 
         let tls: Result<EdgionTls, _> = serde_yaml::from_str(yaml_with_snake_case);
-        
+
         // Should succeed in parsing (because parent_refs and secret_ref have defaults)
         // but the fields should be None/default because they don't match_engine the expected camelCase names
         if let Ok(tls) = tls {
             // With camelCase enforcement, snake_case fields are ignored
             // parent_refs should be None (not parsed from parent_refs)
-            assert!(tls.spec.parent_refs.is_none(), 
-                "parent_refs (snake_case) should be ignored, expected None");
-            
+            assert!(
+                tls.spec.parent_refs.is_none(),
+                "parent_refs (snake_case) should be ignored, expected None"
+            );
+
             // secret_ref is required, so this test would actually fail at deserialization
             // But if it doesn't fail, the secretRef field would have a default/empty value
         } else {
@@ -640,7 +669,7 @@ spec:
         // 1. All field names should be camelCase in YAML
         // 2. First character should be lowercase
         // 3. Acronyms should follow camelCase (e.g., secretRef not secretREF)
-        
+
         let yaml = r#"
 apiVersion: edgion.io/v1
 kind: EdgionTls
@@ -657,17 +686,25 @@ spec:
 "#;
 
         let result: Result<EdgionTls, _> = serde_yaml::from_str(yaml);
-        assert!(result.is_ok(), 
-            "Kubernetes API convention compliant YAML should deserialize successfully");
-        
+        assert!(
+            result.is_ok(),
+            "Kubernetes API convention compliant YAML should deserialize successfully"
+        );
+
         let tls = result.unwrap();
         let serialized = serde_yaml::to_string(&tls).unwrap();
-        
+
         // Verify all conventions are maintained in serialized output
         assert!(serialized.contains("parentRefs:"), "Should use parentRefs (camelCase)");
         assert!(serialized.contains("secretRef:"), "Should use secretRef (camelCase)");
-        assert!(!serialized.contains("ParentRefs:"), "Should NOT use ParentRefs (PascalCase)");
-        assert!(!serialized.contains("SecretRef:"), "Should NOT use SecretRef (PascalCase)");
+        assert!(
+            !serialized.contains("ParentRefs:"),
+            "Should NOT use ParentRefs (PascalCase)"
+        );
+        assert!(
+            !serialized.contains("SecretRef:"),
+            "Should NOT use SecretRef (PascalCase)"
+        );
     }
 
     #[test]
@@ -863,10 +900,10 @@ spec:
 
         let tls: Result<EdgionTls, _> = serde_yaml::from_str(yaml);
         assert!(tls.is_ok(), "Failed to deserialize mTLS YAML: {:?}", tls.err());
-        
+
         let tls = tls.unwrap();
         let client_auth = tls.spec.client_auth.as_ref().unwrap();
-        
+
         assert_eq!(client_auth.mode, ClientAuthMode::Mutual);
         assert_eq!(client_auth.ca_secret_ref.as_ref().unwrap().name, "client-ca");
         assert_eq!(client_auth.verify_depth, 2);
@@ -895,7 +932,7 @@ spec:
 
         let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
         let client_auth = tls.spec.client_auth.as_ref().unwrap();
-        
+
         // Default mode should be Terminate
         assert_eq!(client_auth.mode, ClientAuthMode::Terminate);
     }
@@ -921,14 +958,16 @@ spec:
 
         let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
         let client_auth = tls.spec.client_auth.as_ref().unwrap();
-        
+
         // Default verify_depth should be 1
         assert_eq!(client_auth.verify_depth, 1);
-        
+
         // Test serialization - default verify_depth should be omitted
         let serialized = serde_yaml::to_string(&tls).unwrap();
-        assert!(!serialized.contains("verifyDepth"), 
-            "Default verifyDepth should be omitted in serialization");
+        assert!(
+            !serialized.contains("verifyDepth"),
+            "Default verifyDepth should be omitted in serialization"
+        );
     }
 
     #[test]
@@ -952,7 +991,7 @@ spec:
 
         let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
         let client_auth = tls.spec.client_auth.as_ref().unwrap();
-        
+
         assert_eq!(client_auth.mode, ClientAuthMode::OptionalMutual);
         // TODO: Re-enable when SAN/CN whitelist is implemented
         // assert!(client_auth.allowed_sans.is_none());
@@ -979,7 +1018,7 @@ spec:
 "#;
 
         let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
-        
+
         assert_eq!(tls.client_auth_mode(), ClientAuthMode::Mutual);
         assert!(tls.is_mtls_enabled());
     }
@@ -1000,7 +1039,7 @@ spec:
 "#;
 
         let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
-        
+
         assert!(tls.spec.client_auth.is_none());
         assert_eq!(tls.client_auth_mode(), ClientAuthMode::Terminate);
         assert!(!tls.is_mtls_enabled());

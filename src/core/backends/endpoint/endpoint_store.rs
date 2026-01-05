@@ -1,28 +1,25 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use super::discovery_impl::EndpointLoadBalancer;
+use crate::core::lb::ewma::Ewma;
+use crate::core::lb::leastconn::LeastConnection;
 use arc_swap::ArcSwap;
-use std::sync::LazyLock;
 use pingora_load_balancing::selection::{BackendSelection, Consistent, RoundRobin};
 use pingora_load_balancing::Backend;
-use crate::core::lb::leastconn::LeastConnection;
-use crate::core::lb::ewma::Ewma;
-use super::discovery_impl::EndpointLoadBalancer;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::LazyLock;
 
 /// Store for RoundRobin LoadBalancers (primary, always present)
-static ROUNDROBIN_STORE: LazyLock<Arc<EndpointStore<RoundRobin>>> =
-    LazyLock::new(|| Arc::new(EndpointStore::new()));
+static ROUNDROBIN_STORE: LazyLock<Arc<EndpointStore<RoundRobin>>> = LazyLock::new(|| Arc::new(EndpointStore::new()));
 
 /// Store for Consistent LoadBalancers (optional)
-static CONSISTENT_STORE: LazyLock<Arc<EndpointStore<Consistent>>> =
-    LazyLock::new(|| Arc::new(EndpointStore::new()));
+static CONSISTENT_STORE: LazyLock<Arc<EndpointStore<Consistent>>> = LazyLock::new(|| Arc::new(EndpointStore::new()));
 
 /// Store for LeastConnection LoadBalancers (optional)
 static LEASTCONN_STORE: LazyLock<Arc<EndpointStore<LeastConnection>>> =
     LazyLock::new(|| Arc::new(EndpointStore::new()));
 
 /// Store for EWMA LoadBalancers (optional)
-static EWMA_STORE: LazyLock<Arc<EndpointStore<Ewma>>> =
-    LazyLock::new(|| Arc::new(EndpointStore::new()));
+static EWMA_STORE: LazyLock<Arc<EndpointStore<Ewma>>> = LazyLock::new(|| Arc::new(EndpointStore::new()));
 
 pub fn get_endpoint_roundrobin_store() -> Arc<EndpointStore<RoundRobin>> {
     ROUNDROBIN_STORE.clone()
@@ -78,12 +75,12 @@ where
     }
 
     /// Select a backend peer from the load balancer
-    /// 
+    ///
     /// # Arguments
     /// * `service_key` - The service key (namespace/service-name)
     /// * `hash_key` - Hash key for consistent hashing (use empty slice for round-robin)
     /// * `max_sample` - Maximum number of backends to sample
-    /// 
+    ///
     /// # Returns
     /// * `Some(Backend)` - Selected backend
     /// * `None` - No backend available or service not found
@@ -111,14 +108,14 @@ where
     pub fn update(&self, add_or_update: HashMap<String, Arc<EndpointLoadBalancer<S>>>, remove: &HashSet<String>) {
         let current = self.endpoints.load();
         let mut new_map = (**current).clone();
-        
+
         for key in remove {
             new_map.remove(key);
         }
         for (key, lb) in add_or_update {
             new_map.insert(key, lb);
         }
-        
+
         self.endpoints.store(Arc::new(new_map));
     }
 
@@ -132,14 +129,14 @@ where
         modify(&mut new_map);
         self.endpoints.store(Arc::new(new_map));
     }
-    
+
     /// Update Endpoints in-place and refresh LoadBalancer
     /// This is more efficient than rebuilding the entire ArcSwap map
-    /// 
+    ///
     /// # Arguments
     /// * `key` - The Endpoints key
     /// * `new_endpoint` - The new Endpoints data
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Updated successfully
     /// * `Err(msg)` - Update failed or key not found
@@ -153,13 +150,13 @@ where
             tracing::debug!(key = %key, "Key not found for in-place update");
             format!("Key not found: {}", key)
         })?;
-        
+
         // Update in-place
         if let Err(e) = lb.update(new_endpoint) {
             tracing::error!(key = %key, error = %e, "Failed to update Endpoints data");
             return Err(e);
         }
-        
+
         // Trigger LoadBalancer update using now_or_never for sync execution
         use futures::FutureExt;
         match lb.update_load_balancer().now_or_never() {
@@ -176,4 +173,3 @@ where
         Ok(())
     }
 }
-

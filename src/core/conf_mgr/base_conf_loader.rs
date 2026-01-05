@@ -1,14 +1,11 @@
-use anyhow::{anyhow, Context, Result};
-use std::sync::Arc;
 use crate::core::conf_mgr::ConfStore;
-use crate::types::{GatewayClass, EdgionGatewayConfig, Gateway, GatewayBaseConf, ResourceKind};
+use crate::types::{EdgionGatewayConfig, Gateway, GatewayBaseConf, GatewayClass, ResourceKind};
+use anyhow::{anyhow, Context, Result};
 use kube::ResourceExt;
+use std::sync::Arc;
 
 /// Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway) from store
-pub async fn load_base_conf_from_store(
-    store: Arc<dyn ConfStore>,
-    gateway_class_name: &str,
-) -> Result<GatewayBaseConf> {
+pub async fn load_base_conf_from_store(store: Arc<dyn ConfStore>, gateway_class_name: &str) -> Result<GatewayBaseConf> {
     tracing::info!(
         component = "conf_mgr",
         event = "load_base_start",
@@ -31,26 +28,24 @@ pub async fn load_base_conf_from_store(
         let resource_kind = ResourceKind::from_content(&resource.content);
 
         match resource_kind {
-            Some(ResourceKind::GatewayClass) => {
-                match serde_yaml::from_str::<GatewayClass>(&resource.content) {
-                    Ok(gc) => {
-                        tracing::debug!(
-                            component = "conf_mgr",
-                            name = ?gc.name_any(),
-                            "Found GatewayClass"
-                        );
-                        gateway_classes.push(gc);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            component = "conf_mgr",
-                            name = resource.name,
-                            error = %e,
-                            "Failed to parse GatewayClass"
-                        );
-                    }
+            Some(ResourceKind::GatewayClass) => match serde_yaml::from_str::<GatewayClass>(&resource.content) {
+                Ok(gc) => {
+                    tracing::debug!(
+                        component = "conf_mgr",
+                        name = ?gc.name_any(),
+                        "Found GatewayClass"
+                    );
+                    gateway_classes.push(gc);
                 }
-            }
+                Err(e) => {
+                    tracing::warn!(
+                        component = "conf_mgr",
+                        name = resource.name,
+                        error = %e,
+                        "Failed to parse GatewayClass"
+                    );
+                }
+            },
             Some(ResourceKind::EdgionGatewayConfig) => {
                 match serde_yaml::from_str::<EdgionGatewayConfig>(&resource.content) {
                     Ok(egwc) => {
@@ -71,28 +66,26 @@ pub async fn load_base_conf_from_store(
                     }
                 }
             }
-            Some(ResourceKind::Gateway) => {
-                match serde_yaml::from_str::<Gateway>(&resource.content) {
-                    Ok(gw) => {
-                        tracing::debug!(
-                            component = "conf_mgr",
-                            name = ?gw.name_any(),
-                            namespace = ?gw.namespace(),
-                            gateway_class_name = %gw.spec.gateway_class_name,
-                            "Found Gateway"
-                        );
-                        gateways.push(gw);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            component = "conf_mgr",
-                            name = resource.name,
-                            error = %e,
-                            "Failed to parse Gateway"
-                        );
-                    }
+            Some(ResourceKind::Gateway) => match serde_yaml::from_str::<Gateway>(&resource.content) {
+                Ok(gw) => {
+                    tracing::debug!(
+                        component = "conf_mgr",
+                        name = ?gw.name_any(),
+                        namespace = ?gw.namespace(),
+                        gateway_class_name = %gw.spec.gateway_class_name,
+                        "Found Gateway"
+                    );
+                    gateways.push(gw);
                 }
-            }
+                Err(e) => {
+                    tracing::warn!(
+                        component = "conf_mgr",
+                        name = resource.name,
+                        error = %e,
+                        "Failed to parse Gateway"
+                    );
+                }
+            },
             _ => {
                 // Skip other resource types
             }
@@ -109,10 +102,7 @@ pub async fn load_base_conf_from_store(
 
     // Log all collected Gateways for debugging
     if !gateways.is_empty() {
-        tracing::info!(
-            component = "conf_mgr",
-            "All collected Gateways:"
-        );
+        tracing::info!(component = "conf_mgr", "All collected Gateways:");
         for gw in &gateways {
             tracing::info!(
                 component = "conf_mgr",
@@ -123,22 +113,14 @@ pub async fn load_base_conf_from_store(
             );
         }
     } else {
-        tracing::warn!(
-            component = "conf_mgr",
-            "No Gateways were collected from store"
-        );
+        tracing::warn!(component = "conf_mgr", "No Gateways were collected from store");
     }
 
     // Step 3: Find the matching GatewayClass by name
     let gateway_class = gateway_classes
         .into_iter()
         .find(|gc| gc.name_any() == gateway_class_name)
-        .ok_or_else(|| {
-            anyhow!(
-                "GatewayClass '{}' not found in store",
-                gateway_class_name
-            )
-        })?;
+        .ok_or_else(|| anyhow!("GatewayClass '{}' not found in store", gateway_class_name))?;
 
     tracing::info!(
         component = "conf_mgr",
@@ -175,12 +157,7 @@ pub async fn load_base_conf_from_store(
     let edgion_gateway_config = edgion_gateway_configs
         .into_iter()
         .find(|egwc| egwc.name_any() == egwc_name)
-        .ok_or_else(|| {
-            anyhow!(
-                "EdgionGatewayConfig '{}' not found in store",
-                egwc_name
-            )
-        })?;
+        .ok_or_else(|| anyhow!("EdgionGatewayConfig '{}' not found in store", egwc_name))?;
 
     tracing::info!(
         component = "conf_mgr",
@@ -219,11 +196,7 @@ pub async fn load_base_conf_from_store(
     );
 
     // Step 7: Construct GatewayBaseConf
-    let base_conf = GatewayBaseConf::new(
-        gateway_class,
-        edgion_gateway_config,
-        matching_gateways,
-    );
+    let base_conf = GatewayBaseConf::new(gateway_class, edgion_gateway_config, matching_gateways);
 
     tracing::info!(
         component = "conf_mgr",
@@ -233,4 +206,3 @@ pub async fn load_base_conf_from_store(
 
     Ok(base_conf)
 }
-

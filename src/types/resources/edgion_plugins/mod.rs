@@ -2,18 +2,18 @@
 //!
 //! EdgionPlugins defines reusable plugin configurations that can be referenced by HTTPRoutes
 
-use std::sync::Arc;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::core::plugins::PluginRuntime;
 
 // Submodules
+pub mod custom_plugins;
 pub mod entry;
 pub mod gateway_api_plugins;
-pub mod custom_plugins;
 
 pub mod plugin_configs;
 
@@ -21,17 +21,11 @@ pub mod plugin_configs;
 mod tests;
 
 // Re-exports
-pub use entry::{ConditionEnable, PluginEntry, RequestFilterEntry, UpstreamResponseFilterEntry, UpstreamResponseEntry};
+pub use entry::{ConditionEnable, PluginEntry, RequestFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry};
 pub use gateway_api_plugins::EdgionPlugin;
 pub use plugin_configs::{
-    BasicAuthConfig,
-    CorsConfig,
-    CsrfConfig,
-    DebugAccessLogToHeaderConfig,
-    IpRestrictionConfig,
-    IpSource,
-    DefaultAction,
-    MockConfig,
+    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, DefaultAction, IpRestrictionConfig,
+    IpSource, MockConfig,
 };
 
 /// API group for EdgionPlugins
@@ -93,14 +87,26 @@ impl EdgionPlugins {
     /// Check if this plugin has any plugins defined
     pub fn has_plugins(&self) -> bool {
         self.spec.request_plugins.as_ref().map_or(false, |p| !p.is_empty())
-            || self.spec.upstream_response_filter_plugins.as_ref().map_or(false, |p| !p.is_empty())
-            || self.spec.upstream_response_plugins.as_ref().map_or(false, |p| !p.is_empty())
+            || self
+                .spec
+                .upstream_response_filter_plugins
+                .as_ref()
+                .map_or(false, |p| !p.is_empty())
+            || self
+                .spec
+                .upstream_response_plugins
+                .as_ref()
+                .map_or(false, |p| !p.is_empty())
     }
 
     /// Get the total number of plugins
     pub fn plugin_count(&self) -> usize {
         let request_count = self.spec.request_plugins.as_ref().map_or(0, |p| p.len());
-        let filter_count = self.spec.upstream_response_filter_plugins.as_ref().map_or(0, |p| p.len());
+        let filter_count = self
+            .spec
+            .upstream_response_filter_plugins
+            .as_ref()
+            .map_or(0, |p| p.len());
         let response_count = self.spec.upstream_response_plugins.as_ref().map_or(0, |p| p.len());
         request_count + filter_count + response_count
     }
@@ -124,20 +130,20 @@ impl EdgionPlugins {
     /// This should be called after deserialization to populate the runtime field
     pub fn init_plugin_runtime(&mut self) {
         let mut runtime = PluginRuntime::new();
-        
+        let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
+
         if let Some(request_plugins) = &self.spec.request_plugins {
-            runtime.add_from_request_filters(request_plugins);
+            runtime.add_from_request_filters(request_plugins, namespace);
         }
-        
+
         if let Some(upstream_response_filter_plugins) = &self.spec.upstream_response_filter_plugins {
-            runtime.add_from_upstream_response_filters(upstream_response_filter_plugins);
+            runtime.add_from_upstream_response_filters(upstream_response_filter_plugins, namespace);
         }
-        
+
         if let Some(upstream_response_plugins) = &self.spec.upstream_response_plugins {
-            runtime.add_from_upstream_responses(upstream_response_plugins);
+            runtime.add_from_upstream_responses(upstream_response_plugins, namespace);
         }
-        
+
         self.spec.plugin_runtime = Arc::new(runtime);
     }
 }
-

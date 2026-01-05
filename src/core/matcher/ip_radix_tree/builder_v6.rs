@@ -3,8 +3,8 @@
 //! This module provides the flexible tree structure used during CIDR rule insertion for IPv6.
 
 use super::error::IpRadixError;
-use super::types::IpCidr;
 use super::frozen_v6::FrozenIpV6RadixTree;
+use super::types::IpCidr;
 
 /// A binary radix tree node used during the build phase for IPv6
 ///
@@ -98,13 +98,7 @@ impl IpV6RadixBuilder {
     /// * `prefix_len` - Prefix length (0-128)
     /// * `allow` - true for allow, false for deny
     /// * `current_bit` - Current bit position (0-127, from left to right)
-    fn insert_helper(
-        node: &mut IpV6BuildNode,
-        ip: u128,
-        prefix_len: u8,
-        allow: bool,
-        current_bit: u8,
-    ) {
+    fn insert_helper(node: &mut IpV6BuildNode, ip: u128, prefix_len: u8, allow: bool, current_bit: u8) {
         // Base case: reached the prefix length
         if current_bit == prefix_len {
             node.value = Some(allow);

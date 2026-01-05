@@ -36,14 +36,14 @@ impl TlsCertMatcher {
         // TODO(observability): Add metrics for:
         // - sni_match_total counter (with status label: success/failure)
         // - sni_match_duration_seconds histogram
-        tls_list.first()
+        tls_list
+            .first()
             .cloned()
             .ok_or_else(|| EdError::SniNotMatch(sni.to_string()))
     }
 }
 
-pub static TLS_CERT_MATCHER: LazyLock<TlsCertMatcher> = 
-    LazyLock::new(|| TlsCertMatcher::new());
+pub static TLS_CERT_MATCHER: LazyLock<TlsCertMatcher> = LazyLock::new(|| TlsCertMatcher::new());
 
 pub fn get_tls_cert_matcher() -> &'static TlsCertMatcher {
     &TLS_CERT_MATCHER

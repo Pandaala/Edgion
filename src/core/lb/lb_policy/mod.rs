@@ -1,13 +1,12 @@
 //! Optional load balancing algorithms module
-//! 
+//!
 //! Provides additional load balancing algorithms (Consistent, LeastConnection)
 //! that can be optionally enabled per service based on configuration.
 
-mod types;
 mod config;
 mod policy_store;
+mod types;
 
-pub use types::LbPolicy;
 pub use config::get_policies_for_service;
-pub use policy_store::{PolicyStore, get_global_policy_store};
-
+pub use policy_store::{get_global_policy_store, PolicyStore};
+pub use types::LbPolicy;

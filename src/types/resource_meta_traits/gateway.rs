@@ -9,15 +9,15 @@ impl ResourceMeta for Gateway {
     fn get_version(&self) -> u64 {
         extract_version(&self.metadata)
     }
-    
+
     fn resource_kind() -> ResourceKind {
         ResourceKind::Gateway
     }
-    
+
     fn kind_name() -> &'static str {
         "Gateway"
     }
-    
+
     fn key_name(&self) -> String {
         if let Some(namespace) = &self.metadata.namespace {
             format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
@@ -26,4 +26,3 @@ impl ResourceMeta for Gateway {
         }
     }
 }
-

@@ -2,16 +2,16 @@
 //!
 //! HTTPRoute defines HTTP rules for mapping requests to backends
 
-use std::fmt;
-use std::sync::Arc;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::Arc;
 
+use super::common::ParentReference;
+use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::lb::BackendSelector;
 use crate::core::plugins::PluginRuntime;
-use super::http_route_preparse::BackendExtensionInfo;
-use super::common::ParentReference;
 
 /// API group for HTTPRoute
 pub const HTTP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -83,13 +83,13 @@ pub struct HTTPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
-    
+
     /// Pre-parsed route-level timeout configurations (not serialized)
     /// Parsed once when route is loaded, used at runtime
     #[serde(skip)]
     #[schemars(skip)]
     pub parsed_timeouts: Option<ParsedRouteTimeouts>,
-    
+
     /// Pre-parsed max retries from HTTPRoute annotation (not serialized)
     /// Parsed from annotation "edgion.io/max-retries" during route loading
     /// None = use global default, Some(n) = use annotation value
@@ -162,8 +162,6 @@ pub struct HTTPPathMatch {
     /// Value of the HTTP path to match_engine against
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
-
-
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -223,7 +221,7 @@ pub struct HTTPBackendRef {
     /// Filters defined at this level should be executed if and only if the request is being forwarded to this backend
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<HTTPRouteFilter>>,
-    
+
     /// Parsed extension info (runtime only, not serialized)
     /// This is computed from plugins[].extensionRef at runtime
     #[serde(skip)]
@@ -466,7 +464,7 @@ pub struct HTTPRouteTimeouts {
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_request: Option<String>,
-    
+
     /// IdleTimeout specifies the maximum duration of inactivity on a connection
     /// Format: Duration (e.g., "5m", "300s")
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -572,11 +570,11 @@ pub struct ParsedRouteTimeouts {
     /// Parsed request timeout (end-to-end including retries)
     /// Gateway API v1.4 standard field
     pub request_timeout: Option<Duration>,
-    
+
     /// Parsed backend request timeout
     /// Gateway API v1.4 standard field
     pub backend_request_timeout: Option<Duration>,
-    
+
     /// Parsed idle timeout
     /// Edgion extension (recommended to configure in EdgionGatewayConfig)
     pub idle_timeout: Option<Duration>,
@@ -587,38 +585,35 @@ impl ParsedRouteTimeouts {
     /// Returns None if no timeouts are configured
     pub fn from_config(config: &HTTPRouteTimeouts) -> Option<Self> {
         use crate::core::utils::parse_duration;
-        
+
         // Parse request timeout (end-to-end, Gateway API v1.4 standard)
-        let request_timeout = config.request.as_ref()
-            .and_then(|s| {
-                parse_duration(s)
-                    .map_err(|e| {
-                        tracing::warn!("Invalid request timeout '{}': {}", s, e);
-                        e
-                    })
-                    .ok()
-            });
-        
-        let backend_request_timeout = config.backend_request.as_ref()
-            .and_then(|s| {
-                parse_duration(s)
-                    .map_err(|e| {
-                        tracing::warn!("Invalid backend_request timeout '{}': {}", s, e);
-                        e
-                    })
-                    .ok()
-            });
-        
-        let idle_timeout = config.idle_timeout.as_ref()
-            .and_then(|s| {
-                parse_duration(s)
-                    .map_err(|e| {
-                        tracing::warn!("Invalid idle_timeout '{}': {}", s, e);
-                        e
-                    })
-                    .ok()
-            });
-        
+        let request_timeout = config.request.as_ref().and_then(|s| {
+            parse_duration(s)
+                .map_err(|e| {
+                    tracing::warn!("Invalid request timeout '{}': {}", s, e);
+                    e
+                })
+                .ok()
+        });
+
+        let backend_request_timeout = config.backend_request.as_ref().and_then(|s| {
+            parse_duration(s)
+                .map_err(|e| {
+                    tracing::warn!("Invalid backend_request timeout '{}': {}", s, e);
+                    e
+                })
+                .ok()
+        });
+
+        let idle_timeout = config.idle_timeout.as_ref().and_then(|s| {
+            parse_duration(s)
+                .map_err(|e| {
+                    tracing::warn!("Invalid idle_timeout '{}': {}", s, e);
+                    e
+                })
+                .ok()
+        });
+
         // Only create if at least one timeout is configured
         if request_timeout.is_some() || backend_request_timeout.is_some() || idle_timeout.is_some() {
             Some(Self {
@@ -631,4 +626,3 @@ impl ParsedRouteTimeouts {
         }
     }
 }
-

@@ -172,4 +172,3 @@ mod tests {
         assert!(yaml.contains("gatewayClassName"));
     }
 }
-

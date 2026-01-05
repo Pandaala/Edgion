@@ -5,4 +5,3 @@ mod local_file;
 
 pub use data_sender_trait::DataSender;
 pub use local_file::LocalFileWriter;
-

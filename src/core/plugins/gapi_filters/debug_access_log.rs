@@ -3,9 +3,9 @@
 //! This filter adds the current access log as a JSON string to the response header
 //! for debugging purposes.
 
-use crate::core::plugins::plugin_runtime::traits::{UpstreamResponseFilter, PluginSession};
-use crate::core::plugins::plugin_runtime::log::PluginLog;
 use crate::core::observe::access_log::AccessLogEntry;
+use crate::core::plugins::plugin_runtime::log::PluginLog;
+use crate::core::plugins::plugin_runtime::traits::{PluginSession, UpstreamResponseFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::DebugAccessLogToHeaderConfig;
 
@@ -19,18 +19,18 @@ impl DebugAccessLogToHeaderFilter {
     fn add_debug_header(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
         // Get EdgionHttpContext from session
         let ctx = session.ctx();
-        
+
         // Create access log entry from context
         let entry = AccessLogEntry::from_context(ctx);
-        
+
         // Convert to JSON
         let json = entry.to_json();
-        
+
         // Set the debug header
         if let Err(e) = session.set_response_header("X-Debug-Access-Log", &json) {
             tracing::error!("Failed to set X-Debug-Access-Log header: {:?}", e);
         }
-        
+
         PluginRunningResult::GoodNext
     }
 }
@@ -48,4 +48,3 @@ impl UpstreamResponseFilter for DebugAccessLogToHeaderFilter {
         self.add_debug_header(session)
     }
 }
-

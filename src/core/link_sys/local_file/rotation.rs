@@ -40,19 +40,19 @@ pub fn find_next_size_index(base_path: &PathBuf) -> u32 {
         Some(p) => p,
         None => return 0,
     };
-    
+
     let stem = base_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let ext = base_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    
+
     let mut max_index: u32 = 0;
-    
+
     if let Ok(entries) = fs::read_dir(parent) {
         for entry in entries.flatten() {
             if let Some(filename) = entry.path().file_name().and_then(|n| n.to_str()) {
                 // Match pattern: {stem}.{number}.{ext}
                 let prefix = format!("{}.", stem);
                 let suffix = format!(".{}", ext);
-                
+
                 if filename.starts_with(&prefix) && filename.ends_with(&suffix) {
                     let middle = &filename[prefix.len()..filename.len() - suffix.len()];
                     if let Ok(index) = middle.parse::<u32>() {
@@ -62,7 +62,7 @@ pub fn find_next_size_index(base_path: &PathBuf) -> u32 {
             }
         }
     }
-    
+
     max_index + 1
 }
 
@@ -90,45 +90,42 @@ pub fn open_log_file(path: &PathBuf) -> Result<File, std::io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
+    OpenOptions::new().create(true).append(true).open(path)
 }
 
 /// Cleanup old rotated files, keeping only max_files most recent ones
-/// 
+///
 /// Scans directory for files matching the pattern: {stem}.*.{ext}
 /// Sorts by modification time and removes oldest files exceeding max_files
 pub fn cleanup_old_files(base_path: &PathBuf, max_files: usize) {
     if max_files == 0 {
         return; // 0 means unlimited
     }
-    
+
     let parent = match base_path.parent() {
         Some(p) => p,
         None => return,
     };
-    
+
     let stem = base_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let ext = base_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    
+
     // Pattern: {stem}.*.{ext} (e.g., "access.2025-12-05.log")
     let pattern_prefix = format!("{}.", stem);
     let pattern_suffix = format!(".{}", ext);
-    
+
     // Collect matching files with their modification times
     let mut files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
-    
+
     if let Ok(entries) = fs::read_dir(parent) {
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                 // Match pattern: starts with "{stem}." and ends with ".{ext}"
                 // But exclude the base file itself (no date suffix)
-                if filename.starts_with(&pattern_prefix) 
+                if filename.starts_with(&pattern_prefix)
                     && filename.ends_with(&pattern_suffix)
-                    && filename != format!("{}.{}", stem, ext) 
+                    && filename != format!("{}.{}", stem, ext)
                 {
                     if let Ok(metadata) = entry.metadata() {
                         if let Ok(modified) = metadata.modified() {
@@ -139,10 +136,10 @@ pub fn cleanup_old_files(base_path: &PathBuf, max_files: usize) {
             }
         }
     }
-    
+
     // Sort by modification time (newest first)
     files.sort_by(|a, b| b.1.cmp(&a.1));
-    
+
     // Remove files exceeding max_files
     for (path, _) in files.into_iter().skip(max_files) {
         if let Err(e) = fs::remove_file(&path) {
@@ -152,4 +149,3 @@ pub fn cleanup_old_files(base_path: &PathBuf, max_files: usize) {
         }
     }
 }
-

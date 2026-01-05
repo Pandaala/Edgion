@@ -410,7 +410,7 @@ struct TreeStatistics {
     node_count: usize,
     child_count: usize,
     total_string_bytes: usize,
-    total_values_external: usize,  // Values that need external storage (count > 2)
+    total_values_external: usize, // Values that need external storage (count > 2)
 }
 
 /// Recursively count nodes, children, string bytes, and external values in the build tree
@@ -540,7 +540,7 @@ impl FlatTreeBuilder {
         let node_index = self.nodes.len() as u32;
         let flat_node = FlatNode {
             prefix_offset,
-            children_offset: 0,  // Will be updated later
+            children_offset: 0, // Will be updated later
             values_data,
             prefix_len: prefix_len as u16,
             children_count: children_count as u16,

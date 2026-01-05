@@ -48,11 +48,7 @@ impl fmt::Display for IpRadixError {
                 write!(f, "invalid CIDR '{}': {}", input, reason)
             }
             IpRadixError::PrefixTooLong { prefix_len, max } => {
-                write!(
-                    f,
-                    "prefix length {} exceeds maximum {}",
-                    prefix_len, max
-                )
+                write!(f, "prefix length {} exceeds maximum {}", prefix_len, max)
             }
             IpRadixError::TooManyNodes { count, max } => {
                 write!(f, "tree has {} nodes, exceeds maximum {}", count, max)

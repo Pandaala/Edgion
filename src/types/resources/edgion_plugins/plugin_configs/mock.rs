@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Mock plugin configuration
@@ -70,7 +70,10 @@ impl MockConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
         if self.status_code < 100 || self.status_code >= 600 {
-            return Err(format!("Invalid status code: {}. Must be between 100 and 599", self.status_code));
+            return Err(format!(
+                "Invalid status code: {}. Must be between 100 and 599",
+                self.status_code
+            ));
         }
         Ok(())
     }

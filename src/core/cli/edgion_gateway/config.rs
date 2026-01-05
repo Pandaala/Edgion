@@ -1,8 +1,8 @@
+use crate::types::link_sys::StringOutput;
 use anyhow::{Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use crate::types::link_sys::StringOutput;
 
 /// Edgion Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
@@ -23,7 +23,12 @@ pub struct EdgionGatewayConfig {
     pub work_dir: Option<PathBuf>,
 
     /// Configuration file path (TOML format)
-    #[arg(short = 'c', long = "config-file", value_name = "FILE", default_value = "config/edgion-gateway.toml")]
+    #[arg(
+        short = 'c',
+        long = "config-file",
+        value_name = "FILE",
+        default_value = "config/edgion-gateway.toml"
+    )]
     #[serde(skip)]
     pub config_file: Option<String>,
 
@@ -47,7 +52,6 @@ pub struct EdgionGatewayConfig {
     #[serde(default)]
     pub server: ServerConfig,
 }
-
 
 /// Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
@@ -89,7 +93,7 @@ pub struct SslLogConfig {
     #[arg(skip)]
     #[serde(default)]
     pub output: StringOutput,
-    
+
     /// Enable SSL logging (default: true)
     #[arg(long = "ssl-log-enabled")]
     #[serde(default = "default_true")]
@@ -120,27 +124,27 @@ pub struct ServerConfig {
     #[arg(long = "threads", value_name = "NUM")]
     #[serde(default)]
     pub threads: Option<usize>,
-    
+
     /// Enable work stealing (default: true)
     #[arg(long = "work-stealing")]
     #[serde(default)]
     pub work_stealing: Option<bool>,
-    
+
     /// Grace period for shutdown in seconds (default: 30)
     #[arg(long = "grace-period", value_name = "SECS")]
     #[serde(default)]
     pub grace_period_seconds: Option<u64>,
-    
+
     /// Graceful shutdown timeout in seconds (default: 10)
     #[arg(long = "graceful-shutdown-timeout", value_name = "SECS")]
     #[serde(default)]
     pub graceful_shutdown_timeout_seconds: Option<u64>,
-    
+
     /// Upstream keepalive pool size (default: 128)
     #[arg(long = "upstream-keepalive-pool-size", value_name = "SIZE")]
     #[serde(default)]
     pub upstream_keepalive_pool_size: Option<usize>,
-    
+
     /// Error log file path (optional)
     #[arg(long = "error-log", value_name = "FILE")]
     #[serde(default)]
@@ -262,7 +266,7 @@ impl EdgionGatewayConfig {
         if cli.work_dir.is_some() {
             base.work_dir = cli.work_dir.clone();
         }
-        
+
         // Gateway config
         if cli.gateway.server_addr.is_some() {
             base.gateway.server_addr = cli.gateway.server_addr.clone();
@@ -284,7 +288,7 @@ impl EdgionGatewayConfig {
 
         // Access log config (CLI doesn't support overriding, only from file)
         // No merge needed as there are no CLI args for access_log
-        
+
         // SSL log config (CLI doesn't support overriding, only from file)
         // No merge needed as there are no CLI args for ssl_log
     }
@@ -327,4 +331,3 @@ impl EdgionGatewayConfig {
         }
     }
 }
-

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 
-use crate::core::cli::edgion_ctl::client::{EdgionClient, parse_json_response};
-use crate::core::cli::edgion_ctl::output::{OutputFormat, print_resource, print_resource_list, print_error};
+use crate::core::cli::edgion_ctl::client::{parse_json_response, EdgionClient};
+use crate::core::cli::edgion_ctl::output::{print_error, print_resource, print_resource_list, OutputFormat};
 
 /// Get command - retrieves resources
 pub async fn get(
@@ -31,14 +31,15 @@ async fn get_resource(
     name: &str,
     output: OutputFormat,
 ) -> Result<()> {
-    let resp = client.get(kind, namespace, name)
+    let resp = client
+        .get(kind, namespace, name)
         .await
         .with_context(|| format!("Failed to get {} {}", kind, name))?;
-    
+
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        
+
         if status.as_u16() == 404 {
             print_error(&format!("{} {} not found", kind, name));
             anyhow::bail!("Resource not found");
@@ -47,55 +48,47 @@ async fn get_resource(
             anyhow::bail!("Request failed");
         }
     }
-    
+
     let data = parse_json_response(resp).await?;
     print_resource(&data, output)?;
-    
+
     Ok(())
 }
 
 /// List resources in a namespace
-async fn list_namespaced(
-    client: &EdgionClient,
-    kind: &str,
-    namespace: &str,
-    output: OutputFormat,
-) -> Result<()> {
-    let resp = client.list_namespaced(kind, namespace)
+async fn list_namespaced(client: &EdgionClient, kind: &str, namespace: &str, output: OutputFormat) -> Result<()> {
+    let resp = client
+        .list_namespaced(kind, namespace)
         .await
         .with_context(|| format!("Failed to list {} in namespace {}", kind, namespace))?;
-    
+
     if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
         print_error(&format!("Failed to list resources: {}", body));
         anyhow::bail!("Request failed");
     }
-    
+
     let data = parse_json_response(resp).await?;
     print_resource_list(&data, output)?;
-    
+
     Ok(())
 }
 
 /// List all resources across namespaces
-async fn list_all(
-    client: &EdgionClient,
-    kind: &str,
-    output: OutputFormat,
-) -> Result<()> {
-    let resp = client.list_all(kind)
+async fn list_all(client: &EdgionClient, kind: &str, output: OutputFormat) -> Result<()> {
+    let resp = client
+        .list_all(kind)
         .await
         .with_context(|| format!("Failed to list {}", kind))?;
-    
+
     if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
         print_error(&format!("Failed to list resources: {}", body));
         anyhow::bail!("Request failed");
     }
-    
+
     let data = parse_json_response(resp).await?;
     print_resource_list(&data, output)?;
-    
+
     Ok(())
 }
-

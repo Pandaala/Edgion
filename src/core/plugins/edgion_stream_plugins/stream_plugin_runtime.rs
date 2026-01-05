@@ -1,9 +1,9 @@
 //! Stream plugin runtime for executing stream plugins
 
-use std::sync::Arc;
-use super::stream_plugin_trait::{StreamPlugin, StreamPluginResult, StreamContext};
 use super::ip_restriction::StreamIpRestriction;
-use crate::types::resources::edgion_stream_plugins::{StreamPluginEntry, EdgionStreamPlugin};
+use super::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
+use crate::types::resources::edgion_stream_plugins::{EdgionStreamPlugin, StreamPluginEntry};
+use std::sync::Arc;
 
 /// Runtime for executing stream plugins
 #[derive(Clone)]
@@ -29,9 +29,7 @@ impl Default for StreamPluginRuntime {
 impl StreamPluginRuntime {
     /// Create an empty runtime
     pub fn new() -> Self {
-        Self {
-            plugins: Vec::new(),
-        }
+        Self { plugins: Vec::new() }
     }
 
     /// Create runtime from stream plugin entries
@@ -41,25 +39,17 @@ impl StreamPluginRuntime {
         for entry in entries {
             // Skip disabled plugins
             if !entry.is_enabled() {
-                tracing::debug!(
-                    plugin_type = entry.type_name(),
-                    "Skipping disabled stream plugin"
-                );
+                tracing::debug!(plugin_type = entry.type_name(), "Skipping disabled stream plugin");
                 continue;
             }
 
             // Create plugin based on type
             let plugin: Option<Arc<dyn StreamPlugin>> = match &entry.plugin {
-                EdgionStreamPlugin::IpRestriction(config) => {
-                    Some(Arc::new(StreamIpRestriction::new(config)))
-                }
+                EdgionStreamPlugin::IpRestriction(config) => Some(Arc::new(StreamIpRestriction::new(config))),
             };
 
             if let Some(p) = plugin {
-                tracing::debug!(
-                    plugin_name = p.name(),
-                    "Added stream plugin to runtime"
-                );
+                tracing::debug!(plugin_name = p.name(), "Added stream plugin to runtime");
                 plugins.push(p);
             }
         }
@@ -103,4 +93,3 @@ impl StreamPluginRuntime {
         self.plugins.is_empty()
     }
 }
-

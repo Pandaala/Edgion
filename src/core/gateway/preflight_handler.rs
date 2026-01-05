@@ -40,8 +40,7 @@ impl PreflightHandler {
             PreflightMode::AllOptions => true,
             PreflightMode::CorsStandard => {
                 // CORS standard: must have Origin + Access-Control-Request-Method
-                self.has_header(session, "origin")
-                    && self.has_header(session, "access-control-request-method")
+                self.has_header(session, "origin") && self.has_header(session, "access-control-request-method")
             }
         }
     }
@@ -73,21 +72,13 @@ impl PreflightHandler {
         }
 
         // No CORS config: return simple empty response
-        let status = self
-            .policy
-            .as_ref()
-            .map(|p| p.status_code)
-            .unwrap_or(204);
+        let status = self.policy.as_ref().map(|p| p.status_code).unwrap_or(204);
 
         tracing::debug!(status = status, "Preflight handled without CORS config");
 
         let resp = ResponseHeader::build(status, None)?;
-        session
-            .write_response_header(Box::new(resp), true)
-            .await?;
-        session
-            .write_response_body(Some(Bytes::new()), true)
-            .await?;
+        session.write_response_header(Box::new(resp), true).await?;
+        session.write_response_body(Some(Bytes::new()), true).await?;
 
         Ok(true) // Terminate request
     }
@@ -111,9 +102,7 @@ mod tests {
 
         // Create a mock session with OPTIONS + Origin + Access-Control-Request-Method
         let mut req_header = RequestHeader::build("OPTIONS", b"/", None).unwrap();
-        req_header
-            .insert_header("Origin", "https://example.com")
-            .unwrap();
+        req_header.insert_header("Origin", "https://example.com").unwrap();
         req_header
             .insert_header("Access-Control-Request-Method", "POST")
             .unwrap();
@@ -133,4 +122,3 @@ mod tests {
         // Test logic would go here once we have proper Session mocking
     }
 }
-

@@ -1,18 +1,18 @@
-use pingora_proxy::Session;
-use std::sync::Arc;
-use crate::types::{EdgionHttpContext, EdgionStatus};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::{HTTPRouteFilter, HTTPRouteFilterType, CorsConfig, EdgionPlugin};
+use super::EdgionHttp;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
 use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 use crate::core::routes::grpc_routes::try_match_grpc_route;
-use super::EdgionHttp;
+use crate::types::filters::PluginRunningResult;
+use crate::types::resources::{CorsConfig, EdgionPlugin, HTTPRouteFilter, HTTPRouteFilterType};
+use crate::types::{EdgionHttpContext, EdgionStatus};
+use pingora_proxy::Session;
+use std::sync::Arc;
 
 #[inline]
 pub async fn request_filter(
     edgion_http: &EdgionHttp,
     session: &mut Session,
-    ctx: &mut EdgionHttpContext
+    ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<bool> {
     // Build request metadata (addresses, hostname, path, trace_id, protocol)
     // Validates XFF length and hostname presence, returns true if response sent
@@ -30,14 +30,17 @@ pub async fn request_filter(
                 return Ok(true);
             }
         }
-        
+
         // Try to match gRPC route (sets ctx.is_grpc_route_matched internally if matched)
         let _ = try_match_grpc_route(&edgion_http.grpc_routes, session, ctx, &edgion_http.listener.name).await;
     }
-    
+
     // HTTP route Match, if grpc route already matched, skip here
     if !ctx.is_grpc_route_matched {
-        match edgion_http.domain_routes.match_route(&ctx.request_info.hostname, session, &edgion_http.listener.name) {
+        match edgion_http
+            .domain_routes
+            .match_route(&ctx.request_info.hostname, session, &edgion_http.listener.name)
+        {
             Ok(route_unit) => {
                 ctx.route_unit = Some(route_unit.clone());
             }
@@ -65,7 +68,11 @@ pub async fn request_filter(
         };
 
         // Handle preflight request
-        match edgion_http.preflight_handler.handle_preflight(session, ctx, cors_config.as_ref()).await {
+        match edgion_http
+            .preflight_handler
+            .handle_preflight(session, ctx, cors_config.as_ref())
+            .await
+        {
             Ok(true) => {
                 // Preflight handled, terminate request
                 tracing::debug!("Preflight request handled, terminating");
@@ -81,30 +88,39 @@ pub async fn request_filter(
             }
         }
     }
-    
+
     // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
     if let Some(ref plugin_refs) = edgion_http.edgion_gateway_config.spec.global_plugins_ref {
         for plugin_ref in plugin_refs {
             // Construct plugin key: namespace/name
-            let plugin_key = format!("{}/{}", 
+            let plugin_key = format!(
+                "{}/{}",
                 plugin_ref.namespace.as_deref().unwrap_or("default"),
                 plugin_ref.name
             );
-            
+
             // Get plugin from global store
             if let Some(edgion_plugin) = get_global_plugin_store().get(&plugin_key) {
-                edgion_plugin.spec.plugin_runtime.run_request_plugins(session, ctx).await;
+                edgion_plugin
+                    .spec
+                    .plugin_runtime
+                    .run_request_plugins(session, ctx)
+                    .await;
                 if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
                     return Ok(true);
                 }
             }
         }
     }
-    
+
     // Step 3: Run route-level plugins based on matched route type
     if let Some(grpc_route_unit) = ctx.grpc_route_unit.clone() {
         // Run gRPC route plugins (inline for consistency with HTTP route handling)
-        grpc_route_unit.rule.plugin_runtime.run_request_plugins(session, ctx).await;
+        grpc_route_unit
+            .rule
+            .plugin_runtime
+            .run_request_plugins(session, ctx)
+            .await;
         if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
             return Ok(true);
         }
@@ -115,10 +131,10 @@ pub async fn request_filter(
             return Ok(true);
         }
     }
-    
+
     set_x_real_ip(session, ctx);
     append_x_forwarded_for(session, ctx);
-    
+
     Ok(false)
 }
 
@@ -129,7 +145,7 @@ pub async fn request_filter(
 async fn build_request_metadata(
     edgion_http: &EdgionHttp,
     session: &mut Session,
-    ctx: &mut EdgionHttpContext
+    ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<bool> {
     let req_header = session.req_header();
 
@@ -143,7 +159,7 @@ async fn build_request_metadata(
                 }
             }
         }
-        
+
         // Check for gRPC/gRPC-Web (if not WebSocket)
         if ctx.request_info.discover_protocol.is_none() {
             if let Some(ct) = req_header.headers.get("content-type") {
@@ -167,7 +183,7 @@ async fn build_request_metadata(
         .map(|a| a.ip().to_string())
         .unwrap_or_else(|| client_addr_str.clone());
     ctx.request_info.client_port = parsed_addr.map(|a| a.port()).unwrap_or(0);
-    
+
     // Extract remote_addr (real client IP, considering trusted proxies)
     ctx.request_info.remote_addr = if let Some(extractor) = &edgion_http.real_ip_extractor {
         extractor.extract_real_ip(&client_addr_str, req_header)
@@ -178,19 +194,31 @@ async fn build_request_metadata(
 
     // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback)
     // In HTTP/2, Pingora puts the hostname in the URI, not as a separate header
-    ctx.request_info.hostname = req_header.uri.host()
+    ctx.request_info.hostname = req_header
+        .uri
+        .host()
         .map(|h| h.to_string())
-        .or_else(|| req_header.headers.get("host").and_then(|h| h.to_str().ok().map(|s| s.to_string())))
-        .or_else(|| req_header.headers.get(":authority").and_then(|h| h.to_str().ok().map(|s| s.to_string())))
+        .or_else(|| {
+            req_header
+                .headers
+                .get("host")
+                .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+        })
+        .or_else(|| {
+            req_header
+                .headers
+                .get(":authority")
+                .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+        })
         .unwrap_or_default();
-    
+
     // Validate hostname is present (not required for gRPC requests)
     if !ctx.request_info.is_grpc_request && ctx.request_info.hostname.is_empty() {
         ctx.add_error(EdgionStatus::HostMissing);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true); // Response sent
     }
-    
+
     // Extract request path
     ctx.request_info.path = req_header.uri.path().to_string();
 
@@ -224,7 +252,7 @@ async fn build_request_metadata(
             }
         }
     }
-    
+
     Ok(false) // Continue processing
 }
 
@@ -233,13 +261,10 @@ async fn build_request_metadata(
 /// This function always appends the client IP to maintain the proxy chain,
 /// regardless of trusted proxy configuration.
 #[inline]
-fn append_x_forwarded_for(
-    session: &mut Session, 
-    ctx: &EdgionHttpContext
-) {
+fn append_x_forwarded_for(session: &mut Session, ctx: &EdgionHttpContext) {
     // client_addr is already IP only (without port)
     let client_ip = &ctx.request_info.client_addr;
-    
+
     // Append client IP to X-Forwarded-For (using pre-extracted value)
     let req_header_mut = session.req_header_mut();
     if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
@@ -262,7 +287,7 @@ fn set_x_real_ip(session: &mut Session, ctx: &EdgionHttpContext) {
 }
 
 /// Extract CORS configuration dynamically from route filters
-/// 
+///
 /// This function searches through route filters to find EdgionPlugins references
 /// and extracts the CORS configuration from the global plugin store.
 /// This ensures we always get the latest CORS config even if EdgionPlugin is updated.
@@ -271,25 +296,23 @@ fn extract_cors_config_from_route_filters(
     namespace: &str,
 ) -> Option<Arc<CorsConfig>> {
     let filters = filters.as_ref()?;
-    
+
     for filter in filters {
         if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
             continue;
         }
-        
+
         let ext_ref = filter.extension_ref.as_ref()?;
-        
+
         // Check if it's EdgionPlugins
-        if ext_ref.kind != "EdgionPlugins"
-            || (!ext_ref.group.is_empty() && ext_ref.group != "edgion.io")
-        {
+        if ext_ref.kind != "EdgionPlugins" || (!ext_ref.group.is_empty() && ext_ref.group != "edgion.io") {
             continue;
         }
-        
+
         // Look up EdgionPlugins in global store with namespace/name key
         let key = format!("{}/{}", namespace, ext_ref.name);
         let store = get_global_plugin_store();
-        
+
         if let Some(edgion_plugins) = store.get(&key) {
             // Search for CORS plugin in request_plugins
             if let Some(ref entries) = edgion_plugins.spec.request_plugins {
@@ -303,7 +326,6 @@ fn extract_cors_config_from_route_filters(
             }
         }
     }
-    
+
     None
 }
-

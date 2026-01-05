@@ -9,7 +9,7 @@
 // - EdgionTls_edge_edge-tls.yaml              # TLS 证书配置
 // - Secret_edge_edge-tls.yaml                 # TLS 证书 Secret
 // - GatewayClass__public-gateway.yaml         # GatewayClass 配置
-// 
+//
 // 生成的证书文件：
 // - examples/testing/certs/server.crt         # 服务端证书（由 generate_certs.sh 生成）
 // - examples/testing/certs/server.key         # 服务端私钥
@@ -32,34 +32,27 @@ pub struct GrpcTlsTestSuite;
 impl GrpcTlsTestSuite {
     /// 测试 gRPC over TLS SayHello RPC
     fn test_grpc_tls_say_hello() -> TestCase {
-        TestCase::new(
-            "grpc_tls_say_hello",
-            "gRPC TLS SayHello 测试",
-            |ctx: TestContext| Box::pin(async move {
+        TestCase::new("grpc_tls_say_hello", "gRPC TLS SayHello 测试", |ctx: TestContext| {
+            Box::pin(async move {
                 let start = Instant::now();
-                
+
                 // 构建 HTTPS 连接 URL
                 let grpc_url = format!("https://127.0.0.1:{}", ctx.grpc_https_port);
-                
+
                 // 读取 CA 证书
                 let ca_pem = match std::fs::read_to_string("examples/testing/certs/ca.pem") {
                     Ok(pem) => pem,
                     Err(e) => {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("Failed to read CA certificate: {}", e)
-                        );
+                        return TestResult::failed(start.elapsed(), format!("Failed to read CA certificate: {}", e));
                     }
                 };
-                
+
                 let ca = Certificate::from_pem(ca_pem);
-                
+
                 // 配置 TLS - 使用 CA 证书和 domain_name
                 let domain_name = ctx.grpc_host.as_deref().unwrap_or("localhost");
-                let tls = ClientTlsConfig::new()
-                    .ca_certificate(ca)
-                    .domain_name(domain_name);
-                
+                let tls = ClientTlsConfig::new().ca_certificate(ca).domain_name(domain_name);
+
                 // 创建 Channel
                 let channel = match Channel::from_shared(grpc_url.clone()) {
                     Ok(mut endpoint) => {
@@ -68,50 +61,39 @@ impl GrpcTlsTestSuite {
                             let origin_uri = match format!("https://{}:{}", host, ctx.grpc_https_port).parse() {
                                 Ok(uri) => uri,
                                 Err(e) => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!("Invalid origin URI: {}", e)
-                                    );
+                                    return TestResult::failed(start.elapsed(), format!("Invalid origin URI: {}", e));
                                 }
                             };
                             endpoint = endpoint.origin(origin_uri);
                         }
-                        
+
                         match endpoint.tls_config(tls) {
-                            Ok(ep) => {
-                                match ep.connect().await {
-                                    Ok(ch) => ch,
-                                    Err(e) => {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("Failed to connect to {}: {}", grpc_url, e)
-                                        );
-                                    }
+                            Ok(ep) => match ep.connect().await {
+                                Ok(ch) => ch,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Failed to connect to {}: {}", grpc_url, e),
+                                    );
                                 }
                             },
                             Err(e) => {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Failed to configure TLS: {}", e)
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Failed to configure TLS: {}", e));
                             }
                         }
-                    },
+                    }
                     Err(e) => {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("Invalid endpoint: {}", e)
-                        );
+                        return TestResult::failed(start.elapsed(), format!("Invalid endpoint: {}", e));
                     }
                 };
-                
+
                 let mut client = TestServiceClient::new(channel);
-                
+
                 // 创建请求 - 与 grpc_suite 完全一致
                 let request = tonic::Request::new(HelloRequest {
                     name: "Edgion".to_string(),
                 });
-                
+
                 match client.say_hello(request).await {
                     Ok(response) => {
                         let reply = response.into_inner();
@@ -123,21 +105,16 @@ impl GrpcTlsTestSuite {
                             };
                             TestResult::passed_with_message(start.elapsed(), msg)
                         } else {
-                            TestResult::failed(
-                                start.elapsed(),
-                                format!("Unexpected response: {}", reply.message)
-                            )
+                            TestResult::failed(start.elapsed(), format!("Unexpected response: {}", reply.message))
                         }
-                    },
-                    Err(e) => {
-                        TestResult::failed(
-                            start.elapsed(),
-                            format!("RPC failed: {} (status: {:?})", e.message(), e.code())
-                        )
                     }
+                    Err(e) => TestResult::failed(
+                        start.elapsed(),
+                        format!("RPC failed: {} (status: {:?})", e.message(), e.code()),
+                    ),
                 }
             })
-        )
+        })
     }
 }
 
@@ -146,12 +123,8 @@ impl TestSuite for GrpcTlsTestSuite {
     fn name(&self) -> &str {
         "gRPC-TLS"
     }
-    
+
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::test_grpc_tls_say_hello(),
-        ]
+        vec![Self::test_grpc_tls_say_hello()]
     }
 }
-
-

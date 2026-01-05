@@ -54,7 +54,6 @@ pub struct CorsConfig {
     pub timing_allow_origins_by_regex: Option<Vec<String>>,
 
     // === Cached/computed values ===
-
     /// Parsed origins as HashMap for O(1) lookup
     #[serde(skip)]
     #[schemars(skip)]
@@ -133,34 +132,21 @@ impl CorsConfig {
         // Security check: credentials with wildcards
         if self.allow_credentials {
             if self.allow_origins.contains('*') {
-                return Err(
-                    "Cannot use '*' or '**' in allow_origins when allow_credentials is true"
-                        .to_string()
-                );
+                return Err("Cannot use '*' or '**' in allow_origins when allow_credentials is true".to_string());
             }
             if self.allow_methods.contains('*') {
-                return Err(
-                    "Cannot use '*' or '**' in allow_methods when allow_credentials is true"
-                        .to_string()
-                );
+                return Err("Cannot use '*' or '**' in allow_methods when allow_credentials is true".to_string());
             }
             if self.allow_headers.contains('*') {
-                return Err(
-                    "Cannot use '*' or '**' in allow_headers when allow_credentials is true"
-                        .to_string()
-                );
+                return Err("Cannot use '*' or '**' in allow_headers when allow_credentials is true".to_string());
             }
             if self.expose_headers.contains('*') {
-                return Err(
-                    "Cannot use '*' or '**' in expose_headers when allow_credentials is true"
-                        .to_string()
-                );
+                return Err("Cannot use '*' or '**' in expose_headers when allow_credentials is true".to_string());
             }
             if let Some(ref timing) = self.timing_allow_origins {
                 if timing.contains('*') {
                     return Err(
-                        "Cannot use '*' or '**' in timing_allow_origins when allow_credentials is true"
-                            .to_string()
+                        "Cannot use '*' or '**' in timing_allow_origins when allow_credentials is true".to_string(),
                     );
                 }
             }
@@ -216,10 +202,8 @@ impl CorsConfig {
                 .collect::<Vec<_>>()
                 .join("|");
 
-            self.compiled_origins_regex = Some(
-                Regex::new(&merged)
-                    .map_err(|e| format!("Invalid regex pattern: {}", e))?
-            );
+            self.compiled_origins_regex =
+                Some(Regex::new(&merged).map_err(|e| format!("Invalid regex pattern: {}", e))?);
         }
 
         // Compile regex patterns for timing origins
@@ -233,7 +217,7 @@ impl CorsConfig {
 
                 self.compiled_timing_regex = Some(
                     Regex::new(&merged)
-                        .map_err(|e| format!("Invalid regex in timing_allow_origins_by_regex: {}", e))?
+                        .map_err(|e| format!("Invalid regex in timing_allow_origins_by_regex: {}", e))?,
                 );
             }
         }
@@ -348,7 +332,10 @@ mod tests {
         // Security-first defaults
         assert_eq!(cors.allow_origins, ""); // No origins allowed by default
         assert_eq!(cors.allow_methods, "GET,HEAD,OPTIONS"); // Only safe methods
-        assert_eq!(cors.allow_headers, "Accept,Accept-Language,Content-Language,Content-Type,Range");
+        assert_eq!(
+            cors.allow_headers,
+            "Accept,Accept-Language,Content-Language,Content-Type,Range"
+        );
         assert_eq!(cors.expose_headers, ""); // No extra headers exposed
         assert!(!cors.allow_credentials);
         assert_eq!(cors.max_age, None);

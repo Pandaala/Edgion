@@ -1,15 +1,15 @@
 //! Backend-agnostic API for TLS operations
-//! 
+//!
 //! This module provides unified interfaces that dispatch to backend-specific
 //! implementations based on compile-time features. When adding a new TLS backend,
 //! add the corresponding implementation branch to these functions.
 
-use pingora_core::tls::ssl::{SslRef, SslVerifyMode};
 use crate::types::resources::edgion_tls::EdgionTls;
+use pingora_core::tls::ssl::{SslRef, SslVerifyMode};
 use std::sync::Arc;
 
 /// Set mTLS whitelist verification callback for SSL connection
-/// 
+///
 /// This unified interface internally dispatches to the appropriate backend
 /// implementation based on compile features. When adding a new backend,
 /// simply add a new cfg branch here.
@@ -29,10 +29,12 @@ pub fn set_mtls_verify_callback(
     #[cfg(feature = "boringssl")]
     {
         crate::core::tls::boringssl::mtls_verify_callback::set_verify_callback_with_whitelist(
-            ssl, verify_mode, edgion_tls
+            ssl,
+            verify_mode,
+            edgion_tls,
         )
     }
-    
+
     #[cfg(all(feature = "openssl", not(feature = "boringssl")))]
     {
         // OpenSSL custom verify callback not yet implemented
@@ -45,4 +47,3 @@ pub fn set_mtls_verify_callback(
 // Example:
 // - pub fn configure_session_cache(...)
 // - pub fn set_alpn_protocols(...)
-

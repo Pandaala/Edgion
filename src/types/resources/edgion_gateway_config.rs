@@ -67,27 +67,27 @@ pub struct ServerConfig {
     /// Number of worker threads (default: number of CPU cores)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub threads: Option<u32>,
-    
+
     /// Enable work stealing (default: true)
     #[serde(default = "default_work_stealing")]
     pub work_stealing: bool,
-    
+
     /// Grace period for shutdown in seconds (default: 30)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grace_period_seconds: Option<u64>,
-    
+
     /// Graceful shutdown timeout in seconds (default: 10)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graceful_shutdown_timeout_s: Option<u64>,
-    
+
     /// Upstream keepalive pool size (default: 128)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_keepalive_pool_size: Option<u32>,
-    
+
     /// Error log file path
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_log: Option<String>,
-    
+
     /// Enable downstream response compression (default: false)
     #[serde(default)]
     pub enable_compression: bool,
@@ -207,7 +207,7 @@ pub struct RealIpConfig {
     /// When client_addr matches one of these CIDRs, we extract real IP from the header
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
-    
+
     /// Header to extract real IP from (default: "X-Forwarded-For")
     /// Supports comma-separated list (e.g., "ip1, ip2, ip3")
     /// Extraction uses Nginx-style logic: traverse from right to left, find first non-trusted IP
@@ -277,13 +277,13 @@ pub struct SecurityProtectConfig {
     /// Requests with X-Forwarded-For headers exceeding this limit will be rejected with 400 Bad Request
     #[serde(default = "default_xff_limit")]
     pub x_forwarded_for_limit: usize,
-    
+
     /// Require SNI and Host header to match for HTTPS requests (default: true)
     /// When enabled, HTTPS requests with mismatched SNI and Host will be rejected with 421 Misdirected Request
     /// HTTP requests (no SNI) are not affected by this validation
     #[serde(default = "default_require_sni_host_match")]
     pub require_sni_host_match: bool,
-    
+
     /// Fallback SNI hostname to use when client doesn't provide SNI in TLS handshake
     /// If not set, requests without SNI will fail with certificate error
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -309,7 +309,7 @@ pub struct PreflightPolicy {
     /// Preflight detection mode (default: cors-standard)
     #[serde(default = "default_preflight_mode")]
     pub mode: PreflightMode,
-    
+
     /// Status code to return when no CORS plugin is configured (default: 204)
     #[serde(default = "default_preflight_status_code")]
     pub status_code: u16,
@@ -343,7 +343,7 @@ fn default_preflight_status_code() -> u16 {
 pub struct PluginReference {
     /// Name of the EdgionPlugins resource
     pub name: String,
-    
+
     /// Namespace of the EdgionPlugins resource (defaults to "default")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,

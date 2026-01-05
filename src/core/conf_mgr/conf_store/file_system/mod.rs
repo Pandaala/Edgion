@@ -20,19 +20,18 @@ impl FileSystemStore {
                 .map(|cwd| cwd.join(&root_path))
                 .unwrap_or(root_path)
         };
-        
+
         tracing::info!(
             component = "file_system_store",
             event = "init",
             root = ?root_abs,
             "Initialized FileSystemStore"
         );
-        
+
         Arc::new(Self { root: root_abs })
     }
-    
+
     pub fn root(&self) -> &PathBuf {
         &self.root
     }
 }
-

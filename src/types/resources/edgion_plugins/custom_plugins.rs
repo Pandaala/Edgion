@@ -33,4 +33,3 @@
 //!     pub key: Option<String>,
 //! }
 //! ```
-

@@ -1,7 +1,7 @@
+use crate::core::conf_mgr::{ResourceMgrAPI, SchemaValidator};
+use crate::core::conf_sync::ConfigServer;
 use serde::Serialize;
 use std::sync::Arc;
-use crate::core::conf_sync::ConfigServer;
-use crate::core::conf_mgr::{ResourceMgrAPI, SchemaValidator};
 
 /// Admin state containing ConfigServer, optional ResourceMgrAPI, and SchemaValidator
 pub struct AdminState {
@@ -69,4 +69,3 @@ impl<T> ListResponse<T> {
         }
     }
 }
-

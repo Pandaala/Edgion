@@ -2,11 +2,11 @@
 //!
 //! EdgionStreamPlugins defines reusable plugin configurations for stream routes (TCP/UDP)
 
-use std::sync::Arc;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::core::plugins::StreamPluginRuntime;
 
@@ -18,11 +18,7 @@ pub use crate::types::resources::edgion_plugins::{ConditionEnable, PluginEntry};
 pub use stream_plugins::EdgionStreamPlugin;
 
 // Re-export plugin configs
-pub use crate::types::resources::edgion_plugins::{
-    IpRestrictionConfig,
-    IpSource,
-    DefaultAction,
-};
+pub use crate::types::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig, IpSource};
 
 /// API group for EdgionStreamPlugins
 pub const EDGION_STREAM_PLUGINS_GROUP: &str = "edgion.io";
@@ -137,13 +133,7 @@ impl EdgionStreamPlugins {
         self.spec
             .plugins
             .as_ref()
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter(|e| e.is_enabled())
-                    .map(|e| &e.plugin)
-                    .collect()
-            })
+            .map(|entries| entries.iter().filter(|e| e.is_enabled()).map(|e| &e.plugin).collect())
             .unwrap_or_default()
     }
 
@@ -155,4 +145,3 @@ impl EdgionStreamPlugins {
         }
     }
 }
-

@@ -26,7 +26,7 @@ pub enum EdError {
 
     #[error("Sni not match_engine: {0}")]
     SniNotMatch(String),
-    
+
     #[error("Route match error: {0}")]
     RouteMatchError(String),
 

@@ -42,7 +42,7 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
 
     // Create daily rotating file appender
     let file_appender = tracing_appender::rolling::daily(&config.log_dir, &config.file_prefix);
-    
+
     // Wrap with non_blocking for async writes
     // This creates a background OS thread (not a Tokio task) that handles actual writes
     // The guard MUST be kept alive, otherwise the background thread will shut down
@@ -52,8 +52,7 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
     // We need to handle different layer types separately due to type constraints
     if config.json_format {
         // Build env filter
-        let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(&config.level));
+        let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
 
         // JSON format file layer
         let file_layer = tracing_subscriber::fmt::layer()
@@ -64,9 +63,7 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
             .with_current_span(false)
             .with_ansi(false);
 
-        let subscriber = tracing_subscriber::registry()
-            .with(env_filter)
-            .with(file_layer);
+        let subscriber = tracing_subscriber::registry().with(env_filter).with(file_layer);
 
         if config.console {
             let console_layer = tracing_subscriber::fmt::layer()
@@ -78,9 +75,8 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
             subscriber.try_init()?;
         }
     } else {
-    // Build env filter
-        let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(&config.level));
+        // Build env filter
+        let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
 
         // Plain text format file layer
         let file_layer = tracing_subscriber::fmt::layer()
@@ -89,18 +85,16 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
             .with_line_number(true)
             .with_ansi(false);
 
-        let subscriber = tracing_subscriber::registry()
-            .with(env_filter)
-            .with(file_layer);
+        let subscriber = tracing_subscriber::registry().with(env_filter).with(file_layer);
 
-    if config.console {
-        let console_layer = tracing_subscriber::fmt::layer()
-            .with_target(true)
+        if config.console {
+            let console_layer = tracing_subscriber::fmt::layer()
+                .with_target(true)
                 .with_line_number(true)
                 .with_ansi(true);
-        subscriber.with(console_layer).try_init()?;
-    } else {
-        subscriber.try_init()?;
+            subscriber.with(console_layer).try_init()?;
+        } else {
+            subscriber.try_init()?;
         }
     }
 
@@ -132,14 +126,17 @@ mod tests {
         // Test from Tokio task
         tokio::spawn(async {
             tracing::info!("Log from tokio task");
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
         // Test from regular thread
         std::thread::spawn(|| {
             tracing::info!("Log from regular thread");
-        }).join().unwrap();
+        })
+        .join()
+        .unwrap();
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 }
-

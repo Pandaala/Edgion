@@ -9,5 +9,5 @@ pub use basic_auth::BasicAuthConfig;
 pub use cors::CorsConfig;
 pub use csrf::CsrfConfig;
 pub use debug_access_log::DebugAccessLogToHeaderConfig;
-pub use ip_restriction::{IpRestrictionConfig, IpSource, DefaultAction};
+pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
 pub use mock::MockConfig;

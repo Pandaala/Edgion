@@ -29,9 +29,7 @@ impl TlsAccept for TlsCallback {
 
 impl TlsCallback {
     pub fn new(edgion_gateway_config: Arc<EdgionGatewayConfig>) -> Self {
-        Self {
-            edgion_gateway_config,
-        }
+        Self { edgion_gateway_config }
     }
 
     pub fn new_tls_settings_with_callback(
@@ -39,14 +37,14 @@ impl TlsCallback {
         enable_http2: bool,
     ) -> Result<TlsSettings> {
         let callback = Box::new(TlsCallback::new(edgion_gateway_config));
-        let mut settings = TlsSettings::with_callbacks(callback)
-            .map_err(|e| anyhow!("Failed to create TLS settings: {}", e))?;
-        
+        let mut settings =
+            TlsSettings::with_callbacks(callback).map_err(|e| anyhow!("Failed to create TLS settings: {}", e))?;
+
         // Enable HTTP/2 support if requested
         if enable_http2 {
             settings.enable_h2();
         }
-        
+
         Ok(settings)
     }
 
@@ -92,11 +90,17 @@ impl TlsCallback {
         // Load certificate
         let cert_pem = match edgion_tls.cert_pem() {
             Ok(pem) => pem,
-            Err(e) => { entry.error(format!("Failed to get cert: {}", e)); return; }
+            Err(e) => {
+                entry.error(format!("Failed to get cert: {}", e));
+                return;
+            }
         };
         let cert = match X509::from_pem(cert_pem.as_bytes()) {
             Ok(c) => c,
-            Err(e) => { entry.error(format!("Invalid cert PEM: {}", e)); return; }
+            Err(e) => {
+                entry.error(format!("Invalid cert PEM: {}", e));
+                return;
+            }
         };
         if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
             entry.error(format!("Failed to use cert: {}", e));
@@ -106,11 +110,17 @@ impl TlsCallback {
         // Load private key
         let key_pem = match edgion_tls.key_pem() {
             Ok(pem) => pem,
-            Err(e) => { entry.error(format!("Failed to get key: {}", e)); return; }
+            Err(e) => {
+                entry.error(format!("Failed to get key: {}", e));
+                return;
+            }
         };
         let key = match PKey::private_key_from_pem(key_pem.as_bytes()) {
             Ok(k) => k,
-            Err(e) => { entry.error(format!("Invalid key PEM: {}", e)); return; }
+            Err(e) => {
+                entry.error(format!("Invalid key PEM: {}", e));
+                return;
+            }
         };
         if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &key) {
             entry.error(format!("Failed to use key: {}", e));
@@ -160,37 +170,23 @@ impl TlsCallback {
         })?;
 
         // Parse CA certificate
-        let ca_cert = X509::from_pem(ca_pem.as_bytes()).map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!("Invalid CA certificate PEM: {}", e),
-            )
-        })?;
+        let ca_cert = X509::from_pem(ca_pem.as_bytes())
+            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Invalid CA certificate PEM: {}", e)))?;
 
         // Create X509 store and add CA certificate
         let mut store_builder = X509StoreBuilder::new().map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!("Failed to create X509 store: {}", e),
-            )
+            PingoraError::explain(ErrorType::InvalidCert, format!("Failed to create X509 store: {}", e))
         })?;
 
         store_builder.add_cert(ca_cert).map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!("Failed to add CA cert to store: {}", e),
-            )
+            PingoraError::explain(ErrorType::InvalidCert, format!("Failed to add CA cert to store: {}", e))
         })?;
 
         let store = store_builder.build();
 
         // Set the CA store for client certificate verification
-        ssl.set_verify_cert_store(store).map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!("Failed to set CA store: {}", e),
-            )
-        })?;
+        ssl.set_verify_cert_store(store)
+            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to set CA store: {}", e)))?;
 
         // Set verification mode based on mTLS mode
         let verify_mode = match client_auth.mode {
@@ -232,19 +228,20 @@ impl TlsCallback {
         // Set verify mode with custom callback for SAN/CN whitelist (if configured)
         if client_auth.allowed_sans.is_some() || client_auth.allowed_cns.is_some() {
             tracing::debug!("Setting custom verify callback for SAN/CN whitelist");
-            
+
             // Use backend_api unified interface, backend differences are centrally handled
             if let Err(e) = super::set_mtls_verify_callback(ssl, verify_mode, edgion_tls) {
                 tracing::error!(
                     "Failed to set mTLS verify callback: {}. \
-                    Make sure you're using a compatible TLS backend (BoringSSL).", e
+                    Make sure you're using a compatible TLS backend (BoringSSL).",
+                    e
                 );
                 return Err(PingoraError::explain(
                     ErrorType::InternalError,
                     format!("Failed to set verify callback: {}", e),
                 ));
             }
-            
+
             tracing::info!("Custom verify callback configured for SAN/CN whitelist");
         } else {
             // No whitelist, use standard verify mode
@@ -260,7 +257,7 @@ impl TlsCallback {
 
         Ok(())
     }
-    
+
     /// Configure minimum TLS version (similar to Cloudflare's Minimum TLS Version)
     fn configure_min_tls_version(
         &self,
@@ -295,18 +292,14 @@ impl TlsCallback {
         tracing::debug!(min_version = ?min_version, "Configured minimum TLS version");
         Ok(())
     }
-    
+
     /// Configure cipher list (similar to Nginx ssl_ciphers directive)
     ///
     /// Takes a list of cipher names in OpenSSL format and applies them via BoringSSL FFI.
     /// If configuration fails, logs a warning and continues with default ciphers.
     ///
     /// Note: TLS 1.3 ciphers are hardcoded in BoringSSL and cannot be configured.
-    fn configure_ciphers(
-        &self,
-        ssl: &mut SslRef,
-        ciphers: &[String],
-    ) -> Result<(), Box<PingoraError>> {
+    fn configure_ciphers(&self, ssl: &mut SslRef, ciphers: &[String]) -> Result<(), Box<PingoraError>> {
         if ciphers.is_empty() {
             return Ok(());
         }
@@ -359,4 +352,3 @@ impl TlsCallback {
         Ok(())
     }
 }
-

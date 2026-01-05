@@ -1,19 +1,19 @@
-mod types;
-mod common;
 mod cluster_handlers;
+mod common;
 mod namespaced_handlers;
+mod types;
 
+use crate::core::conf_mgr::{load_all_resources_from_store, ResourceMgrAPI, SchemaValidator};
+use crate::core::conf_sync::ConfigServer;
 use axum::{
     extract::State,
-    response::Json,
-    routing::{get, post, put, delete},
-    Router,
     http::StatusCode,
+    response::Json,
+    routing::{delete, get, post, put},
+    Router,
 };
 use serde::Serialize;
 use std::sync::Arc;
-use crate::core::conf_sync::ConfigServer;
-use crate::core::conf_mgr::{ResourceMgrAPI, SchemaValidator, load_all_resources_from_store};
 use types::AdminState;
 
 /// Standard API response format
@@ -62,7 +62,9 @@ async fn reload_all_resources(
         "All resources reloaded from storage"
     );
 
-    Ok(Json(types::ApiResponse::success("Resources reloaded successfully".to_string())))
+    Ok(Json(types::ApiResponse::success(
+        "Resources reloaded successfully".to_string(),
+    )))
 }
 
 // ============= Router Setup =============
@@ -82,24 +84,41 @@ pub fn create_admin_router(
     Router::new()
         // Health check
         .route("/health", get(health_check))
-
         // Cross-namespace query - List all resources of a kind
-        .route("/api/v1/namespaced/{kind}", get(namespaced_handlers::list_all_namespaces))
-
+        .route(
+            "/api/v1/namespaced/{kind}",
+            get(namespaced_handlers::list_all_namespaces),
+        )
         // Cluster-scoped resources
         .route("/api/v1/cluster/{kind}", get(cluster_handlers::list_cluster))
         .route("/api/v1/cluster/{kind}", post(cluster_handlers::create_cluster))
         .route("/api/v1/cluster/{kind}/{name}", get(cluster_handlers::get_cluster))
         .route("/api/v1/cluster/{kind}/{name}", put(cluster_handlers::update_cluster))
-        .route("/api/v1/cluster/{kind}/{name}", delete(cluster_handlers::delete_cluster))
-
+        .route(
+            "/api/v1/cluster/{kind}/{name}",
+            delete(cluster_handlers::delete_cluster),
+        )
         // Namespace-scoped resources
-        .route("/api/v1/namespaced/{kind}/{namespace}", get(namespaced_handlers::list_namespaced))
-        .route("/api/v1/namespaced/{kind}/{namespace}", post(namespaced_handlers::create_namespaced))
-        .route("/api/v1/namespaced/{kind}/{namespace}/{name}", get(namespaced_handlers::get_namespaced))
-        .route("/api/v1/namespaced/{kind}/{namespace}/{name}", put(namespaced_handlers::update_namespaced))
-        .route("/api/v1/namespaced/{kind}/{namespace}/{name}", delete(namespaced_handlers::delete_namespaced))
-
+        .route(
+            "/api/v1/namespaced/{kind}/{namespace}",
+            get(namespaced_handlers::list_namespaced),
+        )
+        .route(
+            "/api/v1/namespaced/{kind}/{namespace}",
+            post(namespaced_handlers::create_namespaced),
+        )
+        .route(
+            "/api/v1/namespaced/{kind}/{namespace}/{name}",
+            get(namespaced_handlers::get_namespaced),
+        )
+        .route(
+            "/api/v1/namespaced/{kind}/{namespace}/{name}",
+            put(namespaced_handlers::update_namespaced),
+        )
+        .route(
+            "/api/v1/namespaced/{kind}/{namespace}/{name}",
+            delete(namespaced_handlers::delete_namespaced),
+        )
         // Special operations
         .route("/api/v1/reload", post(reload_all_resources))
         .with_state(admin_state)

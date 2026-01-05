@@ -1,12 +1,12 @@
-use pingora_proxy::Session;
-use crate::types::EdgionHttpContext;
 use super::EdgionHttp;
+use crate::types::EdgionHttpContext;
+use pingora_proxy::Session;
 
 #[inline]
 pub async fn early_request_filter(
     edgion_http: &EdgionHttp,
     session: &mut Session,
-    _ctx: &mut EdgionHttpContext
+    _ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
     // Set client timeouts from pre-parsed config (no runtime overhead)
     let client_timeout = &edgion_http.parsed_timeouts.client;
@@ -16,4 +16,3 @@ pub async fn early_request_filter(
 
     Ok(())
 }
-

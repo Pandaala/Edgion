@@ -1,12 +1,12 @@
 //! RequestHeaderModifier filter implementation
-//! 
+//!
 //! This filter modifies request headers based on HTTPHeaderFilter configuration.
 
-use async_trait::async_trait;
-use crate::types::resources::{HTTPHeaderFilter, GRPCHeaderFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::core::plugins::plugin_runtime::traits::{RequestFilter, PluginSession};
 use crate::core::plugins::plugin_runtime::log::PluginLog;
+use crate::core::plugins::plugin_runtime::traits::{PluginSession, RequestFilter};
+use crate::types::filters::PluginRunningResult;
+use crate::types::resources::{GRPCHeaderFilter, HTTPHeaderFilter};
+use async_trait::async_trait;
 
 /// Filter that modifies request headers
 pub struct RequestHeaderModifierFilter {
@@ -27,7 +27,7 @@ impl RequestHeaderModifierFilter {
                 set: config.set,
                 add: config.add,
                 remove: config.remove,
-            }
+            },
         }
     }
 }
@@ -38,11 +38,7 @@ impl RequestFilter for RequestHeaderModifierFilter {
         "RequestHeaderModifier"
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        _log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, _log: &mut PluginLog) -> PluginRunningResult {
         self.modify_headers(session)
     }
 }
@@ -70,4 +66,3 @@ impl RequestHeaderModifierFilter {
         PluginRunningResult::GoodNext
     }
 }
-

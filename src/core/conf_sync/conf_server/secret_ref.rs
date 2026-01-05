@@ -1,5 +1,5 @@
 //! Secret Reference Manager
-//! 
+//!
 //! Manages the reference relationship between Secrets and resources that depend on them.
 //! Uses a bidirectional index for efficient lookups and updates.
 
@@ -18,11 +18,7 @@ pub struct ResourceRef {
 impl ResourceRef {
     /// Create a new ResourceRef
     pub fn new(kind: ResourceKind, namespace: Option<String>, name: String) -> Self {
-        Self {
-            kind,
-            namespace,
-            name,
-        }
+        Self { kind, namespace, name }
     }
 
     /// Generate a unique key for this resource
@@ -233,11 +229,7 @@ mod tests {
         );
         assert_eq!(ref1.key(), "EdgionTls/default/my-tls");
 
-        let ref2 = ResourceRef::new(
-            ResourceKind::EdgionTls,
-            None,
-            "cluster-tls".to_string(),
-        );
+        let ref2 = ResourceRef::new(ResourceKind::EdgionTls, None, "cluster-tls".to_string());
         assert_eq!(ref2.key(), "EdgionTls//cluster-tls");
     }
 
@@ -306,17 +298,9 @@ mod tests {
     #[test]
     fn test_multiple_resources_same_secret() {
         let manager = SecretRefManager::new();
-        
-        let res1 = ResourceRef::new(
-            ResourceKind::EdgionTls,
-            Some("default".to_string()),
-            "tls1".to_string(),
-        );
-        let res2 = ResourceRef::new(
-            ResourceKind::EdgionTls,
-            Some("default".to_string()),
-            "tls2".to_string(),
-        );
+
+        let res1 = ResourceRef::new(ResourceKind::EdgionTls, Some("default".to_string()), "tls1".to_string());
+        let res2 = ResourceRef::new(ResourceKind::EdgionTls, Some("default".to_string()), "tls2".to_string());
 
         manager.add_ref("default/my-cert".to_string(), res1.clone());
         manager.add_ref("default/my-cert".to_string(), res2.clone());
@@ -342,4 +326,3 @@ mod tests {
         assert_eq!(refs.len(), 1);
     }
 }
-

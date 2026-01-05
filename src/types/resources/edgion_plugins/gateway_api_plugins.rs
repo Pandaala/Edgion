@@ -3,11 +3,12 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::types::resources::http_route::{
-    HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter,
-    HTTPURLRewriteFilter, LocalObjectReference,
+use super::plugin_configs::{
+    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig, MockConfig,
 };
-use super::plugin_configs::{BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig, MockConfig};
+use crate::types::resources::http_route::{
+    HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
+};
 
 /// Plugin enum for all supported plugin types
 ///

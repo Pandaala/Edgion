@@ -1,9 +1,9 @@
-use pingora_core::protocols::Digest;
-use pingora_core::prelude::HttpPeer;
-use pingora_proxy::Session;
-use crate::types::EdgionHttpContext;
-use crate::core::observe::AccessLogEntry;
 use super::EdgionHttp;
+use crate::core::observe::AccessLogEntry;
+use crate::types::EdgionHttpContext;
+use pingora_core::prelude::HttpPeer;
+use pingora_core::protocols::Digest;
+use pingora_proxy::Session;
 
 #[inline]
 pub async fn connected_to_upstream(
@@ -20,26 +20,25 @@ pub async fn connected_to_upstream(
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         let ct = upstream.start_time.elapsed().as_millis() as u64;
         upstream.ct = Some(ct);
-        
+
         // Increment connection count for LeastConnection LB
-        if let (Some(addr), Some(crate::types::ParsedLBPolicy::LeastConn)) = 
-            (&upstream.backend_addr, &upstream.lb_policy) 
+        if let (Some(addr), Some(crate::types::ParsedLBPolicy::LeastConn)) =
+            (&upstream.backend_addr, &upstream.lb_policy)
         {
             crate::core::lb::leastconn::increment(addr);
         }
     }
-    
+
     // For gRPC-Web or WebSocket, log connection establishment immediately
     if let Some(protocol) = &ctx.request_info.discover_protocol {
         if protocol == "grpc-web" || protocol == "websocket" {
             let mut entry = AccessLogEntry::from_context(ctx);
             entry.set_conn_est();
-            
+
             // Send to access logger
             edgion_http.access_logger.send(entry.to_json()).await;
         }
     }
-    
+
     Ok(())
 }
-

@@ -47,10 +47,7 @@ impl<T> WeightedRoundRobin<T> {
     pub fn new(items: Vec<T>, weights: Vec<usize>) -> Self {
         assert!(!items.is_empty(), "items must not be empty");
         assert_eq!(items.len(), weights.len(), "items and weights must have same length");
-        assert!(
-            items.len() <= u16::MAX as usize,
-            "supports up to 65535 items"
-        );
+        assert!(items.len() <= u16::MAX as usize, "supports up to 65535 items");
 
         let total_weight: usize = weights.iter().sum();
         assert!(total_weight > 0, "total weight must be greater than 0");
@@ -275,7 +272,11 @@ mod tests {
             } else {
                 0
             };
-            assert!(same_count < 3, "Should not have 3 consecutive same items: {:?}", sequence);
+            assert!(
+                same_count < 3,
+                "Should not have 3 consecutive same items: {:?}",
+                sequence
+            );
         }
     }
 

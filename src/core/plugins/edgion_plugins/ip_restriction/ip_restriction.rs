@@ -34,7 +34,7 @@ use bytes::Bytes;
 use pingora_http::ResponseHeader;
 use std::net::IpAddr;
 
-use crate::core::plugins::plugin_runtime::{RequestFilter, PluginSession, PluginLog};
+use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{IpRestrictionConfig, IpSource};
 
@@ -58,7 +58,7 @@ impl IpRestriction {
     /// Extract client IP from session based on configured source
     fn get_client_ip(&self, session: &mut dyn PluginSession) -> Option<IpAddr> {
         let ip_str = match self.config.ip_source {
-            IpSource::ClientIp => session.remote_addr(),  // Real client IP from proxy headers
+            IpSource::ClientIp => session.remote_addr(), // Real client IP from proxy headers
             IpSource::RemoteAddr => session.client_addr(), // Direct TCP connection IP (without port)
         };
 
@@ -77,11 +77,7 @@ impl RequestFilter for IpRestriction {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        plugin_log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Get client IP
         let client_ip = match self.get_client_ip(session) {
             Some(ip) => ip,
@@ -94,7 +90,10 @@ impl RequestFilter for IpRestriction {
 
         // Check access using config's check_ip_access method
         if !self.config.check_ip_access(&client_ip) {
-            let message = self.config.message.as_deref()
+            let message = self
+                .config
+                .message
+                .as_deref()
                 .unwrap_or("Your IP address is not allowed to access this resource");
 
             plugin_log.push("Denied; ");
@@ -180,15 +179,9 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("IpRestriction");
 
-        mock_session
-            .expect_remote_addr()
-            .return_const("10.0.0.50".to_string());
-        mock_session
-            .expect_write_response_header()
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_write_response_body()
-            .returning(|_, _| Ok(()));
+        mock_session.expect_remote_addr().return_const("10.0.0.50".to_string());
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -203,15 +196,9 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("IpRestriction");
 
-        mock_session
-            .expect_remote_addr()
-            .return_const("10.0.0.100".to_string());
-        mock_session
-            .expect_write_response_header()
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_write_response_body()
-            .returning(|_, _| Ok(()));
+        mock_session.expect_remote_addr().return_const("10.0.0.100".to_string());
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -226,9 +213,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("IpRestriction");
 
-        mock_session
-            .expect_remote_addr()
-            .return_const("172.16.0.1".to_string());
+        mock_session.expect_remote_addr().return_const("172.16.0.1".to_string());
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -243,9 +228,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("IpRestriction");
 
-        mock_session
-            .expect_remote_addr()
-            .return_const("".to_string());
+        mock_session.expect_remote_addr().return_const("".to_string());
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 

@@ -1,5 +1,5 @@
 //! Resource Diff Tool
-//! 
+//!
 //! Validates resource synchronization between edgion-controller and edgion-gateway
 //! by comparing resources via their admin APIs and checking Secret references.
 
@@ -91,7 +91,10 @@ impl DiffResult {
     }
 
     fn total_issues(&self) -> usize {
-        self.differences.iter().map(|d| d.missing_in_gateway.len() + d.extra_in_gateway.len()).sum::<usize>()
+        self.differences
+            .iter()
+            .map(|d| d.missing_in_gateway.len() + d.extra_in_gateway.len())
+            .sum::<usize>()
             + self.secret_issues.len()
     }
 }
@@ -153,7 +156,7 @@ impl AdminClient {
     /// Fetch resources from controller with retry
     async fn fetch_from_controller(&self, endpoint: &str) -> Result<Vec<Resource>, String> {
         let url = format!("{}{}", self.controller_url, endpoint);
-        
+
         for attempt in 1..=self.max_retries {
             match self.client.get(&url).send().await {
                 Ok(response) => {
@@ -187,14 +190,14 @@ impl AdminClient {
             }
             tokio::time::sleep(Duration::from_millis(100 * attempt as u64)).await;
         }
-        
+
         Err("Max retries exceeded".to_string())
     }
 
     /// Fetch resources from gateway with retry
     async fn fetch_from_gateway(&self, endpoint: &str) -> Result<Vec<Resource>, String> {
         let url = format!("{}{}", self.gateway_url, endpoint);
-        
+
         for attempt in 1..=self.max_retries {
             match self.client.get(&url).send().await {
                 Ok(response) => {
@@ -228,40 +231,86 @@ impl AdminClient {
             }
             tokio::time::sleep(Duration::from_millis(100 * attempt as u64)).await;
         }
-        
+
         Err("Max retries exceeded".to_string())
     }
 
     /// Check if controller is reachable
     async fn check_controller_health(&self) -> bool {
         let url = format!("{}/health", self.controller_url);
-        self.client.get(&url).send().await.map(|r| r.status().is_success()).unwrap_or(false)
+        self.client
+            .get(&url)
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
     }
 
     /// Check if gateway is reachable
     async fn check_gateway_health(&self) -> bool {
         let url = format!("{}/health", self.gateway_url);
-        self.client.get(&url).send().await.map(|r| r.status().is_success()).unwrap_or(false)
+        self.client
+            .get(&url)
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
     }
 }
 
 /// Resource types to compare (namespaced resources that exist in both Controller and Gateway)
 const RESOURCE_TYPES: &[(&str, &str, &str)] = &[
     // (Kind, Controller endpoint, Gateway endpoint)
-    ("HTTPRoute", "/api/v1/namespaced/HTTPRoute", "/configclient/httproute/list"),
-    ("GRPCRoute", "/api/v1/namespaced/GRPCRoute", "/configclient/grpcroute/list"),
+    (
+        "HTTPRoute",
+        "/api/v1/namespaced/HTTPRoute",
+        "/configclient/httproute/list",
+    ),
+    (
+        "GRPCRoute",
+        "/api/v1/namespaced/GRPCRoute",
+        "/configclient/grpcroute/list",
+    ),
     ("TCPRoute", "/api/v1/namespaced/TCPRoute", "/configclient/tcproute/list"),
     ("UDPRoute", "/api/v1/namespaced/UDPRoute", "/configclient/udproute/list"),
     ("TLSRoute", "/api/v1/namespaced/TLSRoute", "/configclient/tlsroute/list"),
     ("Service", "/api/v1/namespaced/Service", "/configclient/service/list"),
-    ("EndpointSlice", "/api/v1/namespaced/EndpointSlice", "/configclient/endpointslice/list"),
-    ("EdgionTls", "/api/v1/namespaced/EdgionTls", "/configclient/edgiontls/list"),
-    ("EdgionPlugins", "/api/v1/namespaced/EdgionPlugins", "/configclient/edgionplugins/list"),
-    ("EdgionStreamPlugins", "/api/v1/namespaced/EdgionStreamPlugins", "/configclient/edgionstreamplugins/list"),
-    ("ReferenceGrant", "/api/v1/namespaced/ReferenceGrant", "/configclient/referencegrants/list"),
-    ("BackendTLSPolicy", "/api/v1/namespaced/BackendTLSPolicy", "/configclient/backendtlspolicies/list"),
+    (
+        "EndpointSlice",
+        "/api/v1/namespaced/EndpointSlice",
+        "/configclient/endpointslice/list",
+    ),
+    (
+        "EdgionTls",
+        "/api/v1/namespaced/EdgionTls",
+        "/configclient/edgiontls/list",
+    ),
+    (
+        "EdgionPlugins",
+        "/api/v1/namespaced/EdgionPlugins",
+        "/configclient/edgionplugins/list",
+    ),
+    (
+        "EdgionStreamPlugins",
+        "/api/v1/namespaced/EdgionStreamPlugins",
+        "/configclient/edgionstreamplugins/list",
+    ),
+    (
+        "ReferenceGrant",
+        "/api/v1/namespaced/ReferenceGrant",
+        "/configclient/referencegrants/list",
+    ),
+    (
+        "BackendTLSPolicy",
+        "/api/v1/namespaced/BackendTLSPolicy",
+        "/configclient/backendtlspolicies/list",
+    ),
     ("LinkSys", "/api/v1/namespaced/LinkSys", "/configclient/linksys/list"),
-    ("PluginMetaData", "/api/v1/namespaced/PluginMetaData", "/configclient/pluginmetadata/list"),
+    (
+        "PluginMetaData",
+        "/api/v1/namespaced/PluginMetaData",
+        "/configclient/pluginmetadata/list",
+    ),
 ];
 
 /// Note: Gateway and GatewayClass resources are Kubernetes-level resources managed by Controller only
@@ -300,15 +349,9 @@ async fn compare_resources(client: &AdminClient) -> DiffResult {
             .collect();
 
         // Find differences
-        let missing_in_gateway: Vec<String> = controller_ids
-            .difference(&gateway_ids)
-            .map(|id| id.display())
-            .collect();
+        let missing_in_gateway: Vec<String> = controller_ids.difference(&gateway_ids).map(|id| id.display()).collect();
 
-        let extra_in_gateway: Vec<String> = gateway_ids
-            .difference(&controller_ids)
-            .map(|id| id.display())
-            .collect();
+        let extra_in_gateway: Vec<String> = gateway_ids.difference(&controller_ids).map(|id| id.display()).collect();
 
         if !missing_in_gateway.is_empty() || !extra_in_gateway.is_empty() {
             result.differences.push(ResourceDiff {
@@ -347,16 +390,17 @@ async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
     if let Ok(tls_resources) = client.fetch_from_controller("/api/v1/namespaced/EdgionTls").await {
         for tls in tls_resources {
             let mut missing = Vec::new();
-            
+
             // Extract certificate_refs from spec
             if let Some(spec) = tls.rest.get("spec") {
                 if let Some(cert_refs) = spec.get("certificateRefs").and_then(|v| v.as_array()) {
                     for cert_ref in cert_refs {
                         if let (Some(name), namespace) = (
                             cert_ref.get("name").and_then(|v| v.as_str()),
-                            cert_ref.get("namespace").and_then(|v| v.as_str())
+                            cert_ref.get("namespace").and_then(|v| v.as_str()),
                         ) {
-                            let ns = namespace.unwrap_or_else(|| tls.metadata.namespace.as_deref().unwrap_or("default"));
+                            let ns =
+                                namespace.unwrap_or_else(|| tls.metadata.namespace.as_deref().unwrap_or("default"));
                             if !secret_ids.contains(&(ns.to_string(), name.to_string())) {
                                 missing.push(format!("{}/{}", ns, name));
                             }
@@ -367,9 +411,11 @@ async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
 
             if !missing.is_empty() {
                 issues.push(SecretIssue {
-                    resource: format!("{}/{}", 
+                    resource: format!(
+                        "{}/{}",
                         tls.metadata.namespace.unwrap_or_else(|| "default".to_string()),
-                        tls.metadata.name),
+                        tls.metadata.name
+                    ),
                     kind: "EdgionTls".to_string(),
                     missing_secrets: missing,
                 });
@@ -381,7 +427,7 @@ async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
     if let Ok(gateways) = client.fetch_from_controller("/api/v1/cluster/Gateway").await {
         for gw in gateways {
             let mut missing = Vec::new();
-            
+
             if let Some(spec) = gw.rest.get("spec") {
                 if let Some(listeners) = spec.get("listeners").and_then(|v| v.as_array()) {
                     for listener in listeners {
@@ -390,7 +436,7 @@ async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
                                 for cert_ref in cert_refs {
                                     if let (Some(name), namespace) = (
                                         cert_ref.get("name").and_then(|v| v.as_str()),
-                                        cert_ref.get("namespace").and_then(|v| v.as_str())
+                                        cert_ref.get("namespace").and_then(|v| v.as_str()),
                                     ) {
                                         let ns = namespace.unwrap_or("default");
                                         if !secret_ids.contains(&(ns.to_string(), name.to_string())) {
@@ -422,7 +468,7 @@ fn print_text_report(result: &DiffResult, controller_url: &str, gateway_url: &st
     println!("\n{}", "=".repeat(50));
     println!("  {}", "Resource Synchronization Report".bold());
     println!("{}\n", "=".repeat(50));
-    
+
     println!("Controller: {}", controller_url);
     println!("Gateway:    {}\n", gateway_url);
 
@@ -434,20 +480,21 @@ fn print_text_report(result: &DiffResult, controller_url: &str, gateway_url: &st
             if diff.missing_in_gateway.is_empty() && diff.extra_in_gateway.is_empty() {
                 println!("{} {}: synchronized", "✓".green(), diff.kind);
             } else {
-                println!("{} {}: {} missing, {} extra", 
-                    "✗".red(), 
-                    diff.kind, 
-                    diff.missing_in_gateway.len(), 
+                println!(
+                    "{} {}: {} missing, {} extra",
+                    "✗".red(),
+                    diff.kind,
+                    diff.missing_in_gateway.len(),
                     diff.extra_in_gateway.len()
                 );
-                
+
                 if !diff.missing_in_gateway.is_empty() {
                     println!("    Missing in Gateway:");
                     for resource in &diff.missing_in_gateway {
                         println!("      - {}", resource.red());
                     }
                 }
-                
+
                 if !diff.extra_in_gateway.is_empty() {
                     println!("    Extra in Gateway:");
                     for resource in &diff.extra_in_gateway {
@@ -472,9 +519,16 @@ fn print_text_report(result: &DiffResult, controller_url: &str, gateway_url: &st
 
     println!("\n{}", "=".repeat(50));
     if result.has_issues() {
-        println!("Summary: {} {}", result.total_issues().to_string().red().bold(), "issues found".red());
+        println!(
+            "Summary: {} {}",
+            result.total_issues().to_string().red().bold(),
+            "issues found".red()
+        );
     } else {
-        println!("{}", "Summary: No issues found - All resources synchronized".green().bold());
+        println!(
+            "{}",
+            "Summary: No issues found - All resources synchronized".green().bold()
+        );
     }
     println!("{}\n", "=".repeat(50));
 }
@@ -508,16 +562,24 @@ fn print_json_report(result: &DiffResult, controller_url: &str, gateway_url: &st
     let report = JsonReport {
         controller_url: controller_url.to_string(),
         gateway_url: gateway_url.to_string(),
-        differences: result.differences.iter().map(|d| JsonDiff {
-            kind: d.kind.clone(),
-            missing_in_gateway: d.missing_in_gateway.clone(),
-            extra_in_gateway: d.extra_in_gateway.clone(),
-        }).collect(),
-        secret_issues: result.secret_issues.iter().map(|i| JsonSecretIssue {
-            resource: i.resource.clone(),
-            kind: i.kind.clone(),
-            missing_secrets: i.missing_secrets.clone(),
-        }).collect(),
+        differences: result
+            .differences
+            .iter()
+            .map(|d| JsonDiff {
+                kind: d.kind.clone(),
+                missing_in_gateway: d.missing_in_gateway.clone(),
+                extra_in_gateway: d.extra_in_gateway.clone(),
+            })
+            .collect(),
+        secret_issues: result
+            .secret_issues
+            .iter()
+            .map(|i| JsonSecretIssue {
+                resource: i.resource.clone(),
+                kind: i.kind.clone(),
+                missing_secrets: i.missing_secrets.clone(),
+            })
+            .collect(),
         total_issues: result.total_issues(),
         synchronized: !result.has_issues(),
     };
@@ -539,11 +601,8 @@ async fn main() {
 
     // Check connectivity
     println!("Checking connectivity...");
-    
-    let (controller_ok, gateway_ok) = tokio::join!(
-        client.check_controller_health(),
-        client.check_gateway_health()
-    );
+
+    let (controller_ok, gateway_ok) = tokio::join!(client.check_controller_health(), client.check_gateway_health());
 
     if !controller_ok {
         eprintln!("{} Cannot connect to controller at {}", "✗".red(), args.controller_url);
@@ -578,4 +637,3 @@ async fn main() {
         process::exit(0);
     }
 }
-

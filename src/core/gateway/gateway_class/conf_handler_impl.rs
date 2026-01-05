@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 /// Global store for GatewayClass resources
-static GATEWAY_CLASS_STORE: std::sync::LazyLock<Arc<RwLock<Vec<GatewayClass>>>> = 
+static GATEWAY_CLASS_STORE: std::sync::LazyLock<Arc<RwLock<Vec<GatewayClass>>>> =
     std::sync::LazyLock::new(|| Arc::new(RwLock::new(Vec::new())));
 
 /// Get a reference to the global GatewayClass store
@@ -42,7 +42,7 @@ impl ConfHandler<GatewayClass> for GatewayClassHandler {
             "GatewayClass full_set: received {} GatewayClass resources",
             data.len()
         );
-        
+
         // Update global store
         let mut store = GATEWAY_CLASS_STORE.write().unwrap();
         store.clear();
@@ -63,7 +63,7 @@ impl ConfHandler<GatewayClass> for GatewayClassHandler {
         remove: HashSet<String>,
     ) {
         let mut store = GATEWAY_CLASS_STORE.write().unwrap();
-        
+
         if !add.is_empty() {
             tracing::info!(
                 count = add.len(),
@@ -121,4 +121,3 @@ impl ConfHandler<GatewayClass> for GatewayClassHandler {
 pub fn create_gateway_class_handler() -> Box<dyn ConfHandler<GatewayClass>> {
     Box::new(GatewayClassHandler::new())
 }
-

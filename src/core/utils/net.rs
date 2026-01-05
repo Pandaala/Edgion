@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
+use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 
 pub const DEFAULT_OPERATOR_GRPC_ADDR: &str = "127.0.0.1:50061";
 
@@ -28,7 +28,7 @@ pub fn default_operator_addr() -> &'static str {
 }
 
 /// Check if an address is a localhost/loopback address
-/// 
+///
 /// Returns true if the address is:
 /// - 127.0.0.0/8 (IPv4 loopback range)
 /// - ::1 (IPv6 loopback)
@@ -104,7 +104,7 @@ mod tests {
         let path = Path::new("/tmp/test.sock");
         let unix_addr = StdUnixSockAddr::from_pathname(path).unwrap();
         let addr = PingoraSocketAddr::Unix(unix_addr);
-        
+
         assert!(!is_localhost(&addr), "Unix domain socket should NOT be localhost");
     }
 }

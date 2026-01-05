@@ -91,12 +91,9 @@ impl ConfigSync for ConfigSyncServer {
         );
 
         // Get WatcherMgr and call watch
-        let watch_result = self.config_server.watch(
-            &resource_kind,
-            req.client_id,
-            req.client_name,
-            req.from_version,
-        );
+        let watch_result = self
+            .config_server
+            .watch(&resource_kind, req.client_id, req.client_name, req.from_version);
 
         let receiver = match watch_result {
             Ok(receiver) => {

@@ -1,6 +1,6 @@
-use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::conf_server::ConfigServer;
-use crate::core::conf_sync::{CacheEventDispatch, ServerCache, ResourceMeta};
+use crate::core::conf_sync::traits::ResourceChange;
+use crate::core::conf_sync::{CacheEventDispatch, ResourceMeta, ServerCache};
 use crate::types::prelude_resources::*;
 use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
@@ -57,12 +57,18 @@ impl ConfigServer {
                 if let Some(first_ref) = parent_refs.first() {
                     let info = format!(
                         "namespace={:?}, name={}",
-                        first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
+                        first_ref
+                            .namespace
+                            .as_ref()
+                            .or_else(|| resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "HTTPRoute references a Gateway that does not exist, skipping")
                 } else {
-                    ("no parent_refs".to_string(), "HTTPRoute has empty parent_refs, skipping")
+                    (
+                        "no parent_refs".to_string(),
+                        "HTTPRoute has empty parent_refs, skipping",
+                    )
                 }
             } else {
                 ("no parent_refs".to_string(), "HTTPRoute has no parent_refs, skipping")
@@ -113,12 +119,18 @@ impl ConfigServer {
                 if let Some(first_ref) = parent_refs.first() {
                     let info = format!(
                         "namespace={:?}, name={}",
-                        first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
+                        first_ref
+                            .namespace
+                            .as_ref()
+                            .or_else(|| resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "GRPCRoute references a Gateway that does not exist, skipping")
                 } else {
-                    ("no parent_refs".to_string(), "GRPCRoute has empty parent_refs, skipping")
+                    (
+                        "no parent_refs".to_string(),
+                        "GRPCRoute has empty parent_refs, skipping",
+                    )
                 }
             } else {
                 ("no parent_refs".to_string(), "GRPCRoute has no parent_refs, skipping")
@@ -169,7 +181,10 @@ impl ConfigServer {
                 if let Some(first_ref) = parent_refs.first() {
                     let info = format!(
                         "namespace={:?}, name={}",
-                        first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
+                        first_ref
+                            .namespace
+                            .as_ref()
+                            .or_else(|| resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "TCPRoute references a Gateway that does not exist, skipping")
@@ -225,7 +240,10 @@ impl ConfigServer {
                 if let Some(first_ref) = parent_refs.first() {
                     let info = format!(
                         "namespace={:?}, name={}",
-                        first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
+                        first_ref
+                            .namespace
+                            .as_ref()
+                            .or_else(|| resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "UDPRoute references a Gateway that does not exist, skipping")
@@ -321,12 +339,18 @@ impl ConfigServer {
                 if let Some(first_ref) = parent_refs.first() {
                     let info = format!(
                         "namespace={:?}, name={}",
-                        first_ref.namespace.as_ref().or_else(|| resource.metadata.namespace.as_ref()),
+                        first_ref
+                            .namespace
+                            .as_ref()
+                            .or_else(|| resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "EdgionTls references a Gateway that does not exist, skipping")
                 } else {
-                    ("no parent_refs".to_string(), "EdgionTls has empty parent_refs, skipping")
+                    (
+                        "no parent_refs".to_string(),
+                        "EdgionTls has empty parent_refs, skipping",
+                    )
                 }
             } else {
                 ("no parent_refs".to_string(), "EdgionTls has no parent_refs, skipping")
@@ -348,7 +372,7 @@ impl ConfigServer {
         // Handle Secret reference
         use super::secret_ref::ResourceRef;
         use crate::types::ResourceKind as RK;
-        
+
         let resource_ref = ResourceRef::new(
             RK::EdgionTls,
             resource.metadata.namespace.clone(),
@@ -356,7 +380,11 @@ impl ConfigServer {
         );
 
         // Build secret key from secret_ref
-        let secret_namespace = resource.spec.secret_ref.namespace.as_ref()
+        let secret_namespace = resource
+            .spec
+            .secret_ref
+            .namespace
+            .as_ref()
             .or(resource.metadata.namespace.as_ref());
         let secret_key = if let Some(ns) = secret_namespace {
             format!("{}/{}", ns, resource.spec.secret_ref.name)
@@ -367,8 +395,9 @@ impl ConfigServer {
         // Register reference relationship
         match change {
             ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                self.secret_ref_manager.add_ref(secret_key.clone(), resource_ref.clone());
-                
+                self.secret_ref_manager
+                    .add_ref(secret_key.clone(), resource_ref.clone());
+
                 // Try to resolve Secret immediately from cache
                 let secret_list = self.secrets.list_owned();
                 let secret_data = secret_list.data.iter().find(|s| {
@@ -376,7 +405,7 @@ impl ConfigServer {
                     let s_name = s.metadata.name.as_deref().unwrap_or("");
                     s_namespace == secret_namespace.map(|s| s.as_str()) && s_name == resource.spec.secret_ref.name
                 });
-                
+
                 if let Some(secret) = secret_data {
                     resource.spec.secret = Some(secret.clone());
                     tracing::debug!(
@@ -391,19 +420,21 @@ impl ConfigServer {
                         "Secret not found, EdgionTls will be sent without Secret data"
                     );
                 }
-                
+
                 // Also load CA Secret if mTLS is configured
                 if let Some(ref mut client_auth) = resource.spec.client_auth {
                     if let Some(ref ca_secret_ref) = client_auth.ca_secret_ref {
-                        let ca_secret_namespace = ca_secret_ref.namespace.as_ref()
+                        let ca_secret_namespace = ca_secret_ref
+                            .namespace
+                            .as_ref()
                             .or(resource.metadata.namespace.as_ref());
-                        
+
                         let ca_secret_data = secret_list.data.iter().find(|s| {
                             let s_namespace = s.metadata.namespace.as_deref();
                             let s_name = s.metadata.name.as_deref().unwrap_or("");
                             s_namespace == ca_secret_namespace.map(|s| s.as_str()) && s_name == ca_secret_ref.name
                         });
-                        
+
                         if let Some(ca_secret) = ca_secret_data {
                             client_auth.ca_secret = Some(ca_secret.clone());
                             tracing::debug!(
@@ -418,7 +449,7 @@ impl ConfigServer {
                                 "CA Secret not found, mTLS will not work"
                             );
                         }
-                        
+
                         // Register CA Secret reference
                         let ca_secret_key = if let Some(ns) = ca_secret_namespace {
                             format!("{}/{}", ns, ca_secret_ref.name)
@@ -512,12 +543,10 @@ impl ConfigServer {
             kind = "Secret",
             "Applying Secret resource change"
         );
-        
+
         // Build secret key
         let secret_namespace = resource.metadata.namespace.as_ref();
-        let secret_name = resource.metadata.name.as_ref()
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        let secret_name = resource.metadata.name.as_ref().map(|s| s.as_str()).unwrap_or("");
         let secret_key = if let Some(ns) = secret_namespace {
             format!("{}/{}", ns, secret_name)
         } else {
@@ -532,7 +561,7 @@ impl ConfigServer {
             ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
                 // Get all resources that reference this Secret
                 let refs = self.secret_ref_manager.get_refs(&secret_key);
-                
+
                 if !refs.is_empty() {
                     tracing::info!(
                         secret_key = %secret_key,
@@ -548,7 +577,7 @@ impl ConfigServer {
                             // Reload EdgionTls from cache
                             let edgion_tls_list = self.edgion_tls.list_owned();
                             let secret_list = self.secrets.list_owned();
-                            
+
                             if let Some(mut edgion_tls) = edgion_tls_list.data.into_iter().find(|tls| {
                                 let tls_namespace = tls.metadata.namespace.as_deref();
                                 let tls_name = tls.metadata.name.as_deref().unwrap_or("");
@@ -556,11 +585,14 @@ impl ConfigServer {
                             }) {
                                 // Check if this Secret is the server cert or CA cert
                                 let is_server_cert = edgion_tls.spec.secret_ref.name == secret_name;
-                                let is_ca_cert = edgion_tls.spec.client_auth.as_ref()
+                                let is_ca_cert = edgion_tls
+                                    .spec
+                                    .client_auth
+                                    .as_ref()
                                     .and_then(|ca| ca.ca_secret_ref.as_ref())
                                     .map(|ca_ref| ca_ref.name == secret_name)
                                     .unwrap_or(false);
-                                
+
                                 if is_server_cert {
                                     // Fill in the server Secret
                                     edgion_tls.spec.secret = Some(resource.clone());
@@ -570,7 +602,7 @@ impl ConfigServer {
                                         "Updating EdgionTls with resolved server Secret"
                                     );
                                 }
-                                
+
                                 if is_ca_cert {
                                     // Fill in the CA Secret
                                     if let Some(ref mut client_auth) = edgion_tls.spec.client_auth {
@@ -582,7 +614,7 @@ impl ConfigServer {
                                         );
                                     }
                                 }
-                                
+
                                 // Update resource version for cascading update
                                 if is_server_cert || is_ca_cert {
                                     use crate::core::utils;
@@ -594,13 +626,9 @@ impl ConfigServer {
                                         "Updated resource version for cascading update"
                                     );
                                 }
-                                
+
                                 // Trigger update event
-                                execute_change_on_cache(
-                                    ResourceChange::EventUpdate,
-                                    &self.edgion_tls,
-                                    edgion_tls
-                                );
+                                execute_change_on_cache(ResourceChange::EventUpdate, &self.edgion_tls, edgion_tls);
                             }
                         }
                         _ => {
@@ -621,4 +649,3 @@ impl ConfigServer {
         }
     }
 }
-

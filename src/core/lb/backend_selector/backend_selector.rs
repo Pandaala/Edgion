@@ -3,9 +3,9 @@
 //! Provides a unified backend selection strategy that handles configuration validation
 //! and selection with lazy initialization.
 
-use std::sync::Arc;
-use arc_swap::ArcSwap;
 use super::weighted_selector::WeightedRoundRobin;
+use arc_swap::ArcSwap;
+use std::sync::Arc;
 
 /// Error codes for backend selection configuration
 pub const ERR_NO_BACKEND_REFS: u32 = 1;
@@ -22,10 +22,10 @@ enum SelectorState<T> {
 }
 
 /// Backend selector with lazy initialization
-/// 
+///
 /// Wraps backend configuration and lazily initializes the actual selector
 /// on first use. Thread-safe using ArcSwap internally.
-/// 
+///
 /// # Type Parameters
 /// * `T` - The type of backend items (must implement Clone)
 pub struct BackendSelector<T> {
@@ -53,10 +53,10 @@ impl<T: Clone> BackendSelector<T> {
     }
 
     /// Initialize the selector from items and their optional weights.
-    /// 
+    ///
     /// This should be called once when the route is first used.
     /// If already initialized, this is a no-op.
-    /// 
+    ///
     /// # Arguments
     /// * `items` - A vector of backend items
     /// * `weights` - A vector of optional weights for each item
@@ -114,7 +114,7 @@ impl<T: Clone> BackendSelector<T> {
     }
 
     /// Select a backend.
-    /// 
+    ///
     /// Must be called after init(). Returns Ok(T) on success, or Err(error_code) on error.
     pub fn select(&self) -> Result<T, u32> {
         let guard = self.state.load();

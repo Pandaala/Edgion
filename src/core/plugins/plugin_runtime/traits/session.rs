@@ -66,4 +66,16 @@ pub trait PluginSession: Send {
 
     /// Get reference to EdgionHttpContext (for access log generation)
     fn ctx(&self) -> &EdgionHttpContext;
+
+    /// Track nested plugin references to prevent cycles
+    fn push_plugin_ref(&mut self, key: String);
+
+    /// Remove last tracked plugin reference
+    fn pop_plugin_ref(&mut self);
+
+    /// Current depth of nested plugin references
+    fn plugin_ref_depth(&self) -> usize;
+
+    /// Check whether reference key already exists in stack
+    fn has_plugin_ref(&self, key: &str) -> bool;
 }

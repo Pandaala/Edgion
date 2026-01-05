@@ -1,29 +1,25 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use super::discovery_impl::EndpointSliceLoadBalancer;
+use crate::core::lb::ewma::Ewma;
+use crate::core::lb::leastconn::LeastConnection;
 use arc_swap::ArcSwap;
-use std::sync::LazyLock;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use pingora_load_balancing::selection::{BackendSelection, Consistent, RoundRobin};
 use pingora_load_balancing::Backend;
-use crate::core::lb::leastconn::LeastConnection;
-use crate::core::lb::ewma::Ewma;
-use super::discovery_impl::EndpointSliceLoadBalancer;
+use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
+use std::sync::{Arc, RwLock};
 
 /// Store for RoundRobin LoadBalancers (primary, always present)
-static ROUNDROBIN_STORE: LazyLock<Arc<EpSliceStore<RoundRobin>>> =
-    LazyLock::new(|| Arc::new(EpSliceStore::new()));
+static ROUNDROBIN_STORE: LazyLock<Arc<EpSliceStore<RoundRobin>>> = LazyLock::new(|| Arc::new(EpSliceStore::new()));
 
 /// Store for Consistent LoadBalancers (optional)
-static CONSISTENT_STORE: LazyLock<Arc<EpSliceStore<Consistent>>> =
-    LazyLock::new(|| Arc::new(EpSliceStore::new()));
+static CONSISTENT_STORE: LazyLock<Arc<EpSliceStore<Consistent>>> = LazyLock::new(|| Arc::new(EpSliceStore::new()));
 
 /// Store for LeastConnection LoadBalancers (optional)
-static LEASTCONN_STORE: LazyLock<Arc<EpSliceStore<LeastConnection>>> =
-    LazyLock::new(|| Arc::new(EpSliceStore::new()));
+static LEASTCONN_STORE: LazyLock<Arc<EpSliceStore<LeastConnection>>> = LazyLock::new(|| Arc::new(EpSliceStore::new()));
 
 /// Store for EWMA LoadBalancers (optional)
-static EWMA_STORE: LazyLock<Arc<EpSliceStore<Ewma>>> =
-    LazyLock::new(|| Arc::new(EpSliceStore::new()));
+static EWMA_STORE: LazyLock<Arc<EpSliceStore<Ewma>>> = LazyLock::new(|| Arc::new(EpSliceStore::new()));
 
 pub fn get_roundrobin_store() -> Arc<EpSliceStore<RoundRobin>> {
     ROUNDROBIN_STORE.clone()
@@ -42,7 +38,7 @@ pub fn get_ewma_store() -> Arc<EpSliceStore<Ewma>> {
 }
 
 /// Generic store for endpoint slice load balancers
-/// 
+///
 /// This store aggregates multiple EndpointSlices per Service and maintains
 /// the mapping from service_key to LoadBalancer.
 pub struct EpSliceStore<S>
@@ -54,12 +50,12 @@ where
     /// Key: namespace/service-name
     /// Value: LoadBalancer aggregating all EndpointSlices for this Service
     service_lbs: ArcSwap<HashMap<String, Arc<EndpointSliceLoadBalancer<S>>>>,
-    
+
     /// Cold path: Service key -> EndpointSlice keys
     /// Key: namespace/service-name
     /// Value: Vec<namespace/endpointslice-name>
     service_to_slices: RwLock<HashMap<String, Vec<String>>>,
-    
+
     /// Cold path: EndpointSlice storage
     /// Key: namespace/endpointslice-name
     /// Value: (EndpointSlice, service_key)
@@ -97,12 +93,12 @@ where
     }
 
     /// Select a backend peer from the load balancer
-    /// 
+    ///
     /// # Arguments
     /// * `service_key` - The service key (namespace/service-name)
     /// * `hash_key` - Hash key for consistent hashing (use empty slice for round-robin)
     /// * `max_sample` - Maximum number of backends to sample
-    /// 
+    ///
     /// # Returns
     /// * `Some(Backend)` - Selected backend
     /// * `None` - No backend available or service not found
@@ -128,27 +124,26 @@ where
         let mut service_groups: HashMap<String, Vec<EndpointSlice>> = HashMap::new();
         let mut new_ep_slices: HashMap<String, (EndpointSlice, String)> = HashMap::new();
         let mut new_service_to_slices: HashMap<String, Vec<String>> = HashMap::new();
-        
+
         for (ep_key, ep_slice) in data {
             let service_key = extract_service_key(&ep_slice);
-            
-            service_groups.entry(service_key.clone())
+
+            service_groups
+                .entry(service_key.clone())
                 .or_default()
                 .push(ep_slice.clone());
-            
+
             new_ep_slices.insert(ep_key.clone(), (ep_slice, service_key.clone()));
-            new_service_to_slices.entry(service_key)
-                .or_default()
-                .push(ep_key);
+            new_service_to_slices.entry(service_key).or_default().push(ep_key);
         }
-        
+
         // 2. Create aggregated LoadBalancers per service
         let mut new_service_lbs = HashMap::new();
         for (service_key, slices) in service_groups {
             let lb = EndpointSliceLoadBalancer::new_with_slices(slices);
             new_service_lbs.insert(service_key, lb);
         }
-        
+
         // 3. Atomically update all stores
         self.service_lbs.store(Arc::new(new_service_lbs));
         *self.service_to_slices.write().unwrap() = new_service_to_slices;
@@ -165,17 +160,17 @@ where
     ) {
         // 1. Find affected services
         let mut affected_services: HashSet<String> = HashSet::new();
-        
+
         {
             let ep_slices = self.ep_slices.read().unwrap();
-            
+
             // Services affected by remove
             for ep_key in remove {
                 if let Some((_, service_key)) = ep_slices.get(ep_key) {
                     affected_services.insert(service_key.clone());
                 }
             }
-            
+
             // Services affected by update
             for ep_key in update.keys() {
                 if let Some((_, service_key)) = ep_slices.get(ep_key) {
@@ -183,17 +178,17 @@ where
                 }
             }
         }
-        
+
         // Services affected by add
         for ep_slice in add.values().chain(update.values()) {
             let service_key = extract_service_key(ep_slice);
             affected_services.insert(service_key);
         }
-        
+
         // 2. Update ep_slices and service_to_slices
         let mut ep_slices = self.ep_slices.write().unwrap();
         let mut service_to_slices = self.service_to_slices.write().unwrap();
-        
+
         // Process remove
         for ep_key in remove {
             if let Some((_, service_key)) = ep_slices.remove(ep_key) {
@@ -205,22 +200,22 @@ where
                 }
             }
         }
-        
+
         // Process add and update
         for (ep_key, ep_slice) in add.iter().chain(update.iter()) {
             let service_key = extract_service_key(ep_slice);
             ep_slices.insert(ep_key.clone(), (ep_slice.clone(), service_key.clone()));
-            
+
             let slice_list = service_to_slices.entry(service_key).or_default();
             if !slice_list.contains(ep_key) {
                 slice_list.push(ep_key.clone());
             }
         }
-        
+
         // 3. Re-aggregate affected services
         let current_service_lbs = self.service_lbs.load();
         let mut new_service_lbs = (**current_service_lbs).clone();
-        
+
         for service_key in affected_services {
             if let Some(ep_keys) = service_to_slices.get(&service_key) {
                 if ep_keys.is_empty() {
@@ -228,12 +223,11 @@ where
                     new_service_lbs.remove(&service_key);
                 } else {
                     // Collect all EndpointSlices for this service
-                    let slices: Vec<EndpointSlice> = ep_keys.iter()
-                        .filter_map(|ep_key| {
-                            ep_slices.get(ep_key).map(|(ep, _)| ep.clone())
-                        })
+                    let slices: Vec<EndpointSlice> = ep_keys
+                        .iter()
+                        .filter_map(|ep_key| ep_slices.get(ep_key).map(|(ep, _)| ep.clone()))
                         .collect();
-                    
+
                     // Re-create LoadBalancer with all slices
                     let lb = EndpointSliceLoadBalancer::new_with_slices(slices);
                     new_service_lbs.insert(service_key, lb);
@@ -243,25 +237,25 @@ where
                 new_service_lbs.remove(&service_key);
             }
         }
-        
+
         // 4. Atomically update service_lbs
         self.service_lbs.store(Arc::new(new_service_lbs));
     }
-    
+
     /// Legacy method for compatibility - deprecated
     /// Use replace_all() or update_with_service_aggregation() instead
     #[deprecated(note = "Use replace_all() or update_with_service_aggregation() instead")]
     pub fn update(&self, add_or_update: HashMap<String, Arc<EndpointSliceLoadBalancer<S>>>, remove: &HashSet<String>) {
         let current = self.service_lbs.load();
         let mut new_map = (**current).clone();
-        
+
         for key in remove {
             new_map.remove(key);
         }
         for (key, lb) in add_or_update {
             new_map.insert(key, lb);
         }
-        
+
         self.service_lbs.store(Arc::new(new_map));
     }
 
@@ -282,7 +276,9 @@ where
 /// Extract service key from EndpointSlice label
 /// Returns namespace/service-name format
 fn extract_service_key(ep_slice: &EndpointSlice) -> String {
-    let service_name = ep_slice.metadata.labels
+    let service_name = ep_slice
+        .metadata
+        .labels
         .as_ref()
         .and_then(|labels| labels.get("kubernetes.io/service-name"))
         .map(|s| s.as_str())
@@ -293,7 +289,7 @@ fn extract_service_key(ep_slice: &EndpointSlice) -> String {
             );
             ep_slice.metadata.name.as_deref().unwrap_or("")
         });
-    
+
     if let Some(namespace) = &ep_slice.metadata.namespace {
         format!("{}/{}", namespace, service_name)
     } else {

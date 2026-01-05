@@ -11,8 +11,8 @@
 //! - Token must match and have valid signature (stateless)
 
 use async_trait::async_trait;
-use cookie::{Cookie, CookieBuilder, SameSite};
 use cookie::time::Duration;
+use cookie::{Cookie, CookieBuilder, SameSite};
 
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;

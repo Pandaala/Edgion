@@ -1,6 +1,6 @@
-use std::time::Duration;
+use crate::types::resources::edgion_gateway_config::{BackendTimeout, ClientTimeout};
 use crate::types::EdgionGatewayConfig;
-use crate::types::resources::edgion_gateway_config::{ClientTimeout, BackendTimeout};
+use std::time::Duration;
 
 /// Pre-parsed timeout configurations for runtime use
 #[derive(Debug, Clone)]
@@ -13,7 +13,7 @@ pub struct ParsedTimeouts {
 pub struct ParsedClientTimeout {
     pub read_timeout: Duration,
     pub write_timeout: Duration,
-    pub keepalive_timeout: u64,  // keepalive takes seconds as u64
+    pub keepalive_timeout: u64, // keepalive takes seconds as u64
 }
 
 #[derive(Debug, Clone)]
@@ -29,8 +29,8 @@ impl ParsedTimeouts {
     pub fn from_config(config: &EdgionGatewayConfig) -> Self {
         match config.spec.http_timeout.as_ref() {
             Some(http_timeout) => Self {
-            client: ParsedClientTimeout::from_config(&http_timeout.client),
-            backend: ParsedBackendTimeout::from_config(&http_timeout.backend),
+                client: ParsedClientTimeout::from_config(&http_timeout.client),
+                backend: ParsedBackendTimeout::from_config(&http_timeout.backend),
             },
             None => Self::default(),
         }
@@ -49,26 +49,36 @@ impl Default for ParsedTimeouts {
 impl ParsedClientTimeout {
     fn from_config(config: &ClientTimeout) -> Self {
         use crate::core::utils::parse_duration;
-        
-        let read_timeout = parse_duration(&config.read_timeout)
-            .unwrap_or_else(|e| {
-                tracing::warn!("Invalid read_timeout '{}': {}, using default 60s", config.read_timeout, e);
-                Duration::from_secs(60)
-            });
-        
-        let write_timeout = parse_duration(&config.write_timeout)
-            .unwrap_or_else(|e| {
-                tracing::warn!("Invalid write_timeout '{}': {}, using default 60s", config.write_timeout, e);
-                Duration::from_secs(60)
-            });
-        
+
+        let read_timeout = parse_duration(&config.read_timeout).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Invalid read_timeout '{}': {}, using default 60s",
+                config.read_timeout,
+                e
+            );
+            Duration::from_secs(60)
+        });
+
+        let write_timeout = parse_duration(&config.write_timeout).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Invalid write_timeout '{}': {}, using default 60s",
+                config.write_timeout,
+                e
+            );
+            Duration::from_secs(60)
+        });
+
         let keepalive_timeout = parse_duration(&config.keepalive_timeout)
             .map(|d| d.as_secs())
             .unwrap_or_else(|e| {
-                tracing::warn!("Invalid keepalive_timeout '{}': {}, using default 75s", config.keepalive_timeout, e);
+                tracing::warn!(
+                    "Invalid keepalive_timeout '{}': {}, using default 75s",
+                    config.keepalive_timeout,
+                    e
+                );
                 75
             });
-        
+
         Self {
             read_timeout,
             write_timeout,
@@ -90,25 +100,34 @@ impl Default for ParsedClientTimeout {
 impl ParsedBackendTimeout {
     fn from_config(config: &BackendTimeout) -> Self {
         use crate::core::utils::parse_duration;
-        
-        let connect_timeout = parse_duration(&config.default_connect_timeout)
-            .unwrap_or_else(|e| {
-                tracing::warn!("Invalid default_connect_timeout '{}': {}, using default 5s", config.default_connect_timeout, e);
-                Duration::from_secs(5)
-            });
-        
-        let request_timeout = parse_duration(&config.default_request_timeout)
-            .unwrap_or_else(|e| {
-                tracing::warn!("Invalid default_request_timeout '{}': {}, using default 60s", config.default_request_timeout, e);
-                Duration::from_secs(60)
-            });
-        
-        let idle_timeout = parse_duration(&config.default_idle_timeout)
-            .unwrap_or_else(|e| {
-                tracing::warn!("Invalid default_idle_timeout '{}': {}, using default 300s", config.default_idle_timeout, e);
-                Duration::from_secs(300)
-            });
-        
+
+        let connect_timeout = parse_duration(&config.default_connect_timeout).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Invalid default_connect_timeout '{}': {}, using default 5s",
+                config.default_connect_timeout,
+                e
+            );
+            Duration::from_secs(5)
+        });
+
+        let request_timeout = parse_duration(&config.default_request_timeout).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Invalid default_request_timeout '{}': {}, using default 60s",
+                config.default_request_timeout,
+                e
+            );
+            Duration::from_secs(60)
+        });
+
+        let idle_timeout = parse_duration(&config.default_idle_timeout).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Invalid default_idle_timeout '{}': {}, using default 300s",
+                config.default_idle_timeout,
+                e
+            );
+            Duration::from_secs(300)
+        });
+
         Self {
             connect_timeout,
             request_timeout,
@@ -126,4 +145,3 @@ impl Default for ParsedBackendTimeout {
         }
     }
 }
-

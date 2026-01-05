@@ -26,8 +26,7 @@ mod cleaner;
 mod counter;
 mod selection;
 
-pub use backend_state::{is_active, mark_draining, reactivate, get_state, BackendState};
+pub use backend_state::{get_state, is_active, mark_draining, reactivate, BackendState};
 pub use cleaner::BackendCleaner;
 pub use counter::{decrement, get_count, increment, remove};
 pub use selection::LeastConnection;
-

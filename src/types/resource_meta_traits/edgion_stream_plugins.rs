@@ -9,15 +9,15 @@ impl ResourceMeta for EdgionStreamPlugins {
     fn get_version(&self) -> u64 {
         extract_version(&self.metadata)
     }
-    
+
     fn resource_kind() -> ResourceKind {
         ResourceKind::EdgionStreamPlugins
     }
-    
+
     fn kind_name() -> &'static str {
         "EdgionStreamPlugins"
     }
-    
+
     fn key_name(&self) -> String {
         if let Some(namespace) = &self.metadata.namespace {
             format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
@@ -31,4 +31,3 @@ impl ResourceMeta for EdgionStreamPlugins {
         self.init_stream_plugin_runtime();
     }
 }
-

@@ -10,15 +10,15 @@ impl ResourceMeta for Endpoints {
     fn get_version(&self) -> u64 {
         extract_version(&self.metadata)
     }
-    
+
     fn resource_kind() -> ResourceKind {
         ResourceKind::Endpoint
     }
-    
+
     fn kind_name() -> &'static str {
         "Endpoints"
     }
-    
+
     fn key_name(&self) -> String {
         if let Some(namespace) = &self.metadata.namespace {
             format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
@@ -27,4 +27,3 @@ impl ResourceMeta for Endpoints {
         }
     }
 }
-

@@ -5,8 +5,8 @@
 
 use pingora_load_balancing::selection::{BackendIter, BackendSelection};
 use pingora_load_balancing::Backend;
-use std::collections::{BTreeSet, BinaryHeap};
 use std::cmp::Reverse;
+use std::collections::{BTreeSet, BinaryHeap};
 use std::sync::Arc;
 
 use super::metrics;
@@ -44,13 +44,13 @@ impl BackendSelection for Ewma {
         // Heap sorts by (ewma_value, backend_index) in ascending order
         // Performance: O(n) for heap construction where n = number of active backends
         let mut heap = BinaryHeap::with_capacity(self.backends.len());
-        
+
         for (i, backend) in self.backends.iter().enumerate() {
             // Skip non-active backends (draining or removed)
             if !backend_state::is_active(&backend.addr) {
                 continue;
             }
-            
+
             let ewma = metrics::get_ewma(&backend.addr);
             heap.push(Reverse((ewma, i)));
         }
@@ -130,24 +130,24 @@ mod tests {
         let b2 = Backend::new("127.0.0.1:39081").unwrap();
         backends.insert(b1.clone());
         backends.insert(b2.clone());
-        
+
         let ewma = Arc::new(Ewma::build(&backends));
-        
+
         // Mark b1 as draining
         backend_state::mark_draining(&b1.addr);
-        
+
         // Should only select b2
         let mut iter = ewma.iter(b"test");
         let first = iter.next().unwrap();
         assert_eq!(first.addr, b2.addr);
-        
+
         let second = iter.next();
         assert!(second.is_none(), "Should not select draining backend");
-        
+
         // Cleanup
         backend_state::remove(&b1.addr);
     }
-    
+
     #[test]
     fn test_heap_ordering_with_multiple_backends() {
         let mut backends = BTreeSet::new();
@@ -157,20 +157,20 @@ mod tests {
         backends.insert(b1.clone());
         backends.insert(b2.clone());
         backends.insert(b3.clone());
-        
+
         // Set EWMA: b1=3ms, b2=1ms, b3=2ms
         metrics::update(&b1.addr, 3_000);
         metrics::update(&b2.addr, 1_000);
         metrics::update(&b3.addr, 2_000);
-        
+
         let ewma = Arc::new(Ewma::build(&backends));
         let mut iter = ewma.iter(b"test");
-        
+
         // Should be ordered by EWMA: b2(1ms) < b3(2ms) < b1(3ms)
         assert_eq!(iter.next().unwrap().addr, b2.addr);
         assert_eq!(iter.next().unwrap().addr, b3.addr);
         assert_eq!(iter.next().unwrap().addr, b1.addr);
-        
+
         // Cleanup
         metrics::remove(&b1.addr);
         metrics::remove(&b2.addr);
@@ -184,19 +184,18 @@ mod tests {
         let b2 = Backend::new("127.0.0.1:29081").unwrap();
         backends.insert(b1.clone());
         backends.insert(b2.clone());
-        
+
         // b1 has history (high latency), b2 is new
         metrics::update(&b1.addr, 10_000);
-        
+
         let ewma = Arc::new(Ewma::build(&backends));
         let mut iter = ewma.iter(b"test");
-        
+
         // b2 should be selected first (initial EWMA is low)
         let first = iter.next().unwrap();
         assert_eq!(first.addr, b2.addr);
-        
+
         // Cleanup
         metrics::remove(&b1.addr);
     }
 }
-

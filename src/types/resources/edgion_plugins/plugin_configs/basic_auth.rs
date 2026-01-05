@@ -1,8 +1,8 @@
 //! Basic Auth plugin configuration
 
 use crate::types::resources::gateway::SecretObjectReference;
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// Basic Auth plugin configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

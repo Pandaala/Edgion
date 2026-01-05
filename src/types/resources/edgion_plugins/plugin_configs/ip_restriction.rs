@@ -72,7 +72,6 @@ pub struct IpRestrictionConfig {
     pub default_action: DefaultAction,
 
     // === Runtime-only fields (not serialized) ===
-
     /// Compiled allow matcher (built from allow list)
     #[serde(skip)]
     #[schemars(skip)]
@@ -169,12 +168,16 @@ impl IpRestrictionConfig {
                 // Convert single IP to CIDR format if needed
                 let cidr_str = Self::to_cidr_format(ip_str)?;
 
-                builder.insert(&cidr_str, true)
+                builder
+                    .insert(&cidr_str, true)
                     .map_err(|e| format!("Invalid IP/CIDR in allow list '{}': {}", ip_str, e))?;
             }
 
-            self.allow_matcher = Some(builder.build()
-                .map_err(|e| format!("Failed to build allow matcher: {}", e))?);
+            self.allow_matcher = Some(
+                builder
+                    .build()
+                    .map_err(|e| format!("Failed to build allow matcher: {}", e))?,
+            );
         }
 
         // Build deny matcher from deny list
@@ -191,12 +194,16 @@ impl IpRestrictionConfig {
                 // Convert single IP to CIDR format if needed
                 let cidr_str = Self::to_cidr_format(ip_str)?;
 
-                builder.insert(&cidr_str, true)
+                builder
+                    .insert(&cidr_str, true)
                     .map_err(|e| format!("Invalid IP/CIDR in deny list '{}': {}", ip_str, e))?;
             }
 
-            self.deny_matcher = Some(builder.build()
-                .map_err(|e| format!("Failed to build deny matcher: {}", e))?);
+            self.deny_matcher = Some(
+                builder
+                    .build()
+                    .map_err(|e| format!("Failed to build deny matcher: {}", e))?,
+            );
         }
 
         Ok(())
@@ -217,15 +224,18 @@ impl IpRestrictionConfig {
             }
 
             // Validate prefix length
-            let prefix_len: u8 = parts[1].parse()
+            let prefix_len: u8 = parts[1]
+                .parse()
                 .map_err(|_| format!("Invalid prefix length in CIDR: {}", parts[1]))?;
 
             // Check prefix length bounds (0-32 for IPv4, 0-128 for IPv6)
             let ip: IpAddr = parts[0].parse().unwrap();
             let max_prefix = if ip.is_ipv4() { 32 } else { 128 };
             if prefix_len > max_prefix {
-                return Err(format!("Prefix length {} exceeds maximum {} for {:?}",
-                                   prefix_len, max_prefix, ip));
+                return Err(format!(
+                    "Prefix length {} exceeds maximum {} for {:?}",
+                    prefix_len, max_prefix, ip
+                ));
             }
         } else {
             // Validate single IP address
@@ -245,8 +255,7 @@ impl IpRestrictionConfig {
             Ok(ip_str.to_string())
         } else {
             // Single IP address - convert to CIDR
-            let ip: IpAddr = ip_str.parse()
-                .map_err(|_| format!("Invalid IP address: {}", ip_str))?;
+            let ip: IpAddr = ip_str.parse().map_err(|_| format!("Invalid IP address: {}", ip_str))?;
 
             let prefix_len = if ip.is_ipv4() { 32 } else { 128 };
             Ok(format!("{}/{}", ip_str, prefix_len))

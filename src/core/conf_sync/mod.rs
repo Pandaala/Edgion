@@ -1,5 +1,5 @@
-mod cache_server;
 mod cache_client;
+mod cache_server;
 mod proto;
 pub mod traits;
 pub mod types;
@@ -7,12 +7,12 @@ pub mod types;
 pub mod conf_client;
 pub mod conf_server;
 
+pub use crate::types::{GatewayBaseConf, ResourceMeta};
 pub use cache_client::ClientCache;
 pub use cache_server::ServerCache;
 pub use conf_client::{ConfigClient, ConfigSyncClient};
 pub use conf_server::{ConfigServer, ConfigSyncServer};
 pub use traits::{CacheEventDispatch, ConfHandler};
-pub use crate::types::{GatewayBaseConf, ResourceMeta};
 
 use std::sync::{Arc, OnceLock};
 

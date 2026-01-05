@@ -41,30 +41,19 @@ impl WeightedBackendTestSuite {
                         match request.send().await {
                             Ok(response) => {
                                 // 解析X-Debug-Access-Log header
-                                if let Some(debug_header) =
-                                    response.headers().get("X-Debug-Access-Log")
-                                {
+                                if let Some(debug_header) = response.headers().get("X-Debug-Access-Log") {
                                     if let Ok(debug_str) = debug_header.to_str() {
-                                        if let Ok(debug_json) =
-                                            serde_json::from_str::<serde_json::Value>(debug_str)
-                                        {
+                                        if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(debug_str) {
                                             // 提取backend name
-                                            if let Some(backend_name) =
-                                                debug_json["backend_context"]["name"].as_str()
-                                            {
-                                                *backend_counts
-                                                    .entry(backend_name.to_string())
-                                                    .or_insert(0) += 1;
+                                            if let Some(backend_name) = debug_json["backend_context"]["name"].as_str() {
+                                                *backend_counts.entry(backend_name.to_string()).or_insert(0) += 1;
                                             }
                                         }
                                     }
                                 }
                             }
                             Err(e) => {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Request failed: {}", e),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Request failed: {}", e));
                             }
                         }
                     }
@@ -125,29 +114,18 @@ impl WeightedBackendTestSuite {
 
                         match request.send().await {
                             Ok(response) => {
-                                if let Some(debug_header) =
-                                    response.headers().get("X-Debug-Access-Log")
-                                {
+                                if let Some(debug_header) = response.headers().get("X-Debug-Access-Log") {
                                     if let Ok(debug_str) = debug_header.to_str() {
-                                        if let Ok(debug_json) =
-                                            serde_json::from_str::<serde_json::Value>(debug_str)
-                                        {
-                                            if let Some(backend_name) =
-                                                debug_json["backend_context"]["name"].as_str()
-                                            {
-                                                *backend_counts
-                                                    .entry(backend_name.to_string())
-                                                    .or_insert(0) += 1;
+                                        if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(debug_str) {
+                                            if let Some(backend_name) = debug_json["backend_context"]["name"].as_str() {
+                                                *backend_counts.entry(backend_name.to_string()).or_insert(0) += 1;
                                             }
                                         }
                                     }
                                 }
                             }
                             Err(e) => {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Request failed: {}", e),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Request failed: {}", e));
                             }
                         }
                     }
@@ -208,10 +186,7 @@ impl WeightedBackendTestSuite {
                                 }
                             }
                             Err(e) => {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Request failed: {}", e),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Request failed: {}", e));
                             }
                         }
                     }
@@ -222,10 +197,7 @@ impl WeightedBackendTestSuite {
                             format!("All {} requests returned 200 OK", total_requests),
                         )
                     } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            format!("Inconsistent responses: {:?}", status_codes),
-                        )
+                        TestResult::failed(start.elapsed(), format!("Inconsistent responses: {:?}", status_codes))
                     }
                 })
             },
@@ -247,4 +219,3 @@ impl TestSuite for WeightedBackendTestSuite {
         ]
     }
 }
-

@@ -1,11 +1,10 @@
+use arc_swap::ArcSwap;
+use k8s_openapi::api::core::v1::Service;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use arc_swap::ArcSwap;
 use std::sync::LazyLock;
-use k8s_openapi::api::core::v1::Service;
 
-static GLOBAL_SERVICE_STORE: LazyLock<Arc<ServiceStore>> =
-    LazyLock::new(|| Arc::new(ServiceStore::new()));
+static GLOBAL_SERVICE_STORE: LazyLock<Arc<ServiceStore>> = LazyLock::new(|| Arc::new(ServiceStore::new()));
 
 pub fn get_global_service_store() -> Arc<ServiceStore> {
     GLOBAL_SERVICE_STORE.clone()
@@ -56,15 +55,14 @@ impl ServiceStore {
         let current = self.services.load();
         let current_map: &ServiceMap = &**current;
         let mut new_map: ServiceMap = current_map.clone();
-        
+
         for key in remove {
             new_map.remove(key);
         }
         for (key, service) in add_or_update {
             new_map.insert(key, service);
         }
-        
+
         self.services.store(Arc::new(Arc::new(new_map)));
     }
 }
-

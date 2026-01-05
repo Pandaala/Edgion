@@ -1,38 +1,38 @@
-use std::sync::Arc;
-use std::time::SystemTime;
 use async_trait::async_trait;
-use pingora_core::prelude::HttpPeer;
 use pingora_core::modules::http::HttpModules;
+use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::Digest;
 use pingora_core::Error;
 use pingora_http::ResponseHeader;
-use pingora_proxy::{ProxyHttp, Session, FailToProxy};
+use pingora_proxy::{FailToProxy, ProxyHttp, Session};
+use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::core::gateway::server_header::ServerHeaderOpts;
-use crate::core::routes::{DomainRouteRules, grpc_routes::DomainGrpcRouteRules};
 use crate::core::observe::AccessLogger;
-use crate::types::{EdgionHttpContext, EdgionGatewayConfig, Listener};
+use crate::core::routes::{grpc_routes::DomainGrpcRouteRules, DomainRouteRules};
+use crate::types::{EdgionGatewayConfig, EdgionHttpContext, Listener};
 
 // Sub-modules
 pub mod parse_timeout;
 
 // Pingora ProxyHttp trait implementation stages
-mod pg_new_ctx;
-mod pg_upstream_peer;
-mod pg_init_downstream_modules;
-mod pg_request_filter;
+mod pg_connected_to_upstream;
 mod pg_early_request_filter;
-mod pg_upstream_response_filter;
-mod pg_response_filter;
-mod pg_upstream_response_body_filter;
-mod pg_logging;
 mod pg_error_while_proxy;
 mod pg_fail_to_connect;
 mod pg_fail_to_proxy;
-mod pg_connected_to_upstream;
+mod pg_init_downstream_modules;
+mod pg_logging;
+mod pg_new_ctx;
+mod pg_request_filter;
+mod pg_response_filter;
+mod pg_upstream_peer;
+mod pg_upstream_response_body_filter;
+mod pg_upstream_response_filter;
 
 // Re-exports
-pub use parse_timeout::{ParsedTimeouts, ParsedClientTimeout, ParsedBackendTimeout};
+pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};
 
 /// EdgionHttp proxy structure
 pub struct EdgionHttp {
@@ -45,25 +45,25 @@ pub struct EdgionHttp {
     pub server_start_time: SystemTime,
 
     pub server_header_opts: ServerHeaderOpts,
-    
+
     /// HTTP domain routes for this gateway
     pub domain_routes: Arc<DomainRouteRules>,
-    
+
     /// gRPC domain routes for this gateway
     pub grpc_routes: Arc<DomainGrpcRouteRules>,
-    
+
     /// Access logger for writing access logs
     pub access_logger: Arc<AccessLogger>,
-    
+
     /// Global gateway configuration
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
-    
+
     /// Pre-parsed timeout configurations (always has default values if not configured)
     pub parsed_timeouts: ParsedTimeouts,
-    
+
     /// Whether HTTP/2 is enabled for this listener
     pub enable_http2: bool,
-    
+
     /// Real IP extractor for trusted proxy support
     pub real_ip_extractor: Option<Arc<crate::core::utils::RealIpExtractor>>,
 
@@ -163,12 +163,7 @@ impl ProxyHttp for EdgionHttp {
         pg_fail_to_connect::fail_to_connect(self, session, peer, ctx, e)
     }
 
-    async fn fail_to_proxy(
-        &self,
-        session: &mut Session,
-        e: &Error,
-        ctx: &mut Self::CTX,
-    ) -> FailToProxy
+    async fn fail_to_proxy(&self, session: &mut Session, e: &Error, ctx: &mut Self::CTX) -> FailToProxy
     where
         Self::CTX: Send + Sync,
     {
@@ -199,7 +194,7 @@ impl ProxyHttp for EdgionHttp {
             sock,
             digest,
             ctx,
-        ).await
+        )
+        .await
     }
 }
-

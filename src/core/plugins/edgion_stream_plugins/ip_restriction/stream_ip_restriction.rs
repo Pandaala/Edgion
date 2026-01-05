@@ -17,9 +17,7 @@
 
 use async_trait::async_trait;
 
-use crate::core::plugins::edgion_stream_plugins::{
-    StreamPlugin, StreamPluginResult, StreamContext,
-};
+use crate::core::plugins::edgion_stream_plugins::{StreamContext, StreamPlugin, StreamPluginResult};
 use crate::types::resources::edgion_plugins::IpRestrictionConfig;
 
 /// Stream IP Restriction plugin
@@ -56,7 +54,10 @@ impl StreamPlugin for StreamIpRestriction {
 
         // Check access using config's check_ip_access method
         if !self.config.check_ip_access(&client_ip) {
-            let reason = self.config.message.as_deref()
+            let reason = self
+                .config
+                .message
+                .as_deref()
                 .unwrap_or("IP address not allowed")
                 .to_string();
 
@@ -78,4 +79,3 @@ impl StreamPlugin for StreamIpRestriction {
         StreamPluginResult::Allow
     }
 }
-

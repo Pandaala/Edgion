@@ -1,8 +1,8 @@
+use crate::core::conf_sync::traits::ConfHandler;
+use crate::core::routes::udp_routes::{get_global_udp_route_manager, UdpRouteManager};
+use crate::types::{ResourceMeta, UDPRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use crate::core::conf_sync::traits::ConfHandler;
-use crate::core::routes::udp_routes::{UdpRouteManager, get_global_udp_route_manager};
-use crate::types::{UDPRoute, ResourceMeta};
 
 /// Implement ConfHandler for Arc<UdpRouteManager>
 impl ConfHandler<UDPRoute> for Arc<UdpRouteManager> {
@@ -14,7 +14,7 @@ impl ConfHandler<UDPRoute> for Arc<UdpRouteManager> {
         &self,
         add: HashMap<String, UDPRoute>,
         update: HashMap<String, UDPRoute>,
-        remove: HashSet<String>
+        remove: HashSet<String>,
     ) {
         (**self).partial_update(add, update, remove)
     }
@@ -30,7 +30,7 @@ impl ConfHandler<UDPRoute> for &'static UdpRouteManager {
         &self,
         add: HashMap<String, UDPRoute>,
         update: HashMap<String, UDPRoute>,
-        remove: HashSet<String>
+        remove: HashSet<String>,
     ) {
         (**self).partial_update(add, update, remove)
     }
@@ -43,12 +43,8 @@ pub fn create_udp_route_handler() -> Box<dyn ConfHandler<UDPRoute> + Send + Sync
 
 impl ConfHandler<UDPRoute> for UdpRouteManager {
     fn full_set(&self, data: &HashMap<String, UDPRoute>) {
-        tracing::info!(
-            component = "udp_route_manager",
-            cnt = data.len(),
-            "full set"
-        );
-        
+        tracing::info!(component = "udp_route_manager", cnt = data.len(), "full set");
+
         // Initialize all routes
         let mut processed_routes = HashMap::new();
         for (key, route) in data {
@@ -65,7 +61,7 @@ impl ConfHandler<UDPRoute> for UdpRouteManager {
                 }
             }
         }
-        
+
         self.replace_all(processed_routes);
     }
 
@@ -73,7 +69,7 @@ impl ConfHandler<UDPRoute> for UdpRouteManager {
         &self,
         add: HashMap<String, UDPRoute>,
         update: HashMap<String, UDPRoute>,
-        remove: HashSet<String>
+        remove: HashSet<String>,
     ) {
         tracing::info!(
             component = "udp_route_manager",
@@ -82,7 +78,7 @@ impl ConfHandler<UDPRoute> for UdpRouteManager {
             rm = remove.len(),
             "partial update"
         );
-        
+
         // Process additions
         for (key, route) in add {
             match self.initialize_route(route) {
@@ -99,7 +95,7 @@ impl ConfHandler<UDPRoute> for UdpRouteManager {
                 }
             }
         }
-        
+
         // Process updates
         for (key, route) in update {
             match self.initialize_route(route) {
@@ -119,7 +115,7 @@ impl ConfHandler<UDPRoute> for UdpRouteManager {
                 }
             }
         }
-        
+
         // Process removals
         for key in remove {
             self.remove_route(&key);
@@ -132,19 +128,17 @@ impl UdpRouteManager {
     /// Initialize a UDPRoute by setting up BackendSelector
     fn initialize_route(&self, mut route: UDPRoute) -> Result<Arc<UDPRoute>, String> {
         let route_key = route.key_name();
-        
+
         // Initialize rules
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
                 // Initialize BackendSelector
                 if let Some(backend_refs) = &rule.backend_refs {
                     let backends: Vec<_> = backend_refs.iter().cloned().collect();
-                    let weights: Vec<_> = backend_refs.iter()
-                        .map(|br| br.weight)
-                        .collect();
-                    
+                    let weights: Vec<_> = backend_refs.iter().map(|br| br.weight).collect();
+
                     rule.backend_finder.init(backends, weights);
-                    
+
                     tracing::debug!(
                         route = %route_key,
                         rule_idx,
@@ -154,7 +148,7 @@ impl UdpRouteManager {
                 }
             }
         }
-        
+
         Ok(Arc::new(route))
     }
 }
@@ -162,12 +156,12 @@ impl UdpRouteManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ResourceMeta;
     use crate::types::resources::common::ParentReference;
-    
+    use crate::types::ResourceMeta;
+
     fn create_test_udp_route(namespace: &str, name: &str, gateway: &str, listener_name: &str, port: i32) -> UDPRoute {
         use crate::types::resources::udp_route::*;
-        
+
         UDPRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),
@@ -201,42 +195,42 @@ mod tests {
             },
         }
     }
-    
+
     #[test]
     fn test_udp_route_full_set() {
         let manager = UdpRouteManager::new();
-        
+
         let mut data = HashMap::new();
         let route1 = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000);
         let route2 = create_test_udp_route("default", "route2", "gateway1", "udp-9001", 9001);
-        
+
         data.insert("default/route1".to_string(), route1);
         data.insert("default/route2".to_string(), route2);
-        
+
         manager.full_set(&data);
-        
+
         // Test via GatewayUdpRoutes
         let gateway_routes = manager.get_or_create_gateway_udp_routes("default", "gateway1");
         assert!(gateway_routes.match_route("udp-9000", 9000).is_some());
         assert!(gateway_routes.match_route("udp-9001", 9001).is_some());
         assert!(gateway_routes.match_route("udp-9002", 9002).is_none());
     }
-    
+
     #[test]
     fn test_udp_route_partial_update() {
         let manager = UdpRouteManager::new();
-        
+
         // Add a route
         let mut add = HashMap::new();
         let route1 = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000);
         add.insert("default/route1".to_string(), route1);
-        
+
         manager.partial_update(add, HashMap::new(), HashSet::new());
-        
+
         // Test via GatewayUdpRoutes
         let gateway_routes = manager.get_or_create_gateway_udp_routes("default", "gateway1");
         assert!(gateway_routes.match_route("udp-9000", 9000).is_some());
-        
+
         // Remove the route
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
@@ -244,4 +238,3 @@ mod tests {
         assert!(gateway_routes.match_route("udp-9000", 9000).is_none());
     }
 }
-

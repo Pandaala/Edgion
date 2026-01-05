@@ -1,6 +1,6 @@
 // 测试报告生成器
 
-use crate::framework::{TestResults, SuiteResult};
+use crate::framework::{SuiteResult, TestResults};
 use anyhow::Result;
 use chrono::Utc;
 use console::style;
@@ -14,60 +14,58 @@ impl ConsoleReporter {
     pub fn new() -> Self {
         Self
     }
-    
+
     pub fn report(&self, results: &TestResults, total_duration: Duration) {
         println!();
         self.print_suite_results(results);
         println!();
         self.print_summary(results, total_duration);
     }
-    
+
     fn print_suite_results(&self, results: &TestResults) {
         for suite_result in &results.suite_results {
             self.print_suite(suite_result);
         }
     }
-    
+
     fn print_suite(&self, suite: &SuiteResult) {
-        println!("{} {}", 
-            style("▶").cyan().bold(),
-            style(&suite.name).bold()
-        );
-        
+        println!("{} {}", style("▶").cyan().bold(), style(&suite.name).bold());
+
         for (test_name, test_result) in &suite.test_results {
             let status = if test_result.passed {
                 style("✓").green()
             } else {
                 style("✗").red()
             };
-            
-            println!("  {} {} ({:.2}s)", 
+
+            println!(
+                "  {} {} ({:.2}s)",
                 status,
                 test_name,
                 test_result.duration.as_secs_f64()
             );
-            
+
             if let Some(msg) = &test_result.message {
                 println!("    {}", style(msg).dim());
             }
-            
+
             if let Some(err) = &test_result.error {
                 println!("    {}", style(err).red());
             }
         }
     }
-    
+
     fn print_summary(&self, results: &TestResults, total_duration: Duration) {
         println!("{}", style("=".repeat(50)).dim());
         println!("{}", style("测试总结").bold());
         println!("{}", style("=".repeat(50)).dim());
-        
+
         println!("总测试数: {}", results.total_tests());
         println!("{}: {}", style("通过").green(), results.total_passed());
         println!("{}: {}", style("失败").red(), results.total_failed());
         println!("通过率: {:.1}%", results.pass_rate());
         println!("总耗时: {:.2}s", total_duration.as_secs_f64());
-        
+
         if results.has_failures() {
             println!("\n{}", style("⚠ 部分测试失败").red().bold());
         } else {
@@ -83,20 +81,21 @@ impl JsonReporter {
     pub fn new() -> Self {
         Self
     }
-    
+
     pub fn save_to_file(&self, results: &TestResults, total_duration: Duration, path: &str) -> Result<()> {
         let report = self.build_report(results, total_duration);
         let json = serde_json::to_string_pretty(&report)?;
         std::fs::write(path, json)?;
         Ok(())
     }
-    
+
     fn build_report(&self, results: &TestResults, total_duration: Duration) -> JsonReport {
-        let suites = results.suite_results
+        let suites = results
+            .suite_results
             .iter()
             .map(|suite| self.build_suite_report(suite))
             .collect();
-        
+
         JsonReport {
             timestamp: Utc::now(),
             total_duration: total_duration.as_secs_f64(),
@@ -107,19 +106,24 @@ impl JsonReporter {
             suites,
         }
     }
-    
+
     fn build_suite_report(&self, suite: &SuiteResult) -> SuiteReport {
-        let tests = suite.test_results
+        let tests = suite
+            .test_results
             .iter()
             .map(|(name, result)| TestReport {
                 name: name.clone(),
-                status: if result.passed { "passed".to_string() } else { "failed".to_string() },
+                status: if result.passed {
+                    "passed".to_string()
+                } else {
+                    "failed".to_string()
+                },
                 duration: result.duration.as_secs_f64(),
                 message: result.message.clone(),
                 error: result.error.clone(),
             })
             .collect();
-        
+
         SuiteReport {
             name: suite.name.clone(),
             passed: suite.passed_count(),
@@ -158,4 +162,3 @@ struct TestReport {
     message: Option<String>,
     error: Option<String>,
 }
-

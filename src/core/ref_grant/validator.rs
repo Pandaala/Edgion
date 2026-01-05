@@ -2,12 +2,9 @@
 //!
 //! Validates whether cross-namespace references are allowed by ReferenceGrants
 
-use std::sync::Arc;
-use crate::types::resources::{
-    http_route::BackendObjectReference,
-    gateway::SecretObjectReference,
-};
 use super::ReferenceGrantStore;
+use crate::types::resources::{gateway::SecretObjectReference, http_route::BackendObjectReference};
+use std::sync::Arc;
 
 /// Validator for cross-namespace references
 pub struct CrossNamespaceValidator {
@@ -20,7 +17,7 @@ impl CrossNamespaceValidator {
             store: super::get_global_reference_grant_store(),
         }
     }
-    
+
     /// Validate Route's backendRefs for cross-namespace references
     ///
     /// # Arguments
@@ -37,7 +34,7 @@ impl CrossNamespaceValidator {
         backend_refs: &[BackendObjectReference],
     ) -> Vec<String> {
         let mut errors = Vec::new();
-        
+
         for backend_ref in backend_refs {
             if let Some(backend_ns) = &backend_ref.namespace {
                 if backend_ns != route_namespace {
@@ -47,7 +44,7 @@ impl CrossNamespaceValidator {
                         &backend_ref.group
                     };
                     let kind = backend_ref.kind.as_deref().unwrap_or("Service");
-                    
+
                     let allowed = self.store.check_reference_allowed(
                         route_namespace,
                         "gateway.networking.k8s.io",
@@ -57,7 +54,7 @@ impl CrossNamespaceValidator {
                         kind,
                         Some(&backend_ref.name),
                     );
-                    
+
                     if !allowed {
                         errors.push(format!(
                             "Cross-namespace reference not allowed: {} in namespace '{}' cannot reference {}/{} in namespace '{}' (no ReferenceGrant)",
@@ -68,10 +65,10 @@ impl CrossNamespaceValidator {
                 }
             }
         }
-        
+
         errors
     }
-    
+
     /// Validate Gateway's certificateRefs for cross-namespace references
     ///
     /// # Arguments
@@ -86,7 +83,7 @@ impl CrossNamespaceValidator {
         certificate_refs: &[SecretObjectReference],
     ) -> Vec<String> {
         let mut errors = Vec::new();
-        
+
         for cert_ref in certificate_refs {
             if let Some(cert_ns) = &cert_ref.namespace {
                 if cert_ns != gateway_namespace {
@@ -99,7 +96,7 @@ impl CrossNamespaceValidator {
                         cert_ref.kind.as_deref().unwrap_or("Secret"),
                         Some(&cert_ref.name),
                     );
-                    
+
                     if !allowed {
                         errors.push(format!(
                             "Cross-namespace reference not allowed: Gateway in namespace '{}' cannot reference Secret '{}' in namespace '{}' (no ReferenceGrant)",
@@ -109,7 +106,7 @@ impl CrossNamespaceValidator {
                 }
             }
         }
-        
+
         errors
     }
 }
@@ -175,10 +172,10 @@ pub fn validate_http_route_if_enabled(route: &crate::types::resources::HTTPRoute
     if !is_validation_enabled() {
         return Vec::new();
     }
-    
+
     let validator = CrossNamespaceValidator::new();
     let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-    
+
     let mut errors = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {
@@ -214,10 +211,10 @@ pub fn validate_grpc_route_if_enabled(route: &crate::types::resources::GRPCRoute
     if !is_validation_enabled() {
         return Vec::new();
     }
-    
+
     let validator = CrossNamespaceValidator::new();
     let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-    
+
     let mut errors = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {
@@ -253,10 +250,10 @@ pub fn validate_tcp_route_if_enabled(route: &crate::types::resources::TCPRoute) 
     if !is_validation_enabled() {
         return Vec::new();
     }
-    
+
     let validator = CrossNamespaceValidator::new();
     let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-    
+
     let mut errors = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {
@@ -291,10 +288,10 @@ pub fn validate_udp_route_if_enabled(route: &crate::types::resources::UDPRoute) 
     if !is_validation_enabled() {
         return Vec::new();
     }
-    
+
     let validator = CrossNamespaceValidator::new();
     let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-    
+
     let mut errors = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {
@@ -329,10 +326,10 @@ pub fn validate_tls_route_if_enabled(route: &crate::types::resources::TLSRoute) 
     if !is_validation_enabled() {
         return Vec::new();
     }
-    
+
     let validator = CrossNamespaceValidator::new();
     let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-    
+
     let mut errors = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {

@@ -57,7 +57,6 @@ pub struct EdgionControllerConfig {
     pub k8s_mode: Option<bool>,
 }
 
-
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
 pub struct ServerConfig {
@@ -249,7 +248,6 @@ fn default_buffer_size() -> usize {
     10_000
 }
 
-
 fn default_debug_enabled() -> bool {
     true
 }
@@ -283,9 +281,7 @@ impl Default for LoggingConfig {
 
 impl Default for ConfConfig {
     fn default() -> Self {
-        Self {
-            dir: None,
-        }
+        Self { dir: None }
     }
 }
 

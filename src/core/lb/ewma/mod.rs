@@ -23,6 +23,5 @@ pub mod metrics;
 mod selection;
 
 // Re-export public APIs
-pub use metrics::{update, get_ewma, remove, set_alpha, get_alpha};
+pub use metrics::{get_alpha, get_ewma, remove, set_alpha, update};
 pub use selection::Ewma;
-

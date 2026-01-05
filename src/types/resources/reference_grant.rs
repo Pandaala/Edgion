@@ -130,22 +130,21 @@ impl ReferenceGrant {
         to_name: Option<&str>,
     ) -> bool {
         // Check if from matches
-        let from_matches = self.spec.from.iter().any(|f| {
-            f.namespace == from_namespace 
-                && f.group == from_group 
-                && f.kind == from_kind
-        });
-        
+        let from_matches = self
+            .spec
+            .from
+            .iter()
+            .any(|f| f.namespace == from_namespace && f.group == from_group && f.kind == from_kind);
+
         if !from_matches {
             return false;
         }
-        
+
         // Check if to matches
-        self.spec.to.iter().any(|t| {
-            t.group == to_group 
-                && t.kind == to_kind
-                && (t.name.is_none() || t.name.as_deref() == to_name)
-        })
+        self.spec
+            .to
+            .iter()
+            .any(|t| t.group == to_group && t.kind == to_kind && (t.name.is_none() || t.name.as_deref() == to_name))
     }
 }
 
@@ -309,4 +308,3 @@ mod tests {
         ));
     }
 }
-

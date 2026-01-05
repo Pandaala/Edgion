@@ -21,7 +21,7 @@ impl LbPolicy {
             _ => None,
         }
     }
-    
+
     /// Get policy name
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -30,18 +30,18 @@ impl LbPolicy {
             Self::Ewma => "ewma",
         }
     }
-    
+
     /// Parse LB policies from comma-separated string
-    /// 
+    ///
     /// Supports multiple aliases for each policy type:
     /// - Consistent: "consistent", "consistent-hash", "ketama" (兼容旧配置)
     /// - LeastConnection: "leastconn", "least-connection", "leastconnection", "least_connection"
-    /// 
+    ///
     /// # Examples
     /// ```ignore
     /// let policies = LbPolicy::parse_from_string("consistent");
     /// assert_eq!(policies, vec![LbPolicy::Consistent]);
-    /// 
+    ///
     /// let policies = LbPolicy::parse_from_string("consistent,leastconn");
     /// assert_eq!(policies.len(), 2);
     /// ```

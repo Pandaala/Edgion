@@ -3,10 +3,10 @@
 //! This module provides global storage for ReferenceGrant resources with
 //! efficient lookup by to_namespace for permission checking.
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 use arc_swap::ArcSwap;
+use std::collections::HashMap;
 use std::sync::OnceLock;
+use std::sync::{Arc, RwLock};
 
 use crate::types::resources::ReferenceGrant;
 
@@ -33,7 +33,7 @@ pub struct ReferenceGrantStore {
     /// Raw storage: namespace/name -> ReferenceGrant
     /// Protected by RwLock for rare write operations
     grants: Arc<RwLock<RawGrantMap>>,
-    
+
     /// Indexed storage: to_namespace -> Vec<ReferenceGrant>
     /// Used for fast permission checking without locks
     grants_by_to_namespace: ArcSwap<IndexedGrantMap>,
@@ -103,16 +103,9 @@ impl ReferenceGrantStore {
         let grants = self.get_by_to_namespace(to_namespace);
 
         // Check if any grant allows this reference
-        grants.iter().any(|grant| {
-            grant.allows_reference(
-                from_namespace,
-                from_group,
-                from_kind,
-                to_group,
-                to_kind,
-                to_name,
-            )
-        })
+        grants
+            .iter()
+            .any(|grant| grant.allows_reference(from_namespace, from_group, from_kind, to_group, to_kind, to_name))
     }
 
     /// Replace all grants and rebuild all indexes
@@ -143,7 +136,7 @@ impl ReferenceGrantStore {
         // Update raw storage
         {
             let mut grants = self.grants.write().unwrap();
-            
+
             // Add or update
             for (key, grant) in add_or_update {
                 grants.insert(key, grant);
@@ -165,10 +158,7 @@ impl ReferenceGrantStore {
 
         for grant in grants.values() {
             if let Some(ns) = grant.namespace() {
-                index
-                    .entry(ns.to_string())
-                    .or_insert_with(Vec::new)
-                    .push(grant.clone());
+                index.entry(ns.to_string()).or_insert_with(Vec::new).push(grant.clone());
             }
         }
 
@@ -244,7 +234,7 @@ impl ReferenceGrantStore {
     ) -> std::collections::HashSet<String> {
         let grants = self.grants.read().unwrap();
         let mut affected = std::collections::HashSet::new();
-        
+
         // Extract from new/updated grants
         for grant in add.values().chain(update.values()) {
             if let Some(ns) = grant.namespace() {
@@ -254,7 +244,7 @@ impl ReferenceGrantStore {
                 affected.insert(from.namespace.clone());
             }
         }
-        
+
         // Extract from removed grants
         for key in remove {
             if let Some(grant) = grants.get(key) {
@@ -266,7 +256,7 @@ impl ReferenceGrantStore {
                 }
             }
         }
-        
+
         affected
     }
 
@@ -322,10 +312,10 @@ mod tests {
     fn test_basic_crud() {
         let store = ReferenceGrantStore::new();
         let grant = create_test_grant("ns-target", "test-grant", "ns-source", "HTTPRoute", "Service");
-        
+
         let mut grants = HashMap::new();
         grants.insert("ns-target/test-grant".to_string(), Arc::new(grant));
-        
+
         store.replace_all(grants);
 
         // Test get
@@ -340,16 +330,16 @@ mod tests {
     #[test]
     fn test_index_query() {
         let store = ReferenceGrantStore::new();
-        
+
         let grant1 = create_test_grant("ns1", "grant1", "ns-source", "HTTPRoute", "Service");
         let grant2 = create_test_grant("ns1", "grant2", "ns-source2", "TCPRoute", "Service");
         let grant3 = create_test_grant("ns2", "grant3", "ns-source", "HTTPRoute", "Secret");
-        
+
         let mut grants = HashMap::new();
         grants.insert("ns1/grant1".to_string(), Arc::new(grant1));
         grants.insert("ns1/grant2".to_string(), Arc::new(grant2));
         grants.insert("ns2/grant3".to_string(), Arc::new(grant3));
-        
+
         store.replace_all(grants);
 
         // Query by to_namespace
@@ -366,7 +356,7 @@ mod tests {
     #[test]
     fn test_incremental_update() {
         let store = ReferenceGrantStore::new();
-        
+
         // Initial state
         let grant1 = create_test_grant("ns1", "grant1", "ns-source", "HTTPRoute", "Service");
         let mut grants = HashMap::new();
@@ -396,7 +386,7 @@ mod tests {
     #[test]
     fn test_incremental_update_removes_empty_namespace() {
         let store = ReferenceGrantStore::new();
-        
+
         // Initial state: one grant in ns1
         let grant1 = create_test_grant("ns1", "grant1", "ns-source", "HTTPRoute", "Service");
         let mut grants = HashMap::new();
@@ -417,7 +407,7 @@ mod tests {
     #[test]
     fn test_check_reference_allowed_same_namespace() {
         let store = ReferenceGrantStore::new();
-        
+
         // Same namespace references should always be allowed
         assert!(store.check_reference_allowed(
             "ns1",
@@ -433,7 +423,7 @@ mod tests {
     #[test]
     fn test_check_reference_allowed_cross_namespace() {
         let store = ReferenceGrantStore::new();
-        
+
         // Create a grant that allows HTTPRoute from ns-source to access Service in ns-target
         let grant = create_test_grant("ns-target", "test-grant", "ns-source", "HTTPRoute", "Service");
         let mut grants = HashMap::new();
@@ -477,11 +467,11 @@ mod tests {
     #[test]
     fn test_check_reference_allowed_multiple_grants() {
         let store = ReferenceGrantStore::new();
-        
+
         // Create two grants in ns-target
         let grant1 = create_test_grant("ns-target", "grant1", "ns-source1", "HTTPRoute", "Service");
         let grant2 = create_test_grant("ns-target", "grant2", "ns-source2", "TCPRoute", "Service");
-        
+
         let mut grants = HashMap::new();
         grants.insert("ns-target/grant1".to_string(), Arc::new(grant1));
         grants.insert("ns-target/grant2".to_string(), Arc::new(grant2));
@@ -521,4 +511,3 @@ mod tests {
         ));
     }
 }
-

@@ -2,10 +2,10 @@
 //!
 //! BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
 
-use std::collections::HashMap;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// API group for BackendTLSPolicy
 pub const BACKEND_TLS_POLICY_GROUP: &str = "gateway.networking.k8s.io";
@@ -157,17 +157,15 @@ impl BackendTLSPolicy {
     /// Check if this policy applies to a given target
     pub fn applies_to(&self, group: &str, kind: &str, name: &str, namespace: Option<&str>) -> bool {
         let policy_ns = self.namespace();
-        
+
         self.spec.target_refs.iter().any(|target| {
             // Check group, kind, and name match
-            let matches = target.group == group 
-                && target.kind == kind 
-                && target.name == name;
-            
+            let matches = target.group == group && target.kind == kind && target.name == name;
+
             if !matches {
                 return false;
             }
-            
+
             // Check namespace match
             match (&target.namespace, namespace, policy_ns) {
                 // Target has explicit namespace
@@ -181,4 +179,3 @@ impl BackendTLSPolicy {
         })
     }
 }
-

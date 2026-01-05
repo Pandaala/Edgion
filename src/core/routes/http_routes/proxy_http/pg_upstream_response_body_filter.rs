@@ -1,6 +1,6 @@
-use pingora_proxy::Session;
-use crate::types::EdgionHttpContext;
 use super::EdgionHttp;
+use crate::types::EdgionHttpContext;
+use pingora_proxy::Session;
 
 #[inline]
 pub fn upstream_response_body_filter(
@@ -20,4 +20,3 @@ pub fn upstream_response_body_filter(
     }
     Ok(())
 }
-

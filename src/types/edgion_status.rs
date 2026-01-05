@@ -2,7 +2,6 @@
 /// Each error code has a fixed numeric code (0Xxx format) and a message string
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum EdgionStatus {
-
     Unknown = 999,
 
     UnknownGRPCERR = 999_01,
@@ -18,7 +17,7 @@ pub enum EdgionStatus {
 
     /// SNI and Host header mismatch (HTTP 421)
     SniHostMismatch = 421_01,
-    
+
     /// Client certificate validation failed (HTTP 403)
     ClientCertInvalid = 403_01,
 
@@ -77,7 +76,4 @@ pub enum EdgionStatus {
 
     /// gRPC backend refs not found
     GrpcUpstreamNotBackendRefs = 503_11,
-
 }
-
-

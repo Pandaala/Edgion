@@ -1,8 +1,8 @@
-use pingora_core::{Error, ErrorType};
-use pingora_core::prelude::HttpPeer;
-use pingora_proxy::Session;
-use crate::types::EdgionHttpContext;
 use super::EdgionHttp;
+use crate::types::EdgionHttpContext;
+use pingora_core::prelude::HttpPeer;
+use pingora_core::{Error, ErrorType};
+use pingora_proxy::Session;
 
 /// fail_to_connect - called when connection to upstream fails
 #[inline]
@@ -29,15 +29,18 @@ pub fn fail_to_connect(
 
     // Check request timeout dynamically before allowing retry
     // If timeout is exceeded, block all retries and return 504
-    let request_timeout = ctx.route_unit.as_ref()
+    let request_timeout = ctx
+        .route_unit
+        .as_ref()
         .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
         .and_then(|timeouts| timeouts.request_timeout)
         .or_else(|| {
-            ctx.grpc_route_unit.as_ref()
+            ctx.grpc_route_unit
+                .as_ref()
                 .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
                 .and_then(|timeouts| timeouts.request_timeout)
         });
-    
+
     if let Some(timeout) = request_timeout {
         let elapsed = ctx.start_time.elapsed();
         if elapsed >= timeout {
@@ -55,16 +58,17 @@ pub fn fail_to_connect(
             return e;
         }
     }
-    
+
     // Determine max_retries: route annotation > global config
-    let max_retries = ctx.route_unit.as_ref()
+    let max_retries = ctx
+        .route_unit
+        .as_ref()
         .and_then(|unit| unit.rule.parsed_max_retries)
         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
-    
+
     if ctx.try_cnt <= max_retries {
         e.set_retry(true);
     }
 
     e
 }
-

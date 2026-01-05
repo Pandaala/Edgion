@@ -2,16 +2,16 @@
 //!
 //! UDPRoute defines UDP rules for mapping requests to backends
 
-use std::fmt;
-use std::sync::Arc;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::Arc;
 
+use super::common::ParentReference;
+use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::lb::BackendSelector;
 use crate::core::plugins::{PluginRuntime, StreamPluginRuntime};
-use super::http_route_preparse::BackendExtensionInfo;
-use super::common::ParentReference;
 
 /// API group for UDPRoute
 pub const UDP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -123,4 +123,3 @@ pub struct UDPBackendRef {
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
 }
-

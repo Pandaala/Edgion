@@ -1,5 +1,5 @@
 //! Client certificate extraction utilities
-//! 
+//!
 //! Extracts client certificate information from SSL connections after TLS handshake
 //!
 //! **Note**: This module requires BoringSSL or OpenSSL for X.509 certificate access.
@@ -13,7 +13,7 @@ use pingora_core::tls::x509::X509Ref;
 pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
     // Get peer certificate (client certificate in mTLS)
     let cert = ssl.peer_certificate()?;
-    
+
     // Extract subject DN with efficient string building
     let mut subject = String::with_capacity(128);
     let mut first = true;
@@ -22,45 +22,36 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
             subject.push_str(", ");
         }
         first = false;
-        
+
         let key = entry.object().nid().short_name().unwrap_or("?");
         subject.push_str(key);
         subject.push('=');
-        
+
         match entry.data().as_utf8() {
             Ok(s) => subject.push_str(&s),
             Err(_) => subject.push('?'),
         }
     }
-    
+
     // Extract Common Name (CN) from subject
-    let cn = cert.subject_name()
+    let cn = cert
+        .subject_name()
         .entries()
-        .find(|entry| {
-            entry.object().nid().short_name()
-                .map(|s| s == "CN")
-                .unwrap_or(false)
-        })
-        .and_then(|entry| {
-            entry.data().as_utf8()
-                .map(|s| s.to_string())
-                .ok()
-        });
-    
+        .find(|entry| entry.object().nid().short_name().map(|s| s == "CN").unwrap_or(false))
+        .and_then(|entry| entry.data().as_utf8().map(|s| s.to_string()).ok());
+
     // Extract Subject Alternative Names (SANs)
     let sans = extract_sans(&cert);
-    
+
     // Calculate certificate fingerprint (SHA256)
-    let fingerprint = cert.digest(pingora_core::tls::hash::MessageDigest::sha256())
+    let fingerprint = cert
+        .digest(pingora_core::tls::hash::MessageDigest::sha256())
         .map(|digest| {
             let bytes = digest.as_ref();
-            bytes.iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join(":")
+            bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(":")
         })
         .unwrap_or_else(|_| "unknown".to_string());
-    
+
     Some(ClientCertInfo {
         subject,
         sans,
@@ -72,7 +63,7 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
 /// Extract Subject Alternative Names from certificate
 fn extract_sans(cert: &X509Ref) -> Vec<String> {
     let mut sans = Vec::new();
-    
+
     // Get Subject Alternative Names extension
     if let Some(san_ext) = cert.subject_alt_names() {
         for san in san_ext {
@@ -86,10 +77,7 @@ fn extract_sans(cert: &X509Ref) -> Vec<String> {
                     4 => {
                         // IPv4: 4 bytes
                         // SAFETY: We've verified length is 4, so indexing [0..3] is safe
-                        format!(
-                            "{}.{}.{}.{}",
-                            ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
-                        )
+                        format!("{}.{}.{}.{}", ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3])
                     }
                     16 => {
                         // IPv6: 16 bytes - use std::net::Ipv6Addr for RFC-compliant formatting
@@ -97,10 +85,7 @@ fn extract_sans(cert: &X509Ref) -> Vec<String> {
                         let octets: [u8; 16] = match ip_bytes.try_into() {
                             Ok(arr) => arr,
                             Err(_) => {
-                                tracing::error!(
-                                    "Failed to convert IPv6 bytes to array, length: {}",
-                                    ip_bytes.len()
-                                );
+                                tracing::error!("Failed to convert IPv6 bytes to array, length: {}", ip_bytes.len());
                                 continue;
                             }
                         };
@@ -123,7 +108,7 @@ fn extract_sans(cert: &X509Ref) -> Vec<String> {
             }
         }
     }
-    
+
     sans
 }
 
@@ -135,4 +120,3 @@ mod tests {
         // Real tests should be in integration tests with actual certificates
     }
 }
-

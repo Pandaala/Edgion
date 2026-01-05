@@ -30,12 +30,12 @@ pub struct PluginMetaDataSpec {
     /// Only one of stringList, ipList, or regexList should be set
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub string_list: Option<StringListData>,
-    
+
     /// IpList contains a list of IP addresses/CIDR ranges
     /// Only one of stringList, ipList, or regexList should be set
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ip_list: Option<IpListData>,
-    
+
     /// RegexList contains a list of regex patterns with metadata
     /// Only one of stringList, ipList, or regexList should be set
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -56,19 +56,19 @@ pub struct StringListData {
 pub struct StringItem {
     /// Key is the string value (required)
     pub key: String,
-    
+
     /// Code is a numeric code associated with this item
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<u16>,
-    
+
     /// Priority determines the order of evaluation
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<u32>,
-    
+
     /// ID is a unique identifier for this item
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    
+
     /// Behavior defines how this item should be processed
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior: Option<String>,
@@ -96,19 +96,19 @@ pub struct RegexListData {
 pub struct RegexItem {
     /// Key is the regex pattern (required)
     pub key: String,
-    
+
     /// Code is a numeric code associated with this pattern
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<u16>,
-    
+
     /// Priority determines the order of pattern evaluation
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<u32>,
-    
+
     /// ID is a unique identifier for this pattern
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    
+
     /// Behavior defines how this pattern should be processed
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior: Option<String>,
@@ -127,14 +127,14 @@ impl PluginMetaData {
         if self.spec.regex_list.is_some() {
             count += 1;
         }
-        
+
         match count {
             0 => Err("PluginMetaData must have one of stringList, ipList, or regexList set".to_string()),
             1 => Ok(()),
             _ => Err("PluginMetaData can only have one of stringList, ipList, or regexList set".to_string()),
         }
     }
-    
+
     /// Get the data type of this metadata
     pub fn data_type(&self) -> Option<&str> {
         if self.spec.string_list.is_some() {
@@ -148,4 +148,3 @@ impl PluginMetaData {
         }
     }
 }
-

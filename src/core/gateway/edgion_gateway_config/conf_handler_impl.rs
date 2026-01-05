@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 /// Global store for EdgionGatewayConfig resources
-static EDGION_GATEWAY_CONFIG_STORE: std::sync::LazyLock<Arc<RwLock<Vec<EdgionGatewayConfig>>>> = 
+static EDGION_GATEWAY_CONFIG_STORE: std::sync::LazyLock<Arc<RwLock<Vec<EdgionGatewayConfig>>>> =
     std::sync::LazyLock::new(|| Arc::new(RwLock::new(Vec::new())));
 
 /// Get a reference to the global EdgionGatewayConfig store
@@ -42,7 +42,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             "EdgionGatewayConfig full_set: received {} EdgionGatewayConfig resources",
             data.len()
         );
-        
+
         // Update global store
         let mut store = EDGION_GATEWAY_CONFIG_STORE.write().unwrap();
         store.clear();
@@ -63,7 +63,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         remove: HashSet<String>,
     ) {
         let mut store = EDGION_GATEWAY_CONFIG_STORE.write().unwrap();
-        
+
         if !add.is_empty() {
             tracing::info!(
                 count = add.len(),
@@ -121,4 +121,3 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
 pub fn create_edgion_gateway_config_handler() -> Box<dyn ConfHandler<EdgionGatewayConfig>> {
     Box::new(EdgionGatewayConfigHandler::new())
 }
-

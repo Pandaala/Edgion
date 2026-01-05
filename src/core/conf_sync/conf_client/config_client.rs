@@ -1,11 +1,11 @@
-use crate::types::{GatewayBaseConf, ResourceMeta, all_resource_type_names};
+use crate::core::backends::{create_endpoint_handler, create_ep_slice_handler, create_service_handler};
 use crate::core::conf_sync::cache_client::ClientCache;
+use crate::core::conf_sync::traits::{CacheEventDispatch, ConfHandler, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::conf_sync::types::ListData;
-use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange, ConfHandler};
-use crate::core::utils::format_resource_info;
 use crate::core::routes::create_route_manager_handler;
-use crate::core::backends::{create_service_handler, create_ep_slice_handler, create_endpoint_handler};
+use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
+use crate::types::{all_resource_type_names, GatewayBaseConf, ResourceMeta};
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Endpoints, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
@@ -62,60 +62,61 @@ impl ConfigClient {
         let plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let plugin_handler = crate::core::plugins::edgion_plugins::create_plugin_handler();
         plugins_cache.set_conf_processor(plugin_handler);
-        
+
         // Register TcpRouteManager as the handler for TCPRoute resources
         let tcp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tcp_route_handler = crate::core::routes::tcp_routes::create_tcp_route_handler();
         tcp_routes_cache.set_conf_processor(tcp_route_handler);
-        
+
         // Register UdpRouteManager as the handler for UDPRoute resources
         let udp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let udp_route_handler = crate::core::routes::udp_routes::create_udp_route_handler();
         udp_routes_cache.set_conf_processor(udp_route_handler);
-        
+
         // Register GrpcRouteManager as the handler for GRPCRoute resources
         let grpc_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let grpc_route_handler = crate::core::routes::grpc_routes::create_grpc_route_handler();
         grpc_routes_cache.set_conf_processor(grpc_route_handler);
-        
+
         // Register TlsRouteManager as the handler for TLSRoute resources
         let tls_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_route_handler = crate::core::routes::tls_routes::create_tls_route_handler();
         tls_routes_cache.set_conf_processor(tls_route_handler);
-        
+
         // Register TlsStore as the handler for EdgionTls resources
         let edgion_tls_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_handler = crate::core::tls::create_tls_handler();
         edgion_tls_cache.set_conf_processor(tls_handler);
-        
+
         // Register StreamPluginStore as the handler for EdgionStreamPlugins resources
         let stream_plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let stream_plugin_handler = crate::core::plugins::edgion_stream_plugins::create_stream_plugin_handler();
         stream_plugins_cache.set_conf_processor(stream_plugin_handler);
-        
+
         // Register ReferenceGrantStore as the handler for ReferenceGrant resources
         let reference_grants_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let reference_grant_handler = crate::core::ref_grant::create_reference_grant_handler();
         reference_grants_cache.set_conf_processor(reference_grant_handler);
-        
+
         // Register BackendTLSPolicyStore as the handler for BackendTLSPolicy resources
         let backend_tls_policies_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let backend_tls_policy_handler = crate::core::backends::create_backend_tls_policy_handler();
         backend_tls_policies_cache.set_conf_processor(backend_tls_policy_handler);
-        
+
         // Register handlers for base conf resources
         let gateway_classes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let gateway_class_handler = crate::core::gateway::gateway_class::create_gateway_class_handler();
         gateway_classes_cache.set_conf_processor(gateway_class_handler);
-        
+
         let gateways_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let gateway_handler = crate::core::gateway::gateway::create_gateway_handler();
         gateways_cache.set_conf_processor(gateway_handler);
-        
+
         let edgion_gateway_configs_cache = ClientCache::new(client_id.clone(), client_name.clone());
-        let edgion_gateway_config_handler = crate::core::gateway::edgion_gateway_config::create_edgion_gateway_config_handler();
+        let edgion_gateway_config_handler =
+            crate::core::gateway::edgion_gateway_config::create_edgion_gateway_config_handler();
         edgion_gateway_configs_cache.set_conf_processor(edgion_gateway_config_handler);
-        
+
         Self {
             base_conf: RwLock::new(None),
             // Base conf caches with handlers registered
@@ -268,20 +269,19 @@ impl ConfigClient {
     fn all_caches_status(&self) -> Vec<(&'static str, bool)> {
         all_resource_type_names()
             .into_iter()
-            .filter_map(|name| {
-                self.get_cache_status(name).map(|ready| (name, ready))
-            })
+            .filter_map(|name| self.get_cache_status(name).map(|ready| (name, ready)))
             .collect()
     }
 
     /// Check if all caches are ready
     /// Returns Ok(()) if all caches are ready, Err with waiting message otherwise
     pub fn is_ready(&self) -> Result<(), String> {
-        let not_ready: Vec<&str> = self.all_caches_status()
+        let not_ready: Vec<&str> = self
+            .all_caches_status()
             .into_iter()
             .filter_map(|(name, ready)| if !ready { Some(name) } else { None })
             .collect();
-        
+
         if not_ready.is_empty() {
             Ok(())
         } else {
@@ -413,13 +413,12 @@ impl ConfigClient {
             ResourceKind::Secret => {
                 // Secret now follows related resources, not stored separately
                 return Err("Secret resources are not stored in ConfigClient".to_string());
-            }
-            // ResourceKind::Secret => {
-            //     let list_data = self.secrets.list();
-            //     let json = serde_json::to_string(&list_data.data)
-            //         .map_err(|e| format!("Failed to serialize Secret data: {}", e))?;
-            //     (json, list_data.resource_version)
-            // }
+            } // ResourceKind::Secret => {
+              //     let list_data = self.secrets.list();
+              //     let json = serde_json::to_string(&list_data.data)
+              //         .map_err(|e| format!("Failed to serialize Secret data: {}", e))?;
+              //     (json, list_data.resource_version)
+              // }
         };
 
         Ok(ListDataSimple {

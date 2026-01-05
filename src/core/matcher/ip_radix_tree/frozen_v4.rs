@@ -131,11 +131,7 @@ impl FrozenIpV4RadixTree {
             let bit = (ip >> (31 - current_bit)) & 1;
 
             // Traverse to child based on bit value
-            let next_idx = if bit == 0 {
-                node.left_index
-            } else {
-                node.right_index
-            };
+            let next_idx = if bit == 0 { node.left_index } else { node.right_index };
 
             if next_idx == 0 {
                 // No child, stop here

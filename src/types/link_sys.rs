@@ -10,11 +10,11 @@ pub struct RotationConfig {
     /// Rotation strategy
     #[serde(default)]
     pub strategy: RotationStrategy,
-    
+
     /// Maximum number of rotated files to keep (0 = unlimited)
     #[serde(default)]
     pub max_files: usize,
-    
+
     /// Interval in seconds to check for rotation (default: 30)
     #[serde(default = "default_check_interval_secs")]
     pub check_interval_secs: u64,
@@ -62,12 +62,12 @@ pub struct LocalFileWriterCfg {
     /// Relative path for log file (e.g. "logs/edgion_access.log")
     #[serde(default = "default_access_log_path")]
     pub path: String,
-    
+
     /// Queue size for the write queue (optional)
     /// If not set, defaults to `cpu_cores * 10_000`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_size: Option<usize>,
-    
+
     /// Rotation configuration (optional)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation: Option<RotationConfig>,
@@ -88,10 +88,10 @@ impl Default for LocalFileWriterCfg {
 }
 
 /// String output destination configuration
-/// 
+///
 /// Currently supports:
 /// - LocalFileWriter: write to local file with rotation
-/// 
+///
 /// Future support:
 /// - Elasticsearch
 /// - Kafka
@@ -131,12 +131,12 @@ impl LocalFileWriterConfig {
             rotation: RotationConfig::default(),
         }
     }
-    
+
     pub fn with_queue_size(mut self, size: usize) -> Self {
         self.queue_size = Some(size);
         self
     }
-    
+
     pub fn with_rotation(mut self, rotation: RotationConfig) -> Self {
         self.rotation = rotation;
         self

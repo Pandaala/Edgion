@@ -2,9 +2,9 @@
 //!
 //! This module provides the flexible tree structure used during route insertion.
 
-use std::collections::BTreeMap;
-use crate::core::matcher::radix_tree::frozen::FrozenRadixTree;
 use crate::core::matcher::radix_tree::error::RouterError;
+use crate::core::matcher::radix_tree::frozen::FrozenRadixTree;
+use std::collections::BTreeMap;
 
 /// A radix tree node used during the build phase.
 ///
@@ -89,17 +89,9 @@ impl RadixRouter {
     }
 
     /// Helper function for recursive insertion
-    fn insert_helper(
-        node: &mut BuildNode,
-        path: &[u8],
-        value: usize,
-        original_path: &str,
-    ) -> Result<(), RouterError> {
+    fn insert_helper(node: &mut BuildNode, path: &[u8], value: usize, original_path: &str) -> Result<(), RouterError> {
         // Find common prefix length
-        let common_len = node.prefix.iter()
-            .zip(path.iter())
-            .take_while(|(a, b)| a == b)
-            .count();
+        let common_len = node.prefix.iter().zip(path.iter()).take_while(|(a, b)| a == b).count();
 
         // Case 1: Node prefix is longer than common prefix
         // Need to split the node

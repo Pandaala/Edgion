@@ -1,6 +1,5 @@
 /// Global definitions and constants for Edgion
 
-
 // Component names
 pub const COMPONENT_EDGION_CONTROLLER: &str = "edgion-controller";
 pub const COMPONENT_EDGION_GATEWAY: &str = "edgion-gateway";

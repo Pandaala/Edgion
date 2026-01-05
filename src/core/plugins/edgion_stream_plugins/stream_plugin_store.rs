@@ -1,12 +1,12 @@
 //! Global store for EdgionStreamPlugins resources
 
+use arc_swap::ArcSwap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use arc_swap::ArcSwap;
 use std::sync::LazyLock;
 
-use crate::types::resources::EdgionStreamPlugins;
 use crate::core::conf_sync::traits::ConfHandler;
+use crate::types::resources::EdgionStreamPlugins;
 use crate::types::ResourceMeta;
 
 static GLOBAL_STREAM_PLUGIN_STORE: LazyLock<Arc<StreamPluginStore>> =
@@ -99,17 +99,11 @@ impl Default for StreamPluginStore {
 
 impl ConfHandler<EdgionStreamPlugins> for Arc<StreamPluginStore> {
     fn full_set(&self, data: &HashMap<String, EdgionStreamPlugins>) {
-        tracing::info!(
-            component = "stream_plugin_store",
-            cnt = data.len(),
-            "full set"
-        );
-        
-        let plugins: HashMap<String, Arc<EdgionStreamPlugins>> = data
-            .iter()
-            .map(|(k, v)| (k.clone(), Arc::new(v.clone())))
-            .collect();
-        
+        tracing::info!(component = "stream_plugin_store", cnt = data.len(), "full set");
+
+        let plugins: HashMap<String, Arc<EdgionStreamPlugins>> =
+            data.iter().map(|(k, v)| (k.clone(), Arc::new(v.clone()))).collect();
+
         self.replace_all(plugins);
     }
 
@@ -117,7 +111,7 @@ impl ConfHandler<EdgionStreamPlugins> for Arc<StreamPluginStore> {
         &self,
         add: HashMap<String, EdgionStreamPlugins>,
         update: HashMap<String, EdgionStreamPlugins>,
-        remove: HashSet<String>
+        remove: HashSet<String>,
     ) {
         tracing::info!(
             component = "stream_plugin_store",
@@ -154,12 +148,10 @@ impl ConfHandler<EdgionStreamPlugins> for &'static StreamPluginStore {
             cnt = data.len(),
             "full set (static ref)"
         );
-        
-        let plugins: HashMap<String, Arc<EdgionStreamPlugins>> = data
-            .iter()
-            .map(|(k, v)| (k.clone(), Arc::new(v.clone())))
-            .collect();
-        
+
+        let plugins: HashMap<String, Arc<EdgionStreamPlugins>> =
+            data.iter().map(|(k, v)| (k.clone(), Arc::new(v.clone()))).collect();
+
         self.replace_all(plugins);
     }
 
@@ -167,7 +159,7 @@ impl ConfHandler<EdgionStreamPlugins> for &'static StreamPluginStore {
         &self,
         add: HashMap<String, EdgionStreamPlugins>,
         update: HashMap<String, EdgionStreamPlugins>,
-        remove: HashSet<String>
+        remove: HashSet<String>,
     ) {
         tracing::info!(
             component = "stream_plugin_store",
@@ -196,4 +188,3 @@ impl ConfHandler<EdgionStreamPlugins> for &'static StreamPluginStore {
         self.update(add_or_update, &remove);
     }
 }
-

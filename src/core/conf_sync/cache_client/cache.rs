@@ -1,12 +1,11 @@
-use crate::core::conf_sync::types::ListData;
+use super::cache_data::CacheData;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
+use crate::core::conf_sync::types::ListData;
 use crate::types::ResourceMeta;
 use kube::Resource;
 use std::sync::{Arc, RwLock};
 use tokio::sync::RwLock as AsyncRwLock;
 use tonic::transport::Channel;
-use super::cache_data::CacheData;
-
 
 pub struct ClientCache<T>
 where
@@ -133,11 +132,14 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         let cache = self.cache_data.read().unwrap();
         cache.len()
     }
-    
+
     pub fn trigger_update_event_by_key(&self, key: &str) {
         // Add compress event to trigger partial_update
         let mut cache = self.cache_data.write().unwrap();
-        cache.add_compress_event(key.to_string(), crate::core::conf_sync::traits::ResourceChange::EventUpdate);
+        cache.add_compress_event(
+            key.to_string(),
+            crate::core::conf_sync::traits::ResourceChange::EventUpdate,
+        );
 
         tracing::info!(
             component = "cache_client",

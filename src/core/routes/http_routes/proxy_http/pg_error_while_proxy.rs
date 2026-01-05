@@ -1,8 +1,8 @@
-use pingora_core::Error;
-use pingora_core::prelude::HttpPeer;
-use pingora_proxy::Session;
-use crate::types::EdgionHttpContext;
 use super::EdgionHttp;
+use crate::types::EdgionHttpContext;
+use pingora_core::prelude::HttpPeer;
+use pingora_core::Error;
+use pingora_proxy::Session;
 
 #[inline]
 pub fn error_while_proxy(
@@ -20,4 +20,3 @@ pub fn error_while_proxy(
     // todo need add retry logic?
     e
 }
-

@@ -3,9 +3,9 @@
 //! Tracks active connections per backend address using a thread-safe DashMap.
 
 use dashmap::DashMap;
-use std::sync::LazyLock;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::LazyLock;
 
 /// Global connection counts per backend address
 static CONNECTION_COUNTS: LazyLock<DashMap<SocketAddr, AtomicUsize>> = LazyLock::new(DashMap::new);
@@ -58,24 +58,23 @@ mod tests {
     #[test]
     fn test_increment_decrement() {
         let addr = make_addr(9999);
-        
+
         assert_eq!(get_count(&addr), 0);
-        
+
         increment(&addr);
         assert_eq!(get_count(&addr), 1);
-        
+
         increment(&addr);
         assert_eq!(get_count(&addr), 2);
-        
+
         decrement(&addr);
         assert_eq!(get_count(&addr), 1);
-        
+
         decrement(&addr);
         assert_eq!(get_count(&addr), 0);
-        
+
         // Should not underflow
         decrement(&addr);
         assert_eq!(get_count(&addr), 0);
     }
 }
-

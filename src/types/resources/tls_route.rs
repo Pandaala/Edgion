@@ -2,16 +2,16 @@
 //!
 //! TLSRoute defines TLS rules for mapping requests to backends
 
-use std::fmt;
-use std::sync::Arc;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::Arc;
 
+use super::common::ParentReference;
+use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::lb::BackendSelector;
 use crate::core::plugins::PluginRuntime;
-use super::http_route_preparse::BackendExtensionInfo;
-use super::common::ParentReference;
 
 /// API group for TLSRoute
 pub const TLS_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -120,4 +120,3 @@ pub struct TLSBackendRef {
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
 }
-

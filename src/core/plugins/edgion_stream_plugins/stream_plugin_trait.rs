@@ -53,4 +53,3 @@ pub trait StreamPlugin: Send + Sync {
     /// Called when a new TCP/UDP connection is established
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult;
 }
-

@@ -1,16 +1,16 @@
-use std::sync::{Arc, RwLock, Mutex};
-use std::collections::{HashMap, HashSet};
-use dashmap::DashMap;
-use arc_swap::ArcSwap;
-use std::sync::LazyLock;
-use crate::core::routes::http_routes::HttpRouteRuleUnit;
-use crate::types::{HTTPRouteRule, HTTPBackendRef};
-use crate::types::err::EdError;
+use crate::core::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
+use crate::core::matcher::host_match::radix_match::RadixHostMatchEngine;
 use crate::core::routes::http_routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::routes::http_routes::match_engine::regex_routes_engine::RegexRoutesEngine;
+use crate::core::routes::http_routes::HttpRouteRuleUnit;
+use crate::types::err::EdError;
 use crate::types::HTTPRoute;
-use crate::core::lb::{ERR_NO_BACKEND_REFS, ERR_INCONSISTENT_WEIGHT};
-use crate::core::matcher::host_match::radix_match::RadixHostMatchEngine;
+use crate::types::{HTTPBackendRef, HTTPRouteRule};
+use arc_swap::ArcSwap;
+use dashmap::DashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
+use std::sync::{Arc, Mutex, RwLock};
 
 type DomainStr = String;
 
@@ -18,13 +18,13 @@ pub struct RouteRules {
     /// All resource keys (HTTPRoute) that apply to this hostname
     /// Format: "namespace/name"
     pub(crate) resource_keys: RwLock<HashSet<String>>,
-    
+
     /// Exact and prefix match routes (handled by radix tree)
     /// Stored as Arc to avoid cloning when returning from match_route
     pub(crate) route_rules_list: RwLock<Vec<Arc<HttpRouteRuleUnit>>>,
     /// Match engine for exact/prefix routes. None if there are no normal routes (only regex routes)
     pub(crate) match_engine: Option<Arc<RadixRouteMatchEngine>>,
-    
+
     /// Regex match routes (handled separately)
     /// Uses HttpRouteRuleUnit with path_regex field set
     /// Stored as Arc to avoid cloning when returning from match_route
@@ -64,17 +64,15 @@ impl RouteRules {
         }
 
         // Select backend
-        let backend_ref = rule.backend_finder.select().map_err(|err_code| {
-            match err_code {
-                ERR_NO_BACKEND_REFS => EdError::BackendNotFound(),
-                ERR_INCONSISTENT_WEIGHT => EdError::InconsistentWeight(),
-                _ => EdError::BackendNotFound(),
-            }
+        let backend_ref = rule.backend_finder.select().map_err(|err_code| match err_code {
+            ERR_NO_BACKEND_REFS => EdError::BackendNotFound(),
+            ERR_INCONSISTENT_WEIGHT => EdError::InconsistentWeight(),
+            _ => EdError::BackendNotFound(),
         })?;
-        
+
         // Note: BackendTLSPolicy query is performed in pg_upstream_peer.rs
         // where route namespace is available for proper namespace inheritance
-        
+
         Ok(backend_ref)
     }
 
@@ -93,14 +91,14 @@ impl RouteRules {
                 return Ok(route_unit);
             }
         }
-        
+
         // Step 2: Fall back to radix tree match (exact + prefix)
         if let Some(ref match_engine) = self.match_engine {
             let route_unit = match_engine.match_route(session, listener_name)?;
             tracing::debug!(path=%session.req_header().uri.path(),"radix match ok");
             return Ok(route_unit);
         }
-        
+
         // No route matched
         Err(EdError::RouteNotFound())
     }
@@ -110,7 +108,7 @@ pub struct DomainRouteRules {
     /// Exact domain matching (e.g., "example.com")
     /// Uses HashMap for O(1) lookup performance
     pub(crate) exact_domain_map: ArcSwap<HashMap<DomainStr, Arc<RouteRules>>>,
-    
+
     /// Wildcard domain matching (e.g., "*.example.com")
     /// Uses RadixHostMatchEngine for wildcard support
     /// None if no wildcard domains are configured
@@ -121,7 +119,7 @@ impl DomainRouteRules {
     /// Match a route for the given hostname and session
     /// Returns Arc<HttpRouteRuleUnit> if found, or an error if no route matches
     /// Supports wildcard hostname matching (e.g., *.example.com)
-    /// 
+    ///
     /// Matching priority (per Gateway API spec):
     /// 1. Exact domain match (HashMap lookup - O(1))
     /// 2. Wildcard domain match (RadixHostMatchEngine - O(log n))
@@ -137,7 +135,7 @@ impl DomainRouteRules {
         if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {
             return route_rules.match_route(session, listener_name);
         }
-        
+
         // Step 2: Try wildcard domain match (fallback, O(log n))
         // Only check if wildcard engine exists
         let wildcard_engine = self.wildcard_engine.load();
@@ -146,7 +144,7 @@ impl DomainRouteRules {
                 return route_rules.match_route(session, listener_name);
             }
         }
-        
+
         // No route matched
         Err(EdError::RouteNotFound())
     }
@@ -158,7 +156,7 @@ type RouteKey = String; // Format: "namespace/name"
 pub struct RouteManager {
     /// Maps gateway key to domain route rules
     pub(crate) gateway_routes_map: DashMap<GatewayKey, Arc<DomainRouteRules>>,
-    
+
     /// Stores all HTTPRoute resources for lookup during delete events
     /// Key format: "namespace/name"
     /// Uses Mutex since route updates are serialized (no concurrent writes needed)
@@ -166,8 +164,7 @@ pub struct RouteManager {
 }
 
 // Global RouteManager instance
-static GLOBAL_ROUTE_MANAGER: LazyLock<Arc<RouteManager>> = 
-    LazyLock::new(|| Arc::new(RouteManager::new()));
+static GLOBAL_ROUTE_MANAGER: LazyLock<Arc<RouteManager>> = LazyLock::new(|| Arc::new(RouteManager::new()));
 
 /// Get the global RouteManager instance
 pub fn get_global_route_manager() -> Arc<RouteManager> {
@@ -186,22 +183,24 @@ impl RouteManager {
     /// This ensures the gateway has a route map even if no HTTPRoutes exist yet
     pub fn get_or_create_domain_routes(&self, namespace: &str, name: &str) -> Arc<DomainRouteRules> {
         let gateway_key = format!("{}/{}", namespace, name);
-        
+
         let entry = self.gateway_routes_map.entry(gateway_key.clone());
         let is_new = matches!(entry, dashmap::mapref::entry::Entry::Vacant(_));
-        
+
         let domain_routes = entry
-            .or_insert_with(|| Arc::new(DomainRouteRules {
-                exact_domain_map: ArcSwap::from_pointee(HashMap::new()),
-                wildcard_engine: ArcSwap::from_pointee(None),
-            }))
+            .or_insert_with(|| {
+                Arc::new(DomainRouteRules {
+                    exact_domain_map: ArcSwap::from_pointee(HashMap::new()),
+                    wildcard_engine: ArcSwap::from_pointee(None),
+                })
+            })
             .value()
             .clone();
-        
+
         if is_new {
             tracing::info!(gateway_key = %gateway_key, "Created new domain routes for gateway");
         }
-        
+
         domain_routes
     }
 }

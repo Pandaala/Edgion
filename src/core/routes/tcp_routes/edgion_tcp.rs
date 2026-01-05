@@ -1,8 +1,8 @@
+use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::select;
-use async_trait::async_trait;
 
 use pingora_core::apps::ServerApp;
 use pingora_core::connectors::TransportConnector;
@@ -10,11 +10,11 @@ use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
+use crate::core::backends::endpoint_slice::get_roundrobin_store;
 use crate::core::observe::AccessLogger;
+use crate::core::plugins::{StreamContext, StreamPluginResult};
 use crate::core::routes::tcp_routes::GatewayTcpRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::core::backends::endpoint_slice::get_roundrobin_store;
-use crate::core::plugins::{StreamContext, StreamPluginResult};
 
 /// TCP connection context
 pub struct TcpContext {
@@ -43,7 +43,7 @@ pub enum TcpStatus {
 pub struct EdgionTcp {
     pub gateway_name: String,
     pub gateway_namespace: Option<String>,
-    pub listener_name: String,  // Listener name (sectionName in TCPRoute)
+    pub listener_name: String, // Listener name (sectionName in TCPRoute)
     pub listener_port: u16,
     pub gateway_tcp_routes: Arc<GatewayTcpRoutes>,
     pub access_logger: Arc<AccessLogger>,
@@ -53,11 +53,7 @@ pub struct EdgionTcp {
 
 #[async_trait]
 impl ServerApp for EdgionTcp {
-    async fn process_new(
-        self: &Arc<Self>,
-        downstream: Stream,
-        _shutdown: &ShutdownWatch,
-    ) -> Option<Stream> {
+    async fn process_new(self: &Arc<Self>, downstream: Stream, _shutdown: &ShutdownWatch) -> Option<Stream> {
         // Create context
         let mut ctx = TcpContext {
             listener_port: self.listener_port,
@@ -70,15 +66,15 @@ impl ServerApp for EdgionTcp {
             status: TcpStatus::Success,
             connection_established: false,
         };
-        
+
         // Handle connection (context will be updated regardless of success or failure)
         self.handle_connection(downstream, &mut ctx).await;
-        
+
         // Only log if connection was actually established
         if ctx.connection_established {
             self.log_connection(&ctx).await;
         }
-        
+
         None
     }
 }
@@ -87,14 +83,17 @@ impl EdgionTcp {
     /// Core logic for handling TCP connections
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TcpContext) {
         // 1. Match TCPRoute by listener_name and port
-        let tcp_route = match self.gateway_tcp_routes.match_route(&self.listener_name, self.listener_port) {
+        let tcp_route = match self
+            .gateway_tcp_routes
+            .match_route(&self.listener_name, self.listener_port)
+        {
             Some(route) => route,
             None => {
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
                 return;
             }
         };
-        
+
         // 2. Get the first rule
         let rule = match tcp_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
             Some(rule) => rule,
@@ -103,14 +102,14 @@ impl EdgionTcp {
                 return;
             }
         };
-        
+
         // 3. Execute stream plugins (NEW)
         if !rule.stream_plugin_runtime.is_empty() {
             // Extract client IP from downstream connection
             // TODO: Properly extract IP from Stream - for now use placeholder
             if let Ok(client_ip) = "0.0.0.0".parse() {
                 let stream_ctx = StreamContext::new(client_ip, self.listener_port);
-                
+
                 match rule.stream_plugin_runtime.run(&stream_ctx).await {
                     StreamPluginResult::Allow => {
                         // Continue processing
@@ -128,7 +127,7 @@ impl EdgionTcp {
                 }
             }
         }
-        
+
         // 4. Select backend
         let backend_ref = match rule.backend_finder.select() {
             Ok(backend) => backend,
@@ -137,13 +136,15 @@ impl EdgionTcp {
                 return;
             }
         };
-        
+
         // 5. Resolve backend address via EndpointSlice
-        let namespace = backend_ref.namespace.as_deref()
+        let namespace = backend_ref
+            .namespace
+            .as_deref()
             .or_else(|| tcp_route.metadata.namespace.as_deref())
             .unwrap_or("default");
         let service_key = format!("{}/{}", namespace, &backend_ref.name);
-        
+
         // Select backend from EndpointSlice store
         let ep_store = get_roundrobin_store();
         let backend = match ep_store.select_peer(&service_key, b"", 256) {
@@ -153,7 +154,7 @@ impl EdgionTcp {
                 return;
             }
         };
-        
+
         // 6. Build upstream address (using actual IP address)
         let mut upstream_addr = backend.addr;
         if let Some(port) = backend_ref.port {
@@ -161,7 +162,7 @@ impl EdgionTcp {
         }
         let upstream_addr_str = upstream_addr.to_string();
         ctx.upstream_addr = Some(upstream_addr_str.clone());
-        
+
         // 7. Connect to upstream
         let peer = BasicPeer::new(&upstream_addr_str);
         let upstream = match self.connector.new_stream(&peer).await {
@@ -171,29 +172,24 @@ impl EdgionTcp {
                 return;
             }
         };
-        
+
         // Mark connection as established
         ctx.connection_established = true;
-        
+
         // 8. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx).await;
-        
+
         // Note: TCP routes currently use RoundRobin only
         // When LeastConnection support is added, increment/decrement should be called here
         // based on the selected LB policy
     }
-    
+
     /// Bidirectional data transfer
-    async fn duplex(
-        &self,
-        mut downstream: Stream,
-        mut upstream: Stream,
-        ctx: &mut TcpContext,
-    ) {
+    async fn duplex(&self, mut downstream: Stream, mut upstream: Stream, ctx: &mut TcpContext) {
         const BUFFER_SIZE: usize = 8192;
         let mut upstream_buf = vec![0u8; BUFFER_SIZE];
         let mut downstream_buf = vec![0u8; BUFFER_SIZE];
-        
+
         loop {
             select! {
                 // Client → Upstream
@@ -245,11 +241,11 @@ impl EdgionTcp {
             }
         }
     }
-    
+
     /// Log access record
     async fn log_connection(&self, ctx: &TcpContext) {
         let duration_ms = ctx.start_time.elapsed().as_millis() as u64;
-        
+
         let log_entry = serde_json::json!({
             "ts": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -265,8 +261,7 @@ impl EdgionTcp {
             "bytes_received": ctx.bytes_received,
             "status": format!("{:?}", ctx.status),
         });
-        
+
         self.access_logger.send(log_entry.to_string()).await;
     }
 }
-

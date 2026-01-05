@@ -21,7 +21,7 @@ pub trait CacheEventDispatch<T> {
 }
 
 /// Configuration handler trait for handling resource lifecycle operations
-/// 
+///
 /// This trait must be Send + Sync to allow safe sharing across threads
 pub trait ConfHandler<T>: Send + Sync {
     /// Full set with a complete set of resources

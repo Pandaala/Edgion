@@ -1,6 +1,6 @@
 use crate::types::err::EdError;
-use crate::types::{HTTPRouteMatch, HTTPRouteRule, MatchInfo};
 use crate::types::resources::common::ParentReference;
+use crate::types::{HTTPRouteMatch, HTTPRouteRule, MatchInfo};
 use pingora_proxy::Session;
 use regex::Regex;
 use std::collections::HashMap;
@@ -39,12 +39,12 @@ impl HttpRouteRuleUnit {
             parent_refs,
         }
     }
-    
+
     /// Check if this is a regex route
     pub fn is_regex_route(&self) -> bool {
         self.path_regex.is_some()
     }
-    
+
     /// Try to match the request path against the regex pattern (if this is a regex route)
     pub fn matches_path(&self, path: &str) -> bool {
         if let Some(ref regex) = self.path_regex {
@@ -53,32 +53,38 @@ impl HttpRouteRuleUnit {
             false
         }
     }
-    
+
     /// Perform deep match (headers, query params, method, sectionName)
     /// For use with regex routes or when called directly
     pub fn deep_match(&self, session: &Session, listener_name: &str) -> Result<bool, EdError> {
         let req_header = session.req_header();
-        Self::deep_match_common(&self.matched_info.m, req_header, &self.identifier(), &self.parent_refs, listener_name)
+        Self::deep_match_common(
+            &self.matched_info.m,
+            req_header,
+            &self.identifier(),
+            &self.parent_refs,
+            listener_name,
+        )
     }
-    
+
     /// Get route identifier
     pub fn identifier(&self) -> String {
         format!("{}/{}", self.matched_info.rns, self.matched_info.rn)
     }
-    
+
     /// Parse query string (already extracted by Pingora)
     pub(crate) fn parse_query_string(query: &str) -> HashMap<String, String> {
         let mut params = HashMap::new();
-        
+
         if query.is_empty() {
             return params;
         }
-        
+
         for pair in query.split('&') {
             if pair.is_empty() {
                 continue;
             }
-            
+
             if let Some(eq_pos) = pair.find('=') {
                 let key = Self::url_decode(&pair[..eq_pos]);
                 let value = Self::url_decode(&pair[eq_pos + 1..]);
@@ -88,15 +94,15 @@ impl HttpRouteRuleUnit {
                 params.insert(key, String::new());
             }
         }
-        
+
         params
     }
-    
+
     /// Simple URL decode (percent-encoding)
     fn url_decode(s: &str) -> String {
         let mut result = String::new();
         let mut chars = s.chars();
-        
+
         while let Some(c) = chars.next() {
             if c == '%' {
                 // Try to decode %XX
@@ -116,10 +122,10 @@ impl HttpRouteRuleUnit {
                 result.push(c);
             }
         }
-        
+
         result
     }
-    
+
     /// Match HTTP header
     pub(crate) fn match_header(
         req_header: &pingora_http::RequestHeader,
@@ -129,9 +135,9 @@ impl HttpRouteRuleUnit {
             Some(value) => value.to_str().unwrap_or(""),
             None => return Ok(false),
         };
-        
+
         let match_type = header_match.match_type.as_deref().unwrap_or("Exact");
-        
+
         match match_type {
             "Exact" => Ok(header_value == header_match.value),
             "RegularExpression" => {
@@ -148,7 +154,7 @@ impl HttpRouteRuleUnit {
             }
         }
     }
-    
+
     /// Match query parameter
     pub(crate) fn match_query_param(
         query_params: &HashMap<String, String>,
@@ -158,9 +164,9 @@ impl HttpRouteRuleUnit {
             Some(value) => value,
             None => return Ok(false),
         };
-        
+
         let match_type = query_param_match.match_type.as_deref().unwrap_or("Exact");
-        
+
         match match_type {
             "Exact" => Ok(param_value == &query_param_match.value),
             "RegularExpression" => {
@@ -177,7 +183,7 @@ impl HttpRouteRuleUnit {
             }
         }
     }
-    
+
     /// Common deep match logic for checking method, headers, query parameters, and sectionName
     /// This function is shared between HttpRouteRuleUnit and HttpRouteRuleRegexUnit
     pub(crate) fn deep_match_common(
@@ -188,23 +194,25 @@ impl HttpRouteRuleUnit {
         listener_name: &str,
     ) -> Result<bool, EdError> {
         let method = req_header.method.as_str();
-        
+
         // Parse query parameters from URI (if present)
-        let query_params = req_header.uri.query()
+        let query_params = req_header
+            .uri
+            .query()
             .map(|q| Self::parse_query_string(q))
             .unwrap_or_default();
-        
+
         // 0. Check SectionName (if parent_refs specify section_name)
         if let Some(ref parent_refs) = parent_refs {
-            let matches = parent_refs.iter().any(|pr| {
-                pr.section_name.as_ref().map_or(true, |name| name == listener_name)
-            });
-            
+            let matches = parent_refs
+                .iter()
+                .any(|pr| pr.section_name.as_ref().map_or(true, |name| name == listener_name));
+
             if !matches {
                 return Ok(false);
             }
         }
-        
+
         // 1. Check HTTP Method (if specified)
         if let Some(match_method) = &match_item.method {
             if method != match_method.as_str() {
@@ -217,7 +225,7 @@ impl HttpRouteRuleUnit {
                 return Ok(false);
             }
         }
-        
+
         // 2. Check Headers (if specified) - ALL must match (AND logic)
         if let Some(header_matches) = &match_item.headers {
             for header_match in header_matches {
@@ -231,7 +239,7 @@ impl HttpRouteRuleUnit {
                 }
             }
         }
-        
+
         // 3. Check Query Parameters (if specified) - ALL must match (AND logic)
         if let Some(query_param_matches) = &match_item.query_params {
             for query_param_match in query_param_matches {
@@ -245,7 +253,7 @@ impl HttpRouteRuleUnit {
                 }
             }
         }
-        
+
         // All conditions matched
         tracing::debug!(
             route = %identifier,
@@ -274,56 +282,56 @@ impl HttpRouteRuleUnit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_parse_query_string_basic() {
         let query = "name=john&age=30";
         let params = HttpRouteRuleUnit::parse_query_string(query);
-        
+
         assert_eq!(params.len(), 2);
         assert_eq!(params.get("name"), Some(&"john".to_string()));
         assert_eq!(params.get("age"), Some(&"30".to_string()));
     }
-    
+
     #[test]
     fn test_parse_query_string_with_encoding() {
         let query = "q=hello+world&filter=%20test";
         let params = HttpRouteRuleUnit::parse_query_string(query);
-        
+
         assert_eq!(params.get("q"), Some(&"hello world".to_string()));
         assert_eq!(params.get("filter"), Some(&" test".to_string()));
     }
-    
+
     #[test]
     fn test_parse_query_string_no_value() {
         let query = "flag";
         let params = HttpRouteRuleUnit::parse_query_string(query);
-        
+
         assert_eq!(params.len(), 1);
         assert_eq!(params.get("flag"), Some(&String::new()));
     }
-    
+
     #[test]
     fn test_parse_query_string_empty() {
         let query = "";
         let params = HttpRouteRuleUnit::parse_query_string(query);
-        
+
         assert_eq!(params.len(), 0);
     }
-    
+
     #[test]
     fn test_url_decode_basic() {
         assert_eq!(HttpRouteRuleUnit::url_decode("hello"), "hello");
         assert_eq!(HttpRouteRuleUnit::url_decode("hello+world"), "hello world");
         assert_eq!(HttpRouteRuleUnit::url_decode("hello%20world"), "hello world");
     }
-    
+
     #[test]
     fn test_url_decode_special_chars() {
         assert_eq!(HttpRouteRuleUnit::url_decode("a%2Bb%3Dc"), "a+b=c");
         assert_eq!(HttpRouteRuleUnit::url_decode("100%25"), "100%");
     }
-    
+
     #[test]
     fn test_url_decode_invalid_encoding() {
         // Invalid hex sequences should be kept as-is
@@ -331,4 +339,3 @@ mod tests {
         assert_eq!(HttpRouteRuleUnit::url_decode("test%GG"), "test%GG");
     }
 }
-

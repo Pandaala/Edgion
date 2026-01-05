@@ -5,9 +5,9 @@
 
 use super::builder_v4::IpV4RadixBuilder;
 use super::builder_v6::IpV6RadixBuilder;
+use super::error::IpRadixError;
 use super::frozen_v4::FrozenIpV4RadixTree;
 use super::frozen_v6::FrozenIpV6RadixTree;
-use super::error::IpRadixError;
 use super::types::IpCidr;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -19,7 +19,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 pub struct IpRadixMatcher {
     /// IPv4 radix tree (optional, created only if IPv4 rules are added)
     ipv4_tree: Option<FrozenIpV4RadixTree>,
-    
+
     /// IPv6 radix tree (optional, created only if IPv6 rules are added)
     ipv6_tree: Option<FrozenIpV6RadixTree>,
 }
@@ -102,10 +102,10 @@ impl IpRadixMatcher {
 pub struct MatcherStats {
     /// Number of IPv4 nodes
     pub ipv4_node_count: usize,
-    
+
     /// Number of IPv6 nodes
     pub ipv6_node_count: usize,
-    
+
     /// Total memory usage in bytes
     pub total_bytes: usize,
 }
@@ -152,7 +152,7 @@ impl IpRadixMatcherBuilder {
     pub fn insert(&mut self, cidr_str: &str, allow: bool) -> Result<(), IpRadixError> {
         // Parse CIDR to determine IP version
         let cidr = IpCidr::parse(cidr_str)?;
-        
+
         match cidr {
             IpCidr::V4 { .. } => self.v4_builder.insert(cidr_str, allow),
             IpCidr::V6 { .. } => self.v6_builder.insert(cidr_str, allow),
@@ -193,10 +193,7 @@ impl IpRadixMatcherBuilder {
             None
         };
 
-        Ok(IpRadixMatcher {
-            ipv4_tree,
-            ipv6_tree,
-        })
+        Ok(IpRadixMatcher { ipv4_tree, ipv6_tree })
     }
 }
 
@@ -215,7 +212,7 @@ mod tests {
         let builder = IpRadixMatcherBuilder::new();
         assert_eq!(builder.ipv4_rule_count(), 0);
         assert_eq!(builder.ipv6_rule_count(), 0);
-        
+
         let result = builder.build();
         assert!(matches!(result, Err(IpRadixError::EmptyTree)));
     }
@@ -225,7 +222,7 @@ mod tests {
         let mut builder = IpRadixMatcher::builder();
         builder.insert("192.168.0.0/16", true).unwrap();
         builder.insert("10.0.0.0/8", false).unwrap();
-        
+
         let matcher = builder.build().unwrap();
         assert!(matcher.has_ipv4_rules());
         assert!(!matcher.has_ipv6_rules());
@@ -244,7 +241,7 @@ mod tests {
         let mut builder = IpRadixMatcher::builder();
         builder.insert("2001:db8::/32", true).unwrap();
         builder.insert("fe80::/10", false).unwrap();
-        
+
         let matcher = builder.build().unwrap();
         assert!(!matcher.has_ipv4_rules());
         assert!(matcher.has_ipv6_rules());
@@ -261,15 +258,15 @@ mod tests {
     #[test]
     fn test_mixed_ipv4_and_ipv6() {
         let mut builder = IpRadixMatcher::builder();
-        
+
         // IPv4 rules
         builder.insert("192.168.0.0/16", true).unwrap();
         builder.insert("10.0.0.0/8", false).unwrap();
-        
+
         // IPv6 rules
         builder.insert("2001:db8::/32", true).unwrap();
         builder.insert("fe80::/10", false).unwrap();
-        
+
         let matcher = builder.build().unwrap();
         assert!(matcher.has_ipv4_rules());
         assert!(matcher.has_ipv6_rules());
@@ -290,15 +287,15 @@ mod tests {
     #[test]
     fn test_longest_prefix_match_mixed() {
         let mut builder = IpRadixMatcher::builder();
-        
+
         // IPv4: broader allow, specific deny
         builder.insert("192.168.0.0/16", true).unwrap();
         builder.insert("192.168.1.100/32", false).unwrap();
-        
+
         // IPv6: broader allow, specific deny
         builder.insert("2001:db8::/32", true).unwrap();
         builder.insert("2001:db8::1/128", false).unwrap();
-        
+
         let matcher = builder.build().unwrap();
 
         // IPv4: general IP allowed, specific IP denied
@@ -319,10 +316,10 @@ mod tests {
         let mut builder = IpRadixMatcher::builder();
         builder.insert("192.168.0.0/16", true).unwrap();
         builder.insert("2001:db8::/32", true).unwrap();
-        
+
         let matcher = builder.build().unwrap();
         let stats = matcher.stats();
-        
+
         assert!(stats.ipv4_node_count > 0);
         assert!(stats.ipv6_node_count > 0);
         assert!(stats.total_bytes > 0);

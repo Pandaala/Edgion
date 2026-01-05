@@ -1,15 +1,15 @@
+use super::EdgionHttp;
+use crate::core::observe::AccessLogEntry;
+use crate::types::EdgionHttpContext;
 use pingora_core::Error as PingoraError;
 use pingora_proxy::Session;
-use crate::types::EdgionHttpContext;
-use crate::core::observe::AccessLogEntry;
-use super::EdgionHttp;
 
 #[inline]
 pub async fn logging(
     edgion_http: &EdgionHttp,
     session: &mut Session,
     _e: Option<&PingoraError>,
-    ctx: &mut EdgionHttpContext
+    ctx: &mut EdgionHttpContext,
 ) {
     // Update LB metrics based on policy type
     if let Some(upstream) = ctx.get_current_upstream() {
@@ -28,7 +28,7 @@ pub async fn logging(
             }
         }
     }
-    
+
     // Update response status from session
     if let Some(resp_header) = session.response_written() {
         ctx.request_info.status = Some(resp_header.status.as_u16());
@@ -48,4 +48,3 @@ pub async fn logging(
     // Send to access logger
     edgion_http.access_logger.send(entry.to_json()).await;
 }
-

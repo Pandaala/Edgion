@@ -3,26 +3,25 @@
 //! This module provides the ResourceMeta trait for Kubernetes resources,
 //! combining version information, resource kind, and type metadata.
 
-mod traits;
-mod gateway_class;
+mod backend_tls_policy;
 mod edgion_gateway_config;
-mod gateway;
-mod http_route;
-mod grpc_route;
-mod tcp_route;
-mod udp_route;
-mod tls_route;
-mod plugin_metadata;
-mod link_sys;
-mod service;
-mod endpoint_slice;
-mod endpoint;
-mod secret;
-mod edgion_tls;
 mod edgion_plugins;
 mod edgion_stream_plugins;
+mod edgion_tls;
+mod endpoint;
+mod endpoint_slice;
+mod gateway;
+mod gateway_class;
+mod grpc_route;
+mod http_route;
+mod link_sys;
+mod plugin_metadata;
 mod reference_grant;
-mod backend_tls_policy;
+mod secret;
+mod service;
+mod tcp_route;
+mod tls_route;
+mod traits;
+mod udp_route;
 
 pub use traits::ResourceMeta;
-

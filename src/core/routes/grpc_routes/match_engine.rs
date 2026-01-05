@@ -1,19 +1,19 @@
 use crate::core::routes::grpc_routes::GrpcRouteRuleUnit;
 use crate::types::err::EdError;
 use pingora_proxy::Session;
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// gRPC match engine for service/method based routing with optimized lookup
 pub struct GrpcMatchEngine {
     /// Exact match: (service, method) -> routes
     /// Multiple routes may exist for same service/method with different hostnames or headers
     exact_routes: HashMap<(String, String), Vec<Arc<GrpcRouteRuleUnit>>>,
-    
+
     /// Service-level match: service -> routes (method not specified)
     /// Multiple routes may exist for same service with different hostnames or headers
     service_routes: HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>,
-    
+
     /// Catch-all route (both service and method not specified)
     catch_all_route: Option<Arc<GrpcRouteRuleUnit>>,
 }
@@ -50,9 +50,7 @@ impl GrpcMatchEngine {
                         if catch_all_route.is_none() {
                             catch_all_route = Some(route);
                         } else {
-                            tracing::warn!(
-                                "Multiple catch-all routes found, using first one"
-                            );
+                            tracing::warn!("Multiple catch-all routes found, using first one");
                         }
                     }
                     (None, Some(_)) => {
@@ -138,8 +136,8 @@ pub fn parse_grpc_path(path: &str) -> Result<(String, String), EdError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{GRPCRouteMatch, GRPCMethodMatch};
     use crate::types::resources::grpc_route::GRPCRouteRule;
+    use crate::types::{GRPCMethodMatch, GRPCRouteMatch};
 
     #[test]
     fn test_parse_grpc_path_valid() {
@@ -169,13 +167,13 @@ mod tests {
     fn test_multiple_routes_same_service_method() {
         // Test that multiple routes with same service/method are stored correctly
         // This verifies the fix for HashMap collision issue
-        use crate::core::plugins::PluginRuntime;
         use crate::core::lb::BackendSelector;
-        
+        use crate::core::plugins::PluginRuntime;
+
         // Create route 1: test.Service/Method with hostname api.example.com
         let match1 = GRPCRouteMatch {
             method: Some(GRPCMethodMatch {
-                match_type: None,  // Use default (Exact)
+                match_type: None, // Use default (Exact)
                 service: Some("test.Service".to_string()),
                 method: Some("Method".to_string()),
             }),
@@ -210,7 +208,7 @@ mod tests {
         // Create route 2: test.Service/Method with hostname grpc.example.com
         let match2 = GRPCRouteMatch {
             method: Some(GRPCMethodMatch {
-                match_type: None,  // Use default (Exact)
+                match_type: None, // Use default (Exact)
                 service: Some("test.Service".to_string()),
                 method: Some("Method".to_string()),
             }),
@@ -237,17 +235,16 @@ mod tests {
         // Verify both routes are stored in the exact_routes HashMap
         let key = ("test.Service".to_string(), "Method".to_string());
         assert!(engine.exact_routes.contains_key(&key));
-        
+
         let routes = engine.exact_routes.get(&key).unwrap();
         assert_eq!(routes.len(), 2, "Should have 2 routes for same service/method");
-        
+
         // Verify route identifiers
         assert_eq!(routes[0].matched_info.route_name, "route1");
         assert_eq!(routes[1].matched_info.route_name, "route2");
-        
+
         // Verify hostnames are different
         assert_eq!(routes[0].route_info.hostnames.as_ref().unwrap()[0], "api.example.com");
         assert_eq!(routes[1].route_info.hostnames.as_ref().unwrap()[0], "grpc.example.com");
     }
 }
-

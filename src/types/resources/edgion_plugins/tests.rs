@@ -76,7 +76,8 @@ fn test_plugin_entry_serialization() {
 #[test]
 fn test_plugin_entry_deserialization() {
     // With enable=false
-    let json = r#"{"enable":false,"type":"requestHeaderModifier","config":{"set":[{"name":"X-Test","value":"test-value"}]}}"#;
+    let json =
+        r#"{"enable":false,"type":"requestHeaderModifier","config":{"set":[{"name":"X-Test","value":"test-value"}]}}"#;
     let entry: RequestFilterEntry = serde_json::from_str(json).unwrap();
     assert!(!entry.is_enabled());
     assert_eq!(entry.type_name(), "RequestHeaderModifier");
@@ -108,13 +109,13 @@ fn test_enabled_plugins_filter() {
         ),
     ];
 
-    let response_filter_plugins = vec![
-        UpstreamResponseFilterEntry::new(EdgionPlugin::ResponseHeaderModifier(HTTPHeaderFilter {
+    let response_filter_plugins = vec![UpstreamResponseFilterEntry::new(EdgionPlugin::ResponseHeaderModifier(
+        HTTPHeaderFilter {
             set: None,
             add: None,
             remove: Some(vec!["X-Remove".into()]),
-        })),
-    ];
+        },
+    ))];
 
     let mut ep = EdgionPlugins {
         metadata: Default::default(),
@@ -148,4 +149,3 @@ fn test_edgion_plugin_type_name() {
         panic!("Expected RequestHeaderModifier variant");
     }
 }
-

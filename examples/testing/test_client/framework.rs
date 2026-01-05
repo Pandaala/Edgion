@@ -2,9 +2,9 @@
 
 use async_trait::async_trait;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
-use std::path::PathBuf;
 
 /// 测试上下文 - 包含测试所需的所有配置信息
 #[derive(Clone)]
@@ -14,7 +14,7 @@ pub struct TestContext {
     pub grpc_port: u16,
     pub websocket_port: u16,
     pub tcp_port: u16,
-    pub tcp_filtered_port: u16,  // For testing sectionName matching
+    pub tcp_filtered_port: u16, // For testing sectionName matching
     pub udp_port: u16,
     pub https_port: u16,
     pub grpc_https_port: u16,
@@ -49,7 +49,7 @@ impl TestContext {
             .danger_accept_invalid_certs(true)
             .build()
             .expect("Failed to create HTTP client");
-        
+
         Self {
             target_host,
             http_port,
@@ -68,35 +68,35 @@ impl TestContext {
             access_log_path,
         }
     }
-    
+
     pub fn http_url(&self) -> String {
         format!("http://{}:{}", self.target_host, self.http_port)
     }
-    
+
     pub fn grpc_url(&self) -> String {
         format!("http://{}:{}", self.target_host, self.grpc_port)
     }
-    
+
     pub fn websocket_url(&self) -> String {
         format!("ws://{}:{}/ws", self.target_host, self.websocket_port)
     }
-    
+
     pub fn tcp_addr(&self) -> String {
         format!("{}:{}", self.target_host, self.tcp_port)
     }
-    
+
     pub fn tcp_filtered_addr(&self) -> String {
         format!("{}:{}", self.target_host, self.tcp_filtered_port)
     }
-    
+
     pub fn udp_addr(&self) -> String {
         format!("{}:{}", self.target_host, self.udp_port)
     }
-    
+
     pub fn https_url(&self) -> String {
         format!("https://{}:{}", self.target_host, self.https_port)
     }
-    
+
     pub fn grpc_https_url(&self) -> String {
         format!("https://{}:{}", self.target_host, self.grpc_https_port)
     }
@@ -120,7 +120,7 @@ impl TestResult {
             error: None,
         }
     }
-    
+
     pub fn passed_with_message(duration: Duration, message: String) -> Self {
         Self {
             passed: true,
@@ -129,7 +129,7 @@ impl TestResult {
             error: None,
         }
     }
-    
+
     pub fn failed(duration: Duration, error: String) -> Self {
         Self {
             passed: false,
@@ -158,20 +158,14 @@ impl TestCase {
             test_fn,
         }
     }
-    
+
     pub async fn run(&self, ctx: &TestContext) -> TestResult {
         let start = Instant::now();
-        
+
         // 超时控制
-        match tokio::time::timeout(
-            Duration::from_secs(30),
-            (self.test_fn)(ctx.clone())
-        ).await {
+        match tokio::time::timeout(Duration::from_secs(30), (self.test_fn)(ctx.clone())).await {
             Ok(result) => result,
-            Err(_) => TestResult::failed(
-                start.elapsed(),
-                "Test timed out after 30 seconds".to_string()
-            ),
+            Err(_) => TestResult::failed(start.elapsed(), "Test timed out after 30 seconds".to_string()),
         }
     }
 }
@@ -187,11 +181,11 @@ impl SuiteResult {
     pub fn passed_count(&self) -> usize {
         self.test_results.iter().filter(|(_, r)| r.passed).count()
     }
-    
+
     pub fn failed_count(&self) -> usize {
         self.test_results.iter().filter(|(_, r)| !r.passed).count()
     }
-    
+
     pub fn total_count(&self) -> usize {
         self.test_results.len()
     }
@@ -202,20 +196,20 @@ impl SuiteResult {
 pub trait TestSuite: Send + Sync {
     fn name(&self) -> &str;
     fn test_cases(&self) -> Vec<TestCase>;
-    
+
     async fn setup(&self) -> anyhow::Result<()> {
         Ok(())
     }
-    
+
     async fn teardown(&self) -> anyhow::Result<()> {
         Ok(())
     }
-    
+
     async fn run(&self, ctx: &TestContext) -> SuiteResult {
         let start = Instant::now();
         let test_cases = self.test_cases();
         let mut test_results = Vec::new();
-        
+
         // Setup
         if let Err(e) = self.setup().await {
             eprintln!("Setup failed for {}: {}", self.name(), e);
@@ -225,18 +219,18 @@ pub trait TestSuite: Send + Sync {
                 duration: start.elapsed(),
             };
         }
-        
+
         // Run tests
         for test in test_cases {
             let result = test.run(ctx).await;
             test_results.push((test.name.clone(), result));
         }
-        
+
         // Teardown
         if let Err(e) = self.teardown().await {
             eprintln!("Teardown failed for {}: {}", self.name(), e);
         }
-        
+
         SuiteResult {
             name: self.name().to_string(),
             test_results,
@@ -258,19 +252,19 @@ impl TestRunner {
             suites: Vec::new(),
         }
     }
-    
+
     pub fn add_suite(&mut self, suite: Box<dyn TestSuite>) {
         self.suites.push(suite);
     }
-    
+
     pub async fn run(&self) -> TestResults {
         let mut suite_results = Vec::new();
-        
+
         for suite in &self.suites {
             let result = suite.run(&self.context).await;
             suite_results.push(result);
         }
-        
+
         TestResults { suite_results }
     }
 }
@@ -284,15 +278,15 @@ impl TestResults {
     pub fn total_passed(&self) -> usize {
         self.suite_results.iter().map(|s| s.passed_count()).sum()
     }
-    
+
     pub fn total_failed(&self) -> usize {
         self.suite_results.iter().map(|s| s.failed_count()).sum()
     }
-    
+
     pub fn total_tests(&self) -> usize {
         self.suite_results.iter().map(|s| s.total_count()).sum()
     }
-    
+
     pub fn pass_rate(&self) -> f64 {
         let total = self.total_tests();
         if total == 0 {
@@ -300,9 +294,8 @@ impl TestResults {
         }
         (self.total_passed() as f64 / total as f64) * 100.0
     }
-    
+
     pub fn has_failures(&self) -> bool {
         self.total_failed() > 0
     }
 }
-

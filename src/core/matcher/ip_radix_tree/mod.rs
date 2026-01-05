@@ -94,19 +94,19 @@
 //! assert_eq!(tree.match_ip(ip3), Some(true));  // Matches /8
 //! ```
 
-pub mod types;
-pub mod error;
 pub mod builder_v4;
 pub mod builder_v6;
+pub mod error;
 pub mod frozen_v4;
 pub mod frozen_v6;
 pub mod matcher;
+pub mod types;
 
 // Re-export main types for convenience
 pub use builder_v4::IpV4RadixBuilder;
 pub use builder_v6::IpV6RadixBuilder;
+pub use error::IpRadixError;
 pub use frozen_v4::FrozenIpV4RadixTree;
 pub use frozen_v6::FrozenIpV6RadixTree;
 pub use matcher::{IpRadixMatcher, IpRadixMatcherBuilder, MatcherStats};
-pub use error::IpRadixError;
 pub use types::IpCidr;

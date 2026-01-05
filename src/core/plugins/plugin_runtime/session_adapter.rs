@@ -171,4 +171,20 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn ctx(&self) -> &EdgionHttpContext {
         self.ctx
     }
+
+    fn push_plugin_ref(&mut self, key: String) {
+        self.ctx.push_plugin_ref(key);
+    }
+
+    fn pop_plugin_ref(&mut self) {
+        self.ctx.pop_plugin_ref();
+    }
+
+    fn plugin_ref_depth(&self) -> usize {
+        self.ctx.plugin_ref_depth()
+    }
+
+    fn has_plugin_ref(&self, key: &str) -> bool {
+        self.ctx.has_plugin_ref(key)
+    }
 }

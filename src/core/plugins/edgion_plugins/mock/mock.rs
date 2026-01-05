@@ -12,7 +12,7 @@
 use async_trait::async_trait;
 use tokio::time::{sleep, Duration};
 
-use crate::core::plugins::plugin_runtime::{RequestFilter, PluginSession, PluginLog};
+use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::MockConfig;
 
@@ -37,11 +37,7 @@ impl RequestFilter for Mock {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        plugin_log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Apply delay if configured
         if let Some(delay_ms) = self.config.delay {
             sleep(Duration::from_millis(delay_ms)).await;

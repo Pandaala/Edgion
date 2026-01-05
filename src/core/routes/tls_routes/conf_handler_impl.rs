@@ -1,8 +1,8 @@
+use crate::core::conf_sync::traits::ConfHandler;
+use crate::core::routes::tls_routes::{get_global_tls_route_manager, TlsRouteManager};
+use crate::types::{ResourceMeta, TLSRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use crate::core::conf_sync::traits::ConfHandler;
-use crate::core::routes::tls_routes::{TlsRouteManager, get_global_tls_route_manager};
-use crate::types::{TLSRoute, ResourceMeta};
 
 /// Implement ConfHandler for Arc<TlsRouteManager>
 impl ConfHandler<TLSRoute> for Arc<TlsRouteManager> {
@@ -14,7 +14,7 @@ impl ConfHandler<TLSRoute> for Arc<TlsRouteManager> {
         &self,
         add: HashMap<String, TLSRoute>,
         update: HashMap<String, TLSRoute>,
-        remove: HashSet<String>
+        remove: HashSet<String>,
     ) {
         (**self).partial_update(add, update, remove)
     }
@@ -30,7 +30,7 @@ impl ConfHandler<TLSRoute> for &'static TlsRouteManager {
         &self,
         add: HashMap<String, TLSRoute>,
         update: HashMap<String, TLSRoute>,
-        remove: HashSet<String>
+        remove: HashSet<String>,
     ) {
         (**self).partial_update(add, update, remove)
     }
@@ -43,12 +43,8 @@ pub fn create_tls_route_handler() -> Box<dyn ConfHandler<TLSRoute> + Send + Sync
 
 impl ConfHandler<TLSRoute> for TlsRouteManager {
     fn full_set(&self, data: &HashMap<String, TLSRoute>) {
-        tracing::info!(
-            component = "tls_route_manager",
-            cnt = data.len(),
-            "full set"
-        );
-        
+        tracing::info!(component = "tls_route_manager", cnt = data.len(), "full set");
+
         // Initialize all routes
         let mut processed_routes = HashMap::new();
         for (key, route) in data {
@@ -65,7 +61,7 @@ impl ConfHandler<TLSRoute> for TlsRouteManager {
                 }
             }
         }
-        
+
         self.replace_all(processed_routes);
     }
 
@@ -73,7 +69,7 @@ impl ConfHandler<TLSRoute> for TlsRouteManager {
         &self,
         add: HashMap<String, TLSRoute>,
         update: HashMap<String, TLSRoute>,
-        remove: HashSet<String>
+        remove: HashSet<String>,
     ) {
         tracing::info!(
             component = "tls_route_manager",
@@ -82,7 +78,7 @@ impl ConfHandler<TLSRoute> for TlsRouteManager {
             rm = remove.len(),
             "partial update"
         );
-        
+
         // Process additions
         for (key, route) in add {
             match self.initialize_route(route) {
@@ -99,7 +95,7 @@ impl ConfHandler<TLSRoute> for TlsRouteManager {
                 }
             }
         }
-        
+
         // Process updates
         for (key, route) in update {
             match self.initialize_route(route) {
@@ -119,7 +115,7 @@ impl ConfHandler<TLSRoute> for TlsRouteManager {
                 }
             }
         }
-        
+
         // Process removals
         for key in remove {
             self.remove_route(&key);
@@ -132,19 +128,17 @@ impl TlsRouteManager {
     /// Initialize a TLSRoute by setting up BackendSelector
     fn initialize_route(&self, mut route: TLSRoute) -> Result<Arc<TLSRoute>, String> {
         let route_key = route.key_name();
-        
+
         // Initialize rules
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
                 // Initialize BackendSelector
                 if let Some(backend_refs) = &rule.backend_refs {
                     let backends: Vec<_> = backend_refs.iter().cloned().collect();
-                    let weights: Vec<_> = backend_refs.iter()
-                        .map(|br| br.weight)
-                        .collect();
-                    
+                    let weights: Vec<_> = backend_refs.iter().map(|br| br.weight).collect();
+
                     rule.backend_finder.init(backends, weights);
-                    
+
                     tracing::debug!(
                         route = %route_key,
                         rule_idx,
@@ -154,7 +148,7 @@ impl TlsRouteManager {
                 }
             }
         }
-        
+
         Ok(Arc::new(route))
     }
 }
@@ -162,12 +156,12 @@ impl TlsRouteManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ResourceMeta;
     use crate::types::resources::common::ParentReference;
-    
+    use crate::types::ResourceMeta;
+
     fn create_test_tls_route(namespace: &str, name: &str, gateway: &str, hostname: &str) -> TLSRoute {
         use crate::types::resources::tls_route::*;
-        
+
         TLSRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),
@@ -201,42 +195,42 @@ mod tests {
             },
         }
     }
-    
+
     #[test]
     fn test_tls_route_full_set() {
         let manager = TlsRouteManager::new();
-        
+
         let mut data = HashMap::new();
         let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com");
         let route2 = create_test_tls_route("default", "route2", "gateway1", "api.example.com");
-        
+
         data.insert("default/route1".to_string(), route1);
         data.insert("default/route2".to_string(), route2);
-        
+
         manager.full_set(&data);
-        
+
         // Test via GatewayTlsRoutes
         let gateway_routes = manager.get_or_create_gateway_tls_routes("default", "gateway1");
         assert!(gateway_routes.match_route("test.example.com").is_some());
         assert!(gateway_routes.match_route("api.example.com").is_some());
         assert!(gateway_routes.match_route("other.example.com").is_none());
     }
-    
+
     #[test]
     fn test_tls_route_partial_update() {
         let manager = TlsRouteManager::new();
-        
+
         // Add a route
         let mut add = HashMap::new();
         let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com");
         add.insert("default/route1".to_string(), route1);
-        
+
         manager.partial_update(add, HashMap::new(), HashSet::new());
-        
+
         // Test via GatewayTlsRoutes
         let gateway_routes = manager.get_or_create_gateway_tls_routes("default", "gateway1");
         assert!(gateway_routes.match_route("test.example.com").is_some());
-        
+
         // Remove the route
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
@@ -244,4 +238,3 @@ mod tests {
         assert!(gateway_routes.match_route("test.example.com").is_none());
     }
 }
-

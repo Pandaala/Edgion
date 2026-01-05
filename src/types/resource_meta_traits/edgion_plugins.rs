@@ -9,15 +9,15 @@ impl ResourceMeta for EdgionPlugins {
     fn get_version(&self) -> u64 {
         extract_version(&self.metadata)
     }
-    
+
     fn resource_kind() -> ResourceKind {
         ResourceKind::EdgionPlugins
     }
-    
+
     fn kind_name() -> &'static str {
         "EdgionPlugins"
     }
-    
+
     fn key_name(&self) -> String {
         if let Some(namespace) = &self.metadata.namespace {
             format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
@@ -31,4 +31,3 @@ impl ResourceMeta for EdgionPlugins {
         self.init_plugin_runtime();
     }
 }
-

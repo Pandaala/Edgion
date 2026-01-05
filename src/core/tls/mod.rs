@@ -1,8 +1,8 @@
 pub mod cert_validator;
+mod conf_handler_impl;
+pub mod mtls_validator;
 pub mod tls_cert_matcher;
 pub mod tls_store;
-pub mod mtls_validator;
-mod conf_handler_impl;
 
 // Backend-specific modules
 #[cfg(feature = "boringssl")]
@@ -15,7 +15,7 @@ pub mod openssl;
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 pub mod backend_common;
 
-pub use cert_validator::{validate_cert, CertValidationResult, CertValidationError};
+pub use cert_validator::{validate_cert, CertValidationError, CertValidationResult};
 
 pub use conf_handler_impl::create_tls_handler;
 pub use tls_store::get_global_tls_store;

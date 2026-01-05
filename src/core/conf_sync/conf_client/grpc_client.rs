@@ -1,7 +1,5 @@
 use crate::core::conf_sync::conf_client::ConfigClient;
-use crate::core::conf_sync::proto::{
-    config_sync_client::ConfigSyncClient as ConfigSyncClientService,
-};
+use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::types::prelude_resources::*;
 use crate::types::ResourceKind::*;
 use std::sync::Arc;
@@ -25,10 +23,7 @@ impl ConfigSyncClient {
         timeout: Duration,
     ) -> Result<Self, tonic::transport::Error> {
         let client_id = Uuid::new_v4().to_string();
-        let config_client = Arc::new(ConfigClient::new(
-            client_id.clone(),
-            client_name.clone(),
-        ));
+        let config_client = Arc::new(ConfigClient::new(client_id.clone(), client_name.clone()));
 
         // TODO: Currently this allows cold start (gateway starts without controller).
         // However, without local cache persistence, the gateway will have no configuration
@@ -60,7 +55,10 @@ impl ConfigSyncClient {
         // Since it's a lazy channel, these calls won't fail due to connection issues
         config_client.gateway_classes().set_grpc_client(client.clone()).await;
         config_client.gateways().set_grpc_client(client.clone()).await;
-        config_client.edgion_gateway_configs().set_grpc_client(client.clone()).await;
+        config_client
+            .edgion_gateway_configs()
+            .set_grpc_client(client.clone())
+            .await;
         config_client.routes().set_grpc_client(client.clone()).await;
         config_client.grpc_routes().set_grpc_client(client.clone()).await;
         config_client.tcp_routes().set_grpc_client(client.clone()).await;
@@ -72,9 +70,15 @@ impl ConfigSyncClient {
         config_client.endpoints().set_grpc_client(client.clone()).await;
         config_client.edgion_tls().set_grpc_client(client.clone()).await;
         config_client.edgion_plugins().set_grpc_client(client.clone()).await;
-        config_client.edgion_stream_plugins().set_grpc_client(client.clone()).await;
+        config_client
+            .edgion_stream_plugins()
+            .set_grpc_client(client.clone())
+            .await;
         config_client.reference_grants().set_grpc_client(client.clone()).await;
-        config_client.backend_tls_policies().set_grpc_client(client.clone()).await;
+        config_client
+            .backend_tls_policies()
+            .set_grpc_client(client.clone())
+            .await;
         config_client.plugin_metadata().set_grpc_client(client.clone()).await;
         // config_client.secrets().set_grpc_client(client.clone()).await;
 

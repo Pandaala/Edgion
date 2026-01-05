@@ -1,6 +1,6 @@
 use crate::types::err::EdError;
-use crate::types::{GRPCRouteMatch, GRPCRouteRule};
 use crate::types::resources::common::ParentReference;
+use crate::types::{GRPCRouteMatch, GRPCRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
 use schemars::JsonSchema;
@@ -33,13 +33,7 @@ pub struct GrpcMatchInfo {
 }
 
 impl GrpcMatchInfo {
-    pub fn new(
-        route_ns: String,
-        route_name: String,
-        rule_id: usize,
-        match_id: usize,
-        matched: GRPCRouteMatch,
-    ) -> Self {
+    pub fn new(route_ns: String, route_name: String, rule_id: usize, match_id: usize, matched: GRPCRouteMatch) -> Self {
         // Pre-compile regex patterns for header matching
         let compiled_header_regexes = if let Some(ref headers) = matched.headers {
             headers
@@ -105,13 +99,7 @@ impl GrpcRouteRuleUnit {
     ) -> Self {
         Self {
             resource_key,
-            matched_info: GrpcMatchInfo::new(
-                namespace,
-                name,
-                rule_id,
-                match_id,
-                match_item,
-            ),
+            matched_info: GrpcMatchInfo::new(namespace, name, rule_id, match_id, match_item),
             rule,
             route_info,
         }
@@ -133,10 +121,10 @@ impl GrpcRouteRuleUnit {
         // Check SectionName (if parent_refs specify section_name)
         if let Some(ref parent_refs) = self.route_info.parent_refs {
             // At least one parent_ref must match: section_name is None or equals listener_name
-            let matches = parent_refs.iter().any(|pr| {
-                pr.section_name.as_ref().map_or(true, |name| name == listener_name)
-            });
-            
+            let matches = parent_refs
+                .iter()
+                .any(|pr| pr.section_name.as_ref().map_or(true, |name| name == listener_name));
+
             if !matches {
                 return Ok(false);
             }
@@ -145,7 +133,11 @@ impl GrpcRouteRuleUnit {
         // Check Headers (if specified) - ALL must match (AND logic)
         if let Some(header_matches) = &self.matched_info.matched.headers {
             for (idx, header_match) in header_matches.iter().enumerate() {
-                let compiled_regex = self.matched_info.compiled_header_regexes.get(idx).and_then(|r| r.as_ref());
+                let compiled_regex = self
+                    .matched_info
+                    .compiled_header_regexes
+                    .get(idx)
+                    .and_then(|r| r.as_ref());
                 if !Self::match_header(req_header, header_match, compiled_regex)? {
                     tracing::trace!(
                         header = %header_match.name,
@@ -212,9 +204,8 @@ impl GrpcRouteRuleUnit {
                         header = %header_match.name,
                         "Using runtime regex compilation for header match (pre-compilation failed)"
                     );
-                    let re = Regex::new(&header_match.value).map_err(|e| {
-                        EdError::RouteMatchError(format!("Invalid regex: {}", e))
-                    })?;
+                    let re = Regex::new(&header_match.value)
+                        .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
                     Ok(re.is_match(header_value))
                 }
             }
@@ -246,8 +237,14 @@ mod tests {
 
     #[test]
     fn test_hostname_exact_match() {
-        assert!(GrpcRouteRuleUnit::hostname_matches("api.example.com", "api.example.com"));
-        assert!(!GrpcRouteRuleUnit::hostname_matches("api.example.com", "foo.example.com"));
+        assert!(GrpcRouteRuleUnit::hostname_matches(
+            "api.example.com",
+            "api.example.com"
+        ));
+        assert!(!GrpcRouteRuleUnit::hostname_matches(
+            "api.example.com",
+            "foo.example.com"
+        ));
         assert!(!GrpcRouteRuleUnit::hostname_matches("api.example.com", "example.com"));
     }
 
@@ -256,10 +253,10 @@ mod tests {
         // Wildcard should match subdomain
         assert!(GrpcRouteRuleUnit::hostname_matches("api.example.com", "*.example.com"));
         assert!(GrpcRouteRuleUnit::hostname_matches("foo.example.com", "*.example.com"));
-        
+
         // Wildcard should NOT match the domain itself
         assert!(!GrpcRouteRuleUnit::hostname_matches("example.com", "*.example.com"));
-        
+
         // Wildcard should NOT match different domain
         assert!(!GrpcRouteRuleUnit::hostname_matches("api.other.com", "*.example.com"));
     }
@@ -267,25 +264,27 @@ mod tests {
     #[test]
     fn test_hostname_multi_level_subdomain() {
         // Multi-level subdomain
-        assert!(GrpcRouteRuleUnit::hostname_matches("foo.bar.example.com", "*.bar.example.com"));
-        assert!(!GrpcRouteRuleUnit::hostname_matches("foo.bar.example.com", "*.example.com"));
+        assert!(GrpcRouteRuleUnit::hostname_matches(
+            "foo.bar.example.com",
+            "*.bar.example.com"
+        ));
+        assert!(!GrpcRouteRuleUnit::hostname_matches(
+            "foo.bar.example.com",
+            "*.example.com"
+        ));
     }
 
     #[test]
     fn test_match_hostname_list() {
-        let hostnames = vec![
-            "api.example.com".to_string(),
-            "*.test.com".to_string(),
-        ];
-        
+        let hostnames = vec!["api.example.com".to_string(), "*.test.com".to_string()];
+
         // Should match exact
         assert!(GrpcRouteRuleUnit::match_hostname("api.example.com", &hostnames));
-        
+
         // Should match wildcard
         assert!(GrpcRouteRuleUnit::match_hostname("foo.test.com", &hostnames));
-        
+
         // Should not match
         assert!(!GrpcRouteRuleUnit::match_hostname("other.com", &hostnames));
     }
 }
-

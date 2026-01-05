@@ -2,17 +2,20 @@
 //!
 //! GRPCRoute defines gRPC rules for mapping requests to backends
 
-use std::fmt;
-use std::sync::Arc;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::Arc;
 
+use super::common::ParentReference;
+use super::http_route::{
+    BackendObjectReference, Fraction, HTTPHeader, LocalObjectReference, ParsedRouteTimeouts as HttpParsedRouteTimeouts,
+    SessionPersistence,
+};
+use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::lb::BackendSelector;
 use crate::core::plugins::PluginRuntime;
-use super::http_route_preparse::BackendExtensionInfo;
-use super::common::ParentReference;
-use super::http_route::{HTTPHeader, LocalObjectReference, SessionPersistence, BackendObjectReference, Fraction, ParsedRouteTimeouts as HttpParsedRouteTimeouts};
 
 /// API group for GRPCRoute
 pub const GRPC_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -84,7 +87,7 @@ pub struct GRPCRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
-    
+
     /// Pre-parsed route-level timeout configurations (not serialized)
     /// Parsed once when route is loaded, used at runtime
     #[serde(skip)]
@@ -205,7 +208,7 @@ pub struct GRPCBackendRef {
     /// Filters defined at this level should be executed if and only if the request is being forwarded to this backend
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<GRPCRouteFilter>>,
-    
+
     /// Parsed extension info (runtime only, not serialized)
     /// This is computed from plugins[].extensionRef at runtime
     #[serde(skip)]
@@ -311,7 +314,7 @@ pub struct GRPCRouteTimeouts {
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_request: Option<String>,
-    
+
     /// IdleTimeout specifies the maximum duration of inactivity on a connection
     /// Format: Duration (e.g., "5m", "300s")
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -350,7 +353,7 @@ pub struct GRPCRouteRetry {
 /// Extension trait for GRPCRoute to parse hidden logic
 impl GRPCRoute {
     /// Parse all extension_ref in backend_refs and populate extension_info fields
-    /// 
+    ///
     /// This method should be called after deserializing GRPCRoute from YAML/JSON
     /// to populate the runtime-only extension_info fields.
     pub fn preparse(&mut self) {
@@ -360,7 +363,7 @@ impl GRPCRoute {
 
         // Get namespace for ExtensionRef lookups
         let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
-        
+
         for rule in rules.iter_mut() {
             // Initialize rule-level plugin_runtime from rule.plugins
             if let Some(filters) = &rule.filters {
@@ -370,18 +373,21 @@ impl GRPCRoute {
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
                 continue;
             };
-            
+
             for backend_ref in backend_refs.iter_mut() {
                 // Find ExtensionRef filter in backend_ref.plugins
-                let extension_info = backend_ref.filters.as_ref()
+                let extension_info = backend_ref
+                    .filters
+                    .as_ref()
                     .and_then(|filters| {
-                        filters.iter()
+                        filters
+                            .iter()
                             .find(|f| f.filter_type == GRPCRouteFilterType::ExtensionRef)
                             .and_then(|f| f.extension_ref.as_ref())
                             .map(BackendExtensionInfo::from_extension_ref)
                     })
                     .unwrap_or_default();
-                
+
                 backend_ref.extension_info = extension_info;
 
                 // Initialize plugin_runtime from plugins
@@ -391,42 +397,38 @@ impl GRPCRoute {
             }
         }
     }
-    
+
     /// Parse and pre-process timeout configurations for all rules
-    /// 
+    ///
     /// This method is called during route loading (in pre_parse) to avoid runtime parsing overhead.
     /// It parses timeout strings into Duration objects and stores them in rule.parsed_timeouts.
     pub fn parse_timeouts(&mut self) {
         use crate::core::utils::parse_duration;
-        
+
         let Some(rules) = self.spec.rules.as_mut() else {
             return;
         };
-        
+
         for rule in rules.iter_mut() {
             // Parse timeouts for each rule
             if let Some(timeouts) = &rule.timeouts {
                 // Parse GRPCRouteTimeouts manually (same structure as HTTPRouteTimeouts)
-                let request_timeout = timeouts.request.as_ref()
-                    .and_then(|s| parse_duration(s).ok());
-                
-                let backend_request_timeout = timeouts.backend_request.as_ref()
-                    .and_then(|s| parse_duration(s).ok());
-                
-                let idle_timeout = timeouts.idle_timeout.as_ref()
-                    .and_then(|s| parse_duration(s).ok());
-                
+                let request_timeout = timeouts.request.as_ref().and_then(|s| parse_duration(s).ok());
+
+                let backend_request_timeout = timeouts.backend_request.as_ref().and_then(|s| parse_duration(s).ok());
+
+                let idle_timeout = timeouts.idle_timeout.as_ref().and_then(|s| parse_duration(s).ok());
+
                 if request_timeout.is_some() || backend_request_timeout.is_some() || idle_timeout.is_some() {
                     rule.parsed_timeouts = Some(HttpParsedRouteTimeouts {
                         request_timeout,
                         backend_request_timeout,
                         idle_timeout,
                     });
-                    
+
                     tracing::debug!("Parsed route-level timeouts for GRPCRoute rule");
                 }
             }
         }
     }
 }
-

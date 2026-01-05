@@ -5,17 +5,14 @@
 //! - TCP proxy implementation ([`edgion_tcp`])
 //! - Gateway-level route caching ([`gateway_tcp_routes`])
 
-mod routes_mgr;
 mod conf_handler_impl;
 mod gateway_tcp_routes;
+mod routes_mgr;
 
 // TCP 代理模块
 pub mod edgion_tcp;
 
-pub use routes_mgr::{
-    TcpRouteManager,
-    get_global_tcp_route_manager,
-};
+pub use routes_mgr::{get_global_tcp_route_manager, TcpRouteManager};
 
 pub use conf_handler_impl::create_tcp_route_handler;
 

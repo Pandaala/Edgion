@@ -1,26 +1,26 @@
+use crate::types::err::EdError;
+use crate::types::filters::PluginRunningResult;
+use crate::types::EdgionHttpContext;
 ///! Integration helpers for http_routes
 ///!
 ///! This module provides clean integration interfaces for http_routes to call,
 ///! encapsulating all gRPC-specific logic within grpc_routes module.
-
 use pingora_proxy::Session;
-use crate::types::EdgionHttpContext;
-use crate::types::err::EdError;
-use crate::types::filters::PluginRunningResult;
 use std::sync::Arc;
 
 use super::GrpcRouteRules;
 
 /// Check if the request is a gRPC request (based on context)
 ///
-/// This is the preferred method. The protocol was already identified in 
+/// This is the preferred method. The protocol was already identified in
 /// early_request_filter and stored in ctx.request_info.discover_protocol.
 ///
 /// Note: In most cases, you should check ctx.request_info.discover_protocol directly
 /// rather than calling this helper function.
 #[inline]
 pub fn is_grpc_protocol(ctx: &EdgionHttpContext) -> bool {
-    ctx.request_info.discover_protocol
+    ctx.request_info
+        .discover_protocol
         .as_ref()
         .map(|p| p == "grpc" || p == "grpc-web")
         .unwrap_or(false)
@@ -39,9 +39,7 @@ pub async fn try_match_grpc_route(
     listener_name: &str,
 ) -> Result<bool, EdError> {
     // 1. Parse gRPC service/method from path
-    if let Ok((service, method)) =
-        super::match_engine::parse_grpc_path(&ctx.request_info.path)
-    {
+    if let Ok((service, method)) = super::match_engine::parse_grpc_path(&ctx.request_info.path) {
         ctx.request_info.grpc_service = Some(service);
         ctx.request_info.grpc_method = Some(method);
     }
@@ -65,10 +63,7 @@ pub async fn try_match_grpc_route(
 /// Returns: Ok(Some(())) - gRPC backend handled
 ///          Ok(None) - no gRPC backend, should use HTTP logic
 ///          Err - error occurred
-pub async fn handle_grpc_upstream(
-    session: &mut Session,
-    ctx: &mut EdgionHttpContext,
-) -> Result<Option<()>, EdError> {
+pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpContext) -> Result<Option<()>, EdError> {
     // Check if backend is already selected
     if ctx.selected_grpc_backend.is_some() {
         return Ok(Some(())); // Already handled
@@ -82,25 +77,26 @@ pub async fn handle_grpc_upstream(
 
     // Select gRPC backend
     let mut backend_ref = GrpcRouteRules::select_backend(&grpc_route_unit.rule)?;
-    
+
     // Query BackendTLSPolicy using route namespace for proper namespace inheritance
     let service_name = &backend_ref.name;
     // If backend_ref.namespace is None, inherit from route namespace
-    let service_namespace = backend_ref.namespace.as_deref().or(Some(grpc_route_unit.matched_info.route_ns.as_str()));
-    
-    backend_ref.backend_tls_policy = crate::core::backends::query_backend_tls_policy_for_service(
-        service_name,
-        service_namespace,
-    );
-    
+    let service_namespace = backend_ref
+        .namespace
+        .as_deref()
+        .or(Some(grpc_route_unit.matched_info.route_ns.as_str()));
+
+    backend_ref.backend_tls_policy =
+        crate::core::backends::query_backend_tls_policy_for_service(service_name, service_namespace);
+
     if let Some(ref policy) = backend_ref.backend_tls_policy {
         tracing::debug!(
-            policy = %format!("{}/{}", 
-                policy.namespace().unwrap_or(""), 
+            policy = %format!("{}/{}",
+                policy.namespace().unwrap_or(""),
                 policy.name()
             ),
-            service = %format!("{}/{}", 
-                service_namespace.unwrap_or(""), 
+            service = %format!("{}/{}",
+                service_namespace.unwrap_or(""),
                 service_name
             ),
             sni = %policy.spec.validation.hostname,
@@ -110,10 +106,7 @@ pub async fn handle_grpc_upstream(
 
     // Run backend-level request edgion_plugins
     // todo need keep here or change to run before route plugin run?
-    backend_ref
-        .plugin_runtime
-        .run_request_plugins(session, ctx)
-        .await;
+    backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
 
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
         return Err(EdError::PluginTerminated());
@@ -125,4 +118,3 @@ pub async fn handle_grpc_upstream(
 
     Ok(Some(())) // Handled
 }
-

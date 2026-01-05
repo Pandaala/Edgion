@@ -1,14 +1,16 @@
 use crate::core::cli::config::EdgionControllerConfig;
+use crate::core::conf_mgr::{
+    load_all_resources_from_store, ConfStore, FileSystemStore, KubernetesStore, ResourceMgrAPI, SchemaValidator,
+};
 use crate::core::conf_sync::{ConfigServer, ConfigSyncServer};
-use crate::core::conf_mgr::{FileSystemStore, KubernetesStore, ConfStore, load_all_resources_from_store, ResourceMgrAPI, SchemaValidator};
 use crate::core::observe::init_logging;
 use crate::core::utils;
 use crate::types::{init_work_dir, work_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
-use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use std::sync::Arc;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -48,19 +50,20 @@ impl EdgionControllerCli {
         utils::set_k8s_mode(k8s_mode);
 
         // Determine work_dir (按优先级：CLI > ENV > Config > Default)
-        let work_dir_path = self.config.work_dir
+        let work_dir_path = self
+            .config
+            .work_dir
             .clone()
             .or_else(|| std::env::var("EDGION_WORK_DIR").ok().map(PathBuf::from))
             .or_else(|| config.work_dir.clone())
             .unwrap_or_else(|| PathBuf::from("."));
-        
+
         // Initialize and validate work_dir
-        init_work_dir(work_dir_path)
-            .map_err(|e| anyhow!("Failed to initialize work directory: {}", e))?;
+        init_work_dir(work_dir_path).map_err(|e| anyhow!("Failed to initialize work directory: {}", e))?;
         let wd = work_dir();
         wd.validate()
             .map_err(|e| anyhow!("Work directory validation failed: {}", e))?;
-        
+
         tracing::info!(
             work_dir = %wd.base().display(),
             "Work directory initialized"
@@ -106,7 +109,7 @@ impl EdgionControllerCli {
             );
             FileSystemStore::new(&conf_dir) as Arc<dyn ConfStore>
         };
-        
+
         // Create ConfigServer without base_conf (resources will be loaded dynamically)
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
@@ -114,10 +117,10 @@ impl EdgionControllerCli {
             gateway_class = gateway_class_name,
             "Initializing ConfigServer"
         );
-        
+
         let config_server = Arc::new(ConfigServer::new(&config.conf_sync));
         let sync_server = ConfigSyncServer::new(config_server.clone());
-        
+
         // Create ResourceMgrAPI and register backend
         let resource_mgr = Arc::new(ResourceMgrAPI::new());
         let backend_name = if k8s_mode { "kubernetes" } else { "filesystem" };
@@ -131,7 +134,7 @@ impl EdgionControllerCli {
             );
             return Err(anyhow!("Failed to initialize resource manager: {}", e));
         }
-        
+
         // Load all user resources from storage into ConfigServer (unified loading)
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
@@ -147,7 +150,7 @@ impl EdgionControllerCli {
             );
             return Err(anyhow!("Failed to load user configuration: {}", e));
         }
-        
+
         // If K8s mode, start the controller to watch for changes
         if k8s_mode {
             tracing::info!(
@@ -155,20 +158,21 @@ impl EdgionControllerCli {
                 event = "k8s_controller_start",
                 "Starting Kubernetes controller to watch resources"
             );
-            
+
             let k8s_store = store
                 .as_any()
                 .downcast_ref::<KubernetesStore>()
                 .expect("Store should be KubernetesStore in K8s mode");
-            
+
             let k8s_store_arc = Arc::new(k8s_store.clone());
-            
+
             let controller = crate::core::conf_mgr::conf_store::kubernetes::controller::KubernetesController::new(
                 config_server.clone(),
                 k8s_store_arc,
                 gateway_class_name.to_string(),
-            ).await?;
-            
+            )
+            .await?;
+
             tokio::spawn(async move {
                 if let Err(e) = controller.run().await {
                     tracing::error!(
@@ -180,7 +184,7 @@ impl EdgionControllerCli {
                 }
             });
         }
-        
+
         // Load CRD schemas for validation
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
@@ -188,18 +192,17 @@ impl EdgionControllerCli {
             "Loading CRD schemas for validation"
         );
         let schema_validator = Arc::new(
-            SchemaValidator::from_crd_dir(Path::new("config/crd"))
-                .unwrap_or_else(|e| {
-                    tracing::warn!(
-                        component = COMPONENT_EDGION_CONTROLLER,
-                        event = "schema_load_warning",
-                        error = %e,
-                        "Failed to load CRD schemas, validation will be skipped"
-                    );
-                    // Create an empty validator if CRD loading fails
-                    // This allows the system to continue without validation
-                    SchemaValidator::empty()
-                })
+            SchemaValidator::from_crd_dir(Path::new("config/crd")).unwrap_or_else(|e| {
+                tracing::warn!(
+                    component = COMPONENT_EDGION_CONTROLLER,
+                    event = "schema_load_warning",
+                    error = %e,
+                    "Failed to load CRD schemas, validation will be skipped"
+                );
+                // Create an empty validator if CRD loading fails
+                // This allows the system to continue without validation
+                SchemaValidator::empty()
+            }),
         );
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
@@ -234,7 +237,12 @@ impl EdgionControllerCli {
         // Note: loader.run() is intentionally removed as we're using conf_store instead of file watcher
         let (sync_result, admin_result) = tokio::join!(
             sync_server.serve(addr),
-            crate::core::api::controller::serve(config_server.clone(), Some(resource_mgr.clone()), schema_validator, admin_port)
+            crate::core::api::controller::serve(
+                config_server.clone(),
+                Some(resource_mgr.clone()),
+                schema_validator,
+                admin_port
+            )
         );
 
         // Check results - if any service fails, return error

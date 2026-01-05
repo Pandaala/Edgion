@@ -5,9 +5,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::types::resources::ReferenceGrant;
-use crate::core::conf_sync::traits::ConfHandler;
 use super::store::ReferenceGrantStore;
+use crate::core::conf_sync::traits::ConfHandler;
+use crate::types::resources::ReferenceGrant;
 
 /// Create a handler for ReferenceGrant configuration updates
 pub fn create_reference_grant_handler() -> Box<dyn ConfHandler<ReferenceGrant> + Send + Sync> {
@@ -16,18 +16,12 @@ pub fn create_reference_grant_handler() -> Box<dyn ConfHandler<ReferenceGrant> +
 
 impl ConfHandler<ReferenceGrant> for Arc<ReferenceGrantStore> {
     fn full_set(&self, data: &HashMap<String, ReferenceGrant>) {
-        tracing::info!(
-            component = "ref_grant_store",
-            cnt = data.len(),
-            "full set"
-        );
-        
+        tracing::info!(component = "ref_grant_store", cnt = data.len(), "full set");
+
         // Convert to Arc-wrapped grants
-        let grants: HashMap<String, Arc<ReferenceGrant>> = data
-            .iter()
-            .map(|(k, v)| (k.clone(), Arc::new(v.clone())))
-            .collect();
-        
+        let grants: HashMap<String, Arc<ReferenceGrant>> =
+            data.iter().map(|(k, v)| (k.clone(), Arc::new(v.clone()))).collect();
+
         // Replace all and rebuild all indexes
         self.replace_all(grants);
     }
@@ -36,7 +30,7 @@ impl ConfHandler<ReferenceGrant> for Arc<ReferenceGrantStore> {
         &self,
         add: HashMap<String, ReferenceGrant>,
         update: HashMap<String, ReferenceGrant>,
-        remove: HashSet<String>
+        remove: HashSet<String>,
     ) {
         tracing::info!(
             component = "ref_grant_store",
@@ -51,12 +45,12 @@ impl ConfHandler<ReferenceGrant> for Arc<ReferenceGrantStore> {
 
         // 2. Combine add and update into a single map
         let mut add_or_update = HashMap::new();
-        
+
         for (k, v) in add {
             tracing::debug!(key = %k, "Adding ReferenceGrant");
             add_or_update.insert(k, Arc::new(v));
         }
-        
+
         for (k, v) in update {
             tracing::debug!(key = %k, "Updating ReferenceGrant");
             add_or_update.insert(k, Arc::new(v));
@@ -72,9 +66,11 @@ impl ConfHandler<ReferenceGrant> for Arc<ReferenceGrantStore> {
 
         // 4. Dispatch event to trigger revalidation
         if !affected_namespaces.is_empty() {
-            let event = super::events::ReferenceGrantChangedEvent { affected_namespaces: affected_namespaces.clone() };
+            let event = super::events::ReferenceGrantChangedEvent {
+                affected_namespaces: affected_namespaces.clone(),
+            };
             super::events::get_global_dispatcher().dispatch(&event);
-            
+
             tracing::info!(
                 component = "ref_grant_store",
                 affected_ns = ?affected_namespaces,
@@ -122,21 +118,21 @@ mod tests {
     fn test_full_set() {
         // Create a local store instance to avoid global state pollution
         let store = Arc::new(ReferenceGrantStore::new());
-        
+
         let grant1 = create_test_grant("ns1", "grant1", "ns-source", "HTTPRoute", "Service");
         let grant2 = create_test_grant("ns2", "grant2", "ns-source", "TCPRoute", "Secret");
-        
+
         let mut data = HashMap::new();
         data.insert("ns1/grant1".to_string(), grant1);
         data.insert("ns2/grant2".to_string(), grant2);
-        
+
         let handler: Arc<ReferenceGrantStore> = store.clone();
         handler.full_set(&data);
 
         // Verify grants were stored
         assert!(store.get("ns1/grant1").is_some());
         assert!(store.get("ns2/grant2").is_some());
-        
+
         // Verify indexes were built
         assert_eq!(store.get_by_to_namespace("ns1").len(), 1);
         assert_eq!(store.get_by_to_namespace("ns2").len(), 1);
@@ -146,12 +142,12 @@ mod tests {
     fn test_partial_update() {
         // Create a local store instance to avoid global state pollution
         let store = Arc::new(ReferenceGrantStore::new());
-        
+
         // Initial state
         let grant1 = create_test_grant("ns1", "grant1", "ns-source", "HTTPRoute", "Service");
         let mut data = HashMap::new();
         data.insert("ns1/grant1".to_string(), grant1);
-        
+
         let handler: Arc<ReferenceGrantStore> = store.clone();
         handler.full_set(&data);
 
@@ -159,7 +155,7 @@ mod tests {
         let grant2 = create_test_grant("ns1", "grant2", "ns-source2", "TCPRoute", "Service");
         let mut add = HashMap::new();
         add.insert("ns1/grant2".to_string(), grant2);
-        
+
         handler.partial_update(add, HashMap::new(), HashSet::new());
 
         // Verify new grant was added
@@ -170,7 +166,7 @@ mod tests {
         let grant1_updated = create_test_grant("ns1", "grant1", "ns-source-new", "HTTPRoute", "Service");
         let mut update = HashMap::new();
         update.insert("ns1/grant1".to_string(), grant1_updated);
-        
+
         handler.partial_update(HashMap::new(), update, HashSet::new());
 
         // Verify grant was updated
@@ -180,7 +176,7 @@ mod tests {
         // Remove a grant
         let mut remove = HashSet::new();
         remove.insert("ns1/grant2".to_string());
-        
+
         handler.partial_update(HashMap::new(), HashMap::new(), remove);
 
         // Verify grant was removed
@@ -188,4 +184,3 @@ mod tests {
         assert_eq!(store.get_by_to_namespace("ns1").len(), 1);
     }
 }
-

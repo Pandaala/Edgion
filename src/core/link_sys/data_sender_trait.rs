@@ -6,8 +6,8 @@
 //! - [ ] KafkaSender - Kafka async producer
 //! - [ ] ClickHouseSender - ClickHouse batch insert
 
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
 
 /// Trait for sending data to external systems
 ///
@@ -24,23 +24,22 @@ use anyhow::Result;
 /// ```
 /// When ES is unavailable, logs are cached locally and replayed on recovery.
 #[async_trait]
-pub trait DataSender<T>: Send + Sync 
+pub trait DataSender<T>: Send + Sync
 where
     T: Send + 'static,
 {
     /// Initialize the sender connection
     async fn init(&mut self) -> Result<()>;
-    
+
     /// Check if the sender is healthy
     fn healthy(&self) -> bool;
-    
+
     /// Send data to the external system (takes ownership to avoid copy)
     async fn send(&self, data: T) -> Result<()>;
-    
+
     /// Get the name of this sender (for logging)
     fn name(&self) -> &str;
 }
 
 /// Type alias for string-based data senders (most common case)
 pub type StringDataSender = dyn DataSender<String>;
-

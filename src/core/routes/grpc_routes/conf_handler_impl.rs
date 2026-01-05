@@ -1,12 +1,12 @@
+use crate::core::conf_sync::traits::ConfHandler;
+use crate::core::routes::grpc_routes::match_unit::GrpcRouteInfo;
+use crate::core::routes::grpc_routes::routes_mgr::{DomainGrpcRouteRules, GrpcRouteRules};
+use crate::core::routes::grpc_routes::{
+    get_global_grpc_route_manager, GrpcMatchEngine, GrpcRouteManager, GrpcRouteRuleUnit,
+};
+use crate::types::GRPCRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use crate::core::conf_sync::traits::ConfHandler;
-use crate::core::routes::grpc_routes::{
-    GrpcRouteManager, GrpcRouteRuleUnit, get_global_grpc_route_manager, GrpcMatchEngine,
-};
-use crate::core::routes::grpc_routes::match_unit::GrpcRouteInfo;
-use crate::core::routes::grpc_routes::routes_mgr::{GrpcRouteRules, DomainGrpcRouteRules};
-use crate::types::GRPCRoute;
 
 type GatewayKey = String;
 
@@ -75,11 +75,7 @@ impl GrpcRouteManager {
     }
 
     /// Update gateway routes for a specific gateway
-    fn update_gateway_routes(
-        &self,
-        gateway_key: &str,
-        all_routes: &HashMap<String, GRPCRoute>,
-    ) -> Arc<GrpcRouteRules> {
+    fn update_gateway_routes(&self, gateway_key: &str, all_routes: &HashMap<String, GRPCRoute>) -> Arc<GrpcRouteRules> {
         let mut resource_keys = HashSet::new();
         let mut route_rules_list: Vec<Arc<GrpcRouteRuleUnit>> = Vec::new();
 
@@ -184,12 +180,13 @@ impl GrpcRouteManager {
             let new_route_rules = self.update_gateway_routes(gateway_key, &parsed_routes);
 
             // Get or create DomainGrpcRouteRules for this gateway
-            let domain_routes = self.gateway_routes_map
+            let domain_routes = self
+                .gateway_routes_map
                 .entry(gateway_key.clone())
                 .or_insert_with(|| Arc::new(DomainGrpcRouteRules::new()))
                 .value()
                 .clone();
-            
+
             // Update the internal ArcSwap with new route rules
             domain_routes.grpc_routes.store(new_route_rules);
 
@@ -267,4 +264,3 @@ impl GrpcRouteManager {
         }
     }
 }
-

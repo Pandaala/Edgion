@@ -1,14 +1,13 @@
 //! Global store for EdgionPlugins resources
 
+use arc_swap::ArcSwap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use arc_swap::ArcSwap;
 use std::sync::LazyLock;
 
 use crate::types::resources::EdgionPlugins;
 
-static GLOBAL_PLUGIN_STORE: LazyLock<Arc<PluginStore>> =
-    LazyLock::new(|| Arc::new(PluginStore::new()));
+static GLOBAL_PLUGIN_STORE: LazyLock<Arc<PluginStore>> = LazyLock::new(|| Arc::new(PluginStore::new()));
 
 pub fn get_global_plugin_store() -> Arc<PluginStore> {
     GLOBAL_PLUGIN_STORE.clone()
@@ -59,14 +58,14 @@ impl PluginStore {
         let current = self.plugins.load();
         let current_map: &PluginMap = &**current;
         let mut new_map: PluginMap = current_map.clone();
-        
+
         for key in remove {
             new_map.remove(key);
         }
         for (key, plugin) in add_or_update {
             new_map.insert(key, plugin);
         }
-        
+
         self.plugins.store(Arc::new(Arc::new(new_map)));
     }
 
@@ -76,4 +75,3 @@ impl PluginStore {
         map.len()
     }
 }
-

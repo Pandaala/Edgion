@@ -25,10 +25,10 @@
 //! - **Full replacement** (`replace_all`): Rebuilds entire reverse index
 //! - **Incremental update** (`update`): Only rebuilds affected target entries
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
 use arc_swap::ArcSwap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
+use std::sync::{Arc, RwLock};
 
 use crate::types::resources::BackendTLSPolicy;
 
@@ -62,7 +62,7 @@ impl BackendTLSPolicyStore {
     }
 
     /// Sort policies by Gateway API precedence rules
-    /// 
+    ///
     /// 1. Older creation timestamp first
     /// 2. Alphabetically by name (on ties)
     #[inline]
@@ -73,7 +73,7 @@ impl BackendTLSPolicyStore {
             if ts_cmp != std::cmp::Ordering::Equal {
                 return ts_cmp;
             }
-            
+
             // 2. Sort alphabetically by name (on ties)
             let name_a = a.metadata.name.as_deref().unwrap_or("");
             let name_b = b.metadata.name.as_deref().unwrap_or("");
@@ -82,7 +82,7 @@ impl BackendTLSPolicyStore {
     }
 
     /// Build reverse index from policies
-    /// 
+    ///
     /// Creates a map from target identifier to sorted list of policies
     fn build_reverse_index(policies: &BackendTLSPolicyMap) -> ReverseIndexMap {
         let mut index: HashMap<String, Vec<Arc<BackendTLSPolicy>>> = HashMap::new();
@@ -90,13 +90,11 @@ impl BackendTLSPolicyStore {
         // Build initial index
         for policy in policies.values() {
             let policy_namespace = policy.namespace().unwrap_or("");
-            
+
             for target_ref in &policy.spec.target_refs {
                 let target_key = Self::build_target_key(policy_namespace, target_ref);
-                
-                index.entry(target_key)
-                    .or_insert_with(Vec::new)
-                    .push(policy.clone());
+
+                index.entry(target_key).or_insert_with(Vec::new).push(policy.clone());
             }
         }
 
@@ -123,7 +121,9 @@ impl BackendTLSPolicyStore {
     /// Extract all target keys from a policy
     fn extract_target_keys(policy: &BackendTLSPolicy) -> Vec<String> {
         let policy_namespace = policy.namespace().unwrap_or("");
-        policy.spec.target_refs
+        policy
+            .spec
+            .target_refs
             .iter()
             .map(|target_ref| Self::build_target_key(policy_namespace, target_ref))
             .collect()
@@ -132,8 +132,10 @@ impl BackendTLSPolicyStore {
     /// Check if a policy matches a given target key
     fn policy_matches_target(policy: &BackendTLSPolicy, target_key: &str) -> bool {
         let policy_namespace = policy.namespace().unwrap_or("");
-        
-        policy.spec.target_refs
+
+        policy
+            .spec
+            .target_refs
             .iter()
             .any(|target_ref| Self::build_target_key(policy_namespace, target_ref) == target_key)
     }
@@ -166,38 +168,38 @@ impl BackendTLSPolicyStore {
         let reverse_index = {
             let mut policies_write = self.policies.write().unwrap();
             *policies_write = new_policies;
-            
+
             // Build reverse_index while holding write lock to ensure consistency
             Self::build_reverse_index(&policies_write)
-        };  // Write lock released here
-        
+        }; // Write lock released here
+
         // Atomic swap of reverse index
         self.reverse_index.store(Arc::new(reverse_index));
     }
 
     /// Update backend TLS policies with intelligent index rebuild strategy
-    /// 
+    ///
     /// Uses incremental rebuild when few targets are affected, otherwise full rebuild
     pub fn update(&self, add_or_update: HashMap<String, Arc<BackendTLSPolicy>>, remove: &HashSet<String>) {
         // Early return if no changes
         if add_or_update.is_empty() && remove.is_empty() {
             return;
         }
-        
+
         // Perform all operations under a single write lock to prevent race conditions
         let new_index = {
             let mut policies_write = self.policies.write().unwrap();
-            
+
             // Step 1: Collect affected target keys (under write lock protection)
             let mut affected_targets = HashSet::new();
-            
+
             // 1.1 Collect targets from policies being removed
             for key in remove.iter() {
                 if let Some(old_policy) = policies_write.get(key) {
                     affected_targets.extend(Self::extract_target_keys(old_policy));
                 }
             }
-            
+
             // 1.2 Collect targets from policies being added/updated (both old and new)
             for (key, new_policy) in &add_or_update {
                 // If updating, collect targets from old policy
@@ -207,13 +209,13 @@ impl BackendTLSPolicyStore {
                 // Collect targets from new policy
                 affected_targets.extend(Self::extract_target_keys(new_policy));
             }
-            
+
             // Early return if no affected targets (shouldn't happen, but be safe)
             if affected_targets.is_empty() {
                 tracing::warn!("Update called with changes but no affected targets");
                 return;
             }
-            
+
             // Step 2: Update policies map
             for (key, policy) in add_or_update {
                 policies_write.insert(key, policy);
@@ -221,31 +223,31 @@ impl BackendTLSPolicyStore {
             for key in remove {
                 policies_write.remove(key);
             }
-            
+
             // Step 3: Choose rebuild strategy based on affected targets
             let total_policies = policies_write.len();
             let affected_count = affected_targets.len();
-            
+
             // Use incremental update only if it's beneficial
             // Heuristic: incremental is O(n*m), full rebuild is O(m)
             // Use incremental when n < m/10
             let use_incremental = affected_count < total_policies.max(10) / 10;
-            
+
             if use_incremental {
                 // Incremental update: only rebuild affected targets
                 let current_index = self.reverse_index.load();
                 let mut new_index = (**current_index).clone();
-                
+
                 for target_key in &affected_targets {
                     let mut target_policies = Vec::new();
-                    
+
                     // Find all policies that match this target
                     for policy in policies_write.values() {
                         if Self::policy_matches_target(policy, target_key) {
                             target_policies.push(policy.clone());
                         }
                     }
-                    
+
                     if target_policies.is_empty() {
                         // No policies for this target, remove the entry
                         new_index.remove(target_key);
@@ -255,14 +257,14 @@ impl BackendTLSPolicyStore {
                         new_index.insert(target_key.clone(), target_policies);
                     }
                 }
-                
+
                 tracing::debug!(
                     affected_targets = affected_count,
                     total_policies = total_policies,
                     strategy = "incremental",
                     "Update completed"
                 );
-                
+
                 new_index
             } else {
                 // Full rebuild is more efficient
@@ -272,11 +274,11 @@ impl BackendTLSPolicyStore {
                     strategy = "full_rebuild",
                     "Update completed (using full rebuild)"
                 );
-                
+
                 Self::build_reverse_index(&policies_write)
             }
-        };  // Write lock released here
-        
+        }; // Write lock released here
+
         // Atomic swap of reverse index (after releasing write lock)
         self.reverse_index.store(Arc::new(new_index));
     }
@@ -295,7 +297,8 @@ impl BackendTLSPolicyStore {
             .read()
             .map(|policies| {
                 let prefix = format!("{}/", namespace);
-                policies.iter()
+                policies
+                    .iter()
                     .filter(|(key, _)| key.starts_with(&prefix))
                     .map(|(_, policy)| policy.clone())
                     .collect()
@@ -304,21 +307,17 @@ impl BackendTLSPolicyStore {
     }
 
     /// Get policies that apply to a given target (O(1) lookup using reverse index)
-    /// 
+    ///
     /// Returns policies sorted by Gateway API precedence rules:
     /// 1. Older creation timestamp first
     /// 2. Alphabetically by name (on ties)
-    pub fn get_policies_for_target(
-        &self,
-        name: &str,
-        namespace: Option<&str>,
-    ) -> Vec<Arc<BackendTLSPolicy>> {
+    pub fn get_policies_for_target(&self, name: &str, namespace: Option<&str>) -> Vec<Arc<BackendTLSPolicy>> {
         let index = self.reverse_index.load();
-        
+
         // Build target key (namespace/name)
         let target_namespace = namespace.unwrap_or("");
         let target_key = format!("{}/{}", target_namespace, name);
-        
+
         // O(1) lookup in reverse index
         index
             .get(&target_key)
@@ -328,10 +327,7 @@ impl BackendTLSPolicyStore {
 
     /// Count of policies
     pub fn count(&self) -> usize {
-        self.policies
-            .read()
-            .map(|policies| policies.len())
-            .unwrap_or(0)
+        self.policies.read().map(|policies| policies.len()).unwrap_or(0)
     }
 }
 

@@ -13,4 +13,3 @@ pub use extension_ref::ExtensionRefFilter;
 pub use request_header_modifier::RequestHeaderModifierFilter;
 pub use request_redirect::RequestRedirectFilter;
 pub use response_header_modifier::ResponseHeaderModifierFilter;
-

@@ -1,10 +1,10 @@
 //! Hidden logic structures for internal processing
 //! These structures are not serialized, only used for runtime analysis
 
-use std::sync::Arc;
-use crate::core::plugins::PluginRuntime;
 use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
-use serde::{Serialize, Deserialize};
+use crate::core::plugins::PluginRuntime;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Hash source type for consistent hash LB policy
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,9 +42,9 @@ impl BackendExtensionInfo {
         let lb_policy = Self::parse_lb_policy(ext_ref);
         Self { lb_policy }
     }
-    
+
     /// Parse LB policy from extensionRef
-    /// 
+    ///
     /// Supported formats:
     /// - group: edgion.io, kind: LBPolicyConsistentHash, name: header.x-user-id
     /// - group: edgion.io, kind: LBPolicyConsistentHash, name: cookie.session-id
@@ -54,24 +54,19 @@ impl BackendExtensionInfo {
     fn parse_lb_policy(ext_ref: &LocalObjectReference) -> Option<ParsedLBPolicy> {
         // Check group (empty string means core API group, otherwise should be edgion.io)
         if !ext_ref.group.is_empty() && ext_ref.group != "edgion.io" {
-                return None;
+            return None;
         }
-        
+
         match ext_ref.kind.as_str() {
             "LBPolicyConsistentHash" => {
-                Self::parse_consistent_hash_name(&ext_ref.name)
-                    .map(ParsedLBPolicy::ConsistentHash)
+                Self::parse_consistent_hash_name(&ext_ref.name).map(ParsedLBPolicy::ConsistentHash)
             }
-            "LBPolicyLeastConn" => {
-                Some(ParsedLBPolicy::LeastConn)
-            }
-            "LBPolicyEwma" => {
-                Some(ParsedLBPolicy::Ewma)
-            }
+            "LBPolicyLeastConn" => Some(ParsedLBPolicy::LeastConn),
+            "LBPolicyEwma" => Some(ParsedLBPolicy::Ewma),
             _ => None,
         }
     }
-    
+
     /// Parse consistent hash source from name
     /// Format: "header.xxx" / "cookie.xxx" / "arg.xxx"
     fn parse_consistent_hash_name(name: &str) -> Option<ConsistentHashOn> {
@@ -88,10 +83,10 @@ impl BackendExtensionInfo {
 /// Extension trait for HTTPRoute to parse hidden logic
 impl HTTPRoute {
     /// Parse all extension_ref in backend_refs and populate extension_info fields
-    /// 
+    ///
     /// This method should be called after deserializing HTTPRoute from YAML/JSON
     /// to populate the runtime-only extension_info fields.
-    /// 
+    ///
     /// # Example
     /// ```ignore
     /// let mut route: HTTPRoute = serde_yaml::from_str(yaml_str)?;
@@ -104,7 +99,7 @@ impl HTTPRoute {
 
         // Get namespace for ExtensionRef lookups
         let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
-        
+
         for rule in rules.iter_mut() {
             // Initialize rule-level plugin_runtime from rule.plugins
             if let Some(filters) = &rule.filters {
@@ -114,18 +109,21 @@ impl HTTPRoute {
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
                 continue;
             };
-            
+
             for backend_ref in backend_refs.iter_mut() {
                 // Find ExtensionRef filter in backend_ref.plugins
-                let extension_info = backend_ref.filters.as_ref()
+                let extension_info = backend_ref
+                    .filters
+                    .as_ref()
                     .and_then(|filters| {
-                        filters.iter()
+                        filters
+                            .iter()
                             .find(|f| f.filter_type == HTTPRouteFilterType::ExtensionRef)
                             .and_then(|f| f.extension_ref.as_ref())
                             .map(BackendExtensionInfo::from_extension_ref)
                     })
                     .unwrap_or_default();
-                
+
                 backend_ref.extension_info = extension_info;
 
                 // Initialize plugin_runtime from plugins
@@ -135,32 +133,30 @@ impl HTTPRoute {
             }
         }
     }
-    
+
     /// Parse and pre-process timeout configurations for all rules
-    /// 
+    ///
     /// This method is called during route loading (in pre_parse) to avoid runtime parsing overhead.
     /// It parses timeout strings into Duration objects and stores them in rule.parsed_timeouts.
     pub fn parse_timeouts(&mut self) {
         let Some(rules) = self.spec.rules.as_mut() else {
             return;
         };
-        
+
         for rule in rules.iter_mut() {
             // Parse timeouts for each rule
             if let Some(timeouts) = &rule.timeouts {
                 rule.parsed_timeouts = crate::types::resources::http_route::ParsedRouteTimeouts::from_config(timeouts);
-                
+
                 if rule.parsed_timeouts.is_some() {
-                    tracing::debug!(
-                        "Parsed route-level timeouts for HTTPRoute rule"
-                    );
+                    tracing::debug!("Parsed route-level timeouts for HTTPRoute rule");
                 }
             }
         }
     }
-    
+
     /// Parse and pre-process annotation configurations for all rules
-    /// 
+    ///
     /// This method is called during route loading (in pre_parse) to parse
     /// HTTPRoute-level annotations and make them available to all rules.
     /// Supported annotations:
@@ -169,15 +165,16 @@ impl HTTPRoute {
         let Some(annotations) = &self.metadata.annotations else {
             return;
         };
-        
+
         // Parse max_retries from annotation "edgion.io/max-retries"
-        let max_retries = annotations.get("edgion.io/max-retries")
+        let max_retries = annotations
+            .get("edgion.io/max-retries")
             .and_then(|v| v.parse::<u32>().ok())
             .or_else(|| {
                 if let Some(v) = annotations.get("edgion.io/max-retries") {
                     tracing::warn!(
-                        route = %format!("{}/{}", 
-                            self.metadata.namespace.as_deref().unwrap_or("default"), 
+                        route = %format!("{}/{}",
+                            self.metadata.namespace.as_deref().unwrap_or("default"),
                             self.metadata.name.as_deref().unwrap_or("")),
                         value = %v,
                         "Invalid edgion.io/max-retries annotation value, must be u32"
@@ -185,20 +182,20 @@ impl HTTPRoute {
                 }
                 None
             });
-        
+
         // Apply to all rules
         let Some(rules) = self.spec.rules.as_mut() else {
             return;
         };
-        
+
         if max_retries.is_some() {
             for rule in rules.iter_mut() {
                 rule.parsed_max_retries = max_retries;
             }
-            
+
             tracing::debug!(
-                route = %format!("{}/{}", 
-                    self.metadata.namespace.as_deref().unwrap_or("default"), 
+                route = %format!("{}/{}",
+                    self.metadata.namespace.as_deref().unwrap_or("default"),
                     self.metadata.name.as_deref().unwrap_or("")),
                 max_retries = ?max_retries,
                 "Parsed max_retries annotation for HTTPRoute"
@@ -218,11 +215,13 @@ mod tests {
             kind: "LBPolicyConsistentHash".to_string(),
             name: "header.x-user-id".to_string(),
         };
-        
+
         let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
         assert_eq!(
             info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header("x-user-id".to_string())))
+            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
+                "x-user-id".to_string()
+            )))
         );
     }
 
@@ -233,11 +232,13 @@ mod tests {
             kind: "LBPolicyConsistentHash".to_string(),
             name: "cookie.session-id".to_string(),
         };
-        
+
         let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
         assert_eq!(
             info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Cookie("session-id".to_string())))
+            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Cookie(
+                "session-id".to_string()
+            )))
         );
     }
 
@@ -248,11 +249,13 @@ mod tests {
             kind: "LBPolicyConsistentHash".to_string(),
             name: "arg.user-id".to_string(),
         };
-        
+
         let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
         assert_eq!(
             info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Arg("user-id".to_string())))
+            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Arg(
+                "user-id".to_string()
+            )))
         );
     }
 
@@ -263,7 +266,7 @@ mod tests {
             kind: "LBPolicyLeastConn".to_string(),
             name: "default".to_string(),
         };
-        
+
         let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
         assert_eq!(info.lb_policy, Some(ParsedLBPolicy::LeastConn));
     }
@@ -275,7 +278,7 @@ mod tests {
             kind: "UnknownPolicy".to_string(),
             name: "default".to_string(),
         };
-        
+
         let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
         assert_eq!(info.lb_policy, None);
     }
@@ -287,7 +290,7 @@ mod tests {
             kind: "LBPolicyConsistentHash".to_string(),
             name: "header.x-user-id".to_string(),
         };
-        
+
         let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
         assert_eq!(info.lb_policy, None);
     }
@@ -300,12 +303,13 @@ mod tests {
             kind: "LBPolicyConsistentHash".to_string(),
             name: "header.x-user-id".to_string(),
         };
-        
+
         let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
         assert_eq!(
             info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header("x-user-id".to_string())))
+            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
+                "x-user-id".to_string()
+            )))
         );
     }
 }
-

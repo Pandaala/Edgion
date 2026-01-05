@@ -70,4 +70,3 @@ pub struct WatchClient<T> {
     pub send_count: Arc<std::sync::atomic::AtomicU64>,
     pub last_send_time: Arc<std::sync::RwLock<Option<SystemTime>>>,
 }
-

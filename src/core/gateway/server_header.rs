@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use pingora_http::ResponseHeader;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct ServerHeaderOpts {
@@ -12,11 +12,11 @@ impl Default for ServerHeaderOpts {
     fn default() -> Self {
         let mut headers = HashMap::new();
         headers.insert("Server".to_owned(), "Edgion".to_owned());
-        headers.insert(HSTS_KEY.to_owned(), "max-age=63072000; includeSubDomains; preload".to_owned());
-        Self {
-            headers,
-            enable: true,
-        }
+        headers.insert(
+            HSTS_KEY.to_owned(),
+            "max-age=63072000; includeSubDomains; preload".to_owned(),
+        );
+        Self { headers, enable: true }
     }
 }
 impl ServerHeaderOpts {

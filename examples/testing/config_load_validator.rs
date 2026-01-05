@@ -1,8 +1,8 @@
 //! Configuration Load Validator
-//! 
+//!
 //! Validates that all YAML configuration files in examples/conf/ have been
 //! successfully loaded by the edgion-controller without parsing errors.
-//! 
+//!
 //! This tool runs before resource_diff in the integration test pipeline to
 //! catch configuration issues early.
 
@@ -154,10 +154,7 @@ impl AdminClient {
                                         .collect();
                                     return Ok(resources);
                                 } else {
-                                    return Err(format!(
-                                        "API error: {}",
-                                        api_resp.error.unwrap_or_default()
-                                    ));
+                                    return Err(format!("API error: {}", api_resp.error.unwrap_or_default()));
                                 }
                             }
                             Err(e) => return Err(format!("JSON parse error: {}", e)),
@@ -205,8 +202,7 @@ fn get_api_endpoint(kind: &str, namespace: Option<&str>) -> String {
 fn scan_yaml_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut yaml_files = Vec::new();
 
-    let entries = fs::read_dir(dir)
-        .map_err(|e| format!("Failed to read directory {}: {}", dir.display(), e))?;
+    let entries = fs::read_dir(dir).map_err(|e| format!("Failed to read directory {}: {}", dir.display(), e))?;
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
@@ -231,7 +227,7 @@ fn extract_metadata(path: &Path, content: &str) -> Result<ConfigFile, String> {
     if content.contains("\n---\n") || content.starts_with("---\n") {
         // Extract kind from first line of content if present
         let first_doc = content.split("\n---\n").next().unwrap_or(content);
-        
+
         // Try to extract basic info for reporting
         let kind = first_doc
             .lines()
@@ -239,14 +235,14 @@ fn extract_metadata(path: &Path, content: &str) -> Result<ConfigFile, String> {
             .and_then(|line| line.split(':').nth(1))
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| "Unknown".to_string());
-        
+
         let name = first_doc
             .lines()
             .find(|line| line.trim().starts_with("name:"))
             .and_then(|line| line.split(':').nth(1))
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| path.file_stem().unwrap().to_string_lossy().to_string());
-        
+
         // Multi-document YAML files are auto-skipped
         return Ok(ConfigFile {
             path: path.to_path_buf(),
@@ -256,10 +252,9 @@ fn extract_metadata(path: &Path, content: &str) -> Result<ConfigFile, String> {
             skip_validation: true,
         });
     }
-    
+
     // Parse YAML
-    let value: serde_yaml::Value = serde_yaml::from_str(content)
-        .map_err(|e| format!("YAML parse error: {}", e))?;
+    let value: serde_yaml::Value = serde_yaml::from_str(content).map_err(|e| format!("YAML parse error: {}", e))?;
 
     // Extract kind
     let kind = value
@@ -269,9 +264,7 @@ fn extract_metadata(path: &Path, content: &str) -> Result<ConfigFile, String> {
         .to_string();
 
     // Extract metadata
-    let metadata = value
-        .get("metadata")
-        .ok_or("Missing 'metadata' field")?;
+    let metadata = value.get("metadata").ok_or("Missing 'metadata' field")?;
 
     let name = metadata
         .get("name")
@@ -302,10 +295,7 @@ fn extract_metadata(path: &Path, content: &str) -> Result<ConfigFile, String> {
 }
 
 /// Validate configurations
-async fn validate_configs(
-    client: &AdminClient,
-    config_files: Vec<ConfigFile>,
-) -> ValidationResult {
+async fn validate_configs(client: &AdminClient, config_files: Vec<ConfigFile>) -> ValidationResult {
     let mut result = ValidationResult {
         total_files: config_files.len(),
         ..Default::default()
@@ -313,19 +303,22 @@ async fn validate_configs(
 
     // Group files by (kind, namespace) for batch querying
     let mut kind_groups: HashMap<(String, Option<String>), Vec<ConfigFile>> = HashMap::new();
-    
+
     for file in config_files {
         if file.skip_validation {
             result.skipped.push(file.display_name());
             continue;
         }
-        
+
         // Skip base_conf resources as they are not available via list/watch API
         if is_base_conf_resource(&file.kind) {
-            result.skipped.push(format!("{} (base_conf resource - not available via list API)", file.display_name()));
+            result.skipped.push(format!(
+                "{} (base_conf resource - not available via list API)",
+                file.display_name()
+            ));
             continue;
         }
-        
+
         let key = (file.kind.clone(), file.namespace.clone());
         kind_groups.entry(key).or_insert_with(Vec::new).push(file);
     }
@@ -333,34 +326,29 @@ async fn validate_configs(
     // Query each kind group
     for ((kind, namespace), files) in kind_groups {
         let endpoint = get_api_endpoint(&kind, namespace.as_deref());
-        
+
         match client.fetch_resources(&endpoint).await {
             Ok(resources) => {
                 // Build set of loaded resource names
-                let loaded_names: HashSet<String> = resources
-                    .iter()
-                    .map(|r| r.metadata.name.clone())
-                    .collect();
+                let loaded_names: HashSet<String> = resources.iter().map(|r| r.metadata.name.clone()).collect();
 
                 // Check each file
                 for file in files {
                     if loaded_names.contains(&file.name) {
                         result.loaded.push(file.display_name());
                     } else {
-                        result.not_loaded.push((
-                            file.display_name(),
-                            file.path.display().to_string(),
-                        ));
+                        result
+                            .not_loaded
+                            .push((file.display_name(), file.path.display().to_string()));
                     }
                 }
             }
             Err(e) => {
                 // Mark files as not loaded with error details
                 for file in files {
-                    result.not_loaded.push((
-                        file.display_name(),
-                        file.path.display().to_string(),
-                    ));
+                    result
+                        .not_loaded
+                        .push((file.display_name(), file.path.display().to_string()));
                     // Log the API error for debugging
                     eprintln!("  API query failed for {}: {}", kind, e);
                 }
@@ -431,14 +419,12 @@ fn print_report(result: &ValidationResult, controller_url: &str, config_dir: &st
 
     if result.has_failures() {
         println!("{}", "✗ Configuration validation FAILED".red().bold());
-        println!("\n{}", "Tip: Check controller logs for detailed parsing errors".yellow());
-    } else {
         println!(
-            "{}",
-            "✓ All required configurations loaded successfully"
-                .green()
-                .bold()
+            "\n{}",
+            "Tip: Check controller logs for detailed parsing errors".yellow()
         );
+    } else {
+        println!("{}", "✓ All required configurations loaded successfully".green().bold());
     }
 
     println!("{}\n", "=".repeat(60));
@@ -458,11 +444,7 @@ async fn main() {
     // Check controller connectivity
     println!("Checking controller connectivity...");
     if !client.check_health().await {
-        eprintln!(
-            "{} Cannot connect to controller at {}",
-            "✗".red(),
-            args.controller_url
-        );
+        eprintln!("{} Cannot connect to controller at {}", "✗".red(), args.controller_url);
         process::exit(2);
     }
     println!("{} Connected to controller\n", "✓".green());
@@ -514,5 +496,3 @@ async fn main() {
         process::exit(0);
     }
 }
-
-
