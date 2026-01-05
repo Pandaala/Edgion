@@ -1,58 +1,108 @@
 # Edgion
 
+A high-performance Kubernetes Gateway built on [Pingora](https://github.com/cloudflare/pingora) and [Gateway API](https://gateway-api.sigs.k8s.io/).
 
-todolist
+[![Rust](https://img.shields.io/badge/rust-1.75%2B-blue.svg)](https://www.rust-lang.org)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
+## ✨ Features
 
-plugins
-- 内部增加一个配置，is_record_time_cost()函数，如果有的话，就在插件前后增加耗时计算
+- 🚀 **High Performance** - Built on Cloudflare's Pingora framework
+- 🎯 **Gateway API v1** - Full support for Kubernetes Gateway API standard
+- 🔌 **Extensible Plugin System** - TCP/UDP stream plugins and HTTP filters
+- 🔒 **Advanced TLS** - mTLS, dynamic certificate loading (SNI-based)
+- 🛡️ **Security** - IP restriction, Basic Auth, CORS, CSRF protection
+- 📊 **Observability** - Access logs, metrics, distributed tracing ready
+- 🌊 **Protocol Support** - HTTP/1.1, HTTP/2, gRPC, TCP, UDP, WebSocket
 
+## 📚 Documentation
 
+- 🇨🇳 [中文文档 (Chinese)](docs/zh-CN/README.md)
+- 🇬🇧 [English Documentation](docs/en/README.md) *(Coming soon)*
+- 🇯🇵 [日本語ドキュメント](docs/ja/README.md) *(Coming soon)*
 
+## 🚀 Quick Start
 
-# edgion-op
-./edgion-op --config edgion/config/edgion-op.toml
+### Prerequisites
 
-## 使用默认配置
-./edgion-op
+- Rust 1.75 or higher
+- Kubernetes cluster (optional, for integration testing)
 
-## 命令行参数覆盖配置文件
-./edgion-op -c edgion/config/edgion-op.toml --log-level debug --grpc-listen "0.0.0.0:50052"
+### Build
 
-## 查看帮助
-./edgion-op --help
+```bash
+# Build all components
+cargo build --release
 
+# Build specific binary
+cargo build --release --bin edgion_controller
+cargo build --release --bin edgion_gateway
+```
 
-## 基本启动（使用默认配置）
-cargo run --bin edgion-op -- --gateway-class my-gateway-class
+### Run Controller
 
-## 完整参数示例
-cargo run --bin edgion-op -- \
---gateway-class public-gateway \
---grpc-listen 127.0.0.1:50061 \
---admin-listen 127.0.0.1:8080 \
---loader-type local_path \
---loader-dir config/examples \
---log-level debug
+```bash
+# Start the controller
+./target/release/edgion_controller --config config/edgion-controller.toml
 
-必需参数：
---gateway-class: Gateway class 名称
-常用可选参数：
---grpc-listen: gRPC 监听地址（默认：127.0.0.1:50061）
---admin-listen: Admin HTTP 监听地址
---loader-type: 配置加载器类型（filesystem 或 etcd）
---loader-dir: 配置文件目录（filesystem loader）
---etcd-endpoint: etcd 端点（etcd loader）
---log-level: 日志级别（trace, debug, info, warn, error）
+# Or with custom configuration
+./target/release/edgion_controller \
+  --log-level info \
+  --grpc-listen 127.0.0.1:50061
+```
 
-# edgion-gw
-# 基本启动
-cargo run --bin edgion-gw -- \
---gateway-class my-gateway-class \
---server-addr http://127.0.0.1:50061
+### Run Gateway
 
-# 完整参数示例
-cargo run --bin edgion-gw -- \
---gateway-class my-gateway-class \
---server-addr http://127.0.0.1:50061 \
---admin-listen 127.0.0.1:8081
+```bash
+# Start the gateway
+./target/release/edgion_gateway --config config/edgion-gateway.toml
+
+# Or connect to controller
+./target/release/edgion_gateway \
+  --server-addr http://127.0.0.1:50061 \
+  --log-level info
+```
+
+For detailed usage, see the [User Guide](docs/zh-CN/user-guide/README.md).
+
+## 🧪 Testing
+
+```bash
+# Run unit tests
+cargo test --all --tests
+
+# Run integration tests
+cd examples/testing
+./run_integration_test.sh
+```
+
+## 🏗️ Architecture
+
+Edgion consists of two main components:
+
+- **Controller** (`edgion_controller`) - Watches Kubernetes resources and manages configurations
+- **Gateway** (`edgion_gateway`) - High-performance data plane that processes traffic
+
+For architecture details, see [Architecture Overview](docs/zh-CN/developer-doc/architecture-overview.md).
+
+## 🤝 Contributing
+
+Contributions are welcome! Please check out:
+
+- [Developer Documentation](docs/zh-CN/developer-doc/README.md)
+- [Adding New Resources Guide](docs/zh-CN/developer-doc/add-new-resource-guide.md)
+
+## 📄 License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+
+## 🙏 Acknowledgments
+
+- [Pingora](https://github.com/cloudflare/pingora) - High-performance proxy framework by Cloudflare
+- [Gateway API](https://gateway-api.sigs.k8s.io/) - Kubernetes SIG Network
+- [kube-rs](https://kube.rs/) - Kubernetes client library for Rust
+
+---
+
+**Version**: v0.1.0  
+**Last Updated**: 2026-01-05
