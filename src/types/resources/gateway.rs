@@ -12,6 +12,8 @@ pub const GATEWAY_GROUP: &str = "gateway.networking.k8s.io";
 /// Kind for Gateway
 pub const GATEWAY_KIND: &str = "Gateway";
 
+use super::common::Condition;
+
 /// Gateway defines a network gateway
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
@@ -19,6 +21,7 @@ pub const GATEWAY_KIND: &str = "Gateway";
     version = "v1",
     kind = "Gateway",
     plural = "gateways",
+    status = "GatewayStatus",
     namespaced
 )]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +144,50 @@ pub struct GatewayAddress {
     pub value: String,
 }
 
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStatus {
+    /// Addresses assigned to the Gateway
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addresses: Option<Vec<GatewayStatusAddress>>,
+
+    /// Conditions describe the current conditions of the Gateway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Vec<Condition>>,
+
+    /// Listeners provide status for each unique listener port defined in the Gateway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listeners: Option<Vec<ListenerStatus>>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStatusAddress {
+    /// Type of the address
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub address_type: Option<String>,
+
+    /// Value of the address
+    pub value: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ListenerStatus {
+    /// Name is the name of the Listener that this status corresponds to.
+    pub name: String,
+
+    /// SupportedKinds is the list indicating the Kinds supported by this listener.
+    pub supported_kinds: Vec<RouteGroupKind>,
+
+    /// AttachedRoutes represents the total number of Routes that have been
+    /// successfully attached to this Listener.
+    pub attached_routes: i32,
+
+    /// Conditions describe the current conditions of this listener.
+    pub conditions: Vec<Condition>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +212,7 @@ mod tests {
                 }]),
                 addresses: None,
             },
+            status: None,
         };
 
         let yaml = serde_yaml::to_string(&gateway).unwrap();

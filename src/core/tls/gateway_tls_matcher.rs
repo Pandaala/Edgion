@@ -172,8 +172,7 @@ impl Default for GatewayTlsMatcher {
 }
 
 /// Global Gateway TLS Matcher instance
-pub static GATEWAY_TLS_MATCHER: LazyLock<GatewayTlsMatcher> =
-    LazyLock::new(GatewayTlsMatcher::new);
+pub static GATEWAY_TLS_MATCHER: LazyLock<GatewayTlsMatcher> = LazyLock::new(GatewayTlsMatcher::new);
 
 /// Get a reference to the global Gateway TLS Matcher
 pub fn get_gateway_tls_matcher() -> &'static GatewayTlsMatcher {
@@ -196,11 +195,7 @@ mod tests {
     use crate::types::resources::gateway::{GatewaySpec, GatewayTLSConfig, Listener};
     use kube::api::ObjectMeta;
 
-    fn create_test_gateway(
-        name: &str,
-        namespace: &str,
-        listeners: Vec<Listener>,
-    ) -> Gateway {
+    fn create_test_gateway(name: &str, namespace: &str, listeners: Vec<Listener>) -> Gateway {
         Gateway {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
@@ -212,14 +207,11 @@ mod tests {
                 listeners: Some(listeners),
                 addresses: None,
             },
+            status: None,
         }
     }
 
-    fn create_test_listener(
-        name: &str,
-        hostname: Option<&str>,
-        tls: Option<GatewayTLSConfig>,
-    ) -> Listener {
+    fn create_test_listener(name: &str, hostname: Option<&str>, tls: Option<GatewayTLSConfig>) -> Listener {
         Listener {
             name: name.to_string(),
             hostname: hostname.map(|s| s.to_string()),
@@ -461,7 +453,7 @@ mod tests {
         let result = matcher.match_sni("test.example.com");
         assert!(result.is_ok());
         let entry = result.unwrap();
-        
+
         // Verify Gateway namespace is captured for later Secret lookup
         assert_eq!(entry.gateway_namespace, "my-namespace");
         // Certificate ref has no explicit namespace
@@ -498,7 +490,7 @@ mod tests {
     #[test]
     fn test_has_entries_flag_transitions() {
         let matcher = GatewayTlsMatcher::new();
-        
+
         // Initially empty
         assert!(matcher.is_empty());
 
@@ -515,17 +507,22 @@ mod tests {
         };
         let listener = create_test_listener("https", Some("example.com"), Some(tls_config));
         let gateway = create_test_gateway("test-gw", "default", vec![listener]);
-        
+
         matcher.rebuild_from_gateways(&[gateway]);
-        
+
         // Now has entries
-        assert!(!matcher.is_empty(), "Matcher should have entries after adding TLS config");
+        assert!(
+            !matcher.is_empty(),
+            "Matcher should have entries after adding TLS config"
+        );
 
         // Remove all gateways
         matcher.rebuild_from_gateways(&[]);
-        
+
         // Back to empty
-        assert!(matcher.is_empty(), "Matcher should be empty after removing all gateways");
+        assert!(
+            matcher.is_empty(),
+            "Matcher should be empty after removing all gateways"
+        );
     }
 }
-
