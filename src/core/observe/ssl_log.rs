@@ -1,14 +1,16 @@
 //! SSL/TLS callback logging
 //!
-//! Records every TLS certificate callback to ssl_callback.log
-//! Uses bounded channel with try_send to guarantee non-blocking behavior.
+//! Records every TLS certificate callback with enhanced features:
+//! - Batch processing for better I/O performance
+//! - Log rotation (by time or size)
+//! - Metrics integration for dropped logs
+//! - Non-blocking guarantee for TLS callbacks
 
 use serde::Serialize;
-use std::sync::mpsc::{self, TrySendError};
 use std::sync::OnceLock;
-use std::io::Write;
+use tokio::sync::mpsc;
 
-use crate::core::utils::available_cpu_cores;
+use crate::core::link_sys::{DataSender, LocalFileWriter};
 
 /// Global SSL logger instance
 static SSL_LOGGER: OnceLock<SslLogger> = OnceLock::new();
@@ -72,70 +74,66 @@ impl SslLogEntry {
     }
 }
 
-/// SSL logger with bounded channel (guaranteed non-blocking)
+/// SSL logger with enhanced features via LocalFileWriter
 pub struct SslLogger {
-    tx: mpsc::SyncSender<String>,
+    /// Unbounded channel to bridge sync API to async LocalFileWriter
+    /// Using unbounded channel ensures log_ssl() is truly non-blocking
+    tx: mpsc::UnboundedSender<String>,
 }
 
 impl SslLogger {
-    /// Create and start a new SSL logger
-    pub fn new(log_path: &str) -> std::io::Result<Self> {
-        // Bounded channel: try_send never blocks, drops if full
-        // Capacity = cores * 10000, same as access log
-        let (tx, rx) = mpsc::sync_channel::<String>(available_cpu_cores() * 10_000);
-        let path = log_path.to_string();
-
-        std::thread::spawn(move || {
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path);
-
-            let mut file = match file {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("Failed to open ssl_callback.log: {}", e);
-                    return;
-                }
-            };
-
-            while let Ok(line) = rx.recv() {
-                let _ = writeln!(file, "{}", line);
+    /// Create a new SSL logger with LocalFileWriter backend
+    pub fn new(writer: LocalFileWriter) -> Self {
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        
+        // Spawn async task to forward logs to LocalFileWriter
+        tokio::spawn(async move {
+            let mut writer = writer;
+            
+            // Initialize the writer
+            if let Err(e) = writer.init().await {
+                tracing::error!("Failed to initialize SSL log writer: {}", e);
+                return;
+            }
+            
+            // Forward logs from channel to writer
+            while let Some(log) = rx.recv().await {
+                // LocalFileWriter handles:
+                // - Batch writing (up to 1000 logs per flush)
+                // - Log rotation (time or size based)
+                // - Metrics for dropped logs
+                let _ = writer.send(log).await;
             }
         });
-
-        Ok(Self { tx })
+        
+        Self { tx }
     }
-
-    /// Log an entry (guaranteed non-blocking, drops if channel full)
+    
+    /// Log an entry (guaranteed non-blocking, always safe to call from TLS callback)
     #[inline]
     pub fn log(&self, entry: &SslLogEntry) {
-        match self.tx.try_send(entry.to_json()) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                // Channel full, drop this log entry (non-blocking guarantee)
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                // Receiver dead, nothing we can do
-            }
-        }
+        // UnboundedSender::send() never blocks
+        // If the receiver is dropped, this will silently fail (acceptable for logs)
+        let _ = self.tx.send(entry.to_json());
     }
 }
 
-/// Initialize the global SSL logger
-pub fn init_ssl_logger(log_path: &str) -> std::io::Result<()> {
-    let logger = SslLogger::new(log_path)?;
+/// Initialize the global SSL logger with a LocalFileWriter
+pub async fn init_ssl_logger(writer: LocalFileWriter) -> anyhow::Result<()> {
+    let logger = SslLogger::new(writer);
     SSL_LOGGER.set(logger)
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::AlreadyExists, "SSL logger already initialized"))?;
-    tracing::info!(path = %log_path, "SSL callback logger initialized");
+        .map_err(|_| anyhow::anyhow!("SSL logger already initialized"))?;
+    tracing::info!("SSL callback logger initialized with enhanced features");
     Ok(())
 }
 
 /// Log an SSL callback entry (guaranteed non-blocking)
+/// 
+/// This function is safe to call from any context, including TLS callbacks.
+/// It uses an unbounded channel internally to ensure no blocking occurs.
 #[inline]
 pub fn log_ssl(entry: &SslLogEntry) {
     if let Some(logger) = SSL_LOGGER.get() {
         logger.log(entry);
     }
 }
-

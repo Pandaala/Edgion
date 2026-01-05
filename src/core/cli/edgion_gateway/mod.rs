@@ -187,25 +187,28 @@ impl EdgionGatewayCli {
         // 8. Initialize global AccessLogger
         runtime.block_on(init_access_logger(&config.access_log))?;
         
-        // 8.1 Initialize SSL logger (for TLS handshake events)
-        // Derive ssl.log path from access.log path
-        let ssl_log_path = {
-            let access_path = &config.access_log.output;
-            match access_path {
-                crate::types::link_sys::StringOutput::LocalFile(file_cfg) => {
-                    let access_full = wd.resolve(&file_cfg.path);
-                    if let Some(parent) = access_full.parent() {
-                        parent.join("ssl.log").to_path_buf()
-                    } else {
-                        wd.logs().join("ssl.log")
-                    }
+        // 8.1 Initialize SSL logger with enhanced features (batch processing, rotation, metrics)
+        if config.ssl_log.enabled {
+            use crate::core::link_sys::LocalFileWriter;
+            use crate::types::link_sys::{LocalFileWriterConfig, StringOutput};
+            
+            let ssl_writer_config: LocalFileWriterConfig = match &config.ssl_log.output {
+                StringOutput::LocalFile(file_cfg) => file_cfg.clone().into(),
+            };
+            
+            let ssl_writer = LocalFileWriter::new(ssl_writer_config.clone());
+            let ssl_log_path = wd.resolve(&ssl_writer_config.path);
+            
+            match runtime.block_on(init_ssl_logger(ssl_writer)) {
+                Ok(()) => {
+                    tracing::info!("SSL logger initialized: {} (with batch processing and rotation)", ssl_log_path.display());
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to initialize SSL logger: {}, TLS handshake events will not be logged", e);
                 }
             }
-        };
-        if let Err(e) = init_ssl_logger(ssl_log_path.to_str().unwrap_or("logs/ssl.log")) {
-            tracing::warn!("Failed to initialize SSL logger: {}, TLS handshake events will not be logged", e);
         } else {
-            tracing::info!("SSL logger initialized: {}", ssl_log_path.display());
+            tracing::info!("SSL logging disabled by configuration");
         }
         
         // 9. Create and configure Pingora server (in Tokio runtime context for UDP listeners)

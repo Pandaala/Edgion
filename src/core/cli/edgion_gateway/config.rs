@@ -41,6 +41,10 @@ pub struct EdgionGatewayConfig {
 
     #[command(flatten)]
     #[serde(default)]
+    pub ssl_log: SslLogConfig,
+
+    #[command(flatten)]
+    #[serde(default)]
     pub server: ServerConfig,
 }
 
@@ -73,6 +77,38 @@ impl Default for AccessLogConfig {
     fn default() -> Self {
         Self {
             output: StringOutput::default(),
+        }
+    }
+}
+
+/// SSL log configuration
+/// Supports multiple output targets: LocalFile, Elasticsearch, Kafka, etc.
+#[derive(Debug, Clone, Serialize, Deserialize, Args)]
+pub struct SslLogConfig {
+    /// Output destination for SSL logs
+    #[arg(skip)]
+    #[serde(default)]
+    pub output: StringOutput,
+    
+    /// Enable SSL logging (default: true)
+    #[arg(long = "ssl-log-enabled")]
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for SslLogConfig {
+    fn default() -> Self {
+        Self {
+            output: StringOutput::LocalFile(crate::types::link_sys::LocalFileWriterCfg {
+                path: "logs/ssl.log".to_string(),
+                queue_size: None,
+                rotation: None,
+            }),
+            enabled: default_true(),
         }
     }
 }
@@ -248,6 +284,9 @@ impl EdgionGatewayConfig {
 
         // Access log config (CLI doesn't support overriding, only from file)
         // No merge needed as there are no CLI args for access_log
+        
+        // SSL log config (CLI doesn't support overriding, only from file)
+        // No merge needed as there are no CLI args for ssl_log
     }
 
     /// Get server_addr

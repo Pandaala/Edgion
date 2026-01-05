@@ -134,3 +134,33 @@ path = "logs/edgion_access.log"
 # brokers = ["localhost:9092"]
 # topic = "edgion-access"
 
+# ================================================================================
+# SSL/TLS Callback Log Configuration
+# ================================================================================
+# SSL log 记录每次 TLS 握手的证书回调事件，用于调试和审计
+# 支持与 access log 相同的输出目标和特性（批处理、轮转、metrics）
+
+[ssl_log]
+# 启用 SSL 日志 (default: true)
+enabled = true
+
+[ssl_log.output.localFile]
+# SSL log 文件路径（相对于 work_dir，或使用绝对路径）
+path = "logs/ssl.log"
+
+# 可选：队列大小
+# 如果不设置，默认使用 cpu_cores * 10_000
+# queue_size = 100000
+
+# 可选：日志轮转配置
+# 推荐使用按大小轮转，因为 SSL 日志通常用于调试，不需要保留太长时间
+[ssl_log.output.localFile.rotation]
+strategy = { size = 104857600 }  # 100MB per file
+max_files = 10                    # 保留最多 10 个文件
+check_interval_secs = 30          # 每 30 秒检查一次是否需要轮转
+
+# 未来可以选择其他输出目标（与 access log 相同）
+# [ssl_log.output.es]
+# endpoint = "http://localhost:9200"
+# index = "edgion-ssl"
+
