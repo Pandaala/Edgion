@@ -34,7 +34,7 @@ impl LbPolicy {
     /// Parse LB policies from comma-separated string
     ///
     /// Supports multiple aliases for each policy type:
-    /// - Consistent: "consistent", "consistent-hash", "ketama" (兼容旧配置)
+    /// - Consistent: "consistent", "consistent-hash", "ketama" (compatible with legacy configs)
     /// - LeastConnection: "leastconn", "least-connection", "leastconnection", "least_connection"
     ///
     /// # Examples

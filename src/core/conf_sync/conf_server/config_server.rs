@@ -36,9 +36,9 @@ pub enum ResourceItem {
     Secret(Secret),
 }
 
-// 1、单个controller只处理一种gateway_class
-// 2、内部不做细分的全新配置，实际的权限配置全部由RBAC来控制他能取到哪些，取到哪些，就把哪些全部同步到对应的网关。（此处如果给予全部service/secret可见，那么对应的网关就可见）
-// 3、只会处理对应route信息里的有些parentRefs是对应的，不然就不会处理
+// 1. Each controller handles only one gateway_class
+// 2. No internal subdivision; actual permissions are controlled by RBAC, which determines what can be accessed and synced to the gateway. (If all services/secrets are visible, then they are visible to the gateway)
+// 3. Only processes routes where parentRefs match; otherwise, they are ignored
 pub struct ConfigServer {
     // Base conf resources now use dedicated ServerCache (same as other resources)
     pub gateway_classes: ServerCache<GatewayClass>,

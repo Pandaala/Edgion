@@ -2,9 +2,11 @@
 //!
 //! Validates whether cross-namespace references are allowed by ReferenceGrants
 
-use super::ReferenceGrantStore;
-use crate::types::resources::{gateway::SecretObjectReference, http_route::BackendObjectReference};
 use std::sync::Arc;
+
+use super::ReferenceGrantStore;
+use crate::core::gateway::edgion_gateway_config::list_edgion_gateway_configs;
+use crate::types::resources::{gateway::SecretObjectReference, http_route::BackendObjectReference};
 
 /// Validator for cross-namespace references
 pub struct CrossNamespaceValidator {
@@ -119,7 +121,6 @@ impl Default for CrossNamespaceValidator {
 
 /// Check if ReferenceGrant validation is enabled by querying EdgionGatewayConfig
 fn is_validation_enabled() -> bool {
-    use crate::core::gateway::edgion_gateway_config::list_edgion_gateway_configs;
     list_edgion_gateway_configs()
         .iter()
         .any(|egwc| egwc.spec.enable_reference_grant_validation)

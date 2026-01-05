@@ -15,7 +15,7 @@ fn is_false(b: &bool) -> bool {
     !b
 }
 
-/// Fixed-size log buffer (栈上，零堆分配)
+/// Fixed-size log buffer (stack-allocated, zero heap allocation)
 #[derive(Debug, Clone)]
 struct LogBuffer {
     buffer: SmallVec<[u8; BUFFER_CAPACITY]>,
@@ -65,7 +65,7 @@ impl Serialize for LogBuffer {
     }
 }
 
-/// Unlimited log buffer (堆上，无限制)
+/// Unlimited log buffer (heap-allocated, unlimited)
 #[derive(Debug, Clone)]
 struct ULogBuffer {
     buffer: String,

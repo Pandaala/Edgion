@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::sync::{Arc, OnceLock};
 
-use crate::core::observe::AccessLogger;
+use crate::core::observe::{create_async_logger, AccessLogger};
 use crate::core::routes::tcp_routes::TcpContext;
 
 /// Global TCP logger instance
@@ -64,8 +64,6 @@ impl TcpLogEntry {
 
 /// Initialize the global TCP logger from configuration
 pub async fn init_tcp_logger(config: &crate::types::LogConfig) -> Result<()> {
-    use crate::core::observe::create_async_logger;
-
     if let Some(logger) = create_async_logger(config, "tcp").await? {
         TCP_LOGGER
             .set(logger)

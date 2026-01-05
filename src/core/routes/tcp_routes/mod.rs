@@ -9,7 +9,7 @@ mod conf_handler_impl;
 mod gateway_tcp_routes;
 mod routes_mgr;
 
-// TCP 代理模块
+// TCP proxy module
 pub mod edgion_tcp;
 
 pub use routes_mgr::{get_global_tcp_route_manager, TcpRouteManager};
@@ -18,5 +18,5 @@ pub use conf_handler_impl::create_tcp_route_handler;
 
 pub use gateway_tcp_routes::GatewayTcpRoutes;
 
-// 导出 TCP 代理类型
+// Export TCP proxy types
 pub use edgion_tcp::{EdgionTcp, TcpContext, TcpStatus};

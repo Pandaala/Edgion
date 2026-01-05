@@ -10,7 +10,7 @@ pub struct CacheData<T> {
     data: HashMap<String, T>,
     resource_version: u64,
 
-    // 注册到Cachedata内部，用于处理具体配置的handler
+    // Register handlers to CacheData for processing specific configurations
     handler: Option<ConfHandlerData<T>>,
 }
 

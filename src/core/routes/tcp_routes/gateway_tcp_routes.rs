@@ -3,10 +3,10 @@ use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Gateway 级别的 TCP 路由集合
+/// Gateway-level TCP route collection
 ///
-/// 存储某个特定 Gateway 关联的所有 TCPRoute，按 listener name (sectionName) 索引
-/// 使用 ArcSwap 实现无锁并发访问
+/// Stores all TCPRoutes associated with a specific Gateway, indexed by listener name (sectionName)
+/// Uses ArcSwap for lock-free concurrent access
 pub struct GatewayTcpRoutes {
     /// listener_name -> Vec<Arc<TCPRoute>> mapping
     /// Routes are indexed by listener name (sectionName) for proper Gateway API compliance

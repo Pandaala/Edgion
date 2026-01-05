@@ -200,26 +200,26 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
     let addr = format!("{}:{}", host, context.listener.port);
     let port = context.listener.port as u16;
 
-    // 预获取该 gateway 的 TCP 路由（类似 HTTP 的方式）
+    // Pre-fetch TCP routes for this gateway (similar to HTTP approach)
     let tcp_route_manager = get_global_tcp_route_manager();
     let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
     let gateway_tcp_routes = tcp_route_manager.get_or_create_gateway_tcp_routes(namespace_str, &context.gateway_name);
 
-    // 创建 EdgionTcp
+    // Create EdgionTcp
     let edgion_tcp = EdgionTcp {
         gateway_name: context.gateway_name.clone(),
         gateway_namespace: context.gateway_namespace.clone(),
         listener_name: listener_name.clone(), // Pass listener name for sectionName matching
         listener_port: port,
-        gateway_tcp_routes, // 传入预获取的路由
+        gateway_tcp_routes, // Pass in pre-fetched routes
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         connector: TransportConnector::new(None),
     };
 
-    // 创建 TCP 服务
+    // Create TCP service
     let tcp_service = Service::with_listeners(format!("TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tcp);
 
-    // 添加到 server
+    // Add to server
     server.add_service(tcp_service);
 
     tracing::info!(

@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 use tokio::sync::mpsc;
 
 use crate::core::link_sys::{DataSender, LocalFileWriter};
+use crate::core::observe::create_sync_logger;
 
 /// Global SSL logger instance
 static SSL_LOGGER: OnceLock<SslLogger> = OnceLock::new();
@@ -120,8 +121,6 @@ impl SslLogger {
 
 /// Initialize the global SSL logger from configuration
 pub async fn init_ssl_logger(config: &crate::types::LogConfig) -> anyhow::Result<()> {
-    use crate::core::observe::create_sync_logger;
-
     if let Some(logger) = create_sync_logger(config).await? {
         SSL_LOGGER
             .set(logger)

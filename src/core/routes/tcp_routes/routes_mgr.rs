@@ -7,7 +7,7 @@ use crate::core::routes::tcp_routes::GatewayTcpRoutes;
 use crate::types::resources::TCPRoute;
 use crate::types::ResourceMeta;
 
-/// TCP 路由管理器
+/// TCP route manager
 pub struct TcpRouteManager {
     /// resource_key -> Arc<TCPRoute> mapping
     /// For quick lookup and updates
@@ -300,7 +300,7 @@ impl TcpRouteManager {
     }
 }
 
-/// 全局 TCP 路由管理器
+/// Global TCP route manager
 static GLOBAL_TCP_ROUTE_MANAGER: OnceLock<TcpRouteManager> = OnceLock::new();
 
 pub fn get_global_tcp_route_manager() -> &'static TcpRouteManager {

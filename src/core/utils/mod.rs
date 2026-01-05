@@ -1,3 +1,4 @@
+use kube::ResourceExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -114,8 +115,6 @@ pub fn extract_resource_metadata(content: &str) -> Option<ResourceMetadata> {
 /// This function extracts key information from a Kubernetes resource for logging/debugging purposes.
 /// For cluster-scoped resources (without namespace), the namespace field is omitted.
 pub fn format_resource_info<T: kube::Resource>(resource: &T) -> String {
-    use kube::ResourceExt;
-
     let kind = std::any::type_name::<T>().split("::").last().unwrap_or("Unknown");
     let namespace = resource.namespace();
     let name = resource.name_any();

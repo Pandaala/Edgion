@@ -135,7 +135,7 @@ impl EdgionGatewayCli {
         // 1. Load configuration (synchronous)
         let config = EdgionGatewayConfig::load(self.config.clone())?;
 
-        // 2. Determine work_dir (按优先级：CLI > ENV > Config > Default)
+        // 2. Determine work_dir (priority: CLI > ENV > Config > Default)
         let work_dir_path = self
             .config
             .work_dir

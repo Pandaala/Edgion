@@ -49,7 +49,7 @@ impl EdgionControllerCli {
         let k8s_mode = utils::detect_k8s_mode(self.config.k8s_mode, config.k8s_mode);
         utils::set_k8s_mode(k8s_mode);
 
-        // Determine work_dir (按优先级：CLI > ENV > Config > Default)
+        // Determine work_dir (priority: CLI > ENV > Config > Default)
         let work_dir_path = self
             .config
             .work_dir

@@ -16,6 +16,10 @@
 - ✈️ **[Preflight 策略](./preflight-policy-guide.md)** - 预检请求处理配置
 - 🔒 **[EdgionTLS](./edgiontls-user-guide.md)** - TLS 证书管理
 
+### 插件系统
+
+- 🔌 **[Plugin References](./plugin-ref-guide.md)** - EdgionPlugins reference and composition
+
 ### 流式处理
 
 - 🌊 **[Stream Plugins](./stream-plugins-guide.md)** - TCP/UDP 流式插件
