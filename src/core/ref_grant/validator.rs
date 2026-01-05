@@ -124,9 +124,50 @@ impl Default for CrossNamespaceValidator {
 fn is_validation_enabled() -> bool {
     use crate::core::gateway::edgion_gateway_config::list_edgion_gateway_configs;
     list_edgion_gateway_configs()
-        .first()
-        .map(|egwc| egwc.spec.enable_reference_grant_validation)
-        .unwrap_or(false)
+        .iter()
+        .any(|egwc| egwc.spec.enable_reference_grant_validation)
+}
+
+fn normalize_group(group: Option<&String>) -> &str {
+    group.map(String::as_str).unwrap_or("")
+}
+
+fn normalize_kind(kind: Option<&String>) -> &str {
+    kind.map(String::as_str).unwrap_or("Service")
+}
+
+fn check_cross_namespace_ref(
+    store: &ReferenceGrantStore,
+    route_namespace: &str,
+    route_kind: &str,
+    backend_ns: &str,
+    group: &str,
+    kind: &str,
+    name: &str,
+) -> Option<String> {
+    let allowed = store.check_reference_allowed(
+        route_namespace,
+        "gateway.networking.k8s.io",
+        route_kind,
+        backend_ns,
+        group,
+        kind,
+        Some(name),
+    );
+
+    if allowed {
+        None
+    } else {
+        Some(format!(
+            "Cross-namespace reference not allowed: {} in namespace '{}' cannot reference {}/{}/{} in namespace '{}' (no ReferenceGrant)",
+            route_kind,
+            route_namespace,
+            if group.is_empty() { "core" } else { group },
+            kind,
+            name,
+            backend_ns,
+        ))
+    }
 }
 
 /// Validate HTTPRoute with ReferenceGrant if validation is enabled
@@ -146,21 +187,18 @@ pub fn validate_http_route_if_enabled(route: &crate::types::resources::HTTPRoute
                 for backend_ref in backend_refs {
                     if let Some(backend_ns) = &backend_ref.namespace {
                         if backend_ns != route_namespace {
-                            let allowed = validator.store.check_reference_allowed(
+                            let group = normalize_group(backend_ref.group.as_ref());
+                            let kind = normalize_kind(backend_ref.kind.as_ref());
+                            if let Some(err) = check_cross_namespace_ref(
+                                &validator.store,
                                 route_namespace,
-                                "gateway.networking.k8s.io",
                                 "HTTPRoute",
                                 backend_ns,
-                                "", // HTTPBackendRef implicitly refers to core group
-                                "Service", // HTTPBackendRef implicitly refers to Service
-                                Some(&backend_ref.name),
-                            );
-                            
-                            if !allowed {
-                                errors.push(format!(
-                                    "Cross-namespace reference not allowed: HTTPRoute in namespace '{}' cannot reference Service/{} in namespace '{}' (no ReferenceGrant)",
-                                    route_namespace, backend_ref.name, backend_ns
-                                ));
+                                group,
+                                kind,
+                                &backend_ref.name,
+                            ) {
+                                errors.push(err);
                             }
                         }
                     }
@@ -188,21 +226,18 @@ pub fn validate_grpc_route_if_enabled(route: &crate::types::resources::GRPCRoute
                 for backend_ref in backend_refs {
                     if let Some(backend_ns) = &backend_ref.namespace {
                         if backend_ns != route_namespace {
-                            let allowed = validator.store.check_reference_allowed(
+                            let group = normalize_group(backend_ref.group.as_ref());
+                            let kind = normalize_kind(backend_ref.kind.as_ref());
+                            if let Some(err) = check_cross_namespace_ref(
+                                &validator.store,
                                 route_namespace,
-                                "gateway.networking.k8s.io",
                                 "GRPCRoute",
                                 backend_ns,
-                                "",
-                                "Service",
-                                Some(&backend_ref.name),
-                            );
-                            
-                            if !allowed {
-                                errors.push(format!(
-                                    "Cross-namespace reference not allowed: GRPCRoute in namespace '{}' cannot reference Service/{} in namespace '{}' (no ReferenceGrant)",
-                                    route_namespace, backend_ref.name, backend_ns
-                                ));
+                                group,
+                                kind,
+                                &backend_ref.name,
+                            ) {
+                                errors.push(err);
                             }
                         }
                     }
@@ -229,21 +264,18 @@ pub fn validate_tcp_route_if_enabled(route: &crate::types::resources::TCPRoute) 
                 for backend_ref in backend_refs {
                     if let Some(backend_ns) = &backend_ref.namespace {
                         if backend_ns != route_namespace {
-                            let allowed = validator.store.check_reference_allowed(
+                            let group = normalize_group(backend_ref.group.as_ref());
+                            let kind = normalize_kind(backend_ref.kind.as_ref());
+                            if let Some(err) = check_cross_namespace_ref(
+                                &validator.store,
                                 route_namespace,
-                                "gateway.networking.k8s.io",
                                 "TCPRoute",
                                 backend_ns,
-                                "",
-                                "Service",
-                                Some(&backend_ref.name),
-                            );
-                            
-                            if !allowed {
-                                errors.push(format!(
-                                    "Cross-namespace reference not allowed: TCPRoute in namespace '{}' cannot reference Service/{} in namespace '{}' (no ReferenceGrant)",
-                                    route_namespace, backend_ref.name, backend_ns
-                                ));
+                                group,
+                                kind,
+                                &backend_ref.name,
+                            ) {
+                                errors.push(err);
                             }
                         }
                     }
@@ -270,21 +302,18 @@ pub fn validate_udp_route_if_enabled(route: &crate::types::resources::UDPRoute) 
                 for backend_ref in backend_refs {
                     if let Some(backend_ns) = &backend_ref.namespace {
                         if backend_ns != route_namespace {
-                            let allowed = validator.store.check_reference_allowed(
+                            let group = normalize_group(backend_ref.group.as_ref());
+                            let kind = normalize_kind(backend_ref.kind.as_ref());
+                            if let Some(err) = check_cross_namespace_ref(
+                                &validator.store,
                                 route_namespace,
-                                "gateway.networking.k8s.io",
                                 "UDPRoute",
                                 backend_ns,
-                                "",
-                                "Service",
-                                Some(&backend_ref.name),
-                            );
-                            
-                            if !allowed {
-                                errors.push(format!(
-                                    "Cross-namespace reference not allowed: UDPRoute in namespace '{}' cannot reference Service/{} in namespace '{}' (no ReferenceGrant)",
-                                    route_namespace, backend_ref.name, backend_ns
-                                ));
+                                group,
+                                kind,
+                                &backend_ref.name,
+                            ) {
+                                errors.push(err);
                             }
                         }
                     }
@@ -311,21 +340,18 @@ pub fn validate_tls_route_if_enabled(route: &crate::types::resources::TLSRoute) 
                 for backend_ref in backend_refs {
                     if let Some(backend_ns) = &backend_ref.namespace {
                         if backend_ns != route_namespace {
-                            let allowed = validator.store.check_reference_allowed(
+                            let group = normalize_group(backend_ref.group.as_ref());
+                            let kind = normalize_kind(backend_ref.kind.as_ref());
+                            if let Some(err) = check_cross_namespace_ref(
+                                &validator.store,
                                 route_namespace,
-                                "gateway.networking.k8s.io",
                                 "TLSRoute",
                                 backend_ns,
-                                "",
-                                "Service",
-                                Some(&backend_ref.name),
-                            );
-                            
-                            if !allowed {
-                                errors.push(format!(
-                                    "Cross-namespace reference not allowed: TLSRoute in namespace '{}' cannot reference Service/{} in namespace '{}' (no ReferenceGrant)",
-                                    route_namespace, backend_ref.name, backend_ns
-                                ));
+                                group,
+                                kind,
+                                &backend_ref.name,
+                            ) {
+                                errors.push(err);
                             }
                         }
                     }
@@ -335,5 +361,3 @@ pub fn validate_tls_route_if_enabled(route: &crate::types::resources::TLSRoute) 
     }
     errors
 }
-
-
