@@ -1,0 +1,216 @@
+# ================================================================================
+# Edgion Gateway Configuration File
+# ================================================================================
+# 
+# 使用方法:
+#   1. 直接使用配置文件运行:
+#      ./edgion-gateway --config /usr/local/edgion/config/edgion-gateway.toml
+#   
+#   2. 使用默认配置 (不指定 --config):
+#      ./edgion-gateway --server-addr http://127.0.0.1:50051
+#   
+#   3. 命令行参数覆盖配置文件:
+#      ./edgion-gateway --config /usr/local/edgion/config/edgion-gateway.toml --server-addr http://192.168.1.100:50051
+#
+# ================================================================================
+
+# ============================================================================
+# Working Directory Configuration
+# ============================================================================
+# All relative paths in this configuration file will be relative to work_dir.
+# Absolute paths will be used as-is.
+#
+# Priority order:
+#   1. Command line: --work-dir /path
+#   2. Environment:  EDGION_WORK_DIR=/path
+#   3. Config file:  work_dir = "/path"
+#   4. Default:      "." (current directory)
+#
+# Standard directory layout:
+#   work_dir/
+#   ├── logs/        # Log files
+#   ├── runtime/     # Runtime state
+#   └── config/      # Configuration files
+#
+# Examples:
+#   Development:  work_dir = "."
+#   Production:   work_dir = "/usr/local/edgion"
+#   Container:    work_dir = "/usr/local/edgion"
+# ============================================================================
+work_dir = "."
+
+[gateway]
+# Operator gRPC server address
+# Gateway 连接到此地址以获取配置
+# 格式: http://host:port 或 https://host:port
+server_addr = "http://127.0.0.1:50051"
+
+# Admin HTTP server listen address (optional)
+# 用于管理和健康检查端点
+# admin_listen = "0.0.0.0:8081"
+
+[logging]
+# 日志文件存储目录
+log_dir = "logs"
+
+# 日志文件名前缀
+# 实际文件名格式: {log_prefix}.{date}.log
+log_prefix = "edgion-gateway"
+
+# 日志级别: trace, debug, info, warn, error
+# - trace: 最详细的日志，包含所有调试信息
+# - debug: 调试级别，包含详细的运行时信息
+# - info:  常规信息，生产环境推荐使用
+# - warn:  警告信息
+# - error: 错误信息
+log_level = "debug,pingora_proxy=error,pingora_core=error"
+
+# 是否使用 JSON 格式输出日志
+# true:  使用结构化 JSON 格式，便于日志采集和分析
+# false: 使用人类可读的文本格式
+json_format = false
+
+# 是否同时输出到控制台
+console = true
+
+# 异步日志通道缓冲区大小
+# 增大此值可以提高高并发场景下的日志性能
+buffer_size = 10000
+
+# ================================================================================
+# Pingora Server Configuration
+# ================================================================================
+[server]
+# Number of worker threads (default: number of CPU cores)
+# 工作线程数，建议设置为 CPU 核心数
+# threads = 4
+
+# Enable work stealing (default: true)
+# 启用工作窃取调度，提高负载均衡性能
+# work_stealing = true
+
+# Grace period for shutdown in seconds (default: 30)
+# 优雅关闭的宽限期，允许现有连接完成处理
+# grace_period_seconds = 30
+
+# Graceful shutdown timeout in seconds (default: 10)
+# 优雅关闭超时时间，超时后强制关闭连接
+# graceful_shutdown_timeout_seconds = 10
+
+# Upstream keepalive pool size (default: 128)
+# 上游连接池大小，复用到后端服务的连接
+# upstream_keepalive_pool_size = 128
+
+# Error log file path (optional)
+# Pingora 内部错误日志路径
+# error_log = "logs/pingora_error.log"
+
+# ================================================================================
+# Access Log Configuration (HTTP/gRPC)
+# ================================================================================
+# Access log 记录所有 HTTP 和 gRPC 请求
+# 支持多种输出目标：LocalFile, Elasticsearch, Kafka 等
+
+[access_log]
+# 启用 Access 日志 (default: true)
+enabled = true
+
+[access_log.output.localFile]
+# Access log 文件路径（相对于 work_dir，或使用绝对路径）
+path = "logs/edgion_access.log"
+
+# 可选：队列大小
+# 如果不设置，默认使用 cpu_cores * 10_000
+# queue_size = 100000
+
+# 可选：日志轮转配置
+# [access_log.output.localFile.rotation]
+# strategy = "daily"  # 可选: "daily", "hourly", "never", 或 { size = 104857600 }
+# max_files = 10
+# check_interval_secs = 30
+
+# 未来支持的输出目标示例：
+# [access_log.output.es]
+# endpoint = "http://localhost:9200"
+# index = "edgion-access"
+# 
+# [access_log.output.kafka]
+# brokers = ["localhost:9092"]
+# topic = "edgion-access"
+
+# ================================================================================
+# SSL/TLS Callback Log Configuration
+# ================================================================================
+# SSL log 记录每次 TLS 握手的证书回调事件，用于调试和审计
+# 支持与 access log 相同的输出目标和特性（批处理、轮转、metrics）
+
+[ssl_log]
+# 启用 SSL 日志 (default: true)
+enabled = true
+
+[ssl_log.output.localFile]
+# SSL log 文件路径（相对于 work_dir，或使用绝对路径）
+path = "logs/ssl.log"
+
+# 可选：队列大小
+# 如果不设置，默认使用 cpu_cores * 10_000
+# queue_size = 100000
+
+# 可选：日志轮转配置
+# 推荐使用按大小轮转，因为 SSL 日志通常用于调试，不需要保留太长时间
+[ssl_log.output.localFile.rotation]
+strategy = { size = 104857600 }  # 100MB per file
+max_files = 10                    # 保留最多 10 个文件
+check_interval_secs = 30          # 每 30 秒检查一次是否需要轮转
+
+# 未来可以选择其他输出目标（与 access log 相同）
+# [ssl_log.output.es]
+# endpoint = "http://localhost:9200"
+# index = "edgion-ssl"
+
+# ================================================================================
+# TCP Connection Log Configuration
+# ================================================================================
+# TCP log 记录所有 TCP 连接信息，包括字节数、连接状态等
+# 默认禁用，按需启用
+
+[tcp_log]
+# 启用 TCP 日志 (default: false)
+enabled = false
+
+[tcp_log.output.localFile]
+# TCP log 文件路径（相对于 work_dir，或使用绝对路径）
+path = "logs/tcp.log"
+
+# 可选：队列大小
+# queue_size = 50000
+
+# 可选：日志轮转配置
+# [tcp_log.output.localFile.rotation]
+# strategy = "daily"  # 推荐按日轮转
+# max_files = 10
+# check_interval_secs = 30
+
+# ================================================================================
+# UDP Session Log Configuration
+# ================================================================================
+# UDP log 记录所有 UDP 会话信息，包括包数、字节数、会话时长等
+# 默认禁用，按需启用
+
+[udp_log]
+# 启用 UDP 日志 (default: false)
+enabled = false
+
+[udp_log.output.localFile]
+# UDP log 文件路径（相对于 work_dir，或使用绝对路径）
+path = "logs/udp.log"
+
+# 可选：队列大小
+# queue_size = 50000
+
+# 可选：日志轮转配置
+# [udp_log.output.localFile.rotation]
+# strategy = "daily"  # 推荐按日轮转
+# max_files = 10
+# check_interval_secs = 30
+

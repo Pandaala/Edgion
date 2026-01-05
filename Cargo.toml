@@ -1,18 +1,79 @@
-[workspace]
-resolver = "2"
-members = [
-    "edgion",
-    "test-server",
-    "radix_route_matcher",
-]
-
-[workspace.package]
+[package]
+name = "edgion"
 version = "0.1.0"
 edition = "2021"
 authors = ["pandalaa"]
 
-# Shared dependencies for the workspace
-[workspace.dependencies]
+[lib]
+name = "edgion"
+path = "src/lib.rs"
+
+[[bin]]
+name = "edgion-gateway"
+path = "src/bin/edgion_gateway.rs"
+
+[[bin]]
+name = "edgion-controller"
+path = "src/bin/edgion_controller.rs"
+
+[[bin]]
+name = "edgion-ctl"
+path = "src/bin/edgion_ctl.rs"
+
+[[example]]
+name = "build_test_proto"
+path = "examples/testing/build_test_proto.rs"
+
+[[example]]
+name = "test_server"
+path = "examples/testing/test_server.rs"
+
+[[example]]
+name = "test_client"
+path = "examples/testing/test_client.rs"
+
+[[example]]
+name = "resource_diff"
+path = "examples/testing/resource_diff.rs"
+
+[[example]]
+name = "config_load_validator"
+path = "examples/testing/config_load_validator.rs"
+
+[features]
+# Default features
+default = ["allocator-jemalloc", "boringssl"]
+
+# Memory allocator selection (mutually exclusive)
+allocator-jemalloc = ["tikv-jemallocator"]
+allocator-mimalloc = ["mimalloc"]
+allocator-system = []
+
+# TLS backend selection (mutually exclusive)
+boringssl = [
+    "pingora-core/boringssl",
+    "pingora-proxy/boringssl",
+    "dep:boring-sys",
+]
+
+openssl = [
+    "pingora-core/openssl",
+    "pingora-proxy/openssl",
+]
+
+rustls = [
+    "pingora-core/rustls",
+    "pingora-proxy/rustls",
+]
+
+# Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
+legacy_route_tests = []
+
+[dependencies]
+# Memory allocators (optional, controlled by features)
+tikv-jemallocator = { version = "0.6", optional = true }
+mimalloc = { version = "0.1", default-features = false, optional = true }
+
 # Core async runtime and error handling
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = "0.1"
@@ -24,47 +85,91 @@ thiserror = "1.0.69"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
+toml = "0.8"
+jsonschema = "0.26"  # JSON Schema validation
 
-# Kubernetes client and types
+# Kubernetes conf_client and types
 kube = { version = "2.0.1", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.26.0", features = ["latest", "schemars"] }
 schemars = { version = "1" }
 
 # gRPC (config sync)
-tonic = "0.12"
+tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
+# rustls 加密后端（tonic TLS 需要）
+rustls = { version = "0.23", features = ["ring"] }
+tokio-rustls = "0.26"
+rustls-pemfile = "2.0"
+x509-parser = "0.16"  # Certificate parsing and validation
 tonic-reflection = "0.12"
 prost = "0.13"
-tonic-build = "0.12"
 
 # File system monitoring
 notify = "6.1"
+futures = "0.3.31"
+
+# HTTP server
+axum = { version = "0.8.4", features = ["macros", "ws"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+tower-http = { version = "0.6", features = ["fs"] }  # Only for static files
+rust-embed = { version = "8.5" }  # For embedding frontend
+mime_guess = "2.0"
 
 # Utilities
 bytes = "1.0"
 base64 = "0.22"
 chrono = "0.4"
-once_cell = "1.21.3"
 parking_lot = "0.12"
 uuid = { version = "1.0", features = ["v4"] }
 arc-swap = "1.7"
+dashmap = "5.5"
+regex = "1.0"
+rand = "0.8"
+smallvec = "1.15"
+bcrypt = "0.15"
+sha2 = "0.10"
+hex = "0.4"
 
 # Pingora
-pingora-core = { version = "0.6", features = ["openssl_derived", "boringssl"] }
-pingora-http = { version = "0.6" }
-pingora-load-balancing = { version = "0.6" }
-pingora-proxy = { version = "0.6", features = ["openssl_derived", "boringssl"] }
+pingora-core = { version = "0.6" }
+pingora-http = "0.6"
+pingora-load-balancing = "0.6"
+pingora-proxy = { version = "0.6" }
+etcd-client = "0.11"
+
+# BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
+boring-sys = { version = "4", optional = true }
+
+# Metrics
+metrics = "0.24"
+metrics-exporter-prometheus = "0.15"
 
 # CLI
 clap = { version = "4.0", features = ["derive"] }
-tracing = { version = "0.1" }
-tracing-subscriber = { version = "0.3" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+http = "1.3.1"
+mockall = "0.14.0"
 
-# Test server
-axum = { version = "0.8.4", features = ["macros"] }
-futures = { version = "0.3.31" }
+# Test client dependencies
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+console = "0.15"
+colored = "2.0"
 
-# Route matching
-radix_route_matcher = { path = "radix_route_matcher" }
+# CLI table formatting
+tabled = "0.15"
 
-# Workspace packages
-edgion = { path = "edgion" }
+# Unix Socket support for HTTP
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
+tower = "0.5"
+htpasswd-verify = "0.3.0"
+cookie = "0.18.1"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
+tokio-tungstenite = "0.24"
+base64 = "0.22"
+tonic-build = "0.12"

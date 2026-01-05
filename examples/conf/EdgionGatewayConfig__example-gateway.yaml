@@ -1,0 +1,50 @@
+apiVersion: example.com/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: example-gateway
+spec:
+  # Server 配置（Pingora 服务器参数）
+  # todo 等待实现
+  server:
+    threads: 4                          # 工作线程数（默认: CPU 核心数）
+    work_stealing: true                 # 启用工作窃取（默认: true）
+    grace_period_seconds: 30            # 优雅关闭等待时间（秒）
+    graceful_shutdown_timeout_s: 10     # 优雅关闭超时（秒）
+    upstream_keepalive_pool_size: 128   # 上游连接池大小
+
+  # Real IP 提取配置（用于 CDN/LB 后的真实 IP 提取）
+  realIp:
+    # 受信任的代理 CIDR 列表
+    trustedProxies:
+      - "127.0.0.0/8"       # 本地回环（测试用）
+      - "198.51.100.0/24"   # 测试用 CDN (包含 198.51.100.2)
+      - "192.168.0.0/16"    # 测试用 LB (包含 192.168.1.1)
+      - "10.0.0.0/8"        # 私有网络 A
+      - "172.16.0.0/12"     # 私有网络 B
+    # 提取真实 IP 的 header（默认: X-Forwarded-For）
+    realIpHeader: "X-Forwarded-For"
+
+  # 全局插件引用（对所有使用此 GatewayClass 的路由生效，在路由级插件之前执行）
+  # globalPluginsRef:
+  #   - name: https-redirect-plugin
+  #     namespace: default
+
+  # 安全防护配置
+  securityProtect:
+    xForwardedForLimit: 200     # X-Forwarded-For header 最大长度（字节），超过则返回 400
+    requireSniHostMatch: true   # 要求 SNI 和 Host header 必须匹配（HTTPS），不匹配返回 421
+    fallbackSni: "default.example.com"  # 当客户端未提供 SNI 时使用的默认 SNI（可选）
+    
+
+  # HTTP 超时配置
+  httpTimeout:
+    client:
+      readTimeout: 60s
+      writeTimeout: 60s
+      keepaliveTimeout: 75s
+    backend:
+      defaultConnectTimeout: 5s
+      defaultRequestTimeout: 60s
+      defaultPerTryTimeout: 30s
+      defaultIdleTimeout: 300s
+      defaultMaxRetries: 3

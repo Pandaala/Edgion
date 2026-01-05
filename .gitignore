@@ -20,4 +20,18 @@ Thumbs.db
 *.dll
 *.a
 *.lib
+logs/
+**/logs_*/  # Integration test log directories (all subdirectories)
+examples/testing/logs_*/
+
+# Test reports
+test_report.json
+*_report.json
+runtime/
+
+# TLS 测试 Secret（包含证书私钥，自动生成，不要提交）
+examples/conf/Secret_*.yaml
+
+# 测试证书文件（自动生成，不要提交）
+examples/testing/certs/
 

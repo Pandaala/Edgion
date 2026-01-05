@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: https-redirect-plugin
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: requestRedirect
+      config:
+        scheme: https
+        statusCode: 301
+

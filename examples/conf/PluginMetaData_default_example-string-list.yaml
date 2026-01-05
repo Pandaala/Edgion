@@ -1,0 +1,26 @@
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: example-string-list
+  namespace: default
+spec:
+  stringList:
+    items:
+      - key: "admin"
+        code: 100
+        priority: 10
+        id: "admin-001"
+        behavior: "allow"
+      - key: "user"
+        code: 200
+        priority: 20
+        id: "user-001"
+        behavior: "allow"
+      - key: "guest"
+        code: 300
+        priority: 30
+        id: "guest-001"
+        behavior: "deny"
+      - key: "api-key-abc123"
+        code: 150
+

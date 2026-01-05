@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-grpc
+  namespace: edge
+spec:
+  ports:
+    - name: grpc-30021
+      port: 30021
+      protocol: TCP
+      targetPort: 30021
+  type: ClusterIP
+

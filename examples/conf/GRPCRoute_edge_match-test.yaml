@@ -1,0 +1,44 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: match-test
+  namespace: edge
+spec:
+  parentRefs:
+    - name: example-gateway
+      namespace: edge
+      sectionName: http
+
+  hostnames:
+    - "grpc-match.example.com"
+
+  rules:
+    # Rule 1: Exact match for test.TestService.SayHello with header match
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+          headers:
+            - name: x-test-header
+              value: test-value
+      backendRefs:
+        - name: test-grpc
+          port: 30021
+
+    # Rule 2: Service-level match for test.TestService (no method specified)
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      backendRefs:
+        - name: test-grpc
+          port: 30021
+
+    # Rule 3: Catch-all match (no service/method)
+    - matches:
+        - method: {}
+      backendRefs:
+        - name: test-grpc
+          port: 30021
+

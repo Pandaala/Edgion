@@ -1,0 +1,18 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: test-grpc
+  namespace: edge
+  labels:
+    kubernetes.io/service-name: test-grpc
+addressType: IPv4
+ports:
+  - name: grpc-30021
+    port: 30021
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+

@@ -1,0 +1,77 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: edgionstreamplugins.edgion.io
+spec:
+  group: edgion.io
+  names:
+    kind: EdgionStreamPlugins
+    listKind: EdgionStreamPluginsList
+    plural: edgionstreamplugins
+    shortNames:
+    - esplugins
+    singular: edgionstreamplugins
+  scope: Namespaced
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              plugins:
+                type: array
+                description: List of stream plugins to apply
+                items:
+                  type: object
+                  properties:
+                    enable:
+                      type: boolean
+                      description: Whether this plugin is enabled (default true)
+                      default: true
+                    conditionEnable:
+                      type: object
+                      description: Conditional enable configuration
+                      properties:
+                        timeBefore:
+                          type: string
+                          description: Plugin enabled before this time (RFC3339)
+                    type:
+                      type: string
+                      description: Plugin type
+                      enum:
+                      - IpRestriction
+                    config:
+                      type: object
+                      description: Plugin configuration
+                      x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            properties:
+              conditions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                    status:
+                      type: string
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                    reason:
+                      type: string
+                    message:
+                      type: string
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp
+

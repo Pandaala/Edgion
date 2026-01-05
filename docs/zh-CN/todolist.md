@@ -1,0 +1,95 @@
+
+
+🔥 绝大部分插件都在 request_filter
+
+鉴权
+
+路由逻辑
+
+限流
+
+黑白名单
+
+访问日志
+
+上游选择（LB）
+
+HTTP 属性修改
+
+🟨 早期 early_request_filter 适用场景
+
+特殊路由重写
+
+建立 request_id
+
+X-Forwarded-* 处理
+
+CORS 预检 OPTIONS
+
+请求过大 / 协议预检查
+
+仅 ~5% 插件会用到。
+
+🟨 response_filter 适用场景（少）
+
+gzip
+
+header modification
+
+error transform
+
+
+
+
+
+Gateway API 官方已经确认未来也不打算做“通用 Filter”
+
+特别是以下类型：
+
+Auth（JWT, OAuth, API-Key）
+
+Security（WAF, ACL, IP 限制）
+
+RateLimit
+
+Request/Response rewrite
+
+Header manipulation
+
+Body filter
+
+Load balancing logic
+
+Circuit break
+
+Retry
+
+Compression
+
+Logging / Tracing 插件
+
+官方给出的理由：
+
+不同控制器对这些功能的实现差异太大，无法标准化。
+
+这和你现在做的情况很像：
+每个网关都是自己设计一套 Filter 框架。
+
+路由match后，如何取出filter，可以优化一下，同时兼容之copy 引用的plugin的namespace/name，和复杂配置下的插件.
+gateway上配置80转443.
+
+
+
+实现Pingora Cache：
+如果你的系统需要：
+CDN 边缘缓存
+API Gateway 加速
+反向代理缓存
+小型 CDN/Local Cache 节点（像 Cloudflare Workers 一样）
+HTTP GET 的减负（同类请求 collapse）
+短期静态资源缓存
+业务服务降压
+那么 Pingora 的内置缓存可以直接使用。
+
+
+扩展wasm的动态filters

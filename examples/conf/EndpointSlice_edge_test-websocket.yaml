@@ -1,0 +1,18 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: test-websocket
+  namespace: edge
+  labels:
+    kubernetes.io/service-name: test-websocket
+addressType: IPv4
+ports:
+  - name: ws-30005
+    port: 30005
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+

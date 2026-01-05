@@ -1,0 +1,139 @@
+# ================================================================================
+# Edgion Controller Configuration File
+# ================================================================================
+# 
+# 使用方法:
+#   1. 直接使用配置文件运行:
+#      ./edgion-controller --config /usr/local/edgion/config/edgion-controller.toml
+#   
+#   2. 使用默认配置 (不指定 --config):
+#      ./edgion-controller --gateway-class public-gateway
+#   
+#   3. 命令行参数覆盖配置文件:
+#      ./edgion-controller --config /usr/local/edgion/config/edgion-controller.toml --log-level debug
+#
+# ================================================================================
+
+# ============================================================================
+# Working Directory Configuration
+# ============================================================================
+# All relative paths in this configuration file will be relative to work_dir.
+# Absolute paths will be used as-is.
+#
+# Priority order:
+#   1. Command line: --work-dir /path
+#   2. Environment:  EDGION_WORK_DIR=/path
+#   3. Config file:  work_dir = "/path"
+#   4. Default:      "." (current directory)
+#
+# Standard directory layout:
+#   work_dir/
+#   ├── logs/        # Log files
+#   ├── runtime/     # Runtime state
+#   └── config/      # Configuration files
+#
+# Examples:
+#   Development:  work_dir = "."
+#   Production:   work_dir = "/usr/local/edgion"
+#   Container:    work_dir = "/usr/local/edgion"
+# ============================================================================
+work_dir = "."
+
+# K8s mode (optional, can also use CLI --k8s-mode or auto-detect via env)
+# K8s 模式（可选，也可使用 CLI --k8s-mode 或通过环境变量自动检测）
+# 优先级: CLI 参数 > 环境变量 (KUBERNETES_SERVICE_HOST) > 配置文件 > 默认值(false)
+# k8s_mode = false
+
+[server]
+# gRPC 服务器监听地址
+# 用于接收来自 Gateway 的配置同步请求
+grpc_listen = "0.0.0.0:50051"
+
+# Admin HTTP 服务器监听地址
+# 用于管理和健康检查端点，同时提供 Web Dashboard
+admin_listen = "0.0.0.0:5800"
+
+# Gateway class name that this operator instance will handle
+# 指定此 operator 实例将处理的 gateway class 名称
+gateway_class = "public-gateway"
+
+[logging]
+# 日志文件存储目录
+log_dir = "logs"
+
+# 日志文件名前缀
+# 实际文件名格式: {log_prefix}.{date}.log
+log_prefix = "edgion-controller"
+
+# 日志级别: trace, debug, info, warn, error
+# - trace: 最详细的日志，包含所有调试信息
+# - debug: 调试级别，包含详细的运行时信息
+# - info:  常规信息，生产环境推荐使用
+# - warn:  警告信息
+# - error: 错误信息
+log_level = "info"
+
+# 是否使用 JSON 格式输出日志
+# true:  使用结构化 JSON 格式，便于日志采集和分析
+# false: 使用人类可读的文本格式
+json_format = false
+
+# 异步日志通道缓冲区大小
+# 增大此值可以提高高并发场景下的日志性能
+buffer_size = 10000
+
+[loader]
+# 配置加载器类型: localpath 或 etcd
+# - localpath: 从本地文件系统加载配置（开发和测试环境推荐）
+# - etcd:      从 etcd 集群加载配置（生产环境推荐）
+type = "localpath"
+
+# 文件系统加载器的根目录 (仅当 type = "localpath" 时生效)
+# 该目录应包含所有 Gateway API 资源的 YAML 文件
+# 开发测试推荐使用 examples/conf，生产环境使用 config/examples
+dir = "examples/conf"
+
+# Etcd 集群端点列表 (仅当 type = "etcd" 时生效)
+# 示例: etcd_endpoints = ["http://127.0.0.1:2379", "http://127.0.0.1:2380"]
+# etcd_endpoints = ["http://127.0.0.1:2379"]
+
+# Etcd 键前缀 (仅当 type = "etcd" 时生效)
+# 所有配置将存储在该前缀下
+# etcd_prefix = "/edgion/config"
+
+[debug]
+# 是否启用调试模式
+# 当启用且日志级别为 debug 或 trace 时，每 30 秒打印一次所有 GatewayClass 的配置
+# 生产环境建议设置为 false
+enabled = true
+
+[conf_sync]
+# EventStore 环形缓冲区容量配置
+# 每种资源类型可以独立配置容量
+# 控制每种资源类型保留多少历史事件
+# 较高的值允许客户端从更长时间的断开连接中恢复而无需完全重新列出
+# 但会占用更多内存
+
+# Base conf 资源容量（这些资源通常数量很少）
+gateway_classes_capacity = 50          # GatewayClass
+gateways_capacity = 200                # Gateway
+edgion_gateway_configs_capacity = 50   # EdgionGatewayConfig
+
+# Route 资源容量
+routes_capacity = 200      # HTTPRoute
+grpc_routes_capacity = 200 # GRPCRoute
+tcp_routes_capacity = 200  # TCPRoute
+udp_routes_capacity = 200  # UDPRoute
+tls_routes_capacity = 200  # TLSRoute
+
+# 其他资源容量
+link_sys_capacity = 200        # LinkSys
+services_capacity = 200        # Service
+endpoint_slices_capacity = 200 # EndpointSlice
+edgion_tls_capacity = 200              # EdgionTls
+edgion_plugins_capacity = 200          # EdgionPlugins
+edgion_stream_plugins_capacity = 200   # EdgionStreamPlugins
+reference_grants_capacity = 200        # ReferenceGrant
+backend_tls_policies_capacity = 200    # BackendTLSPolicy
+plugin_metadata_capacity = 200         # PluginMetadata
+secrets_capacity = 200         # Secret

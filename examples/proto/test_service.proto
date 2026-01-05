@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package test;
+
+// Test service for gRPC examples
+service TestService {
+    // Simple unary RPC
+    rpc SayHello (HelloRequest) returns (HelloResponse);
+    
+    // Server streaming RPC
+    rpc StreamNumbers (NumberRequest) returns (stream NumberResponse);
+}
+
+// Request message for SayHello
+message HelloRequest {
+    string name = 1;
+}
+
+// Response message for SayHello
+message HelloResponse {
+    string message = 1;
+    string server_addr = 2;
+}
+
+// Request message for StreamNumbers
+message NumberRequest {
+    int32 count = 1;
+}
+
+// Response message for StreamNumbers
+message NumberResponse {
+    int32 number = 1;
+}
+

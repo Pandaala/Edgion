@@ -1,0 +1,49 @@
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-gateway-to-secret
+  namespace: secret-namespace
+spec:
+  # Allow Gateway from gateway-namespace to reference Secrets in this namespace
+  from:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    namespace: gateway-namespace
+  to:
+  - group: ""
+    kind: Secret
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-routes-to-backend
+  namespace: backend-namespace
+spec:
+  # Allow HTTPRoute and TCPRoute from route-namespace to reference Services in this namespace
+  from:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    namespace: route-namespace
+  - group: gateway.networking.k8s.io
+    kind: TCPRoute
+    namespace: route-namespace
+  to:
+  - group: ""
+    kind: Service
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-specific-service
+  namespace: production-namespace
+spec:
+  # Allow HTTPRoute from frontend-namespace to reference a specific Service
+  from:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    namespace: frontend-namespace
+  to:
+  - group: ""
+    kind: Service
+    name: critical-backend-service
+

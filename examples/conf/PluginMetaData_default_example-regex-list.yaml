@@ -1,0 +1,27 @@
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: example-regex-list
+  namespace: default
+spec:
+  regexList:
+    items:
+      - key: "^/api/v1/.*"
+        code: 100
+        priority: 5
+        id: "api-v1"
+        behavior: "route"
+      - key: "^/admin/.*"
+        code: 200
+        priority: 1
+        id: "admin-path"
+        behavior: "auth-required"
+      - key: ".*\\.jpg$"
+        code: 300
+        priority: 10
+        id: "image-jpeg"
+        behavior: "cache"
+      - key: "^/public/.*"
+        code: 400
+        id: "public-path"
+

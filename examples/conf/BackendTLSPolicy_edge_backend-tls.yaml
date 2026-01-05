@@ -1,0 +1,17 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: backend-tls
+  namespace: edge
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: test-backend-tls
+  validation:
+    caCertificateRefs:
+      - name: backend-ca
+        kind: Secret
+        group: ""
+    hostname: backend.example.com
+

@@ -1,0 +1,21 @@
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: mtls-test-mutual
+  namespace: edge
+spec:
+  parentRefs:
+    - name: mtls-test-gateway
+      namespace: edge
+  hosts:
+    - mtls.example.com
+  secretRef:
+    name: mtls-server
+    namespace: edge
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: client-ca
+      namespace: edge
+    verifyDepth: 1
+

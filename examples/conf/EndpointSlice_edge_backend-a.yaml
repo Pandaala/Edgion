@@ -1,0 +1,18 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: backend-a-slice
+  namespace: edge
+  labels:
+    kubernetes.io/service-name: backend-a
+addressType: IPv4
+endpoints:
+  - addresses:
+      - 127.0.0.1
+    conditions:
+      ready: true
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+

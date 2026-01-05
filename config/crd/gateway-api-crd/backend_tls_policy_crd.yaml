@@ -1,0 +1,110 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes-sigs/gateway-api/pull/2997
+    gateway.networking.k8s.io/bundle-version: v1.2.0
+    gateway.networking.k8s.io/channel: standard
+  creationTimestamp: null
+  name: backendtlspolicies.gateway.networking.k8s.io
+spec:
+  group: gateway.networking.k8s.io
+  names:
+    categories:
+    - gateway-api
+    kind: BackendTLSPolicy
+    listKind: BackendTLSPolicyList
+    plural: backendtlspolicies
+    shortNames:
+    - btlspolicy
+    singular: backendtlspolicy
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        description: BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation of an object.'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this object represents.'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: Spec defines the desired state of BackendTLSPolicy.
+            properties:
+              targetRefs:
+                description: TargetRefs identifies the API object(s) to apply the policy to.
+                items:
+                  description: BackendTLSPolicyTargetRef identifies an API object to apply policy to.
+                  properties:
+                    group:
+                      description: Group is the group of the target resource.
+                      type: string
+                    kind:
+                      description: Kind is kind of the target resource.
+                      type: string
+                    name:
+                      description: Name is the name of the target resource.
+                      type: string
+                    namespace:
+                      description: Namespace is the namespace of the target resource.
+                      type: string
+                    sectionName:
+                      description: SectionName is the name of a section within the target resource.
+                      type: string
+                  required:
+                  - group
+                  - kind
+                  - name
+                  type: object
+                type: array
+              validation:
+                description: Validation contains backend TLS validation configuration.
+                properties:
+                  caCertificateRefs:
+                    description: CACertificateRefs contains one or more references to Kubernetes objects that contain a PEM-encoded TLS CA certificate bundle.
+                    items:
+                      description: BackendTLSPolicyCACertificateRef identifies a ConfigMap or Secret containing a CA certificate bundle.
+                      properties:
+                        group:
+                          description: Group is the group of the referent.
+                          type: string
+                        kind:
+                          description: Kind is the kind of the referent.
+                          type: string
+                        name:
+                          description: Name is the name of the referent.
+                          type: string
+                        namespace:
+                          description: Namespace is the namespace of the referent.
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      type: object
+                    type: array
+                  hostname:
+                    description: Hostname is used for SNI and certificate validation.
+                    type: string
+                  wellKnownCACertificates:
+                    description: WellKnownCACertificates specifies whether system CA certificates may be used.
+                    enum:
+                    - System
+                    type: string
+                required:
+                - hostname
+                type: object
+            required:
+            - targetRefs
+            - validation
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+

@@ -1,0 +1,21 @@
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: mtls-test-chain
+  namespace: edge
+spec:
+  parentRefs:
+    - name: mtls-test-gateway
+      namespace: edge
+  hosts:
+    - mtls-chain.example.com
+  secretRef:
+    name: mtls-server
+    namespace: edge
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: ca-chain  # Root + Intermediate CA bundle
+      namespace: edge
+    verifyDepth: 2  # Support intermediate CA
+
