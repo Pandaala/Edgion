@@ -86,6 +86,26 @@ fn is_default_verify_depth(depth: &u8) -> bool {
     *depth == 1
 }
 
+/// OCSP stapling configuration (planned; data model reserved)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OcspStaplingConfig {
+    /// Enable OCSP stapling (no-op until handshake support is added)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Refresh interval seconds for OCSP responses
+    /// Recommended: 900-3600. When None, implementation default will be used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_interval_seconds: Option<u64>,
+
+    /// Fail-open behavior when OCSP response is unavailable/expired
+    /// true  -> allow handshake without stapled OCSP
+    /// false -> fail handshake
+    #[serde(default)]
+    pub fail_open: bool,
+}
+
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[kube(
     group = "edgion.io",
@@ -115,9 +135,116 @@ pub struct EdgionTlsSpec {
     /// If not configured, uses BoringSSL default ciphers
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ciphers: Option<Vec<String>>,
+    /// Extended/experimental TLS knobs (reserved; requires handshake support)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extend: Option<EdgionTlsExtend>,
+
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub secret: Option<Secret>,
 }
+
+/// Extended/experimental TLS features (reserved)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgionTlsExtend {
+    /// Prefer server cipher order
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prefer_server_ciphers: bool,
+
+    /// OCSP stapling configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocsp_stapling: Option<OcspStaplingConfig>,
+
+    /// Session ticket configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ticket: Option<SessionTicketConfig>,
+
+    /// Session cache configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_cache: Option<SessionCacheConfig>,
+
+    /// Revocation check configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revocation_check: Option<RevocationCheckConfig>,
+
+    /// Early data (0-RTT) configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub early_data: Option<EarlyDataConfig>,
+}
+
+/// Session ticket configuration (reserved)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTicketConfig {
+    /// Enable session tickets
+    #[serde(default)]
+    pub enabled: bool,
+    /// Ticket lifetime in seconds
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime_seconds: Option<u64>,
+    /// Optional key rotation interval seconds
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_interval_seconds: Option<u64>,
+    /// Optional secret ref for ticket keys (reserved; format TBD)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_secret_ref: Option<SecretObjectReference>,
+}
+
+/// Session cache configuration (reserved)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCacheConfig {
+    /// Enable session cache
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum entries in cache
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_entries: Option<u64>,
+    /// Entry TTL seconds
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
+}
+
+/// Revocation check configuration (reserved)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RevocationCheckConfig {
+    /// Mode: off / ocsp / crl (future extension)
+    #[serde(default)]
+    pub mode: RevocationMode,
+    /// Fail open if revocation data unavailable/expired
+    #[serde(default)]
+    pub fail_open: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub enum RevocationMode {
+    #[serde(rename = "off")]
+    Off,
+    #[serde(rename = "ocsp")]
+    Ocsp,
+    #[serde(rename = "crl")]
+    Crl,
+}
+
+impl Default for RevocationMode {
+    fn default() -> Self {
+        RevocationMode::Off
+    }
+}
+
+/// Early data (0-RTT) configuration (reserved)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EarlyDataConfig {
+    /// Enable early data (0-RTT)
+    #[serde(default)]
+    pub enabled: bool,
+    /// Reject on replay risk (if supported by TLS stack)
+    #[serde(default)]
+    pub reject_on_replay: bool,
+}
+
 
 #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
 pub struct EdgionTlsStatus {
