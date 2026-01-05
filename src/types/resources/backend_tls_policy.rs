@@ -17,7 +17,7 @@ pub const BACKEND_TLS_POLICY_KIND: &str = "BackendTLSPolicy";
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "gateway.networking.k8s.io",
-    version = "v1",
+    version = "v1alpha3",
     kind = "BackendTLSPolicy",
     plural = "backendtlspolicies",
     shortname = "btlspolicy",
