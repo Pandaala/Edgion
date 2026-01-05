@@ -34,7 +34,7 @@ pub struct PluginRuntime {
 
 impl Clone for PluginRuntime {
     fn clone(&self) -> Self {
-        // PluginRuntime is rebuilt from edgion_plugins during pre_parse, so clone creates empty
+        // PluginRuntime is rebuilt from edgion_plugins during pre_parse, so clone creates empty runtime on purpose.
         Self::new()
     }
 }

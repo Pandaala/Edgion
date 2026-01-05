@@ -46,7 +46,7 @@ impl UdpLogEntry {
         session_start: Instant,
     ) -> Self {
         let session_duration_ms = session_start.elapsed().as_millis() as u64;
-        
+
         Self {
             ts: chrono::Utc::now().timestamp_millis(),
             listener_port,
@@ -60,7 +60,7 @@ impl UdpLogEntry {
             bytes_received: 0,
         }
     }
-    
+
     /// Set packet/byte statistics
     pub fn with_stats(
         mut self,
@@ -75,7 +75,7 @@ impl UdpLogEntry {
         self.bytes_received = bytes_received;
         self
     }
-    
+
     /// Serialize to JSON
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
@@ -85,9 +85,10 @@ impl UdpLogEntry {
 /// Initialize the global UDP logger from configuration
 pub async fn init_udp_logger(config: &crate::types::LogConfig) -> Result<()> {
     use crate::core::observe::create_async_logger;
-    
+
     if let Some(logger) = create_async_logger(config, "udp").await? {
-        UDP_LOGGER.set(logger)
+        UDP_LOGGER
+            .set(logger)
             .map_err(|_| anyhow!("UdpLogger already initialized"))?;
         tracing::info!("UdpLogger initialized");
     } else {
@@ -107,4 +108,3 @@ pub async fn log_udp(entry: &UdpLogEntry) {
         let _ = logger.send(entry.to_json()).await;
     }
 }
-

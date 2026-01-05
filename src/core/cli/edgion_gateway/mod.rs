@@ -189,7 +189,7 @@ impl EdgionGatewayCli {
         runtime.block_on(init_ssl_logger(&config.ssl_log))?;
         runtime.block_on(init_tcp_logger(&config.tcp_log))?;
         runtime.block_on(init_udp_logger(&config.udp_log))?;
-        
+
         tracing::info!("All loggers initialized (access, ssl, tcp, udp)");
 
         // 9. Create and configure Pingora server (in Tokio runtime context for UDP listeners)

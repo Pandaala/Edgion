@@ -1,15 +1,15 @@
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 
 use crate::core::backends::endpoint_slice::get_roundrobin_store;
+use crate::core::observe::{log_udp, UdpLogEntry};
 use crate::core::routes::udp_routes::GatewayUdpRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::core::observe::{log_udp, UdpLogEntry};
 
 /// UDP session timeout (60 seconds of inactivity)
 const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -152,11 +152,11 @@ impl EdgionUdp {
         // 6. Forward packet to upstream
         let data_len = data.len() as u64;
         let _ = session.upstream_socket.send_to(&data, session.upstream_addr).await;
-        
+
         // 7. Update statistics
         session.packets_sent.fetch_add(1, Ordering::Relaxed);
         session.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
-        
+
         // 8. Update last activity
         *session.last_activity.lock() = Instant::now();
     }
@@ -208,7 +208,8 @@ impl EdgionUdp {
                 last_activity,
                 packets_received,
                 bytes_received,
-            ).await;
+            )
+            .await;
         });
 
         Ok(session)
@@ -238,11 +239,11 @@ impl EdgionUdp {
                 Ok(Ok((len, _))) => {
                     // Forward packet back to client
                     let _ = downstream_socket.send_to(&buf[..len], client_addr).await;
-                    
+
                     // Update statistics
                     packets_received.fetch_add(1, Ordering::Relaxed);
                     bytes_received.fetch_add(len as u64, Ordering::Relaxed);
-                    
+
                     // Update last activity
                     *last_activity.lock() = Instant::now();
                 }
@@ -273,7 +274,7 @@ impl EdgionUdp {
                     to_remove.push((*entry.key(), entry.value().clone()));
                 }
             }
-            
+
             // Remove inactive sessions and log them
             for (client_addr, session) in to_remove {
                 // Log session before removal
@@ -283,15 +284,16 @@ impl EdgionUdp {
                     client_addr.port(),
                     Some(session.upstream_addr.to_string()),
                     session.session_start,
-                ).with_stats(
+                )
+                .with_stats(
                     session.packets_sent.load(Ordering::Relaxed),
                     session.packets_received.load(Ordering::Relaxed),
                     session.bytes_sent.load(Ordering::Relaxed),
                     session.bytes_received.load(Ordering::Relaxed),
                 );
-                
+
                 log_udp(&log_entry).await;
-                
+
                 // Remove session
                 self.client_sessions.remove(&client_addr);
             }

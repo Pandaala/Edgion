@@ -1,9 +1,9 @@
 //! Observability configuration types
 
+use crate::types::link_sys::StringOutput;
 use clap::Args;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::types::link_sys::StringOutput;
 
 /// Generic log configuration applicable to all log types
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Args)]
@@ -13,7 +13,7 @@ pub struct LogConfig {
     #[arg(skip)]
     #[serde(default)]
     pub enabled: bool,
-    
+
     /// Output destination configuration
     #[arg(skip)]
     #[serde(default)]
@@ -41,12 +41,12 @@ impl LogConfig {
             }),
         }
     }
-    
+
     /// Create enabled config with default settings
     pub fn enabled_default(path: impl Into<String>) -> Self {
         Self::with_path(path, true)
     }
-    
+
     /// Create disabled config with default settings
     pub fn disabled_default(path: impl Into<String>) -> Self {
         Self::with_path(path, false)
@@ -76,4 +76,3 @@ impl LogType {
         }
     }
 }
-

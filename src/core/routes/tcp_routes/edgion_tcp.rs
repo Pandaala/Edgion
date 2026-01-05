@@ -11,10 +11,10 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
 use crate::core::backends::endpoint_slice::get_roundrobin_store;
+use crate::core::observe::{log_tcp, TcpLogEntry};
 use crate::core::plugins::{StreamContext, StreamPluginResult};
 use crate::core::routes::tcp_routes::GatewayTcpRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::core::observe::{log_tcp, TcpLogEntry};
 
 /// TCP connection context
 pub struct TcpContext {

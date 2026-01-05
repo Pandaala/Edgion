@@ -5,13 +5,13 @@ pub mod filters;
 pub mod gateway_base_conf;
 pub mod global_def;
 pub mod link_sys;
+pub mod observe;
 pub mod resource_kind;
 pub mod resource_meta_traits;
 pub mod resource_registry;
 pub mod resources;
 pub mod schema;
 pub mod work_dir;
-pub mod observe;
 
 pub use self::ctx::{BackendContext, BackendTlsInfo, EdgionHttpContext, MatchInfo, RequestInfo, UpstreamInfo};
 pub use self::edgion_status::EdgionStatus;
@@ -19,6 +19,7 @@ pub use self::err::{EdError, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPE
 pub use self::gateway_base_conf::GatewayBaseConf;
 pub use self::global_def::*;
 pub use self::link_sys::{LocalFileWriterCfg, LocalFileWriterConfig, StringOutput};
+pub use self::observe::{LogConfig, LogType};
 pub use self::resource_kind::ResourceKind;
 pub use self::resource_meta_traits::ResourceMeta;
 pub use self::resource_registry::{
@@ -27,7 +28,6 @@ pub use self::resource_registry::{
 pub use self::resources::*;
 pub use self::schema::*;
 pub use self::work_dir::{init_work_dir, work_dir, WorkDir};
-pub use self::observe::{LogConfig, LogType};
 
 // Re-export from conf_mgr for backward compatibility
 pub use crate::core::conf_mgr::{

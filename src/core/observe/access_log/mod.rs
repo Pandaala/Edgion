@@ -15,13 +15,12 @@ static ACCESS_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
 /// Initialize global AccessLogger from configuration
 /// Should be called once during application startup
 /// Returns error if already initialized
-pub async fn init_access_logger(
-    config: &crate::types::LogConfig
-) -> Result<()> {
+pub async fn init_access_logger(config: &crate::types::LogConfig) -> Result<()> {
     use crate::core::observe::create_async_logger;
-    
+
     if let Some(logger) = create_async_logger(config, "access").await? {
-        ACCESS_LOGGER.set(logger)
+        ACCESS_LOGGER
+            .set(logger)
             .map_err(|_| anyhow!("AccessLogger already initialized"))?;
         tracing::info!("Global AccessLogger initialized");
     } else {

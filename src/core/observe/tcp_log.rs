@@ -41,7 +41,7 @@ impl TcpLogEntry {
     pub fn from_context(ctx: &TcpContext) -> Self {
         let duration_ms = ctx.start_time.elapsed().as_millis() as u64;
         let status = format!("{:?}", ctx.status);
-        
+
         Self {
             ts: chrono::Utc::now().timestamp_millis(),
             listener_port: ctx.listener_port,
@@ -55,7 +55,7 @@ impl TcpLogEntry {
             connection_established: ctx.connection_established,
         }
     }
-    
+
     /// Serialize to JSON
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
@@ -65,9 +65,10 @@ impl TcpLogEntry {
 /// Initialize the global TCP logger from configuration
 pub async fn init_tcp_logger(config: &crate::types::LogConfig) -> Result<()> {
     use crate::core::observe::create_async_logger;
-    
+
     if let Some(logger) = create_async_logger(config, "tcp").await? {
-        TCP_LOGGER.set(logger)
+        TCP_LOGGER
+            .set(logger)
             .map_err(|_| anyhow!("TcpLogger already initialized"))?;
         tracing::info!("TcpLogger initialized");
     } else {
@@ -87,4 +88,3 @@ pub async fn log_tcp(entry: &TcpLogEntry) {
         let _ = logger.send(entry.to_json()).await;
     }
 }
-
