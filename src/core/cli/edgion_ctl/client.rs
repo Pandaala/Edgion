@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, Response};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -8,6 +8,7 @@ use std::time::Duration;
 pub struct EdgionClient {
     client: Client,
     base_url: String,
+    #[allow(dead_code)]
     socket_path: Option<PathBuf>,
 }
 

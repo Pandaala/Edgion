@@ -4,7 +4,7 @@ use crate::core::conf_sync::{CacheEventDispatch, ResourceMeta, ServerCache};
 use crate::types::prelude_resources::*;
 use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use kube::{Resource, ResourceExt};
+use kube::Resource;
 
 /// Helper function to execute change on cache
 fn execute_change_on_cache<T>(change: ResourceChange, cache: &ServerCache<T>, resource: T)
@@ -597,7 +597,7 @@ impl ConfigServer {
                         RK::EdgionTls => {
                             // Reload EdgionTls from cache
                             let edgion_tls_list = self.edgion_tls.list_owned();
-                            let secret_list = self.secrets.list_owned();
+                            let _secret_list = self.secrets.list_owned();
 
                             if let Some(mut edgion_tls) = edgion_tls_list.data.into_iter().find(|tls| {
                                 let tls_namespace = tls.metadata.namespace.as_deref();

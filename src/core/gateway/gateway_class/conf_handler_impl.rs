@@ -9,17 +9,20 @@ static GATEWAY_CLASS_STORE: std::sync::LazyLock<Arc<RwLock<Vec<GatewayClass>>>> 
     std::sync::LazyLock::new(|| Arc::new(RwLock::new(Vec::new())));
 
 /// Get a reference to the global GatewayClass store
+#[allow(dead_code)]
 pub fn get_gateway_class_store() -> Arc<RwLock<Vec<GatewayClass>>> {
     GATEWAY_CLASS_STORE.clone()
 }
 
 /// Query GatewayClass by name
+#[allow(dead_code)]
 pub fn get_gateway_class_by_name(name: &str) -> Option<GatewayClass> {
     let store = GATEWAY_CLASS_STORE.read().unwrap();
     store.iter().find(|gc| gc.name_any() == name).cloned()
 }
 
 /// List all GatewayClass resources
+#[allow(dead_code)]
 pub fn list_gateway_classes() -> Vec<GatewayClass> {
     let store = GATEWAY_CLASS_STORE.read().unwrap();
     store.clone()

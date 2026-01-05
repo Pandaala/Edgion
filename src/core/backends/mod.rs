@@ -58,6 +58,7 @@ impl EdgionService {
 /// Get port from BackendRef or Service spec
 /// Returns error if port is not available in either place
 #[inline]
+#[allow(dead_code)]
 fn get_port_from_backend_ref_or_service(
     br: &HTTPBackendRef,
     service: &k8s_openapi::api::core::v1::Service,

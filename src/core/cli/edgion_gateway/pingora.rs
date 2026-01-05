@@ -88,7 +88,7 @@ pub fn create_and_configure_server(
 ///
 /// This function starts the Pingora server and blocks until shutdown.
 /// It should be called after the Tokio runtime has been moved to a background thread.
-pub fn run_server(mut server: Server) {
+pub fn run_server(server: Server) {
     tracing::info!("Starting Pingora server");
     server.run_forever();
 }

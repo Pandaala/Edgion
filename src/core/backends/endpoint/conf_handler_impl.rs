@@ -1,4 +1,4 @@
-use super::discovery_impl::{EndpointExt, EndpointLoadBalancer};
+use super::discovery_impl::EndpointLoadBalancer;
 use super::{
     get_endpoint_consistent_store, get_endpoint_ewma_store, get_endpoint_leastconn_store, get_endpoint_roundrobin_store,
 };

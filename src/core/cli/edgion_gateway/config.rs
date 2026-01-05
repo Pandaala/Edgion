@@ -1,4 +1,3 @@
-use crate::types::link_sys::StringOutput;
 use crate::types::LogConfig;
 use anyhow::{Context, Result};
 use clap::Args;

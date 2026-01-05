@@ -9,11 +9,13 @@ static EDGION_GATEWAY_CONFIG_STORE: std::sync::LazyLock<Arc<RwLock<Vec<EdgionGat
     std::sync::LazyLock::new(|| Arc::new(RwLock::new(Vec::new())));
 
 /// Get a reference to the global EdgionGatewayConfig store
+#[allow(dead_code)]
 pub fn get_edgion_gateway_config_store() -> Arc<RwLock<Vec<EdgionGatewayConfig>>> {
     EDGION_GATEWAY_CONFIG_STORE.clone()
 }
 
 /// Query EdgionGatewayConfig by name
+#[allow(dead_code)]
 pub fn get_edgion_gateway_config_by_name(name: &str) -> Option<EdgionGatewayConfig> {
     let store = EDGION_GATEWAY_CONFIG_STORE.read().unwrap();
     store.iter().find(|config| config.name_any() == name).cloned()

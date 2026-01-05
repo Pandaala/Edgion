@@ -30,6 +30,7 @@ impl GatewayStore {
             .ok_or_else(|| anyhow!("Gateway with key '{}' not found in store", key))
     }
 
+    #[allow(dead_code)]
     pub fn remove_gateway(&mut self, key: &str) -> Result<()> {
         if !self.gateways.contains_key(key) {
             return Err(anyhow!("Gateway with key '{}' not found in store", key));

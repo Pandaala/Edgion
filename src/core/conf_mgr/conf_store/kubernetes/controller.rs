@@ -3,9 +3,9 @@
 //! Watches Kubernetes resources and keeps the KubernetesStore cache up to date
 
 use anyhow::Result;
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use kube::runtime::watcher;
-use kube::{Api, Client, ResourceExt};
+use kube::{Api, Client};
 use std::sync::Arc;
 
 use super::KubernetesStore;

@@ -10,11 +10,13 @@ static GATEWAY_STORE: std::sync::LazyLock<Arc<RwLock<Vec<Gateway>>>> =
     std::sync::LazyLock::new(|| Arc::new(RwLock::new(Vec::new())));
 
 /// Get a reference to the global Gateway store
+#[allow(dead_code)]
 pub fn get_gateway_store() -> Arc<RwLock<Vec<Gateway>>> {
     GATEWAY_STORE.clone()
 }
 
 /// Query Gateway by namespace and name
+#[allow(dead_code)]
 pub fn get_gateway_by_name(namespace: Option<&str>, name: &str) -> Option<Gateway> {
     let store = GATEWAY_STORE.read().unwrap();
     store
@@ -24,6 +26,7 @@ pub fn get_gateway_by_name(namespace: Option<&str>, name: &str) -> Option<Gatewa
 }
 
 /// List all Gateway resources
+#[allow(dead_code)]
 pub fn list_gateways() -> Vec<Gateway> {
     let store = GATEWAY_STORE.read().unwrap();
     store.clone()
