@@ -10,6 +10,15 @@ use crate::core::utils::available_cpu_cores;
 use crate::types::link_sys::{LocalFileWriterConfig, RotationConfig};
 use crate::types::work_dir;
 
+/// Log type for metrics differentiation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogType {
+    Access,
+    Ssl,
+    Tcp,
+    Udp,
+}
+
 /// Local file writer that implements DataSender
 ///
 /// Uses a background thread to write log entries (avoids blocking tokio runtime)
@@ -21,6 +30,8 @@ pub struct LocalFileWriter {
     queue_size: Option<usize>,
     /// Rotation configuration
     pub(super) rotation: RotationConfig,
+    /// Log type for metrics differentiation
+    pub(super) log_type: LogType,
     pub(super) sender: Option<SyncSender<String>>,
     pub(super) healthy: bool,
 }
@@ -32,6 +43,7 @@ impl LocalFileWriter {
             relative_path: config.path,
             queue_size: config.queue_size,
             rotation: config.rotation,
+            log_type: LogType::Access, // Default to Access
             sender: None,
             healthy: false,
         }
@@ -43,9 +55,16 @@ impl LocalFileWriter {
             relative_path: path.into(),
             queue_size: None,
             rotation: RotationConfig::default(),
+            log_type: LogType::Access,
             sender: None,
             healthy: false,
         }
+    }
+
+    /// Set the log type for metrics differentiation
+    pub fn with_log_type(mut self, log_type: LogType) -> Self {
+        self.log_type = log_type;
+        self
     }
 
     /// Get full path by resolving relative path against work_dir

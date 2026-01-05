@@ -11,6 +11,7 @@ pub mod resource_registry;
 pub mod resources;
 pub mod schema;
 pub mod work_dir;
+pub mod observe;
 
 pub use self::ctx::{BackendContext, BackendTlsInfo, EdgionHttpContext, MatchInfo, RequestInfo, UpstreamInfo};
 pub use self::edgion_status::EdgionStatus;
@@ -26,6 +27,7 @@ pub use self::resource_registry::{
 pub use self::resources::*;
 pub use self::schema::*;
 pub use self::work_dir::{init_work_dir, work_dir, WorkDir};
+pub use self::observe::{LogConfig, LogType};
 
 // Re-export from conf_mgr for backward compatibility
 pub use crate::core::conf_mgr::{

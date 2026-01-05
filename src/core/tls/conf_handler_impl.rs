@@ -84,6 +84,7 @@ mod tests {
                 client_auth: None,
                 min_tls_version: None,
                 ciphers: None,
+                extend: None,
                 secret,
             },
             status: None,

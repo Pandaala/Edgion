@@ -1,4 +1,5 @@
 use crate::types::link_sys::StringOutput;
+use crate::types::LogConfig;
 use anyhow::{Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
@@ -40,13 +41,21 @@ pub struct EdgionGatewayConfig {
     #[serde(default)]
     pub logging: LoggingConfig,
 
-    #[command(flatten)]
-    #[serde(default)]
-    pub access_log: AccessLogConfig,
+    #[arg(skip)]
+    #[serde(default = "default_access_log_config")]
+    pub access_log: LogConfig,
 
-    #[command(flatten)]
+    #[arg(skip)]
+    #[serde(default = "default_ssl_log_config")]
+    pub ssl_log: LogConfig,
+
+    #[arg(skip)]
     #[serde(default)]
-    pub ssl_log: SslLogConfig,
+    pub tcp_log: LogConfig,
+
+    #[arg(skip)]
+    #[serde(default)]
+    pub udp_log: LogConfig,
 
     #[command(flatten)]
     #[serde(default)]
@@ -67,54 +76,13 @@ pub struct GatewayConfig {
     pub admin_listen: Option<String>,
 }
 
-/// Access log configuration
-/// Supports multiple output targets: LocalFile, Elasticsearch, Kafka, etc.
-#[derive(Debug, Clone, Serialize, Deserialize, Args)]
-pub struct AccessLogConfig {
-    /// Output destination for access logs
-    #[arg(skip)]
-    #[serde(default)]
-    pub output: StringOutput,
+// Default log configurations
+fn default_access_log_config() -> LogConfig {
+    LogConfig::enabled_default("logs/edgion_access.log")
 }
 
-impl Default for AccessLogConfig {
-    fn default() -> Self {
-        Self {
-            output: StringOutput::default(),
-        }
-    }
-}
-
-/// SSL log configuration
-/// Supports multiple output targets: LocalFile, Elasticsearch, Kafka, etc.
-#[derive(Debug, Clone, Serialize, Deserialize, Args)]
-pub struct SslLogConfig {
-    /// Output destination for SSL logs
-    #[arg(skip)]
-    #[serde(default)]
-    pub output: StringOutput,
-
-    /// Enable SSL logging (default: true)
-    #[arg(long = "ssl-log-enabled")]
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-impl Default for SslLogConfig {
-    fn default() -> Self {
-        Self {
-            output: StringOutput::LocalFile(crate::types::link_sys::LocalFileWriterCfg {
-                path: "logs/ssl.log".to_string(),
-                queue_size: None,
-                rotation: None,
-            }),
-            enabled: default_true(),
-        }
-    }
+fn default_ssl_log_config() -> LogConfig {
+    LogConfig::enabled_default("logs/ssl.log")
 }
 
 /// Pingora server configuration
@@ -318,11 +286,11 @@ impl EdgionGatewayConfig {
         self.logging.json_format.unwrap_or(false)
     }
 
-    /// Convert to LogConfig
-    pub fn to_log_config(&self) -> crate::core::observe::LogConfig {
-        use crate::core::observe::LogConfig;
+    /// Convert to SysLogConfig (for system logging)
+    pub fn to_log_config(&self) -> crate::core::observe::SysLogConfig {
+        use crate::core::observe::SysLogConfig;
 
-        LogConfig {
+        SysLogConfig {
             log_dir: PathBuf::from(self.log_dir()),
             file_prefix: self.logging.log_prefix.clone(),
             json_format: self.json_format(),

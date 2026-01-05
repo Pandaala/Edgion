@@ -1,4 +1,4 @@
-use crate::core::observe::LogConfig;
+use crate::core::observe::SysLogConfig;
 use anyhow::Result;
 use std::path::PathBuf;
 
@@ -68,9 +68,9 @@ impl GatewayLogConfig {
         self
     }
     
-    /// Convert to core LogConfig
-    pub fn to_log_config(self) -> LogConfig {
-        LogConfig {
+    /// Convert to core SysLogConfig
+    pub fn to_log_config(self) -> SysLogConfig {
+        SysLogConfig {
             log_dir: self.log_dir,
             file_prefix: self.file_prefix,
             json_format: self.json_format,

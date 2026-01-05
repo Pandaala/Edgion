@@ -118,13 +118,17 @@ impl SslLogger {
     }
 }
 
-/// Initialize the global SSL logger with a LocalFileWriter
-pub async fn init_ssl_logger(writer: LocalFileWriter) -> anyhow::Result<()> {
-    let logger = SslLogger::new(writer);
-    SSL_LOGGER
-        .set(logger)
-        .map_err(|_| anyhow::anyhow!("SSL logger already initialized"))?;
-    tracing::info!("SSL callback logger initialized with enhanced features");
+/// Initialize the global SSL logger from configuration
+pub async fn init_ssl_logger(config: &crate::types::LogConfig) -> anyhow::Result<()> {
+    use crate::core::observe::create_sync_logger;
+    
+    if let Some(logger) = create_sync_logger(config).await? {
+        SSL_LOGGER.set(logger)
+            .map_err(|_| anyhow::anyhow!("SSL logger already initialized"))?;
+        tracing::info!("SSL callback logger initialized with enhanced features");
+    } else {
+        tracing::info!("SSL logger disabled");
+    }
     Ok(())
 }
 

@@ -13,6 +13,9 @@ pub mod names {
     pub const REQUESTS_TOTAL: &str = "edgion_requests_total";
     pub const REQUESTS_FAILED: &str = "edgion_requests_failed_total";
     pub const ACCESS_LOG_DROPPED: &str = "edgion_access_log_dropped_total";
+    pub const SSL_LOG_DROPPED: &str = "edgion_ssl_log_dropped_total";
+    pub const TCP_LOG_DROPPED: &str = "edgion_tcp_log_dropped_total";
+    pub const UDP_LOG_DROPPED: &str = "edgion_udp_log_dropped_total";
 }
 
 /// Global metrics singleton
@@ -38,6 +41,12 @@ pub struct GatewayMetrics {
     requests_failed: Counter,
     /// Total access logs dropped (channel full)
     access_log_dropped: Counter,
+    /// Total SSL logs dropped (channel full)
+    ssl_log_dropped: Counter,
+    /// Total TCP logs dropped (channel full)
+    tcp_log_dropped: Counter,
+    /// Total UDP logs dropped (channel full)
+    udp_log_dropped: Counter,
 }
 
 impl GatewayMetrics {
@@ -49,6 +58,9 @@ impl GatewayMetrics {
             requests_total: counter!(names::REQUESTS_TOTAL),
             requests_failed: counter!(names::REQUESTS_FAILED),
             access_log_dropped: counter!(names::ACCESS_LOG_DROPPED),
+            ssl_log_dropped: counter!(names::SSL_LOG_DROPPED),
+            tcp_log_dropped: counter!(names::TCP_LOG_DROPPED),
+            udp_log_dropped: counter!(names::UDP_LOG_DROPPED),
         }
     }
 
@@ -82,5 +94,23 @@ impl GatewayMetrics {
     #[inline]
     pub fn access_log_dropped(&self) {
         self.access_log_dropped.increment(1);
+    }
+
+    /// Record a dropped SSL log entry
+    #[inline]
+    pub fn ssl_log_dropped(&self) {
+        self.ssl_log_dropped.increment(1);
+    }
+
+    /// Record a dropped TCP log entry
+    #[inline]
+    pub fn tcp_log_dropped(&self) {
+        self.tcp_log_dropped.increment(1);
+    }
+
+    /// Record a dropped UDP log entry
+    #[inline]
+    pub fn udp_log_dropped(&self) {
+        self.udp_log_dropped.increment(1);
     }
 }

@@ -1,16 +1,23 @@
 # Edgion 日志系统架构
 
-本文档介绍 Edgion 的日志系统架构，包括 Access Log 和 SSL/TLS Callback Log 的设计与实现。
+本文档介绍 Edgion 的统一日志系统架构，包括 Access Log、SSL Log、TCP Log 和 UDP Log 的设计与实现。
 
 ## 概览
 
-Edgion 提供了统一的日志基础设施，支持：
-- **Access Log**：记录所有 HTTP/HTTPS 请求
-- **SSL Log**：记录所有 TLS 握手和证书回调事件
+Edgion 提供了统一的日志基础设施，支持四种日志类型：
+- **Access Log**：记录所有 HTTP/HTTPS/gRPC 请求（默认启用）
+- **SSL Log**：记录所有 TLS 握手和证书回调事件（默认启用）
+- **TCP Log**：记录所有 TCP 连接和数据传输（默认禁用）
+- **UDP Log**：记录所有 UDP 会话和数据传输（默认禁用）
+
+### 核心特性
+
+- **统一配置**：所有日志类型使用相同的配置模式（enabled + output + rotation）
 - **批处理写入**：减少系统调用，提升性能
 - **日志轮转**：按时间或大小自动轮转
 - **多种输出**：本地文件、Elasticsearch、Kafka（未来支持）
 - **Metrics 集成**：记录丢弃日志数量
+- **灵活控制**：每种日志可独立启用/禁用
 
 ## 架构设计
 
@@ -19,47 +26,78 @@ Edgion 提供了统一的日志基础设施，支持：
 ```mermaid
 graph TB
     subgraph Gateway[Edgion Gateway]
-        ProxyReq[Proxy Request]
-        TLSCallback[TLS Callback]
+        HttpReq[HTTP/gRPC Request]
+        TlsCallback[TLS Callback]
+        TcpConn[TCP Connection]
+        UdpSession[UDP Session]
     end
     
-    subgraph LogSystem[Logging System]
-        AccessLogger[Access Logger]
-        SslLogger[SSL Logger]
+    subgraph LogSystem[Unified Logging System]
+        AccessLogger[Access Logger async]
+        SslLogger[SSL Logger sync]
+        TcpLogger[TCP Logger async]
+        UdpLogger[UDP Logger async]
         
         subgraph Infrastructure[Shared Infrastructure]
+            LoggerFactory[Logger Factory]
             LocalFileWriter[LocalFileWriter]
             BatchWriter[Batch Writer Thread]
             Rotator[Log Rotator]
         end
     end
     
-    subgraph Output[Output]
-        LogFile1[access.log]
-        LogFile2[ssl.log]
+    subgraph Output[Output Files]
+        AccessLog[access.log enabled]
+        SslLog[ssl.log enabled]
+        TcpLog[tcp.log disabled]
+        UdpLog[udp.log disabled]
         Metrics[Prometheus Metrics]
     end
     
-    ProxyReq -->|async| AccessLogger
-    TLSCallback -->|sync| SslLogger
+    HttpReq -->|async| AccessLogger
+    TlsCallback -->|sync| SslLogger
+    TcpConn -->|async| TcpLogger
+    UdpSession -->|async| UdpLogger
+    
+    LoggerFactory -.->|create| AccessLogger
+    LoggerFactory -.->|create| SslLogger
+    LoggerFactory -.->|create| TcpLogger
+    LoggerFactory -.->|create| UdpLogger
     
     AccessLogger -->|tokio channel| LocalFileWriter
-    SslLogger -->|tokio unbounded channel| LocalFileWriter
+    SslLogger -->|unbounded channel| LocalFileWriter
+    TcpLogger -->|tokio channel| LocalFileWriter
+    UdpLogger -->|tokio channel| LocalFileWriter
     
     LocalFileWriter -->|sync channel| BatchWriter
-    BatchWriter -->|batch write| LogFile1
-    BatchWriter -->|batch write| LogFile2
+    BatchWriter -->|batch write| AccessLog
+    BatchWriter -->|batch write| SslLog
+    BatchWriter -->|batch write| TcpLog
+    BatchWriter -->|batch write| UdpLog
     BatchWriter -->|check| Rotator
     
     LocalFileWriter -.->|dropped count| Metrics
 ```
 
+### 日志类型对比
+
+| 日志类型 | 默认状态 | API 类型 | 用途 | 典型场景 |
+|---------|---------|---------|------|---------|
+| **Access Log** | ✅ Enabled | Async | HTTP/gRPC 流量分析 | 请求追踪、性能分析、审计 |
+| **SSL Log** | ✅ Enabled | Sync | TLS 握手诊断 | 证书问题排查、mTLS 调试 |
+| **TCP Log** | ❌ Disabled | Async | TCP 连接分析 | 低级网络调试、连接问题排查 |
+| **UDP Log** | ❌ Disabled | Async | UDP 会话分析 | DNS/QUIC 等 UDP 协议调试 |
+
+**默认启用策略**：
+- Access Log 和 SSL Log 默认启用，因为它们对于生产环境的可观测性至关重要
+- TCP Log 和 UDP Log 默认禁用，因为它们是低级协议日志，仅在需要深度网络调试时启用
+
 ### 关键特性
 
 #### 1. 非阻塞保证
 
-- **Access Log**：使用 async API，不阻塞 tokio runtime
-- **SSL Log**：使用 unbounded channel 桥接，保证 TLS callback 永不阻塞
+- **Access/TCP/UDP Log**：使用 async API，不阻塞 tokio runtime
+- **SSL Log**：使用 unbounded channel 桥接，保证 TLS callback 永不阻塞（TLS callback 必须是同步的）
 
 ```rust
 // SSL Log - 同步 API，内部使用 unbounded channel
@@ -192,6 +230,102 @@ init_ssl_logger(writer).await?;
 log_ssl(&entry);  // 同步调用，永不阻塞
 ```
 
+### TCP Logger
+
+**位置**：`src/core/observe/tcp_log.rs`
+
+**架构**：
+
+```rust
+static TCP_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
+
+pub struct TcpLogEntry {
+    pub ts: i64,
+    pub listener_port: u16,
+    pub client_addr: String,
+    pub client_port: u16,
+    pub upstream_addr: Option<String>,
+    pub duration_ms: u64,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub status: String,
+    pub connection_established: bool,
+}
+```
+
+**使用方式**：
+
+```rust
+// 在 TCP 连接结束时记录
+let log_entry = TcpLogEntry::from_context(&tcp_context);
+log_tcp(&log_entry).await;
+```
+
+**记录时机**：
+- 仅当连接成功建立后（`connection_established = true`）才记录日志
+- 记录完整的连接生命周期信息：建立、数据传输、关闭
+
+**日志内容**：
+- 客户端信息（地址、端口）
+- 上游信息（地址、端口）
+- 连接时长
+- 字节传输统计（发送/接收）
+- 连接状态（Success, UpstreamConnectionFailed, ReadError, WriteError 等）
+
+### UDP Logger
+
+**位置**：`src/core/observe/udp_log.rs`
+
+**架构**：
+
+```rust
+static UDP_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
+
+pub struct UdpLogEntry {
+    pub ts: i64,
+    pub listener_port: u16,
+    pub client_addr: String,
+    pub client_port: u16,
+    pub upstream_addr: Option<String>,
+    pub session_duration_ms: u64,
+    pub packets_sent: u64,
+    pub packets_received: u64,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+}
+```
+
+**使用方式**：
+
+```rust
+// 在 UDP session 超时清理时记录
+let log_entry = UdpLogEntry::new(
+    listener_port,
+    client_addr,
+    client_port,
+    upstream_addr,
+    session_start,
+).with_stats(packets_sent, packets_received, bytes_sent, bytes_received);
+
+log_udp(&log_entry).await;
+```
+
+**记录时机**：
+- Session 超时（默认 60 秒无活动）时自动记录
+- 记录整个 session 的统计信息
+
+**日志内容**：
+- 客户端信息（地址、端口）
+- 上游信息（地址、端口）
+- Session 时长
+- 包传输统计（发送/接收包数）
+- 字节传输统计（发送/接收字节数）
+
+**Session 管理**：
+- 每个客户端地址维护独立的 session
+- 使用原子变量（`AtomicU64`）进行线程安全的统计更新
+- 后台任务定期清理超时 session 并记录日志
+
 ### LocalFileWriter
 
 **位置**：`src/core/link_sys/local_file/`
@@ -253,6 +387,196 @@ queue_size = 100000
 strategy = { size = 104857600 }  # 100MB per file
 max_files = 10
 check_interval_secs = 30
+```
+
+### TCP Log 配置
+
+```toml
+[tcp_log]
+enabled = false  # 默认禁用，按需启用
+
+[tcp_log.output.localFile]
+path = "logs/tcp.log"
+queue_size = 50000
+
+[tcp_log.output.localFile.rotation]
+strategy = "daily"  # 推荐按日轮转
+max_files = 10
+check_interval_secs = 30
+```
+
+### UDP Log 配置
+
+```toml
+[udp_log]
+enabled = false  # 默认禁用，按需启用
+
+[udp_log.output.localFile]
+path = "logs/udp.log"
+queue_size = 50000
+
+[udp_log.output.localFile.rotation]
+strategy = "daily"  # 推荐按日轮转
+max_files = 10
+check_interval_secs = 30
+```
+
+### 统一配置模式
+
+所有日志类型都遵循相同的配置结构：
+
+```toml
+[<log_type>]
+enabled = true/false  # 启用/禁用日志
+
+[<log_type>.output.localFile]
+path = "logs/<log_type>.log"
+queue_size = <optional>
+
+[<log_type>.output.localFile.rotation]
+strategy = "daily" | "hourly" | "never" | { size = <bytes> }
+max_files = <number>
+check_interval_secs = <seconds>
+```
+
+**配置优先级**：
+1. `enabled` 标志（false 则不初始化）
+2. `output` 配置（LocalFile/Elasticsearch/Kafka）
+3. `queue_size`（可选，默认 cores * 10000）
+4. `rotation`（可选，默认 100MB 按大小轮转）
+
+## 日志格式示例
+
+所有日志都以 JSON 格式输出，每行一条记录。以下是各类日志的格式示例：
+
+### Access Log（HTTP/gRPC）
+
+```json
+{
+  "ts": 1704470400123,
+  "request_info": {
+    "method": "GET",
+    "path": "/api/v1/users",
+    "status": 200,
+    "x_trace_id": "abc123-def456",
+    "host": "example.com",
+    "user_agent": "curl/7.88.0"
+  },
+  "match_info": {
+    "route_name": "user-api",
+    "route_namespace": "default"
+  },
+  "backend_context": {
+    "upstreams": [{
+      "ip": "10.0.1.5",
+      "port": 8080,
+      "response_time_ms": 45
+    }]
+  },
+  "errors": [],
+  "plugin_logs": [],
+  "conn_est": true
+}
+```
+
+### SSL Log（TLS 握手）
+
+```json
+{
+  "ts": 1704470400456,
+  "sni": "example.com",
+  "cert": "default/example-cert",
+  "mtls": false
+}
+```
+
+**错误示例**：
+```json
+{
+  "ts": 1704470400789,
+  "sni": "unknown.com",
+  "error": "Certificate not found for SNI: unknown.com"
+}
+```
+
+### TCP Log（TCP 连接）
+
+```json
+{
+  "ts": 1704470401000,
+  "listener_port": 9000,
+  "client_addr": "192.168.1.100",
+  "client_port": 54321,
+  "upstream_addr": "10.0.1.10:8000",
+  "duration_ms": 5432,
+  "bytes_sent": 1024000,
+  "bytes_received": 2048000,
+  "status": "Success",
+  "connection_established": true
+}
+```
+
+**连接失败示例**：
+```json
+{
+  "ts": 1704470402000,
+  "listener_port": 9000,
+  "client_addr": "192.168.1.101",
+  "client_port": 54322,
+  "upstream_addr": null,
+  "duration_ms": 10,
+  "bytes_sent": 0,
+  "bytes_received": 0,
+  "status": "UpstreamConnectionFailed",
+  "connection_established": false
+}
+```
+
+### UDP Log（UDP 会话）
+
+```json
+{
+  "ts": 1704470403000,
+  "listener_port": 53,
+  "client_addr": "192.168.1.200",
+  "client_port": 12345,
+  "upstream_addr": "8.8.8.8:53",
+  "session_duration_ms": 60000,
+  "packets_sent": 25,
+  "packets_received": 25,
+  "bytes_sent": 1280,
+  "bytes_received": 2560
+}
+```
+
+**说明**：
+- `ts`：Unix 时间戳（毫秒）
+- 所有字段使用 camelCase 命名
+- 可选字段在为空时不会序列化（`skip_serializing_if`）
+- 所有日志都是单行 JSON，便于解析和处理
+
+## Metrics 监控
+
+每种日志类型都有独立的 dropped 指标，用于监控队列满导致的日志丢失：
+
+| Metric 名称 | 说明 | 触发条件 |
+|------------|------|---------|
+| `edgion_access_log_dropped_total` | Access 日志丢弃数 | Access 日志队列满 |
+| `edgion_ssl_log_dropped_total` | SSL 日志丢弃数 | SSL 日志队列满 |
+| `edgion_tcp_log_dropped_total` | TCP 日志丢弃数 | TCP 日志队列满 |
+| `edgion_udp_log_dropped_total` | UDP 日志丢弃数 | UDP 日志队列满 |
+
+**监控示例**：
+
+```promql
+# 查看最近 5 分钟各类日志的丢弃速率
+rate(edgion_access_log_dropped_total[5m])
+rate(edgion_ssl_log_dropped_total[5m])
+rate(edgion_tcp_log_dropped_total[5m])
+rate(edgion_udp_log_dropped_total[5m])
+
+# 设置告警（任何日志丢弃都应该告警）
+sum(rate(edgion_*_log_dropped_total[5m])) > 0
 ```
 
 ## 性能考虑

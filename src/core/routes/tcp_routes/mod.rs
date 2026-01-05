@@ -19,4 +19,4 @@ pub use conf_handler_impl::create_tcp_route_handler;
 pub use gateway_tcp_routes::GatewayTcpRoutes;
 
 // 导出 TCP 代理类型
-pub use edgion_tcp::EdgionTcp;
+pub use edgion_tcp::{EdgionTcp, TcpContext, TcpStatus};

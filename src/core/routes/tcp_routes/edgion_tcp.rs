@@ -11,10 +11,10 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
 use crate::core::backends::endpoint_slice::get_roundrobin_store;
-use crate::core::observe::AccessLogger;
 use crate::core::plugins::{StreamContext, StreamPluginResult};
 use crate::core::routes::tcp_routes::GatewayTcpRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
+use crate::core::observe::{log_tcp, TcpLogEntry};
 
 /// TCP connection context
 pub struct TcpContext {
@@ -46,7 +46,6 @@ pub struct EdgionTcp {
     pub listener_name: String, // Listener name (sectionName in TCPRoute)
     pub listener_port: u16,
     pub gateway_tcp_routes: Arc<GatewayTcpRoutes>,
-    pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     pub connector: TransportConnector,
 }
@@ -242,26 +241,9 @@ impl EdgionTcp {
         }
     }
 
-    /// Log access record
+    /// Log TCP connection
     async fn log_connection(&self, ctx: &TcpContext) {
-        let duration_ms = ctx.start_time.elapsed().as_millis() as u64;
-
-        let log_entry = serde_json::json!({
-            "ts": std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis(),
-            "protocol": "TCP",
-            "listener_port": ctx.listener_port,
-            "client_addr": &ctx.client_addr,
-            "client_port": ctx.client_port,
-            "upstream_addr": &ctx.upstream_addr,
-            "duration_ms": duration_ms,
-            "bytes_sent": ctx.bytes_sent,
-            "bytes_received": ctx.bytes_received,
-            "status": format!("{:?}", ctx.status),
-        });
-
-        self.access_logger.send(log_entry.to_string()).await;
+        let log_entry = TcpLogEntry::from_context(ctx);
+        log_tcp(&log_entry).await;
     }
 }

@@ -171,7 +171,14 @@ impl DataSender<String> for LocalFileWriter {
         if let Some(sender) = &self.sender {
             // Non-blocking send, drop if channel is full
             if sender.try_send(data).is_err() {
-                global_metrics().access_log_dropped();
+                // Record dropped log with type-specific metrics
+                use super::LogType;
+                match self.log_type {
+                    LogType::Access => global_metrics().access_log_dropped(),
+                    LogType::Ssl => global_metrics().ssl_log_dropped(),
+                    LogType::Tcp => global_metrics().tcp_log_dropped(),
+                    LogType::Udp => global_metrics().udp_log_dropped(),
+                }
             }
         }
         Ok(())

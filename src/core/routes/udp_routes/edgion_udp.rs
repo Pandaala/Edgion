@@ -2,12 +2,14 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 
 use crate::core::backends::endpoint_slice::get_roundrobin_store;
 use crate::core::routes::udp_routes::GatewayUdpRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
+use crate::core::observe::{log_udp, UdpLogEntry};
 
 /// UDP session timeout (60 seconds of inactivity)
 const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -15,11 +17,17 @@ const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
 /// Maximum UDP packet size (64KB)
 const MAX_UDP_PACKET_SIZE: usize = 65535;
 
-/// Client session information
+/// Client session information with statistics
 struct ClientSession {
     upstream_socket: Arc<UdpSocket>,
     upstream_addr: std::net::SocketAddr,
     last_activity: Arc<Mutex<Instant>>,
+    session_start: Instant,
+    // Atomic statistics for thread-safe updates
+    packets_sent: Arc<AtomicU64>,
+    packets_received: Arc<AtomicU64>,
+    bytes_sent: Arc<AtomicU64>,
+    bytes_received: Arc<AtomicU64>,
 }
 
 /// UDP proxy service
@@ -142,9 +150,14 @@ impl EdgionUdp {
         };
 
         // 6. Forward packet to upstream
+        let data_len = data.len() as u64;
         let _ = session.upstream_socket.send_to(&data, session.upstream_addr).await;
-
-        // 7. Update last activity
+        
+        // 7. Update statistics
+        session.packets_sent.fetch_add(1, Ordering::Relaxed);
+        session.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
+        
+        // 8. Update last activity
         *session.last_activity.lock() = Instant::now();
     }
 
@@ -170,6 +183,11 @@ impl EdgionUdp {
             upstream_socket: upstream_socket.clone(),
             upstream_addr,
             last_activity: Arc::new(Mutex::new(Instant::now())),
+            session_start: Instant::now(),
+            packets_sent: Arc::new(AtomicU64::new(0)),
+            packets_received: Arc::new(AtomicU64::new(0)),
+            bytes_sent: Arc::new(AtomicU64::new(0)),
+            bytes_received: Arc::new(AtomicU64::new(0)),
         });
 
         // Store session
@@ -179,6 +197,8 @@ impl EdgionUdp {
         let client_sessions = self.client_sessions.clone();
         let downstream_socket = self.socket.clone();
         let last_activity = session.last_activity.clone();
+        let packets_received = session.packets_received.clone();
+        let bytes_received = session.bytes_received.clone();
         tokio::spawn(async move {
             Self::handle_upstream_packets_static(
                 client_addr,
@@ -186,8 +206,9 @@ impl EdgionUdp {
                 downstream_socket,
                 client_sessions,
                 last_activity,
-            )
-            .await;
+                packets_received,
+                bytes_received,
+            ).await;
         });
 
         Ok(session)
@@ -200,6 +221,8 @@ impl EdgionUdp {
         downstream_socket: Arc<UdpSocket>,
         client_sessions: Arc<DashMap<std::net::SocketAddr, Arc<ClientSession>>>,
         last_activity: Arc<Mutex<Instant>>,
+        packets_received: Arc<AtomicU64>,
+        bytes_received: Arc<AtomicU64>,
     ) {
         let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE];
 
@@ -215,7 +238,11 @@ impl EdgionUdp {
                 Ok(Ok((len, _))) => {
                     // Forward packet back to client
                     let _ = downstream_socket.send_to(&buf[..len], client_addr).await;
-
+                    
+                    // Update statistics
+                    packets_received.fetch_add(1, Ordering::Relaxed);
+                    bytes_received.fetch_add(len as u64, Ordering::Relaxed);
+                    
                     // Update last activity
                     *last_activity.lock() = Instant::now();
                 }
@@ -243,12 +270,29 @@ impl EdgionUdp {
             for entry in self.client_sessions.iter() {
                 let last_activity = *entry.value().last_activity.lock();
                 if now.duration_since(last_activity) > SESSION_TIMEOUT {
-                    to_remove.push(*entry.key());
+                    to_remove.push((*entry.key(), entry.value().clone()));
                 }
             }
-
-            // Remove inactive sessions
-            for client_addr in to_remove {
+            
+            // Remove inactive sessions and log them
+            for (client_addr, session) in to_remove {
+                // Log session before removal
+                let log_entry = UdpLogEntry::new(
+                    self.listener_port,
+                    client_addr.ip().to_string(),
+                    client_addr.port(),
+                    Some(session.upstream_addr.to_string()),
+                    session.session_start,
+                ).with_stats(
+                    session.packets_sent.load(Ordering::Relaxed),
+                    session.packets_received.load(Ordering::Relaxed),
+                    session.bytes_sent.load(Ordering::Relaxed),
+                    session.bytes_received.load(Ordering::Relaxed),
+                );
+                
+                log_udp(&log_entry).await;
+                
+                // Remove session
                 self.client_sessions.remove(&client_addr);
             }
         }

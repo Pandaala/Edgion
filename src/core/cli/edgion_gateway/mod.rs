@@ -2,6 +2,8 @@ use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
 use crate::core::observe::access_log::init_access_logger;
 use crate::core::observe::init_logging;
 use crate::core::observe::ssl_log::init_ssl_logger;
+use crate::core::observe::tcp_log::init_tcp_logger;
+use crate::core::observe::udp_log::init_udp_logger;
 use crate::types::{init_work_dir, work_dir};
 use anyhow::{anyhow, Result};
 use clap::Parser;
@@ -182,38 +184,13 @@ impl EdgionGatewayCli {
         // 7. Wait for all resources ready (including Gateway/GatewayClass/EdgionGatewayConfig)
         runtime.block_on(Self::wait_for_ready(config_client.clone()))?;
 
-        // 8. Initialize global AccessLogger
+        // 8. Initialize all loggers
         runtime.block_on(init_access_logger(&config.access_log))?;
-
-        // 8.1 Initialize SSL logger with enhanced features (batch processing, rotation, metrics)
-        if config.ssl_log.enabled {
-            use crate::core::link_sys::LocalFileWriter;
-            use crate::types::link_sys::{LocalFileWriterConfig, StringOutput};
-
-            let ssl_writer_config: LocalFileWriterConfig = match &config.ssl_log.output {
-                StringOutput::LocalFile(file_cfg) => file_cfg.clone().into(),
-            };
-
-            let ssl_writer = LocalFileWriter::new(ssl_writer_config.clone());
-            let ssl_log_path = wd.resolve(&ssl_writer_config.path);
-
-            match runtime.block_on(init_ssl_logger(ssl_writer)) {
-                Ok(()) => {
-                    tracing::info!(
-                        "SSL logger initialized: {} (with batch processing and rotation)",
-                        ssl_log_path.display()
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to initialize SSL logger: {}, TLS handshake events will not be logged",
-                        e
-                    );
-                }
-            }
-        } else {
-            tracing::info!("SSL logging disabled by configuration");
-        }
+        runtime.block_on(init_ssl_logger(&config.ssl_log))?;
+        runtime.block_on(init_tcp_logger(&config.tcp_log))?;
+        runtime.block_on(init_udp_logger(&config.udp_log))?;
+        
+        tracing::info!("All loggers initialized (access, ssl, tcp, udp)");
 
         // 9. Create and configure Pingora server (in Tokio runtime context for UDP listeners)
         let pingora_server = runtime.block_on(async {

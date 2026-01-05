@@ -215,7 +215,6 @@ pub struct EdgionHttpContext {
     pub plugin_logs: Vec<PluginLogs>,
 
     /// Tracking stack for nested plugin references to prevent cycles
-    #[serde(skip)]
     pub plugin_ref_stack: Vec<String>,
 
     /// Plugin running result

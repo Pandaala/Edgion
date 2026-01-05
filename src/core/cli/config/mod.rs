@@ -412,11 +412,11 @@ impl EdgionControllerConfig {
         self.conf.dir.clone().unwrap_or_else(|| "examples/conf".to_string())
     }
 
-    /// Convert to LogConfig
-    pub fn to_log_config(&self) -> crate::core::observe::LogConfig {
-        use crate::core::observe::LogConfig;
+    /// Convert to SysLogConfig (for system logging)
+    pub fn to_log_config(&self) -> crate::core::observe::SysLogConfig {
+        use crate::core::observe::SysLogConfig;
 
-        LogConfig {
+        SysLogConfig {
             log_dir: PathBuf::from(self.log_dir()),
             file_prefix: self.logging.log_prefix.clone(),
             json_format: self.json_format(),
