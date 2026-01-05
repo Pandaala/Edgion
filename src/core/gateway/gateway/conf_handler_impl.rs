@@ -1,4 +1,5 @@
 use crate::core::conf_sync::traits::ConfHandler;
+use crate::core::tls::rebuild_gateway_tls_matcher;
 use crate::types::prelude_resources::Gateway;
 use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
@@ -61,6 +62,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
             );
             store.push(gateway.clone());
         }
+
+        // Rebuild Gateway TLS matcher for dynamic TLS certificate lookup
+        rebuild_gateway_tls_matcher(&store);
     }
 
     fn partial_update(&self, add: HashMap<String, Gateway>, update: HashMap<String, Gateway>, remove: HashSet<String>) {
@@ -138,6 +142,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
 
             // TODO: Clean up listeners (requires Pingora support or hot reload)
         }
+
+        // Rebuild Gateway TLS matcher after any changes
+        rebuild_gateway_tls_matcher(&store);
     }
 }
 

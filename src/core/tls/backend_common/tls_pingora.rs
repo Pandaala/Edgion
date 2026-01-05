@@ -1,4 +1,6 @@
+use crate::core::conf_sync::conf_server::get_secret_by_name;
 use crate::core::observe::ssl_log::{log_ssl, SslLogEntry};
+use crate::core::tls::gateway_tls_matcher::{match_gateway_tls, GatewayTlsEntry};
 use crate::core::tls::tls_cert_matcher::match_sni;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
@@ -49,6 +51,10 @@ impl TlsCallback {
     }
 
     /// Load certificate from SNI and populate log entry
+    ///
+    /// Uses a layered lookup strategy:
+    /// 1. First, try to match SNI against EdgionTls resources
+    /// 2. If not found, fallback to Gateway Listener TLS configurations (from Secret)
     async fn load_cert_from_sni(&self, ssl: &mut SslRef, entry: &mut SslLogEntry) {
         // Get SNI from SSL context, with fallback support
         let sni = match ssl.servername(NameType::HOST_NAME) {
@@ -70,19 +76,30 @@ impl TlsCallback {
         };
         entry.sni(&sni);
 
-        // Match certificate by SNI
-        let edgion_tls = match match_sni(&sni) {
-            Ok(tls) => tls,
-            Err(e) => {
-                entry.error(format!("Certificate not found: {}", e));
-                return;
-            }
-        };
+        // Layer 1: Try to match against EdgionTls resources
+        if let Ok(edgion_tls) = match_sni(&sni) {
+            self.apply_edgion_tls_cert(ssl, &edgion_tls, entry);
+            return;
+        }
 
+        // Layer 2: Fallback to Gateway Listener TLS configurations
+        if let Ok(gateway_tls) = match_gateway_tls(&sni) {
+            self.apply_gateway_tls_cert(ssl, &gateway_tls, entry);
+            return;
+        }
+
+        entry.error(format!(
+            "Certificate not found in EdgionTls or Gateway for SNI: {}",
+            sni
+        ));
+    }
+
+    /// Apply certificate from EdgionTls resource
+    fn apply_edgion_tls_cert(&self, ssl: &mut SslRef, edgion_tls: &Arc<EdgionTls>, entry: &mut SslLogEntry) {
         // Record matched certificate
         let ns = edgion_tls.metadata.namespace.as_deref().unwrap_or("-");
         let name = edgion_tls.metadata.name.as_deref().unwrap_or("-");
-        entry.cert(format!("{}/{}", ns, name));
+        entry.cert(format!("EdgionTls:{}/{}", ns, name));
 
         // Record mTLS mode
         entry.mtls(edgion_tls.spec.client_auth.is_some());
@@ -129,7 +146,7 @@ impl TlsCallback {
 
         // Configure mTLS
         if let Some(ref client_auth) = edgion_tls.spec.client_auth {
-            if let Err(e) = self.configure_mtls(ssl, client_auth, &edgion_tls) {
+            if let Err(e) = self.configure_mtls(ssl, client_auth, edgion_tls) {
                 entry.error(format!("mTLS config failed: {}", e));
                 return;
             }
@@ -147,9 +164,117 @@ impl TlsCallback {
         if let Some(ref ciphers) = edgion_tls.spec.ciphers {
             if let Err(e) = self.configure_ciphers(ssl, ciphers) {
                 entry.error(format!("Cipher config failed: {}", e));
-                return;
             }
         }
+    }
+
+    /// Apply certificate from Gateway Listener TLS configuration (from Secret)
+    fn apply_gateway_tls_cert(&self, ssl: &mut SslRef, gateway_tls: &GatewayTlsEntry, entry: &mut SslLogEntry) {
+        // Record source
+        entry.cert(format!(
+            "Gateway:{}/{}/{}",
+            gateway_tls.gateway_namespace, gateway_tls.gateway_name, gateway_tls.listener_name
+        ));
+
+        // Gateway TLS doesn't support mTLS by default
+        entry.mtls(false);
+
+        // Get the first certificate ref (typically there's only one)
+        let cert_ref = match gateway_tls.certificate_refs.first() {
+            Some(r) => r,
+            None => {
+                entry.error("No certificate refs in Gateway TLS config");
+                return;
+            }
+        };
+
+        // Resolve Secret namespace (use Gateway namespace if not specified)
+        let secret_namespace = cert_ref
+            .namespace
+            .as_deref()
+            .unwrap_or(&gateway_tls.gateway_namespace);
+
+        // Load Secret
+        let secret = match get_secret_by_name(Some(secret_namespace), &cert_ref.name) {
+            Some(s) => s,
+            None => {
+                entry.error(format!(
+                    "Secret not found: {}/{}",
+                    secret_namespace, cert_ref.name
+                ));
+                return;
+            }
+        };
+
+        // Extract tls.crt and tls.key from Secret
+        let data = match &secret.data {
+            Some(d) => d,
+            None => {
+                entry.error("Secret has no data");
+                return;
+            }
+        };
+
+        let cert_pem = match data.get("tls.crt") {
+            Some(bytes) => match String::from_utf8(bytes.0.clone()) {
+                Ok(s) => s,
+                Err(e) => {
+                    entry.error(format!("Invalid tls.crt encoding: {}", e));
+                    return;
+                }
+            },
+            None => {
+                entry.error("Secret missing tls.crt");
+                return;
+            }
+        };
+
+        let key_pem = match data.get("tls.key") {
+            Some(bytes) => match String::from_utf8(bytes.0.clone()) {
+                Ok(s) => s,
+                Err(e) => {
+                    entry.error(format!("Invalid tls.key encoding: {}", e));
+                    return;
+                }
+            },
+            None => {
+                entry.error("Secret missing tls.key");
+                return;
+            }
+        };
+
+        // Parse and apply certificate
+        let cert = match X509::from_pem(cert_pem.as_bytes()) {
+            Ok(c) => c,
+            Err(e) => {
+                entry.error(format!("Invalid cert PEM from Secret: {}", e));
+                return;
+            }
+        };
+        if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
+            entry.error(format!("Failed to use cert: {}", e));
+            return;
+        }
+
+        // Parse and apply private key
+        let key = match PKey::private_key_from_pem(key_pem.as_bytes()) {
+            Ok(k) => k,
+            Err(e) => {
+                entry.error(format!("Invalid key PEM from Secret: {}", e));
+                return;
+            }
+        };
+        if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &key) {
+            entry.error(format!("Failed to use key: {}", e));
+            return;
+        }
+
+        tracing::debug!(
+            gateway = %gateway_tls.gateway_name,
+            listener = %gateway_tls.listener_name,
+            secret = format!("{}/{}", secret_namespace, cert_ref.name),
+            "Applied certificate from Gateway TLS config"
+        );
     }
 
     /// Configure mTLS (mutual TLS) client certificate verification

@@ -556,6 +556,27 @@ impl ConfigServer {
         // Apply the Secret change first
         execute_change_on_cache(change, &self.secrets, resource.clone());
 
+        // Also update global SecretStore for TLS callback access
+        use super::secret_store::update_secrets;
+        use std::collections::{HashMap, HashSet};
+        match change {
+            ResourceChange::InitAdd | ResourceChange::EventAdd => {
+                let mut add = HashMap::new();
+                add.insert(secret_key.clone(), resource.clone());
+                update_secrets(add, HashMap::new(), &HashSet::new());
+            }
+            ResourceChange::EventUpdate => {
+                let mut update = HashMap::new();
+                update.insert(secret_key.clone(), resource.clone());
+                update_secrets(HashMap::new(), update, &HashSet::new());
+            }
+            ResourceChange::EventDelete => {
+                let mut remove = HashSet::new();
+                remove.insert(secret_key.clone());
+                update_secrets(HashMap::new(), HashMap::new(), &remove);
+            }
+        }
+
         // Handle resource references when Secret is added or updated
         match change {
             ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
