@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tokio::fs;
 
-use crate::core::cli::edgion_ctl::client::{handle_response, parse_json_response, EdgionClient};
+use crate::core::cli::edgion_ctl::client::{handle_response, EdgionClient};
 use crate::core::cli::edgion_ctl::output::{print_error, print_success};
 use crate::core::utils::extract_resource_metadata;
 

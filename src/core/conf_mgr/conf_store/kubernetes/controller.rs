@@ -3,12 +3,12 @@
 //! Watches Kubernetes resources and keeps the KubernetesStore cache up to date
 
 use anyhow::Result;
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use kube::runtime::watcher;
-use kube::{Api, Client, ResourceExt};
+use kube::{Api, Client};
 use std::sync::Arc;
 
-use super::KubernetesStore;
+use super::{KubernetesStore, StatusManager, StatusReconciler};
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{CacheEventDispatch, ConfigServer};
 use crate::types::prelude_resources::*;
@@ -21,6 +21,8 @@ pub struct KubernetesController {
     client: Client,
     config_server: Arc<ConfigServer>,
     store: Arc<KubernetesStore>,
+    _status_manager: Arc<StatusManager>,
+    reconciler: StatusReconciler,
     #[allow(dead_code)]
     gateway_class_name: String,
 }
@@ -32,10 +34,19 @@ impl KubernetesController {
         gateway_class_name: String,
     ) -> Result<Self> {
         let client = Client::try_default().await?;
+        let status_manager = Arc::new(StatusManager::new(client.clone(), "edgion-controller".to_string()));
+        let reconciler = StatusReconciler::new(
+            config_server.clone(),
+            status_manager.clone(),
+            gateway_class_name.clone(),
+        );
+
         Ok(Self {
             client,
             config_server,
             store,
+            _status_manager: status_manager,
+            reconciler,
             gateway_class_name,
         })
     }
@@ -50,7 +61,14 @@ impl KubernetesController {
 
         // Run all watchers concurrently
         // Note: If any watcher fails, all will be cancelled
+        // Run all watchers concurrently
+        // Note: If any watcher fails, all will be cancelled
         tokio::try_join!(
+            // Status reconciler
+            async {
+                self.reconciler.run().await;
+                Ok(())
+            },
             // Base conf resources
             self.watch_gateway_classes(),
             self.watch_gateways(),

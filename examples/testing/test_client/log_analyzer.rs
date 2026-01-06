@@ -2,7 +2,7 @@
 //!
 //! Parses and analyzes JSON access logs to verify LB policy usage
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -41,6 +41,7 @@ struct UpstreamInfo {
 
 #[derive(Debug)]
 pub struct LBAnalysisResult {
+    #[allow(dead_code)]
     pub test_type: String,
     pub total_requests: usize,
     pub lb_policy_counts: HashMap<String, usize>,
@@ -134,6 +135,7 @@ impl AccessLogAnalyzer {
         Ok(result)
     }
 
+    #[allow(dead_code)]
     pub fn generate_report(&self, results: &[LBAnalysisResult]) -> String {
         let mut report = String::new();
         report.push_str("============================================================\n");

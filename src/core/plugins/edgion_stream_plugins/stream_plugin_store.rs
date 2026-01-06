@@ -7,7 +7,6 @@ use std::sync::LazyLock;
 
 use crate::core::conf_sync::traits::ConfHandler;
 use crate::types::resources::EdgionStreamPlugins;
-use crate::types::ResourceMeta;
 
 static GLOBAL_STREAM_PLUGIN_STORE: LazyLock<Arc<StreamPluginStore>> =
     LazyLock::new(|| Arc::new(StreamPluginStore::new()));

@@ -1,6 +1,6 @@
 use crate::core::backends::{create_endpoint_handler, create_ep_slice_handler, create_service_handler};
 use crate::core::conf_sync::cache_client::ClientCache;
-use crate::core::conf_sync::traits::{CacheEventDispatch, ConfHandler, ConfigClientEventDispatcher, ResourceChange};
+use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::conf_sync::types::ListData;
 use crate::core::routes::create_route_manager_handler;
 use crate::core::utils::format_resource_info;
@@ -297,7 +297,7 @@ impl ConfigClient {
         cache.apply_change(change, resource);
     }
 
-    pub fn list(&self, key: &String, kind: &ResourceKind) -> Result<ListDataSimple, String> {
+    pub fn list(&self, _key: &String, kind: &ResourceKind) -> Result<ListDataSimple, String> {
         let (data_json, resource_version) = match kind {
             ResourceKind::Unspecified => {
                 return Err("Resource kind unspecified".to_string());

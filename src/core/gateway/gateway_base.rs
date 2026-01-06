@@ -3,7 +3,7 @@ use crate::core::gateway::gateway_store::get_global_gateway_store;
 use crate::core::gateway::listener_builder;
 use crate::core::observe::access_log::get_access_logger_unchecked;
 use crate::core::observe::AccessLogger;
-use crate::types::{EdgionGatewayConfig, Gateway, GatewayClass, ResourceMeta};
+use crate::types::{Gateway, ResourceMeta};
 use anyhow::{anyhow, Result};
 use kube::ResourceExt;
 use pingora_core::server::Server;

@@ -51,3 +51,28 @@ impl ParentReference {
         format!("{}/{}", namespace, self.name)
     }
 }
+
+/// Condition contains details for one aspect of the current state of this API Resource.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Condition {
+    /// LastTransitionTime is the last time the condition transitioned from one status to another.
+    pub last_transition_time: String,
+
+    /// Message is a human readable message indicating details about the transition.
+    pub message: String,
+
+    /// ObservedGeneration represents the .metadata.generation that the condition was set based upon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+
+    /// Reason contains a programmatic identifier indicating the reason for the condition's last transition.
+    pub reason: String,
+
+    /// Status of the condition, one of True, False, Unknown.
+    pub status: String,
+
+    /// Type of condition.
+    #[serde(rename = "type")]
+    pub type_: String,
+}

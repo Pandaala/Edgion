@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
 use tabled::{settings::Style, Table, Tabled};
 

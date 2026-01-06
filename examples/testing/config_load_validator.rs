@@ -9,7 +9,7 @@
 use clap::Parser;
 use colored::Colorize;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -56,6 +56,7 @@ impl ConfigFile {
         }
     }
 
+    #[allow(dead_code)]
     fn resource_key(&self) -> String {
         match &self.namespace {
             Some(ns) => format!("{}/{}", ns, self.name),
@@ -99,7 +100,9 @@ struct Resource {
 #[derive(Deserialize, Debug)]
 struct Metadata {
     name: String,
+    #[allow(dead_code)]
     namespace: Option<String>,
+    #[allow(dead_code)]
     #[serde(default)]
     annotations: HashMap<String, String>,
 }

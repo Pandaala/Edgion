@@ -38,6 +38,7 @@ pub async fn end_response_400(
 
 /// Send 403 Forbidden error response (nginx-style)
 /// Used when client certificate validation fails or access is denied
+#[allow(dead_code)]
 pub async fn end_response_403(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
@@ -67,6 +68,7 @@ pub async fn end_response_403(
 
 /// Send 421 Misdirected Request error response (RFC 7540)
 /// Used when SNI and Host header mismatch for HTTPS requests
+#[allow(dead_code)]
 pub async fn end_response_421(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,

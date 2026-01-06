@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
 
-use super::common::ParentReference;
+use super::common::{Condition, ParentReference};
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::lb::BackendSelector;
 use crate::core::plugins::PluginRuntime;
@@ -26,6 +26,7 @@ pub const HTTP_ROUTE_KIND: &str = "HTTPRoute";
     version = "v1",
     kind = "HTTPRoute",
     plural = "httproutes",
+    status = "HTTPRouteStatus",
     namespaced
 )]
 #[serde(rename_all = "camelCase")]
@@ -629,4 +630,25 @@ impl ParsedRouteTimeouts {
             None
         }
     }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HTTPRouteStatus {
+    /// Parents describe the status of the route with respect to each parent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<RouteParentStatus>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteParentStatus {
+    /// ParentRef references the parent that this status corresponds to.
+    pub parent_ref: ParentReference,
+
+    /// ControllerName is the name of the controller that manages this Route.
+    pub controller_name: String,
+
+    /// Conditions describe the current conditions of this route.
+    pub conditions: Vec<Condition>,
 }
