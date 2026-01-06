@@ -16,9 +16,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 项目根目录
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# 创建带时间戳的独立日志目录（每次测试一个独立的 logs_xxx 目录）
+# 创建带时间戳的独立测试目录
 TEST_RUN_ID=$(date +%Y%m%d_%H%M%S)
-LOG_DIR="${SCRIPT_DIR}/logs_${TEST_RUN_ID}"
+LOG_DIR="${SCRIPT_DIR}/testing_tmp/${TEST_RUN_ID}"
 mkdir -p "$LOG_DIR"
 
 # 运行时目录
@@ -205,7 +205,32 @@ sleep 1
 > "$TEST_RESULT_LOG"
 > "$TEST_REPORT"
 
-# 0. 生成 TLS 证书
+# 0. 预编译所有组件（避免后续启动超时）
+echo ""
+echo "=========================================="
+echo "  Pre-compiling All Components"
+echo "=========================================="
+echo ""
+
+cd "$PROJECT_DIR"
+
+echo_info "Compiling binaries (edgion-gateway, edgion-controller, edgion-ctl)..."
+if ! cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-ctl; then
+    echo_error "Failed to compile binaries"
+    exit 1
+fi
+echo_success "Binaries compiled successfully"
+
+echo_info "Compiling test examples (test_server, test_client, validators)..."
+if ! cargo build --release --example test_server --example test_client --example config_load_validator --example resource_diff; then
+    echo_error "Failed to compile test examples"
+    exit 1
+fi
+echo_success "Test examples compiled successfully"
+
+echo ""
+
+# 1. 生成 TLS 证书
 echo_info "Generating TLS certificates..."
 "${SCRIPT_DIR}/scripts/generate_certs.sh"
 if [ $? -eq 0 ]; then
@@ -216,7 +241,7 @@ else
 fi
 echo ""
 
-# 0.5 生成后端 TLS 证书
+# 1.5 生成后端 TLS 证书
 echo_info "Generating backend TLS certificates..."
 "${SCRIPT_DIR}/scripts/generate_backend_certs.sh"
 if [ $? -eq 0 ]; then
@@ -231,7 +256,7 @@ echo ""
 echo_info "Starting test_server with Backend TLS support..."
 cd "$PROJECT_DIR"
 
-cargo run --example test_server -- \
+cargo run --release --example test_server -- \
   --https-backend-port 30051 \
   --cert-file "${SCRIPT_DIR}/certs/backend/server.crt" \
   --key-file "${SCRIPT_DIR}/certs/backend/server.key" \
@@ -242,7 +267,7 @@ echo $! > "${PID_DIR}/test_server.pid"
 wait_for_port 30001 "test_server HTTP" "${PID_DIR}/test_server.pid" 30 || {
     echo_error "Failed to start test_server"
     echo "         Log: $TEST_SERVER_LOG"
-    echo "         Manual: cd $PROJECT_DIR && cargo run --example test_server -- --https-backend-port 30051 --cert-file ${SCRIPT_DIR}/certs/backend/server.crt --key-file ${SCRIPT_DIR}/certs/backend/server.key"
+    echo "         Manual: cd $PROJECT_DIR && cargo run --release --example test_server -- --https-backend-port 30051 --cert-file ${SCRIPT_DIR}/certs/backend/server.crt --key-file ${SCRIPT_DIR}/certs/backend/server.key"
     exit 1
 }
 
@@ -255,7 +280,7 @@ wait_for_port 30051 "test_server HTTPS backend" "${PID_DIR}/test_server.pid" 30 
 
 # 2. 启动 edgion-controller
 echo_info "Starting edgion-controller (using default config)..."
-cargo run --bin edgion-controller > "$CONTROLLER_LOG" 2>&1 &
+cargo run --release --bin edgion-controller > "$CONTROLLER_LOG" 2>&1 &
 echo $! > "${PID_DIR}/controller.pid"
 
 # Wait briefly and check if process is still alive
@@ -263,7 +288,7 @@ sleep 2
 if ! kill -0 $(cat "${PID_DIR}/controller.pid") 2>/dev/null; then
     echo_error "Controller process died immediately"
     echo "         Log: $CONTROLLER_LOG"
-    echo "         Manual: cd $PROJECT_DIR && cargo run --bin edgion-controller"
+    echo "         Manual: cd $PROJECT_DIR && cargo run --release --bin edgion-controller"
     exit 1
 fi
 echo_success "edgion-controller started (PID: $(cat ${PID_DIR}/controller.pid))"
@@ -272,14 +297,14 @@ echo_success "edgion-controller started (PID: $(cat ${PID_DIR}/controller.pid))"
 echo_info "Starting edgion-gateway (using default config)..."
 EDGION_ACCESS_LOG="$ACCESS_LOG" \
 EDGION_TEST_ACCESS_LOG_PATH="$ACCESS_LOG" \
-cargo run --bin edgion-gateway > "$GATEWAY_LOG" 2>&1 &
+cargo run --release --bin edgion-gateway > "$GATEWAY_LOG" 2>&1 &
 echo $! > "${PID_DIR}/gateway.pid"
 
 # Wait for gateway to be ready
 wait_for_port 10080 "edgion-gateway" "${PID_DIR}/gateway.pid" 30 || {
     echo_error "Failed to start gateway"
     echo "         Log: $GATEWAY_LOG"
-    echo "         Manual: cd $PROJECT_DIR && EDGION_ACCESS_LOG=$ACCESS_LOG EDGION_TEST_ACCESS_LOG_PATH=$ACCESS_LOG cargo run --bin edgion-gateway"
+    echo "         Manual: cd $PROJECT_DIR && EDGION_ACCESS_LOG=$ACCESS_LOG EDGION_TEST_ACCESS_LOG_PATH=$ACCESS_LOG cargo run --release --bin edgion-gateway"
     exit 1
 }
 
@@ -301,13 +326,13 @@ if [ "$SERVER_ONLY_MODE" = true ]; then
     echo_info "To run tests manually:"
     echo ""
     echo "  # HTTP tests"
-    echo "  cargo run --example test_client -- --gateway http"
+    echo "  cargo run --release --example test_client -- --gateway http"
     echo ""
     echo "  # Backend TLS tests"
-    echo "  cargo run --example test_client -- --gateway backend-tls"
+    echo "  cargo run --release --example test_client -- --gateway backend-tls"
     echo ""
     echo "  # All gateway tests"
-    echo "  cargo run --example test_client -- --gateway all"
+    echo "  cargo run --release --example test_client -- --gateway all"
     echo ""
     echo_warn "Press Ctrl+C to stop all services and exit"
     echo ""
@@ -328,7 +353,7 @@ echo "=========================================="
 echo ""
 
 echo_info "Verifying all config files are loaded by controller..."
-if cargo run --example config_load_validator 2>&1 | tee -a "$TEST_RESULT_LOG"; then
+if cargo run --release --example config_load_validator 2>&1 | tee -a "$TEST_RESULT_LOG"; then
     echo_success "All configurations loaded successfully"
 else
     echo_error "Configuration loading FAILED - some YAML files not loaded"
@@ -346,7 +371,7 @@ echo "=========================================="
 echo ""
 
 echo_info "Verifying controller and gateway resource sync..."
-if cargo run --example resource_diff 2>&1 | tee -a "$TEST_RESULT_LOG"; then
+if cargo run --release --example resource_diff 2>&1 | tee -a "$TEST_RESULT_LOG"; then
     echo_success "Resource synchronization verified"
 else
     echo_warn "Resource diff check completed with warnings (non-fatal)"
@@ -363,7 +388,7 @@ echo ""
 
 # Direct 模式 HTTP 测试
 echo_info "Test 1: HTTP Direct mode (backend:30001)"
-cargo run --example test_client -- http 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- http 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_HTTP_RESULT=$?
 
 echo ""
@@ -372,7 +397,7 @@ echo ""
 
 # Gateway 模式 HTTP 测试
 echo_info "Test 2: HTTP Gateway mode (gateway:10080)"
-cargo run --example test_client -- -g http 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g http 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_HTTP_RESULT=$?
 
 echo ""
@@ -381,7 +406,7 @@ echo ""
 
 # Direct 模式 gRPC 测试
 echo_info "Test 3: gRPC Direct mode (backend:30021)"
-cargo run --example test_client -- grpc 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- grpc 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_GRPC_RESULT=$?
 
 echo ""
@@ -390,7 +415,7 @@ echo ""
 
 # Gateway 模式 gRPC 测试
 echo_info "Test 4: gRPC Gateway mode (gateway:10080)"
-cargo run --example test_client -- -g grpc 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g grpc 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_GRPC_RESULT=$?
 
 echo ""
@@ -399,7 +424,7 @@ echo ""
 
 # Gateway 模式 gRPC Match Rules 测试
 echo_info "Test 5: gRPC Match Rules Gateway mode (gateway:10080)"
-cargo run --example test_client -- -g grpc-match 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g grpc-match 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_GRPC_MATCH_RESULT=$?
 
 echo ""
@@ -408,7 +433,7 @@ echo ""
 
 # Direct 模式 TCP 测试
 echo_info "Test 7: TCP Direct mode (backend:30010)"
-cargo run --example test_client -- tcp 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- tcp 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_TCP_RESULT=$?
 
 echo ""
@@ -417,7 +442,7 @@ echo ""
 
 # Gateway 模式 TCP 测试
 echo_info "Test 8: TCP Gateway mode (gateway:19000)"
-cargo run --example test_client -- -g tcp 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g tcp 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_TCP_RESULT=$?
 
 echo ""
@@ -426,7 +451,7 @@ echo ""
 
 # Direct 模式 UDP 测试
 echo_info "Test 9: UDP Direct mode (backend:30011)"
-cargo run --example test_client -- udp 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- udp 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_UDP_RESULT=$?
 
 echo ""
@@ -435,7 +460,7 @@ echo ""
 
 # Gateway 模式 UDP 测试
 echo_info "Test 10: UDP Gateway mode (gateway:19002)"
-cargo run --example test_client -- -g udp 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g udp 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_UDP_RESULT=$?
 
 echo ""
@@ -444,7 +469,7 @@ echo ""
 
 # Direct 模式 WebSocket 测试
 echo_info "Test 11: WebSocket Direct mode (backend:30005)"
-cargo run --example test_client -- websocket 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- websocket 2>&1 | tee -a "$TEST_RESULT_LOG"
 DIRECT_WS_RESULT=$?
 
 echo ""
@@ -453,7 +478,7 @@ echo ""
 
 # Gateway 模式 WebSocket 测试
 echo_info "Test 12: WebSocket Gateway mode (gateway:10080)"
-cargo run --example test_client -- -g websocket 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g websocket 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_WS_RESULT=$?
 
 echo ""
@@ -462,7 +487,7 @@ echo ""
 
 # Gateway 模式 HTTPS 测试
 echo_info "Test 13: HTTPS Gateway mode (gateway:10443)"
-cargo run --example test_client -- -g https 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g https 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_HTTPS_RESULT=$?
 
 echo ""
@@ -471,7 +496,7 @@ echo ""
 
 # Gateway 模式 gRPC-TLS 测试
 echo_info "Test 14: gRPC-TLS Gateway mode (gateway:18443)"
-cargo run --example test_client -- -g grpc-tls 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g grpc-tls 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_GRPC_TLS_RESULT=$?
 
 echo ""
@@ -480,7 +505,7 @@ echo ""
 
 # Gateway 模式 Real IP 测试
 echo_info "Test 15: Real IP Gateway mode (gateway:10080)"
-cargo run --example test_client -- -g real-ip 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g real-ip 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_REAL_IP_RESULT=$?
 
 echo ""
@@ -489,7 +514,7 @@ echo ""
 
 # Gateway 模式 Security Protection 测试
 echo_info "Test 16: Security Protection Gateway mode (gateway:10080)"
-cargo run --example test_client -- -g security 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g security 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_SECURITY_RESULT=$?
 
 echo ""
@@ -498,7 +523,7 @@ echo ""
 
 # Gateway 模式 mTLS 测试（配置已在启动前复制）
 echo_info "Test 17: mTLS Gateway mode (gateway:10444)"
-cargo run --example test_client -- -g mtls 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g mtls 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_MTLS_RESULT=$?
 
 echo ""
@@ -507,7 +532,7 @@ echo ""
 
 # Gateway 模式 Plugin Logs 测试
 echo_info "Test 18: Plugin Logs Gateway mode (gateway:10080)"
-cargo run --example test_client -- -g plugin-logs 2>&1 | tee -a "$TEST_RESULT_LOG"
+cargo run --release --example test_client -- -g plugin-logs 2>&1 | tee -a "$TEST_RESULT_LOG"
 GATEWAY_PLUGIN_LOGS_RESULT=$?
 
 echo ""
@@ -518,7 +543,7 @@ echo ""
 # Reason: Need better testing approach without log analysis timing issues
 # TODO: Redesign test to use real backends with response headers
 # echo_info "Test 17: LB Policy Gateway mode (gateway:10080)"
-# EDGION_TEST_ACCESS_LOG_PATH="$ACCESS_LOG" cargo run --example test_client -- -g lb-policy 2>&1 | tee -a "$TEST_RESULT_LOG"
+# EDGION_TEST_ACCESS_LOG_PATH="$ACCESS_LOG" cargo run --release --example test_client -- -g lb-policy 2>&1 | tee -a "$TEST_RESULT_LOG"
 # GATEWAY_LB_POLICY_RESULT=$?
 GATEWAY_LB_POLICY_RESULT=0  # Placeholder - test disabled
 
