@@ -189,19 +189,13 @@ impl TlsCallback {
         };
 
         // Resolve Secret namespace (use Gateway namespace if not specified)
-        let secret_namespace = cert_ref
-            .namespace
-            .as_deref()
-            .unwrap_or(&gateway_tls.gateway_namespace);
+        let secret_namespace = cert_ref.namespace.as_deref().unwrap_or(&gateway_tls.gateway_namespace);
 
         // Load Secret
         let secret = match get_secret_by_name(Some(secret_namespace), &cert_ref.name) {
             Some(s) => s,
             None => {
-                entry.error(format!(
-                    "Secret not found: {}/{}",
-                    secret_namespace, cert_ref.name
-                ));
+                entry.error(format!("Secret not found: {}/{}", secret_namespace, cert_ref.name));
                 return;
             }
         };

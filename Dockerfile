@@ -1,15 +1,15 @@
 # Edgion Multi-stage Dockerfile
-# Supports building: edgion-gateway, edgion-controller, edgion-ctl
+# Supports building: edgion-gateway, edgion-controller
+# Each image includes edgion-ctl for debugging
 #
 # Build arguments:
 #   BINARY: Target binary name (default: edgion-gateway)
 #   FEATURES: Cargo features (default: default, which includes boringssl)
-#   RUST_VERSION: Rust version (default: 1.92)
+#   RUST_VERSION: Rust version (default: 1.82)
 #
 # Usage:
 #   docker build --build-arg BINARY=edgion-gateway -t edgion/edgion-gateway:0.1.0 .
 #   docker build --build-arg BINARY=edgion-controller -t edgion/edgion-controller:0.1.0 .
-#   docker build --build-arg BINARY=edgion-ctl -t edgion/edgion-ctl:0.1.0 .
 
 # Build arguments
 ARG RUST_VERSION=1.92
@@ -46,7 +46,7 @@ FROM rust:${RUST_VERSION} AS builder
 
 WORKDIR /app
 
-# Install additional build dependencies (base image already has gcc, make, perl, etc.)
+# Install additional build dependencies
 RUN apt-get update && apt-get install -y \
     cmake \
     libclang-dev \
@@ -64,16 +64,17 @@ ARG FEATURES
 ARG BINARY
 
 # Build dependencies (cached layer)
-RUN cargo chef cook --release --features "${FEATURES}" --bin "${BINARY}" --recipe-path recipe.json
+RUN cargo chef cook --release --features "${FEATURES}" --recipe-path recipe.json
 
 # Copy source code
 COPY . .
 
-# Build the application
-RUN cargo build --release --features "${FEATURES}" --bin "${BINARY}"
+# Build the main binary and ctl
+RUN cargo build --release --features "${FEATURES}" --bin "${BINARY}" --bin edgion-ctl
 
-# Copy binary to a known location
-RUN cp /app/target/release/${BINARY} /app/edgion-binary
+# Copy binaries to known locations
+RUN cp /app/target/release/${BINARY} /app/edgion-binary && \
+    cp /app/target/release/edgion-ctl /app/edgion-ctl-binary
 
 # =============================================================================
 # Stage 4: Runtime - Minimal runtime environment
@@ -100,9 +101,10 @@ RUN mkdir -p /usr/local/edgion/{config,logs,runtime} && \
 # Set working directory
 WORKDIR /usr/local/edgion
 
-# Copy binary from builder
+# Copy binaries from builder (main binary + ctl for debugging)
 COPY --from=builder /app/edgion-binary /usr/local/bin/${BINARY}
-RUN chmod +x /usr/local/bin/${BINARY}
+COPY --from=builder /app/edgion-ctl-binary /usr/local/bin/edgion-ctl
+RUN chmod +x /usr/local/bin/${BINARY} /usr/local/bin/edgion-ctl
 
 # Copy default config files
 COPY --chown=edgion:edgion config/*.toml ./config/
@@ -114,10 +116,7 @@ USER edgion
 ENV RUST_LOG=info
 ENV RUST_BACKTRACE=0
 
-# Expose ports (will be overridden based on binary)
-# Gateway: 80, 443, 10080, 10443
-# Controller: 50051, 5800
-# CLI: No ports
+# Expose ports
 EXPOSE 80 443 10080 10443 18443 19000 19002 19010 50051 5800
 
 # Set entrypoint
@@ -126,6 +125,6 @@ CMD ["exec /usr/local/bin/${BINARY}"]
 
 # Labels
 LABEL maintainer="Edgion Team"
-LABEL org.opencontainers.image.source="https://github.com/your-org/Edgion"
+LABEL org.opencontainers.image.source="https://github.com/Pandaala/Edgion"
 LABEL org.opencontainers.image.description="Edgion Gateway - Kubernetes Gateway API Implementation"
 LABEL org.opencontainers.image.licenses="Apache-2.0"

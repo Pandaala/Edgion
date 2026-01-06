@@ -20,7 +20,6 @@ pub use cert_validator::{validate_cert, CertValidationError, CertValidationResul
 
 pub use conf_handler_impl::create_tls_handler;
 pub use gateway_tls_matcher::{
-    get_gateway_tls_matcher, match_gateway_tls, rebuild_gateway_tls_matcher, GatewayTlsEntry,
-    GatewayTlsMatcher,
+    get_gateway_tls_matcher, match_gateway_tls, rebuild_gateway_tls_matcher, GatewayTlsEntry, GatewayTlsMatcher,
 };
 pub use tls_store::get_global_tls_store;

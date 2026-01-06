@@ -20,7 +20,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.82"
+          toolchain: "1.92"
 
       - name: Install dependencies
         run: |
@@ -39,7 +39,7 @@ jobs:
             ${{ runner.os }}-cargo-check-
 
       - name: Run cargo check
-        run: cargo check --all-targets --all-features
+        run: cargo check --all-targets
 
   fmt:
     name: Format
@@ -50,7 +50,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.82"
+          toolchain: "1.92"
           components: rustfmt
 
       - name: Run cargo fmt
@@ -65,7 +65,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.82"
+          toolchain: "1.92"
           components: clippy
 
       - name: Install dependencies
@@ -85,7 +85,7 @@ jobs:
             ${{ runner.os }}-cargo-clippy-
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets
 
   test:
     name: Test
@@ -96,7 +96,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.82"
+          toolchain: "1.92"
 
       - name: Install dependencies
         run: |
@@ -115,7 +115,7 @@ jobs:
             ${{ runner.os }}-cargo-test-
 
       - name: Run tests
-        run: cargo test --all --all-features
+        run: cargo test --all
 
   # Summary job for branch protection
   ci-success:

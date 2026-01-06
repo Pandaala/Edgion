@@ -34,11 +34,7 @@ impl SecretStore {
     pub fn replace_all(&self, secrets: HashMap<String, Secret>) {
         let count = secrets.len();
         self.secrets.store(Arc::new(secrets));
-        tracing::info!(
-            component = "secret_store",
-            count = count,
-            "Replaced all secrets"
-        );
+        tracing::info!(component = "secret_store", count = count, "Replaced all secrets");
     }
 
     /// Update secrets atomically
@@ -69,10 +65,7 @@ impl SecretStore {
 
         self.secrets.store(Arc::new(new_map));
 
-        tracing::debug!(
-            component = "secret_store",
-            "Updated secrets in store"
-        );
+        tracing::debug!(component = "secret_store", "Updated secrets in store");
     }
 
     /// Create a key from namespace and name
@@ -127,7 +120,7 @@ mod tests {
         let mut data = std::collections::BTreeMap::new();
         data.insert("tls.crt".to_string(), ByteString(cert.as_bytes().to_vec()));
         data.insert("tls.key".to_string(), ByteString(key.as_bytes().to_vec()));
-        
+
         Secret {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
@@ -142,23 +135,23 @@ mod tests {
     #[test]
     fn test_secret_store_basic() {
         let store = SecretStore::new();
-        
+
         // Initially empty
         assert!(store.get(Some("default"), "my-secret").is_none());
-        
+
         // Add a secret
         let secret = create_test_secret("default", "my-secret", "cert-pem", "key-pem");
         let mut secrets = HashMap::new();
         secrets.insert("default/my-secret".to_string(), secret);
         store.replace_all(secrets);
-        
+
         // Should find it now
         let found = store.get(Some("default"), "my-secret");
         assert!(found.is_some());
         let found = found.unwrap();
         assert_eq!(found.metadata.name.as_deref(), Some("my-secret"));
         assert_eq!(found.metadata.namespace.as_deref(), Some("default"));
-        
+
         // Verify data
         let data = found.data.as_ref().unwrap();
         let cert = data.get("tls.crt").unwrap();
@@ -168,40 +161,40 @@ mod tests {
     #[test]
     fn test_secret_store_update() {
         let store = SecretStore::new();
-        
+
         // Initial secret
         let secret1 = create_test_secret("prod", "cert-1", "cert1", "key1");
         let mut initial = HashMap::new();
         initial.insert("prod/cert-1".to_string(), secret1);
         store.replace_all(initial);
-        
+
         // Add new secret
         let secret2 = create_test_secret("prod", "cert-2", "cert2", "key2");
         let mut add = HashMap::new();
         add.insert("prod/cert-2".to_string(), secret2);
         store.update(add, HashMap::new(), &std::collections::HashSet::new());
-        
+
         // Both secrets should exist
         assert!(store.get(Some("prod"), "cert-1").is_some());
         assert!(store.get(Some("prod"), "cert-2").is_some());
-        
+
         // Update cert-1
         let secret1_updated = create_test_secret("prod", "cert-1", "updated-cert", "updated-key");
         let mut update = HashMap::new();
         update.insert("prod/cert-1".to_string(), secret1_updated);
         store.update(HashMap::new(), update, &std::collections::HashSet::new());
-        
+
         // Verify update
         let found = store.get(Some("prod"), "cert-1").unwrap();
         let data = found.data.as_ref().unwrap();
         let cert = data.get("tls.crt").unwrap();
         assert_eq!(String::from_utf8(cert.0.clone()).unwrap(), "updated-cert");
-        
+
         // Remove cert-2
         let mut remove = std::collections::HashSet::new();
         remove.insert("prod/cert-2".to_string());
         store.update(HashMap::new(), HashMap::new(), &remove);
-        
+
         // cert-2 should be gone
         assert!(store.get(Some("prod"), "cert-2").is_none());
         // cert-1 should still exist
@@ -211,16 +204,15 @@ mod tests {
     #[test]
     fn test_secret_store_no_namespace() {
         let store = SecretStore::new();
-        
+
         // Secret without namespace (cluster-scoped)
         let secret = create_test_secret("", "cluster-secret", "cert", "key");
         let mut secrets = HashMap::new();
         secrets.insert("cluster-secret".to_string(), secret);
         store.replace_all(secrets);
-        
+
         // Find by name only
         let found = store.get(None, "cluster-secret");
         assert!(found.is_some());
     }
 }
-
