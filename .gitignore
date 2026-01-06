@@ -1,6 +1,6 @@
 # Rust generated files
 target/
-Cargo.lock
+# Note: Cargo.lock is committed for binary projects to ensure reproducible builds
 
 # IDE files
 .idea/
