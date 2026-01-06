@@ -50,6 +50,7 @@ mod tests {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use k8s_openapi::ByteString;
 
+    #[allow(dead_code)]
     fn create_test_tls(namespace: &str, name: &str, hosts: Vec<&str>) -> EdgionTls {
         let secret = Some(Secret {
             metadata: ObjectMeta {

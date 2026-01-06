@@ -21,7 +21,9 @@ pub struct TestContext {
     pub http_client: reqwest::Client,
     pub http_host: Option<String>,
     pub grpc_host: Option<String>,
+    #[allow(dead_code)]
     pub gateway: bool,
+    #[allow(dead_code)]
     pub verbose: bool,
     pub access_log_path: PathBuf,
 }
@@ -73,6 +75,7 @@ impl TestContext {
         format!("http://{}:{}", self.target_host, self.http_port)
     }
 
+    #[allow(dead_code)]
     pub fn grpc_url(&self) -> String {
         format!("http://{}:{}", self.target_host, self.grpc_port)
     }
@@ -93,10 +96,12 @@ impl TestContext {
         format!("{}:{}", self.target_host, self.udp_port)
     }
 
+    #[allow(dead_code)]
     pub fn https_url(&self) -> String {
         format!("https://{}:{}", self.target_host, self.https_port)
     }
 
+    #[allow(dead_code)]
     pub fn grpc_https_url(&self) -> String {
         format!("https://{}:{}", self.target_host, self.grpc_https_port)
     }
@@ -146,6 +151,7 @@ pub type TestFn = fn(TestContext) -> Pin<Box<dyn Future<Output = TestResult> + S
 /// 测试用例
 pub struct TestCase {
     pub name: String,
+    #[allow(dead_code)]
     pub description: String,
     pub test_fn: TestFn,
 }

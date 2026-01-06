@@ -104,6 +104,7 @@ impl DiffResult {
 struct ListApiResponse {
     success: bool,
     data: Option<Vec<serde_json::Value>>,
+    #[allow(dead_code)]
     count: usize,
     error: Option<String>,
 }

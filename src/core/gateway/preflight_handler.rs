@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_preflight_detection_cors_standard() {
-        let handler = PreflightHandler::new(Some(PreflightPolicy {
+        let _handler = PreflightHandler::new(Some(PreflightPolicy {
             mode: PreflightMode::CorsStandard,
             status_code: 204,
         }));
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn test_preflight_mode_all_options() {
-        let handler = PreflightHandler::new(Some(PreflightPolicy {
+        let _handler = PreflightHandler::new(Some(PreflightPolicy {
             mode: PreflightMode::AllOptions,
             status_code: 204,
         }));

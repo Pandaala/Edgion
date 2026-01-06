@@ -157,7 +157,6 @@ impl TlsRouteManager {
 mod tests {
     use super::*;
     use crate::types::resources::common::ParentReference;
-    use crate::types::ResourceMeta;
 
     fn create_test_tls_route(namespace: &str, name: &str, gateway: &str, hostname: &str) -> TLSRoute {
         use crate::types::resources::tls_route::*;

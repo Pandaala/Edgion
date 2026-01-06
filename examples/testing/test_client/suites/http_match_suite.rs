@@ -510,7 +510,7 @@ impl HttpMatchTestSuite {
                             );
                             }
                         }
-                        Err(e) => {
+                        Err(_e) => {
                             // 404 or connection error is expected
                             // We accept either as "not matched"
                         }

@@ -157,7 +157,6 @@ impl UdpRouteManager {
 mod tests {
     use super::*;
     use crate::types::resources::common::ParentReference;
-    use crate::types::ResourceMeta;
 
     fn create_test_udp_route(namespace: &str, name: &str, gateway: &str, listener_name: &str, port: i32) -> UDPRoute {
         use crate::types::resources::udp_route::*;
