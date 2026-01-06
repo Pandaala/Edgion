@@ -170,6 +170,8 @@ impl EdgionControllerCli {
                 config_server.clone(),
                 k8s_store_arc,
                 gateway_class_name.to_string(),
+                config.watch_namespaces().to_vec(),
+                config.label_selector().map(|s| s.to_string()),
             )
             .await?;
 

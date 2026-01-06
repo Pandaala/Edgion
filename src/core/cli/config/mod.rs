@@ -74,6 +74,21 @@ pub struct ServerConfig {
     #[arg(long = "gateway-class", value_name = "NAME")]
     #[serde(default)]
     pub gateway_class: Option<String>,
+
+    /// Namespaces to watch (empty = all namespaces, single = one namespace, multiple = multi-namespace mode)
+    /// Examples:
+    ///   --watch-namespaces ""           # All namespaces (default)
+    ///   --watch-namespaces "default"    # Single namespace
+    ///   --watch-namespaces "ns1,ns2"    # Multiple namespaces
+    #[arg(long = "watch-namespaces", value_name = "NS", value_delimiter = ',')]
+    #[serde(default)]
+    pub watch_namespaces: Vec<String>,
+
+    /// Label selector for filtering resources (applies to all watched resources)
+    /// Example: --label-selector "app.kubernetes.io/managed-by=edgion"
+    #[arg(long = "label-selector", value_name = "SELECTOR")]
+    #[serde(default)]
+    pub label_selector: Option<String>,
 }
 
 /// Logging configuration
@@ -263,6 +278,8 @@ impl Default for ServerConfig {
             grpc_listen: None,
             admin_listen: None,
             gateway_class: None,
+            watch_namespaces: Vec::new(),
+            label_selector: None,
         }
     }
 }
@@ -359,6 +376,12 @@ impl EdgionControllerConfig {
         if cli.server.gateway_class.is_some() {
             base.server.gateway_class = cli.server.gateway_class.clone();
         }
+        if !cli.server.watch_namespaces.is_empty() {
+            base.server.watch_namespaces = cli.server.watch_namespaces.clone();
+        }
+        if cli.server.label_selector.is_some() {
+            base.server.label_selector = cli.server.label_selector.clone();
+        }
 
         // Logging config
         if cli.logging.log_dir.is_some() {
@@ -410,6 +433,16 @@ impl EdgionControllerConfig {
     /// Get configuration directory with default fallback
     pub fn conf_dir(&self) -> String {
         self.conf.dir.clone().unwrap_or_else(|| "examples/conf".to_string())
+    }
+
+    /// Get watch_namespaces (empty = all namespaces)
+    pub fn watch_namespaces(&self) -> &[String] {
+        &self.server.watch_namespaces
+    }
+
+    /// Get label_selector
+    pub fn label_selector(&self) -> Option<&str> {
+        self.server.label_selector.as_deref()
     }
 
     /// Convert to SysLogConfig (for system logging)
