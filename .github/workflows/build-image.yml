@@ -15,30 +15,90 @@ on:
 env:
   IMAGE_REGISTRY: docker.io
   IMAGE_NAMESPACE: pandaala
-  RUST_VERSION: 1.92
+  RUST_VERSION: "1.82"
 
 jobs:
-  build-and-push:
+  # Stage 1: Build all binaries in one job (shared compilation)
+  build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        binary: [gateway, controller, ctl]
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
+      - name: Set up Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libclang-dev protobuf-compiler
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-build-
+
+      - name: Build all binaries
+        run: |
+          cargo build --release --bin edgion-gateway
+          cargo build --release --bin edgion-controller
+          cargo build --release --bin edgion-ctl
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            target/release/edgion-gateway
+            target/release/edgion-controller
+            target/release/edgion-ctl
+          retention-days: 1
+
+  # Stage 2: Build and push Docker images (gateway and controller, each includes ctl)
+  push-images:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        binary: [gateway, controller]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: ./binaries
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+
       - name: Login to Docker Hub
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.IMAGE_REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -51,23 +111,17 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-      
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
+          file: ./Dockerfile.runtime
           build-args: |
             BINARY=edgion-${{ matrix.binary }}
-            RUST_VERSION=${{ env.RUST_VERSION }}
-            FEATURES=default
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      
-      - name: Image digest
-        run: echo "Image pushed with digest ${{ steps.build.outputs.digest }}"
-
