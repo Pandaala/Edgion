@@ -14,7 +14,7 @@ on:
 
 env:
   IMAGE_REGISTRY: docker.io
-  IMAGE_NAMESPACE: qiiheng3
+  IMAGE_NAMESPACE: pandaala
   RUST_VERSION: 1.92
 
 jobs:
