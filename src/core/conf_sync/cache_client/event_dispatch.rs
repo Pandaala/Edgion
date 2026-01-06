@@ -162,15 +162,15 @@ where
 
                 drop(client_guard);
 
-                // Inner loop: perform watch operation
-                'watch_loop: loop {
+                // Watch block: perform watch operation, break to return to outer loop for re-list
+                'watch_block: {
                     let mut client_guard = grpc_client.write().await;
                     let client = match client_guard.as_mut() {
                         Some(c) => c,
                         None => {
                             tracing::error!(kind = T::kind_name(), "gRPC conf_client not initialized for watch");
                             drop(client_guard);
-                            break 'watch_loop; // Return to outer loop
+                            break 'watch_block; // Return to outer loop
                         }
                     };
 
@@ -190,7 +190,7 @@ where
                         Err(e) => {
                             tracing::error!(kind = T::kind_name(), error = %e, from_version = from_version, "Failed to start watch");
                             drop(client_guard);
-                            break 'watch_loop; // Return to outer loop to re-list
+                            break 'watch_block; // Return to outer loop to re-list
                         }
                     };
 
@@ -207,7 +207,7 @@ where
                                         error = watch_response.err,
                                         "Received error signal from server, re-listing"
                                     );
-                                    break 'watch_loop;
+                                    break 'watch_block;
                                 }
 
                                 let _ = watch_response.resource_version; // Track version from response
@@ -264,7 +264,7 @@ where
                             }
                             Ok(None) => {
                                 tracing::info!(kind = T::kind_name(), "Watch stream ended");
-                                break 'watch_loop; // Return to outer loop to re-list
+                                break 'watch_block; // Return to outer loop to re-list
                             }
                             Err(e) => {
                                 let error_message = e.message();
@@ -275,7 +275,7 @@ where
                                 } else {
                                     tracing::error!(kind = T::kind_name(), error = %e, "Watch stream error");
                                 }
-                                break 'watch_loop; // Return to outer loop to re-list
+                                break 'watch_block; // Return to outer loop to re-list
                             }
                         }
                     }
