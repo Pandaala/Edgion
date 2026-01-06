@@ -35,3 +35,7 @@ examples/conf/Secret_*.yaml
 # 测试证书文件（自动生成，不要提交）
 examples/testing/certs/
 
+# Cross-compilation config (personal dev workflow)
+Cross.toml
+Dockerfile.cross
+
