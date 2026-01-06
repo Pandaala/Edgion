@@ -1,4 +1,4 @@
-use super::StatusManager;
+use crate::core::conf_mgr::StatusStore;
 use crate::core::conf_sync::ConfigServer;
 use crate::types::resources::common::Condition;
 use kube::ResourceExt;
@@ -9,19 +9,19 @@ const RECONCILE_INTERVAL: u64 = 5; // seconds
 
 pub struct StatusReconciler {
     config_server: Arc<ConfigServer>,
-    status_manager: Arc<StatusManager>,
+    status_store: Arc<dyn StatusStore>,
     gateway_class_name: String,
 }
 
 impl StatusReconciler {
     pub fn new(
         config_server: Arc<ConfigServer>,
-        status_manager: Arc<StatusManager>,
+        status_store: Arc<dyn StatusStore>,
         gateway_class_name: String,
     ) -> Self {
         Self {
             config_server,
-            status_manager,
+            status_store,
             gateway_class_name,
         }
     }
@@ -110,7 +110,7 @@ impl StatusReconciler {
             // Optimization: check generation in existing status.
 
             if let Err(e) = self
-                .status_manager
+                .status_store
                 .update_gateway_status(
                     gateway.namespace().as_deref().unwrap_or("default"),
                     gateway.name_any().as_str(),
@@ -181,8 +181,8 @@ impl StatusReconciler {
                 };
 
                 if let Err(e) = self
-                    .status_manager
-                    .update_http_route_status_full(
+                    .status_store
+                    .update_http_route_status(
                         route.namespace().as_deref().unwrap_or("default"),
                         route.name_any().as_str(),
                         status,

@@ -16,7 +16,8 @@ use kube::runtime::watcher;
 use kube::{Api, Client};
 use std::sync::Arc;
 
-use super::{KubernetesStore, StatusManager, StatusReconciler};
+use super::{KubernetesStore, StatusReconciler};
+use crate::core::conf_mgr::{KubernetesStatusStore, StatusStore};
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{CacheEventDispatch, ConfigServer};
 use crate::types::prelude_resources::*;
@@ -57,7 +58,8 @@ pub struct KubernetesController {
     client: Client,
     config_server: Arc<ConfigServer>,
     store: Arc<KubernetesStore>,
-    _status_manager: Arc<StatusManager>,
+    #[allow(dead_code)]
+    status_store: Arc<dyn StatusStore>,
     reconciler: StatusReconciler,
     #[allow(dead_code)]
     gateway_class_name: String,
@@ -84,12 +86,11 @@ impl KubernetesController {
         label_selector: Option<String>,
     ) -> Result<Self> {
         let client = Client::try_default().await?;
-        let status_manager = Arc::new(StatusManager::new(client.clone(), "edgion-controller".to_string()));
-        let reconciler = StatusReconciler::new(
-            config_server.clone(),
-            status_manager.clone(),
-            gateway_class_name.clone(),
-        );
+        let status_store: Arc<dyn StatusStore> = Arc::new(KubernetesStatusStore::new(
+            client.clone(),
+            "edgion-controller".to_string(),
+        ));
+        let reconciler = StatusReconciler::new(config_server.clone(), status_store.clone(), gateway_class_name.clone());
 
         let watch_mode = NamespaceWatchMode::from_namespaces(watch_namespaces);
 
@@ -105,7 +106,7 @@ impl KubernetesController {
             client,
             config_server,
             store,
-            _status_manager: status_manager,
+            status_store,
             reconciler,
             gateway_class_name,
             watch_mode,
@@ -175,7 +176,14 @@ impl KubernetesController {
     /// Run a watcher for namespace-scoped resources based on watch mode
     async fn run_namespaced_watcher<T, F>(&self, kind: &str, handler: F) -> Result<()>
     where
-        T: kube::Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug + Send + Sync + 'static,
+        T: kube::Resource<DynamicType = (), Scope = NamespaceResourceScope>
+            + Clone
+            + serde::Serialize
+            + serde::de::DeserializeOwned
+            + std::fmt::Debug
+            + Send
+            + Sync
+            + 'static,
         F: Fn(&ConfigServer, ResourceChange, T) + Clone + Send + Sync + 'static,
     {
         match &self.watch_mode {
@@ -219,7 +227,14 @@ impl KubernetesController {
     /// Run a single watcher
     async fn run_single_watcher<T, F>(&self, api: Api<T>, kind: &str, handler: F) -> Result<()>
     where
-        T: kube::Resource<DynamicType = ()> + Clone + serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug + Send + Sync + 'static,
+        T: kube::Resource<DynamicType = ()>
+            + Clone
+            + serde::Serialize
+            + serde::de::DeserializeOwned
+            + std::fmt::Debug
+            + Send
+            + Sync
+            + 'static,
         F: Fn(&ConfigServer, ResourceChange, T),
     {
         let config = self.watcher_config();
@@ -288,12 +303,7 @@ impl KubernetesController {
     }
 
     // Helper function to handle watch events for most resources
-    async fn handle_event<T, F>(
-        &self,
-        event: watcher::Event<T>,
-        kind: &str,
-        handler: F,
-    ) -> Result<()>
+    async fn handle_event<T, F>(&self, event: watcher::Event<T>, kind: &str, handler: F) -> Result<()>
     where
         T: kube::Resource + Clone + serde::Serialize,
         <T as kube::Resource>::DynamicType: Default,
