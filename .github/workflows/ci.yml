@@ -28,7 +28,7 @@ jobs:
           sudo apt-get install -y cmake libclang-dev protobuf-compiler
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -74,7 +74,7 @@ jobs:
           sudo apt-get install -y cmake libclang-dev protobuf-compiler
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -104,7 +104,7 @@ jobs:
           sudo apt-get install -y cmake libclang-dev protobuf-compiler
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
