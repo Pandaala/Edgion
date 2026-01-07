@@ -30,7 +30,7 @@ use crate::types::resources::gateway::Listener;
 /// Annotation key to control HTTP/2 support
 /// Set to "false" to disable HTTP/2 (both h2c and ALPN)
 /// Default: "true" (enabled)
-pub const ANNOTATION_ENABLE_HTTP2: &str = "edgion.com/enable-http2";
+pub const ANNOTATION_ENABLE_HTTP2: &str = "edgion.io/enable-http2";
 
 /// Annotation key to specify backend protocol for TLS listeners
 /// Set to "tcp" for TLS terminate to TCP backend

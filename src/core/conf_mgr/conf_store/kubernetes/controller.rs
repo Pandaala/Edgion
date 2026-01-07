@@ -210,7 +210,9 @@ impl KubernetesController {
                         async move {
                             let watcher = watcher(api, config);
                             tokio::pin!(watcher);
-                            while let Some(event) = watcher.try_next().await? {
+                            while let Some(event) = watcher.try_next().await.map_err(|e| {
+                                anyhow::anyhow!("Watcher for {} failed: {}", kind, e)
+                            })? {
                                 Self::handle_event_static(&store, &config_server, event, &kind, &handler).await?;
                             }
                             Ok::<(), anyhow::Error>(())
@@ -240,7 +242,9 @@ impl KubernetesController {
         let config = self.watcher_config();
         let watcher = watcher(api, config);
         tokio::pin!(watcher);
-        while let Some(event) = watcher.try_next().await? {
+        while let Some(event) = watcher.try_next().await.map_err(|e| {
+            anyhow::anyhow!("Watcher for {} failed: {}", kind, e)
+        })? {
             self.handle_event(event, kind, &handler).await?;
         }
         Ok(())
@@ -447,7 +451,9 @@ impl KubernetesController {
         let config = self.watcher_config();
         let watcher = watcher(api, config);
         tokio::pin!(watcher);
-        while let Some(event) = watcher.try_next().await? {
+        while let Some(event) = watcher.try_next().await.map_err(|e| {
+            anyhow::anyhow!("Watcher for GatewayClass failed: {}", e)
+        })? {
             self.handle_event(event, "GatewayClass", |server, change, resource| {
                 server.gateway_classes.apply_change(change, resource);
             })
@@ -462,7 +468,9 @@ impl KubernetesController {
         let config = self.watcher_config();
         let watcher = watcher(api, config);
         tokio::pin!(watcher);
-        while let Some(event) = watcher.try_next().await? {
+        while let Some(event) = watcher.try_next().await.map_err(|e| {
+            anyhow::anyhow!("Watcher for EdgionGatewayConfig failed: {}", e)
+        })? {
             self.handle_event(event, "EdgionGatewayConfig", |server, change, resource| {
                 server.edgion_gateway_configs.apply_change(change, resource);
             })

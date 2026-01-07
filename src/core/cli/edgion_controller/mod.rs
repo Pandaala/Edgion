@@ -151,6 +151,14 @@ impl EdgionControllerCli {
             return Err(anyhow!("Failed to load user configuration: {}", e));
         }
 
+        // Mark all caches as ready after initial resource loading
+        config_server.set_ready();
+        tracing::info!(
+            component = COMPONENT_EDGION_CONTROLLER,
+            event = "caches_ready",
+            "All caches marked as ready after initial sync"
+        );
+
         // If K8s mode, start the controller to watch for changes
         if k8s_mode {
             tracing::info!(
