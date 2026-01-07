@@ -79,7 +79,7 @@ tokio = { version = "1.0", features = ["full"] }
 tokio-stream = "0.1"
 anyhow = "1.0"
 async-trait = "0.1"
-thiserror = "1.0.69"
+thiserror = "2.0.17"
 
 # Serialization/Deserialization
 serde = { version = "1.0", features = ["derive"] }
