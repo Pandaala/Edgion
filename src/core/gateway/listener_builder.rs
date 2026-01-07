@@ -18,7 +18,7 @@ use tokio::net::UdpSocket;
 
 use crate::core::observe::AccessLogger;
 use crate::core::routes::get_global_route_manager;
-use crate::core::routes::http_routes::EdgionHttp;
+use crate::core::routes::http_routes::{EdgionHttp, EdgionHttpRedirect};
 use crate::core::routes::tcp_routes::{get_global_tcp_route_manager, EdgionTcp};
 use crate::core::routes::tls_routes::{get_global_tls_route_manager, EdgionTls};
 use crate::core::routes::udp_routes::{get_global_udp_route_manager, EdgionUdp};
@@ -35,6 +35,15 @@ pub const ANNOTATION_ENABLE_HTTP2: &str = "edgion.com/enable-http2";
 /// Annotation key to specify backend protocol for TLS listeners
 /// Set to "tcp" for TLS terminate to TCP backend
 pub const ANNOTATION_BACKEND_PROTOCOL: &str = "edgion.io/backend-protocol";
+
+/// Annotation key to enable HTTP to HTTPS redirect
+/// Set to "true" to redirect all HTTP requests to HTTPS
+/// Default: "false" (disabled)
+pub const ANNOTATION_HTTP_TO_HTTPS_REDIRECT: &str = "edgion.io/http-to-https-redirect";
+
+/// Annotation key to specify HTTPS redirect port
+/// Default: 443
+pub const ANNOTATION_HTTPS_REDIRECT_PORT: &str = "edgion.io/https-redirect-port";
 
 /// Context passed to listener builders containing gateway-level information and listener config
 #[derive(Clone)]
@@ -70,6 +79,38 @@ pub fn add_http_listener(
     let listener_name = context.listener.name.clone();
     let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
     let addr = format!("{}:{}", host, context.listener.port);
+
+    // Check if HTTP to HTTPS redirect is enabled (only for non-TLS listeners)
+    let http_to_https_redirect = !enable_tls
+        && context
+            .gateway_annotations
+            .get(ANNOTATION_HTTP_TO_HTTPS_REDIRECT)
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+    // If redirect is enabled, use the simple redirect handler
+    if http_to_https_redirect {
+        let https_port: u16 = context
+            .gateway_annotations
+            .get(ANNOTATION_HTTPS_REDIRECT_PORT)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(443);
+
+        let redirect_handler = EdgionHttpRedirect::new(https_port);
+        let mut http_service = http_proxy_service(&context.server_conf, redirect_handler);
+        http_service.add_tcp(&addr);
+
+        tracing::info!(
+            gateway=%context.gateway_key,
+            listener=%listener_name,
+            addr=%addr,
+            https_port=%https_port,
+            "Adding HTTP to HTTPS redirect listener"
+        );
+
+        server.add_service(http_service);
+        return Ok(());
+    }
 
     // Get or create domain routes from global RouteManager
     let route_manager = get_global_route_manager();

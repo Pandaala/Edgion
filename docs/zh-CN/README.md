@@ -8,8 +8,15 @@
 
 快速上手和功能使用教程：
 - [Stream Plugins 使用指南](./user-guide/stream-plugins-guide.md) - TCP/UDP 流式插件
+- [CORS 跨域配置](./user-guide/cors-user-guide.md) - 跨域资源共享
 
-### 🔧 [开发者文档](./developer-doc/README.md)
+### 🔧 [运维指南](./op-guide/README.md)
+
+Gateway 平台级运维配置：
+- [HTTP to HTTPS 重定向](./op-guide/http-to-https-redirect-guide.md) - Gateway Annotation 配置
+- [启动配置文件](./op-guide/README.md#配置文件说明) - Controller/Gateway toml 配置
+
+### 🛠️ [开发者文档](./developer-doc/README.md)
 
 架构设计和开发指南：
 - [架构概览](./developer-doc/architecture-overview.md)
@@ -22,8 +29,9 @@
 
 | 类型 | 链接 | 说明 |
 |------|------|------|
-| 📚 用户指南 | [user-guide/](./user-guide/) | 功能使用教程 |
-| 🔧 开发文档 | [developer-doc/](./developer-doc/) | 架构和开发 |
+| 📚 用户指南 | [user-guide/](./user-guide/) | 插件和功能使用 |
+| 🔧 运维指南 | [op-guide/](./op-guide/) | Gateway/TLS 配置 |
+| 🛠️ 开发文档 | [developer-doc/](./developer-doc/) | 架构和开发 |
 | 📦 示例配置 | [examples/conf/](../../examples/conf/) | YAML 配置示例 |
 | 🧪 测试 | [examples/testing/](../../examples/testing/) | 集成测试 |
 

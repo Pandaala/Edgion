@@ -14,7 +14,7 @@
 
 - 🌐 **[CORS 跨域](./cors-user-guide.md)** - 跨域资源共享配置
 - ✈️ **[Preflight 策略](./preflight-policy-guide.md)** - 预检请求处理配置
-- 🔒 **[EdgionTLS](./edgiontls-user-guide.md)** - TLS 证书管理
+- 🔒 **[EdgionTLS](./edgiontls-user-guide.md)** - TLS 证书和 mTLS 配置
 
 ### 插件系统
 
@@ -36,13 +36,15 @@
 
 ### 即将推出
 
-- 🔐 mTLS 配置指南
 - 🚀 性能优化指南
 - 🧩 ExtensionRef 深度控制：`extensionRefMaxDepth` 可配置（默认 5），用于限制插件引用链深度，避免循环。
 
 ---
 
 ## 🔗 其他资源
+
+### 运维指南
+TLS 证书、Gateway 配置等运维相关文档，请参考 [Op Guide](../op-guide/README.md)
 
 ### 开发者文档
 详细的架构和开发指南，请参考 [Developer Documentation](../developer-doc/README.md)

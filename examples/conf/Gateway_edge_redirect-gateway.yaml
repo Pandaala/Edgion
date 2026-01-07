@@ -1,0 +1,18 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: redirect-gateway
+  namespace: edge
+  annotations:
+    # 启用 HTTP 到 HTTPS 重定向
+    edgion.io/http-to-https-redirect: "true"
+    # 指定重定向到 10443 端口
+    edgion.io/https-redirect-port: "10443"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # HTTP 监听器 - 会自动重定向到 HTTPS
+    - name: http-redirect
+      protocol: HTTP
+      port: 10081
+

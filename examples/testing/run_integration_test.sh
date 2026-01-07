@@ -539,6 +539,15 @@ echo ""
 echo "---"
 echo ""
 
+# Gateway 模式 HTTP Redirect 测试
+echo_info "Test 19: HTTP Redirect Gateway mode (gateway:10081)"
+cargo run --release --example test_client -- -g http-redirect 2>&1 | tee -a "$TEST_RESULT_LOG"
+GATEWAY_HTTP_REDIRECT_RESULT=$?
+
+echo ""
+echo "---"
+echo ""
+
 # Gateway 模式 LB Policy 测试 - DISABLED
 # Reason: Need better testing approach without log analysis timing issues
 # TODO: Redesign test to use real backends with response headers
@@ -656,6 +665,12 @@ else
     echo_error "Plugin Logs Gateway mode: FAILED"
 fi
 
+if [ $GATEWAY_HTTP_REDIRECT_RESULT -eq 0 ]; then
+    echo_success "HTTP Redirect Gateway mode: PASSED"
+else
+    echo_error "HTTP Redirect Gateway mode: FAILED"
+fi
+
 # LB Policy test disabled
 # if [ $GATEWAY_LB_POLICY_RESULT -eq 0 ]; then
 #     echo_success "LB Policy Gateway mode: PASSED"
@@ -683,7 +698,7 @@ TEST_DURATION=$((TEST_END_TIME - TEST_START_TIME))
 # 计算通过和失败的测试数
 PASSED_COUNT=0
 FAILED_COUNT=0
-TOTAL_TESTS=17  # LB Policy test disabled
+TOTAL_TESTS=18  # LB Policy test disabled, HTTP Redirect test added
 
 [ $DIRECT_HTTP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $GATEWAY_HTTP_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
@@ -702,6 +717,7 @@ TOTAL_TESTS=17  # LB Policy test disabled
 [ $GATEWAY_SECURITY_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $GATEWAY_MTLS_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 [ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
+[ $GATEWAY_HTTP_REDIRECT_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))
 # [ $GATEWAY_LB_POLICY_RESULT -eq 0 ] && PASSED_COUNT=$((PASSED_COUNT + 1)) || FAILED_COUNT=$((FAILED_COUNT + 1))  # LB Policy test disabled
 
 # 生成报告文件
@@ -745,6 +761,7 @@ Functional Tests:
   $([ $GATEWAY_SECURITY_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") Security Protection Gateway mode (gateway:10080)
   $([ $GATEWAY_MTLS_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") mTLS Gateway mode (gateway:10444)
   $([ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") Plugin Logs Gateway mode (gateway:10080)
+  $([ $GATEWAY_HTTP_REDIRECT_RESULT -eq 0 ] && echo "[PASSED]" || echo "[FAILED]") HTTP Redirect Gateway mode (gateway:10081)
 
 ================================================================================
                           LOG FILE LOCATIONS
@@ -803,7 +820,8 @@ if [ $DIRECT_HTTP_RESULT -eq 0 ] && [ $GATEWAY_HTTP_RESULT -eq 0 ] && \
    [ $DIRECT_WS_RESULT -eq 0 ] && [ $GATEWAY_WS_RESULT -eq 0 ] && \
    [ $GATEWAY_HTTPS_RESULT -eq 0 ] && [ $GATEWAY_GRPC_TLS_RESULT -eq 0 ] && \
    [ $GATEWAY_REAL_IP_RESULT -eq 0 ] && [ $GATEWAY_SECURITY_RESULT -eq 0 ] && \
-   [ $GATEWAY_MTLS_RESULT -eq 0 ] && [ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ]; then
+   [ $GATEWAY_MTLS_RESULT -eq 0 ] && [ $GATEWAY_PLUGIN_LOGS_RESULT -eq 0 ] && \
+   [ $GATEWAY_HTTP_REDIRECT_RESULT -eq 0 ]; then
     echo_success "All tests PASSED! ✨"
     exit 0
 else
