@@ -157,7 +157,7 @@ console = "0.15"
 colored = "2.0"
 
 # CLI table formatting
-tabled = "0.15"
+tabled = "0.20"
 
 # Unix Socket support for HTTP
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
