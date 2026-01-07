@@ -134,7 +134,7 @@ pingora-core = { version = "0.6" }
 pingora-http = "0.6"
 pingora-load-balancing = "0.6"
 pingora-proxy = { version = "0.6" }
-etcd-client = "0.11"
+etcd-client = "0.17"
 
 # BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
 boring-sys = { version = "4", optional = true }
