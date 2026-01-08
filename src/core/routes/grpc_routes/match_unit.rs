@@ -93,10 +93,9 @@ impl GrpcRouteRuleUnit {
 
         // Check Hostname (if route specifies hostnames)
         if let Some(ref route_hostnames) = self.route_info.hostnames {
-            if !route_hostnames.is_empty()
-                && !Self::match_hostname(hostname, route_hostnames) {
-                    return Ok(false);
-                }
+            if !route_hostnames.is_empty() && !Self::match_hostname(hostname, route_hostnames) {
+                return Ok(false);
+            }
         }
 
         // Check SectionName (if parent_refs specify section_name)

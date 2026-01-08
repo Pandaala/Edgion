@@ -95,7 +95,6 @@ pub enum IpSource {
     RemoteAddr,
 }
 
-
 /// Default action when no rules match
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -107,7 +106,6 @@ pub enum DefaultAction {
     /// Deny access when no rules match
     Deny,
 }
-
 
 fn default_status() -> u16 {
     403

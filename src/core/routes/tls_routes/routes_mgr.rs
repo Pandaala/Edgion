@@ -74,10 +74,7 @@ impl TlsRouteManager {
                 let gateway_map = gateway_routes.entry(gateway_key).or_default();
 
                 for hostname in &hostnames {
-                    gateway_map
-                        .entry(hostname.clone())
-                        .or_default()
-                        .push(route.clone());
+                    gateway_map.entry(hostname.clone()).or_default().push(route.clone());
                 }
             }
         }

@@ -38,10 +38,7 @@ impl ConfigServer {
         // Check if HTTPRoute references a gateway that exists
         let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
             if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref
-                    .namespace
-                    .as_ref()
-                    .or(resource.metadata.namespace.as_ref());
+                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -57,10 +54,7 @@ impl ConfigServer {
                 if let Some(first_ref) = parent_refs.first() {
                     let info = format!(
                         "namespace={:?}, name={}",
-                        first_ref
-                            .namespace
-                            .as_ref()
-                            .or(resource.metadata.namespace.as_ref()),
+                        first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "HTTPRoute references a Gateway that does not exist, skipping")
@@ -100,10 +94,7 @@ impl ConfigServer {
     pub fn apply_grpc_route_change(&self, change: ResourceChange, resource: GRPCRoute) {
         let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
             if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref
-                    .namespace
-                    .as_ref()
-                    .or(resource.metadata.namespace.as_ref());
+                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -119,10 +110,7 @@ impl ConfigServer {
                 if let Some(first_ref) = parent_refs.first() {
                     let info = format!(
                         "namespace={:?}, name={}",
-                        first_ref
-                            .namespace
-                            .as_ref()
-                            .or(resource.metadata.namespace.as_ref()),
+                        first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "GRPCRoute references a Gateway that does not exist, skipping")
@@ -162,10 +150,7 @@ impl ConfigServer {
     pub fn apply_tcp_route_change(&self, change: ResourceChange, resource: TCPRoute) {
         let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
             if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref
-                    .namespace
-                    .as_ref()
-                    .or(resource.metadata.namespace.as_ref());
+                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -181,10 +166,7 @@ impl ConfigServer {
                 if let Some(first_ref) = parent_refs.first() {
                     let info = format!(
                         "namespace={:?}, name={}",
-                        first_ref
-                            .namespace
-                            .as_ref()
-                            .or(resource.metadata.namespace.as_ref()),
+                        first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "TCPRoute references a Gateway that does not exist, skipping")
@@ -221,10 +203,7 @@ impl ConfigServer {
     pub fn apply_udp_route_change(&self, change: ResourceChange, resource: UDPRoute) {
         let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
             if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref
-                    .namespace
-                    .as_ref()
-                    .or(resource.metadata.namespace.as_ref());
+                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -240,10 +219,7 @@ impl ConfigServer {
                 if let Some(first_ref) = parent_refs.first() {
                     let info = format!(
                         "namespace={:?}, name={}",
-                        first_ref
-                            .namespace
-                            .as_ref()
-                            .or(resource.metadata.namespace.as_ref()),
+                        first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "UDPRoute references a Gateway that does not exist, skipping")
@@ -280,10 +256,7 @@ impl ConfigServer {
     pub fn apply_tls_route_change(&self, change: ResourceChange, resource: TLSRoute) {
         let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
             if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref
-                    .namespace
-                    .as_ref()
-                    .or(resource.metadata.namespace.as_ref());
+                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -320,10 +293,7 @@ impl ConfigServer {
         // Check if EdgionTls references a gateway that exists in base_conf
         let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
             if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref
-                    .namespace
-                    .as_ref()
-                    .or(resource.metadata.namespace.as_ref());
+                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -339,10 +309,7 @@ impl ConfigServer {
                 if let Some(first_ref) = parent_refs.first() {
                     let info = format!(
                         "namespace={:?}, name={}",
-                        first_ref
-                            .namespace
-                            .as_ref()
-                            .or(resource.metadata.namespace.as_ref()),
+                        first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "EdgionTls references a Gateway that does not exist, skipping")

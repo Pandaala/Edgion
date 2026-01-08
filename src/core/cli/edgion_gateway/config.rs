@@ -62,8 +62,7 @@ pub struct EdgionGatewayConfig {
 }
 
 /// Gateway configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Args)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
 pub struct GatewayConfig {
     /// Operator gRPC address (e.g., http://127.0.0.1:50051)
     #[arg(long = "server-addr", value_name = "ADDR")]
@@ -86,8 +85,7 @@ fn default_ssl_log_config() -> LogConfig {
 }
 
 /// Pingora server configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Args)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
 pub struct ServerConfig {
     /// Number of worker threads (default: number of CPU cores)
     #[arg(long = "threads", value_name = "NUM")]
@@ -119,7 +117,6 @@ pub struct ServerConfig {
     #[serde(default)]
     pub error_log: Option<String>,
 }
-
 
 /// Logging configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
@@ -173,7 +170,6 @@ fn default_console() -> bool {
 fn default_buffer_size() -> usize {
     10_000
 }
-
 
 impl Default for LoggingConfig {
     fn default() -> Self {

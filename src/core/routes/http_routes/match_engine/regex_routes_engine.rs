@@ -181,13 +181,7 @@ mod tests {
 
         Arc::new(HttpRouteRuleUnit {
             resource_key: format!("{}/{}", namespace, name),
-            matched_info: MatchInfo::new(
-                namespace.to_string(),
-                name.to_string(),
-                rule_id,
-                0,
-                match_item,
-            ),
+            matched_info: MatchInfo::new(namespace.to_string(), name.to_string(), rule_id, 0, match_item),
             rule,
             path_regex: Some(regex),
             parent_refs: None,

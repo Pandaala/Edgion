@@ -284,10 +284,9 @@ fn is_host_covered(declared: &str, san_list: &[String]) -> bool {
         }
 
         // Reverse wildcard: declared *.example.com is covered by *.example.com
-        if declared_lower.starts_with("*.") && san_lower.starts_with("*.")
-            && declared_lower == san_lower {
-                return true;
-            }
+        if declared_lower.starts_with("*.") && san_lower.starts_with("*.") && declared_lower == san_lower {
+            return true;
+        }
     }
 
     false

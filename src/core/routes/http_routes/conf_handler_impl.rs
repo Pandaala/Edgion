@@ -671,9 +671,7 @@ impl RouteManager {
 /// Parse all HTTPRoutes and collect rules into gateway->domain->rules structure
 /// Returns HashMap<GatewayKey, HashMap<DomainStr, (Vec<Arc<HttpRouteRuleUnit>>, Vec<Arc<HttpRouteRuleUnit>>)>>
 /// The tuple contains (normal_routes, regex_routes), both using Arc<HttpRouteRuleUnit>
-fn parse_http_routes_to_gateway_domain_rules(
-    data: &HashMap<String, HTTPRoute>,
-) -> GatewayDomainRulesMap {
+fn parse_http_routes_to_gateway_domain_rules(data: &HashMap<String, HTTPRoute>) -> GatewayDomainRulesMap {
     let mut gateway_domain_rules: GatewayDomainRulesMap = HashMap::new();
 
     let mut processed_routes = 0;
@@ -696,9 +694,7 @@ fn parse_http_routes_to_gateway_domain_rules(
             let gateway_key = parent_ref.build_parent_key(Some(&validated.namespace));
 
             // Get or create the domain map for this gateway
-            let domain_map = gateway_domain_rules
-                .entry(gateway_key.clone())
-                .or_default();
+            let domain_map = gateway_domain_rules.entry(gateway_key.clone()).or_default();
 
             // Process each hostname and rule combination
             for hostname in validated.hostnames {
