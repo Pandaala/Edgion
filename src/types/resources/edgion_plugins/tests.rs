@@ -64,7 +64,7 @@ fn test_plugin_entry_serialization() {
     let enabled_entry = RequestFilterEntry::new(make_header_modifier_plugin());
     let json = serde_json::to_string(&enabled_entry).unwrap();
     assert!(!json.contains("\"enable\"")); // enable=true is skipped
-    assert!(json.contains("\"type\":\"requestHeaderModifier\""));
+    assert!(json.contains("\"type\":\"RequestHeaderModifier\""));
     assert!(json.contains("\"config\""));
 
     // Disabled plugin (enable field should be present)
@@ -77,13 +77,13 @@ fn test_plugin_entry_serialization() {
 fn test_plugin_entry_deserialization() {
     // With enable=false
     let json =
-        r#"{"enable":false,"type":"requestHeaderModifier","config":{"set":[{"name":"X-Test","value":"test-value"}]}}"#;
+        r#"{"enable":false,"type":"RequestHeaderModifier","config":{"set":[{"name":"X-Test","value":"test-value"}]}}"#;
     let entry: RequestFilterEntry = serde_json::from_str(json).unwrap();
     assert!(!entry.is_enabled());
     assert_eq!(entry.type_name(), "RequestHeaderModifier");
 
     // Without enable field (should default to true)
-    let json = r#"{"type":"requestHeaderModifier","config":{"set":[{"name":"X-Test","value":"test-value"}]}}"#;
+    let json = r#"{"type":"RequestHeaderModifier","config":{"set":[{"name":"X-Test","value":"test-value"}]}}"#;
     let entry: RequestFilterEntry = serde_json::from_str(json).unwrap();
     assert!(entry.is_enabled());
 }
