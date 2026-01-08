@@ -224,11 +224,11 @@ impl EdgionTls {
                         }
                         Ok(n) => {
                             ctx.bytes_sent += n as u64;
-                            if let Err(_) = upstream.write_all(&upstream_buf[0..n]).await {
+                            if (upstream.write_all(&upstream_buf[0..n]).await).is_err() {
                                 ctx.status = TlsStatus::UpstreamWriteError;
                                 break;
                             }
-                            if let Err(_) = upstream.flush().await {
+                            if (upstream.flush().await).is_err() {
                                 ctx.status = TlsStatus::UpstreamWriteError;
                                 break;
                             }
@@ -247,11 +247,11 @@ impl EdgionTls {
                         }
                         Ok(n) => {
                             ctx.bytes_received += n as u64;
-                            if let Err(_) = downstream.write_all(&downstream_buf[0..n]).await {
+                            if (downstream.write_all(&downstream_buf[0..n]).await).is_err() {
                                 ctx.status = TlsStatus::DownstreamWriteError;
                                 break;
                             }
-                            if let Err(_) = downstream.flush().await {
+                            if (downstream.flush().await).is_err() {
                                 ctx.status = TlsStatus::DownstreamWriteError;
                                 break;
                             }

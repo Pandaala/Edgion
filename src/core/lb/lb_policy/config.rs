@@ -25,7 +25,7 @@ pub fn get_policies_for_service(service_key: &str) -> Vec<LbPolicy> {
 #[allow(dead_code)]
 pub fn parse_policies(s: &str) -> Vec<LbPolicy> {
     s.split(',')
-        .filter_map(|part| LbPolicy::from_str(part.trim()))
+        .filter_map(|part| LbPolicy::parse(part.trim()))
         .collect()
 }
 

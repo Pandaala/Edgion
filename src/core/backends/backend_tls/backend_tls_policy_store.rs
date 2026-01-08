@@ -94,7 +94,7 @@ impl BackendTLSPolicyStore {
             for target_ref in &policy.spec.target_refs {
                 let target_key = Self::build_target_key(policy_namespace, target_ref);
 
-                index.entry(target_key).or_insert_with(Vec::new).push(policy.clone());
+                index.entry(target_key).or_default().push(policy.clone());
             }
         }
 
@@ -108,14 +108,14 @@ impl BackendTLSPolicyStore {
 
     /// Build a target key from target reference components
     /// Key format: namespace/name
+    /// Per Gateway API spec, targetRef can only reference resources in the same namespace as the policy.
     #[inline]
     fn build_target_key(
         policy_namespace: &str,
         target_ref: &crate::types::resources::backend_tls_policy::BackendTLSPolicyTargetRef,
     ) -> String {
-        let target_namespace = target_ref.namespace.as_deref().unwrap_or(policy_namespace);
         let target_name = &target_ref.name;
-        format!("{}/{}", target_namespace, target_name)
+        format!("{}/{}", policy_namespace, target_name)
     }
 
     /// Extract all target keys from a policy
@@ -320,8 +320,7 @@ impl BackendTLSPolicyStore {
 
         // O(1) lookup in reverse index
         index
-            .get(&target_key)
-            .map(|policies| policies.clone())
+            .get(&target_key).cloned()
             .unwrap_or_default()
     }
 

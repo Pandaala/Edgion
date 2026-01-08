@@ -8,6 +8,12 @@ pub struct ResourceMgrAPI {
     default_backend: RwLock<Option<String>>,
 }
 
+impl Default for ResourceMgrAPI {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResourceMgrAPI {
     pub fn new() -> Self {
         Self {
@@ -61,32 +67,32 @@ impl ResourceMgrAPI {
         name: &str,
         content: String,
     ) -> Result<(), ConfStoreError> {
-        let backend = self.get_backend(None).map_err(|e| ConfStoreError::InternalError(e))?;
+        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
         backend.set_one(kind, namespace, name, content).await
     }
 
     pub async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfStoreError> {
-        let backend = self.get_backend(None).map_err(|e| ConfStoreError::InternalError(e))?;
+        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
         backend.get_one(kind, namespace, name).await
     }
 
     pub async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfStoreError> {
-        let backend = self.get_backend(None).map_err(|e| ConfStoreError::InternalError(e))?;
+        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
         backend.delete_one(kind, namespace, name).await
     }
 
     pub async fn list_all(&self) -> Result<Vec<ConfEntry>, ConfStoreError> {
-        let backend = self.get_backend(None).map_err(|e| ConfStoreError::InternalError(e))?;
+        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
         backend.list_all().await
     }
 
     pub async fn get_list_by_kind(&self, kind: &str) -> Result<Vec<ConfEntry>, ConfStoreError> {
-        let backend = self.get_backend(None).map_err(|e| ConfStoreError::InternalError(e))?;
+        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
         backend.get_list_by_kind(kind).await
     }
 
     pub async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfStoreError> {
-        let backend = self.get_backend(None).map_err(|e| ConfStoreError::InternalError(e))?;
+        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
         backend.cnt_by_kind(kind).await
     }
 }

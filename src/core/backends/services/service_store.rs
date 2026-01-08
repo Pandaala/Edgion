@@ -17,6 +17,12 @@ pub struct ServiceStore {
     services: ArcSwap<Arc<ServiceMap>>,
 }
 
+impl Default for ServiceStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ServiceStore {
     pub fn new() -> Self {
         Self {
@@ -53,7 +59,7 @@ impl ServiceStore {
     /// Update services atomically (clone map + modify + swap)
     pub fn update(&self, add_or_update: HashMap<String, Service>, remove: &HashSet<String>) {
         let current = self.services.load();
-        let current_map: &ServiceMap = &**current;
+        let current_map: &ServiceMap = &current;
         let mut new_map: ServiceMap = current_map.clone();
 
         for key in remove {

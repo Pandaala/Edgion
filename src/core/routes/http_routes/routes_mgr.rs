@@ -171,6 +171,12 @@ pub fn get_global_route_manager() -> Arc<RouteManager> {
     GLOBAL_ROUTE_MANAGER.clone()
 }
 
+impl Default for RouteManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RouteManager {
     pub fn new() -> Self {
         Self {

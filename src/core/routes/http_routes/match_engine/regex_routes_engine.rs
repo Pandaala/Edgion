@@ -142,7 +142,7 @@ mod tests {
     use super::*;
     use crate::core::lb::BackendSelector;
     use crate::core::plugins::PluginRuntime;
-    use crate::types::{HTTPPathMatch, HTTPRouteMatch, HTTPRouteRule};
+    use crate::types::{HTTPPathMatch, HTTPRouteMatch, HTTPRouteRule, MatchInfo};
     use regex::Regex;
 
     /// Helper function to create a test HttpRouteRuleUnit with regex pattern
@@ -179,17 +179,19 @@ mod tests {
 
         let regex = Regex::new(regex_pattern).expect(&format!("Invalid regex pattern: {}", regex_pattern));
 
-        Arc::new(HttpRouteRuleUnit::new(
-            namespace.to_string(),
-            name.to_string(),
-            rule_id,
-            0,
-            format!("{}/{}", namespace, name),
-            match_item,
+        Arc::new(HttpRouteRuleUnit {
+            resource_key: format!("{}/{}", namespace, name),
+            matched_info: MatchInfo::new(
+                namespace.to_string(),
+                name.to_string(),
+                rule_id,
+                0,
+                match_item,
+            ),
             rule,
-            Some(regex),
-            None,
-        ))
+            path_regex: Some(regex),
+            parent_refs: None,
+        })
     }
 
     #[test]

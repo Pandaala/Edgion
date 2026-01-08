@@ -1,3 +1,3 @@
-mod basic_auth;
+mod plugin;
 
-pub use basic_auth::BasicAuth;
+pub use plugin::BasicAuth;

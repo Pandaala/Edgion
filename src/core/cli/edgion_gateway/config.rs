@@ -63,6 +63,7 @@ pub struct EdgionGatewayConfig {
 
 /// Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
+#[derive(Default)]
 pub struct GatewayConfig {
     /// Operator gRPC address (e.g., http://127.0.0.1:50051)
     #[arg(long = "server-addr", value_name = "ADDR")]
@@ -86,6 +87,7 @@ fn default_ssl_log_config() -> LogConfig {
 
 /// Pingora server configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
+#[derive(Default)]
 pub struct ServerConfig {
     /// Number of worker threads (default: number of CPU cores)
     #[arg(long = "threads", value_name = "NUM")]
@@ -118,18 +120,6 @@ pub struct ServerConfig {
     pub error_log: Option<String>,
 }
 
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            threads: None,
-            work_stealing: None,
-            grace_period_seconds: None,
-            graceful_shutdown_timeout_seconds: None,
-            upstream_keepalive_pool_size: None,
-            error_log: None,
-        }
-    }
-}
 
 /// Logging configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
@@ -184,14 +174,6 @@ fn default_buffer_size() -> usize {
     10_000
 }
 
-impl Default for GatewayConfig {
-    fn default() -> Self {
-        Self {
-            server_addr: None,
-            admin_listen: None,
-        }
-    }
-}
 
 impl Default for LoggingConfig {
     fn default() -> Self {

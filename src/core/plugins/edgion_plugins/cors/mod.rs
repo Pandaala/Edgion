@@ -1,3 +1,3 @@
-mod cors;
+mod plugin;
 
-pub use cors::Cors;
+pub use plugin::Cors;

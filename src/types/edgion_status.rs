@@ -1,3 +1,7 @@
+//! Edgion status/error codes
+
+#![allow(clippy::inconsistent_digit_grouping)]
+
 /// Error code for Edgion gateway
 /// Each error code has a fixed numeric code (0Xxx format) and a message string
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]

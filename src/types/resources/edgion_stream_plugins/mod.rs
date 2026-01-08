@@ -115,7 +115,7 @@ impl EdgionStreamPlugins {
 
     /// Check if this plugin has any plugins defined
     pub fn has_plugins(&self) -> bool {
-        self.spec.plugins.as_ref().map_or(false, |p| !p.is_empty())
+        self.spec.plugins.as_ref().is_some_and(|p| !p.is_empty())
     }
 
     /// Get the total number of plugins

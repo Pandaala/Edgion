@@ -221,7 +221,9 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         T: Clone + Send + 'static,
     {
         if !self.is_ready() {
-            tracing::warn!("Trying push event when not ready!");
+            // This is expected during initial sync - watchers start receiving events before
+            // the cache is marked as ready. Use trace level to avoid log spam during startup.
+            tracing::trace!("Pushing event while cache not yet ready (expected during initial sync)");
         }
 
         match tokio::runtime::Handle::try_current() {

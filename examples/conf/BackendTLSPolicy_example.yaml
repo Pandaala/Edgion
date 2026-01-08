@@ -1,23 +1,22 @@
 ---
 # Example 1: Basic BackendTLSPolicy with CA certificate from Secret
+# Note: targetRefs and caCertificateRefs can only reference resources in the SAME namespace
 apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: backend-tls-example
-  namespace: default
+  namespace: edgion-default
 spec:
   targetRefs:
     - group: ""
       kind: Service
       name: backend-service
-      namespace: default
   validation:
     hostname: backend.example.com
     caCertificateRefs:
       - group: ""
         kind: Secret
         name: backend-ca-cert
-        namespace: default
 
 ---
 # Example 2: BackendTLSPolicy using system CA certificates
@@ -25,7 +24,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: backend-tls-system-ca
-  namespace: default
+  namespace: edgion-default
 spec:
   targetRefs:
     - group: ""
@@ -36,27 +35,23 @@ spec:
     wellKnownCACertificates: System
 
 ---
-# Example 3: BackendTLSPolicy for multiple backends
+# Example 3: BackendTLSPolicy for multiple backends in edgion-test namespace
 apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: multi-backend-tls
-  namespace: production
+  namespace: edgion-test
 spec:
   targetRefs:
     - group: ""
       kind: Service
       name: backend-1
-      namespace: production
     - group: ""
       kind: Service
       name: backend-2
-      namespace: production
   validation:
-    hostname: "*.production.internal"
+    hostname: "test.internal"
     caCertificateRefs:
       - group: ""
         kind: ConfigMap
         name: ca-bundle
-        namespace: production
-

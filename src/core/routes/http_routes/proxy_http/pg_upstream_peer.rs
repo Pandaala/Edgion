@@ -104,7 +104,7 @@ pub async fn upstream_peer_grpc(
 
     // 6. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
-    update_peer_metrics(edgion_http, &mut peer, ctx);
+    update_peer_metrics(edgion_http, &peer, ctx);
 
     Ok(peer)
 }
@@ -129,7 +129,7 @@ pub async fn upstream_peer_http(
 
     // 4. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
-    update_peer_metrics(edgion_http, &mut peer, ctx);
+    update_peer_metrics(edgion_http, &peer, ctx);
 
     Ok(peer)
 }
@@ -228,17 +228,13 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttp, peer: &mut Box<HttpPeer
     peer.options.read_timeout = Some(effective_backend_timeout);
     peer.options.write_timeout = Some(effective_backend_timeout);
 
-    // Idle timeout: route-level overrides global
-    peer.options.idle_timeout = Some(
-        route_timeouts
-            .and_then(|rt| rt.idle_timeout)
-            .unwrap_or(backend_timeout.idle_timeout),
-    );
+    // Idle timeout: use global config from EdgionGatewayConfig
+    peer.options.idle_timeout = Some(backend_timeout.idle_timeout);
 }
 
 /// Update peer address info and metrics (inline for performance)
 #[inline]
-pub fn update_peer_metrics(_edgion_http: &EdgionHttp, peer: &Box<HttpPeer>, ctx: &mut EdgionHttpContext) {
+pub fn update_peer_metrics(_edgion_http: &EdgionHttp, peer: &HttpPeer, ctx: &mut EdgionHttpContext) {
     // Increment try count
     ctx.try_cnt += 1;
 

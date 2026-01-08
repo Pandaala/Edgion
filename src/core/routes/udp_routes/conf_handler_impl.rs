@@ -134,7 +134,7 @@ impl UdpRouteManager {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
                 // Initialize BackendSelector
                 if let Some(backend_refs) = &rule.backend_refs {
-                    let backends: Vec<_> = backend_refs.iter().cloned().collect();
+                    let backends: Vec<_> = backend_refs.to_vec();
                     let weights: Vec<_> = backend_refs.iter().map(|br| br.weight).collect();
 
                     rule.backend_finder.init(backends, weights);

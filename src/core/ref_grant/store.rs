@@ -84,6 +84,7 @@ impl ReferenceGrantStore {
     ///
     /// # Returns
     /// `true` if the reference is allowed by at least one ReferenceGrant, `false` otherwise
+    #[allow(clippy::too_many_arguments)]
     pub fn check_reference_allowed(
         &self,
         from_namespace: &str,
@@ -158,7 +159,7 @@ impl ReferenceGrantStore {
 
         for grant in grants.values() {
             if let Some(ns) = grant.namespace() {
-                index.entry(ns.to_string()).or_insert_with(Vec::new).push(grant.clone());
+                index.entry(ns.to_string()).or_default().push(grant.clone());
             }
         }
 

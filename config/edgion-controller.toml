@@ -57,6 +57,35 @@ admin_listen = "0.0.0.0:5800"
 # 指定此 operator 实例将处理的 gateway class 名称
 gateway_class = "public-gateway"
 
+# ============================================================================
+# Namespace Watch Configuration (K8s Mode Only)
+# ============================================================================
+# Configure which namespaces the controller should watch for resources.
+# This setting only takes effect in Kubernetes mode (k8s_mode = true).
+#
+# Watch modes:
+#   1. All namespaces (default): watch_namespaces = []
+#      Controller watches all namespaces in the cluster.
+#
+#   2. Single namespace: watch_namespaces = ["default"]
+#      Controller only watches resources in the specified namespace.
+#      Useful for namespace-scoped deployments.
+#
+#   3. Multiple namespaces: watch_namespaces = ["ns1", "ns2", "ns3"]
+#      Controller watches resources in the specified namespaces only.
+#      Useful for multi-tenant deployments.
+#
+# Note: Cluster-scoped resources (GatewayClass, EdgionGatewayConfig) are
+# always watched regardless of this setting.
+# ============================================================================
+watch_namespaces = []
+
+# Optional label selector for filtering resources
+# Only resources matching this selector will be watched.
+# Format: "key=value" or "key1=value1,key2=value2"
+# Example: label_selector = "app.kubernetes.io/managed-by=edgion"
+# label_selector = ""
+
 [logging]
 # 日志文件存储目录
 log_dir = "logs"

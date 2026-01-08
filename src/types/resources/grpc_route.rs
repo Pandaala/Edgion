@@ -318,11 +318,6 @@ pub struct GRPCRouteTimeouts {
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_request: Option<String>,
-
-    /// IdleTimeout specifies the maximum duration of inactivity on a connection
-    /// Format: Duration (e.g., "5m", "300s")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idle_timeout: Option<String>,
 }
 
 /// GRPCRouteRetry defines retry policy for a GRPCRoute
@@ -421,13 +416,10 @@ impl GRPCRoute {
 
                 let backend_request_timeout = timeouts.backend_request.as_ref().and_then(|s| parse_duration(s).ok());
 
-                let idle_timeout = timeouts.idle_timeout.as_ref().and_then(|s| parse_duration(s).ok());
-
-                if request_timeout.is_some() || backend_request_timeout.is_some() || idle_timeout.is_some() {
+                if request_timeout.is_some() || backend_request_timeout.is_some() {
                     rule.parsed_timeouts = Some(HttpParsedRouteTimeouts {
                         request_timeout,
                         backend_request_timeout,
-                        idle_timeout,
                     });
 
                     tracing::debug!("Parsed route-level timeouts for GRPCRoute rule");

@@ -1,7 +1,6 @@
-# Test logs and runtime data
-logs/
-runtime/
+# Integration test working directories
+testing_tmp/
 logs_*/
-*.log
-*.pid
 
+# Runtime files
+runtime/

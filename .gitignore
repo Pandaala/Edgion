@@ -21,8 +21,9 @@ Thumbs.db
 *.a
 *.lib
 logs/
-**/logs_*/  # Integration test log directories (all subdirectories)
+**/logs_*/  # Legacy integration test log directories
 examples/testing/logs_*/
+examples/testing/testing_tmp/  # Integration test working directory
 
 # Test reports
 test_report.json

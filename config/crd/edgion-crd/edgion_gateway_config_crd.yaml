@@ -1,16 +1,16 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: ztracegatewayclassconfigs.example.com
+  name: edgiongatewayclassconfigs.edgion.io
 spec:
-  group: example.com
+  group: edgion.io
   names:
-    kind: ZtraceGatewayConfig
-    listKind: ZtraceGatewayConfigList
-    plural: ztracegatewayclassconfigs
-    singular: ztracegatewayclassconfig
+    kind: EdgionGatewayConfig
+    listKind: EdgionGatewayConfigList
+    plural: edgiongatewayclassconfigs
+    singular: edgiongatewayclassconfig
     shortNames:
-      - zgwcfg
+      - edgwcfg
   scope: Cluster
   versions:
     - name: v1alpha1
@@ -19,233 +19,182 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
-          required:
-            - spec
           properties:
             spec:
               type: object
               properties:
                 # ============================================
-                # Listener Defaults Configuration
+                # Server Configuration
                 # ============================================
-                listenerDefaults:
+                server:
                   type: object
-                  description: "Default configuration for all listeners in gateways using this class"
+                  description: "Server configuration for Pingora"
                   properties:
-                    defaultTLSMode:
-                      type: string
-                      description: "Default TLS termination mode"
-                      enum:
-                        - Terminate
-                        - Passthrough
-                      default: Terminate
-                    allowInsecure:
+                    threads:
+                      type: integer
+                      description: "Number of worker threads (default: number of CPU cores)"
+                      format: int32
+                    workStealing:
                       type: boolean
-                      description: "Whether to allow insecure (HTTP) connections"
+                      description: "Enable work stealing (default: true)"
+                      default: true
+                    gracePeriodSeconds:
+                      type: integer
+                      description: "Grace period for shutdown in seconds (default: 30)"
+                      format: int64
+                    gracefulShutdownTimeoutS:
+                      type: integer
+                      description: "Graceful shutdown timeout in seconds (default: 10)"
+                      format: int64
+                    upstreamKeepalivePoolSize:
+                      type: integer
+                      description: "Upstream keepalive pool size (default: 128)"
+                      format: int32
+                    errorLog:
+                      type: string
+                      description: "Error log file path"
+                    enableCompression:
+                      type: boolean
+                      description: "Enable downstream response compression (default: false)"
                       default: false
-                    sniMatchingPolicy:
-                      type: string
-                      description: "SNI matching behavior"
-                      enum:
-                        - Strict
-                        - Loose
-                      default: Strict
 
                 # ============================================
-                # Load Balancing Configuration
+                # HTTP Timeout Configuration
                 # ============================================
-                loadBalancing:
+                httpTimeout:
                   type: object
-                  description: "Default load balancing configuration"
+                  description: "HTTP timeout configuration"
                   properties:
-                    defaultLBPolicy:
-                      type: string
-                      description: "Default load balancing algorithm"
-                      enum:
-                        - round-robin
-                        - least-connections
-                        - random
-                        - ip-hash
-                        - weighted-round-robin
-                      default: round-robin
-                    healthCheck:
+                    client:
                       type: object
-                      description: "Default health check configuration"
+                      description: "Client-side timeout settings"
                       properties:
-                        enabled:
-                          type: boolean
-                          default: true
-                        interval:
+                        readTimeout:
                           type: string
-                          description: "Health check interval (e.g., '30s', '1m')"
-                          default: "30s"
-                        timeout:
+                          description: "Timeout for reading request from client (e.g., '60s', '1m')"
+                          default: "60s"
+                        writeTimeout:
                           type: string
-                          description: "Health check timeout"
+                          description: "Timeout for writing response to client"
+                          default: "60s"
+                        keepaliveTimeout:
+                          type: string
+                          description: "HTTP keepalive timeout"
+                          default: "75s"
+                    backend:
+                      type: object
+                      description: "Backend-side timeout settings"
+                      properties:
+                        defaultConnectTimeout:
+                          type: string
+                          description: "Timeout for connecting to upstream backend"
                           default: "5s"
-                        unhealthyThreshold:
+                        defaultRequestTimeout:
+                          type: string
+                          description: "Total request timeout including retries"
+                          default: "60s"
+                        defaultIdleTimeout:
+                          type: string
+                          description: "Idle timeout for backend connection pool"
+                          default: "300s"
+                        defaultMaxRetries:
                           type: integer
-                          description: "Number of failures before marking unhealthy"
+                          description: "Maximum number of retries"
+                          format: int32
                           default: 3
-                        healthyThreshold:
-                          type: integer
-                          description: "Number of successes before marking healthy"
-                          default: 2
 
                 # ============================================
-                # Security Policies
+                # Max Retries
                 # ============================================
-                # Note: accessLog configuration has been moved to local TOML config
-                # Configure access logging in edgion-gateway.toml [access_log] section
-                security:
-                  type: object
-                  description: "Security policies"
-                  properties:
-                    tls:
-                      type: object
-                      properties:
-                        minTLSVersion:
-                          type: string
-                          description: "Minimum TLS version"
-                          enum:
-                            - "1.0"
-                            - "1.1"
-                            - "1.2"
-                            - "1.3"
-                          default: "1.2"
-                        maxTLSVersion:
-                          type: string
-                          description: "Maximum TLS version"
-                          enum:
-                            - "1.2"
-                            - "1.3"
-                          default: "1.3"
-                        allowedCiphers:
-                          type: array
-                          description: "Allowed TLS cipher suites"
-                          items:
-                            type: string
-                          default:
-                            - "TLS_AES_128_GCM_SHA256"
-                            - "TLS_AES_256_GCM_SHA384"
-                            - "TLS_CHACHA20_POLY1305_SHA256"
-                            - "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
-                            - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
-                            - "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
-                            - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+                maxRetries:
+                  type: integer
+                  description: "Maximum number of retries for upstream connections (default: 3)"
+                  format: int32
+                  default: 3
 
                 # ============================================
-                # Resource Limits
+                # Real IP Configuration
                 # ============================================
-                limits:
+                realIp:
                   type: object
-                  description: "Resource and performance limits"
+                  description: "Real IP extraction configuration"
                   properties:
-                    maxConnections:
+                    trustedProxies:
+                      type: array
+                      description: "Trusted proxy CIDRs (e.g., ['10.0.0.0/8', '172.16.0.0/12'])"
+                      items:
+                        type: string
+                    realIpHeader:
+                      type: string
+                      description: "Header to extract real IP from (default: 'X-Forwarded-For')"
+                      default: "X-Forwarded-For"
+
+                # ============================================
+                # Security Protection Configuration
+                # ============================================
+                securityProtect:
+                  type: object
+                  description: "Security protection configuration"
+                  properties:
+                    xForwardedForLimit:
                       type: integer
-                      description: "Maximum concurrent connections per instance"
-                      default: 10000
-                      minimum: 1
-                    maxRequestsPerConnection:
-                      type: integer
-                      description: "Maximum requests per connection (HTTP/1.1)"
-                      default: 1000
-                    connectionTimeout:
+                      description: "Maximum length of X-Forwarded-For header in bytes (default: 200)"
+                      format: int64
+                      default: 200
+                    requireSniHostMatch:
+                      type: boolean
+                      description: "Require SNI and Host header to match for HTTPS requests (default: true)"
+                      default: true
+                    fallbackSni:
                       type: string
-                      description: "Connection timeout"
-                      default: "60s"
-                    requestTimeout:
-                      type: string
-                      description: "Request timeout"
-                      default: "30s"
-                    idleTimeout:
-                      type: string
-                      description: "Idle connection timeout"
-                      default: "300s"
-                    maxRequestHeaderSize:
-                      type: string
-                      description: "Maximum request header size"
-                      default: "8KB"
-                    maxRequestBodySize:
-                      type: string
-                      description: "Maximum request body size"
-                      default: "10MB"
-                    readBufferSize:
-                      type: string
-                      description: "Read buffer size"
-                      default: "4KB"
-                    writeBufferSize:
-                      type: string
-                      description: "Write buffer size"
-                      default: "4KB"
+                      description: "Fallback SNI hostname when client doesn't provide SNI"
 
                 # ============================================
-                # Observability Configuration
+                # Global Plugins Reference
                 # ============================================
-                observability:
+                globalPluginsRef:
+                  type: array
+                  description: "Global plugins references that apply to all routes using this GatewayClass"
+                  items:
+                    type: object
+                    required:
+                      - name
+                    properties:
+                      name:
+                        type: string
+                        description: "Name of the EdgionPlugins resource"
+                        minLength: 1
+                      namespace:
+                        type: string
+                        description: "Namespace of the EdgionPlugins resource (defaults to 'default')"
+
+                # ============================================
+                # Preflight Policy Configuration
+                # ============================================
+                preflightPolicy:
                   type: object
-                  description: "Observability configuration"
+                  description: "Preflight request handling policy"
                   properties:
-                    metrics:
-                      type: object
-                      properties:
-                        enabled:
-                          type: boolean
-                          default: true
-                        endpoint:
-                          type: string
-                          description: "Metrics endpoint path"
-                          default: "/metrics"
-                        port:
-                          type: integer
-                          description: "Metrics conf_server port"
-                          default: 9090
-                        format:
-                          type: string
-                          enum:
-                            - prometheus
-                            - openmetrics
-                          default: prometheus
-                    tracing:
-                      type: object
-                      properties:
-                        enabled:
-                          type: boolean
-                          default: false
-                        provider:
-                          type: string
-                          enum:
-                            - jaeger
-                            - zipkin
-                            - otlp
-                          default: otlp
-                        endpoint:
-                          type: string
-                          description: "Tracing collector endpoint"
-                        samplingRate:
-                          type: number
-                          description: "Trace sampling rate (0.0-1.0)"
-                          minimum: 0.0
-                          maximum: 1.0
-                          default: 0.1
-                    logging:
-                      type: object
-                      properties:
-                        level:
-                          type: string
-                          enum:
-                            - trace
-                            - debug
-                            - info
-                            - warn
-                            - error
-                          default: info
-                        format:
-                          type: string
-                          enum:
-                            - json
-                            - text
-                          default: json
+                    mode:
+                      type: string
+                      description: "Preflight detection mode"
+                      enum: ["cors-standard", "all-options"]
+                      default: "cors-standard"
+                    statusCode:
+                      type: integer
+                      description: "Status code to return when no CORS plugin is configured (default: 204)"
+                      format: int32
+                      default: 204
+                      minimum: 100
+                      maximum: 599
+
+                # ============================================
+                # ReferenceGrant Validation
+                # ============================================
+                enableReferenceGrantValidation:
+                  type: boolean
+                  description: "Enable ReferenceGrant validation for cross-namespace references (default: false)"
+                  default: false
 
             status:
               type: object
@@ -267,3 +216,9 @@ spec:
                       lastTransitionTime:
                         type: string
                         format: date-time
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

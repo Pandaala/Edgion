@@ -136,6 +136,7 @@ pub fn parse_grpc_path(path: &str) -> Result<(String, String), EdError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::routes::grpc_routes::match_unit::GrpcMatchInfo;
     use crate::types::resources::grpc_route::GRPCRouteRule;
     use crate::types::{GRPCMethodMatch, GRPCRouteMatch};
 
@@ -194,16 +195,18 @@ mod tests {
             plugin_runtime: Arc::new(PluginRuntime::new()),
             parsed_timeouts: None,
         });
-        let route1 = Arc::new(GrpcRouteRuleUnit::new(
-            "default".to_string(),
-            "route1".to_string(),
-            0,
-            0,
-            "default/route1".to_string(),
-            match1,
-            rule1.clone(),
-            route_info1,
-        ));
+        let route1 = Arc::new(GrpcRouteRuleUnit {
+            resource_key: "default/route1".to_string(),
+            matched_info: GrpcMatchInfo::new(
+                "default".to_string(),
+                "route1".to_string(),
+                0,
+                0,
+                match1,
+            ),
+            rule: rule1.clone(),
+            route_info: route_info1,
+        });
 
         // Create route 2: test.Service/Method with hostname grpc.example.com
         let match2 = GRPCRouteMatch {
@@ -218,16 +221,18 @@ mod tests {
             parent_refs: None,
             hostnames: Some(vec!["grpc.example.com".to_string()]),
         });
-        let route2 = Arc::new(GrpcRouteRuleUnit::new(
-            "default".to_string(),
-            "route2".to_string(),
-            0,
-            0,
-            "default/route2".to_string(),
-            match2,
-            rule1,
-            route_info2,
-        ));
+        let route2 = Arc::new(GrpcRouteRuleUnit {
+            resource_key: "default/route2".to_string(),
+            matched_info: GrpcMatchInfo::new(
+                "default".to_string(),
+                "route2".to_string(),
+                0,
+                0,
+                match2,
+            ),
+            rule: rule1,
+            route_info: route_info2,
+        });
 
         // Create match engine with both routes
         let engine = GrpcMatchEngine::new(vec![route1.clone(), route2.clone()]);

@@ -41,12 +41,12 @@ CERTS_DIR="$PROJECT_ROOT/examples/testing/certs/backend"
 mkdir -p "$CERTS_DIR"
 
 # Check if Secret file already exists
-if [ -f "$CONF_DIR/Secret_edge_backend-ca.yaml" ]; then
+if [ -f "$CONF_DIR/Secret_edgion-test_backend-ca.yaml" ]; then
     echo_info "Backend CA Secret file already exists, skipping generation..."
-    echo_info "  - $CONF_DIR/Secret_edge_backend-ca.yaml"
+    echo_info "  - $CONF_DIR/Secret_edgion-test_backend-ca.yaml"
     echo ""
     echo_warning "To regenerate certificates, delete the Secret file and run this script again:"
-    echo_warning "  rm $CONF_DIR/Secret_edge_backend-ca.yaml"
+    echo_warning "  rm $CONF_DIR/Secret_edgion-test_backend-ca.yaml"
     echo_warning "  ./scripts/generate_backend_certs.sh"
     exit 0
 fi
@@ -121,19 +121,19 @@ echo_info "Step 3/3: Creating CA Secret YAML..."
 CA_B64=$(base64 < "$TEMP_DIR/ca.crt" | tr -d '\n')
 
 # Create Secret YAML
-cat > "$CONF_DIR/Secret_edge_backend-ca.yaml" <<EOF
+cat > "$CONF_DIR/Secret_edgion-test_backend-ca.yaml" <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
   name: backend-ca
-  namespace: edge
+  namespace: edgion-test
 type: Opaque
 data:
   ca.crt: $CA_B64
 EOF
 
 if [ $? -eq 0 ]; then
-    echo_info "✓ CA Secret YAML created: Secret_edge_backend-ca.yaml"
+    echo_info "✓ CA Secret YAML created: Secret_edgion-test_backend-ca.yaml"
 else
     echo_error "Failed to create CA Secret YAML"
     exit 1
@@ -158,7 +158,7 @@ echo_info "Backend certificate generation completed!"
 echo_info "=========================================="
 echo_info "Generated files:"
 echo_info "  Secret YAML:"
-echo_info "    - $CONF_DIR/Secret_edge_backend-ca.yaml"
+echo_info "    - $CONF_DIR/Secret_edgion-test_backend-ca.yaml"
 echo_info ""
 echo_info "  Backend server certificates:"
 echo_info "    - $CERTS_DIR/server.crt (Server certificate)"

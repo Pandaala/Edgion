@@ -7,7 +7,7 @@
 // - GRPCRoute_edge_test-grpc-https.yaml       # gRPC TLS 路由规则（Host: grpc-tls.test.example.com）
 // - Gateway_edge_tls-terminate-gateway.yaml   # TLS 终止 Gateway 配置（监听 18443 端口）
 // - EdgionTls_edge_edge-tls.yaml              # TLS 证书配置
-// - Secret_edge_edge-tls.yaml                 # TLS 证书 Secret
+// - Secret_edgion-test_edge-tls.yaml          # TLS 证书 Secret
 // - GatewayClass__public-gateway.yaml         # GatewayClass 配置
 //
 // 生成的证书文件：

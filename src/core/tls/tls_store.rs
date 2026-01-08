@@ -221,7 +221,7 @@ impl TlsStore {
                 // Performance: String clone is relatively cheap for typical hostname lengths
                 // TODO(performance): Consider using Cow<str> or &str keys with custom lifetime
                 // management if profiling shows this is a bottleneck during high-frequency reloads
-                host_map.entry(host.clone()).or_insert_with(Vec::new).push(tls.clone());
+                host_map.entry(host.clone()).or_default().push(tls.clone());
                 total_hosts += 1;
             }
             valid_certs += 1;

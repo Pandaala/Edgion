@@ -19,7 +19,7 @@ pub mod names {
 }
 
 /// Global metrics singleton
-static GLOBAL_METRICS: LazyLock<GatewayMetrics> = LazyLock::new(|| GatewayMetrics::new());
+static GLOBAL_METRICS: LazyLock<GatewayMetrics> = LazyLock::new(GatewayMetrics::new);
 
 /// Get the global metrics instance
 pub fn global_metrics() -> &'static GatewayMetrics {

@@ -43,12 +43,12 @@ pub async fn fail_to_proxy(
     if code > 0 {
         // Only update request_info.status if not already set
         if ctx.request_info.status.is_none() {
-            ctx.request_info.status = Some(code as u16);
+            ctx.request_info.status = Some(code);
         }
 
         // Always update current upstream status and error message
         if let Some(upstream) = ctx.get_current_upstream_mut() {
-            upstream.status = Some(code as u16);
+            upstream.status = Some(code);
             // Only add error message for non-timeout errors (not 504/499)
             if code != 504 && code != 499 {
                 upstream.err.push(e.etype().as_str().to_string());

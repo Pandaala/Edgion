@@ -87,35 +87,16 @@ pub struct GrpcRouteRuleUnit {
 }
 
 impl GrpcRouteRuleUnit {
-    pub fn new(
-        namespace: String,
-        name: String,
-        rule_id: usize,
-        match_id: usize,
-        resource_key: String,
-        match_item: GRPCRouteMatch,
-        rule: Arc<GRPCRouteRule>,
-        route_info: Arc<GrpcRouteInfo>,
-    ) -> Self {
-        Self {
-            resource_key,
-            matched_info: GrpcMatchInfo::new(namespace, name, rule_id, match_id, match_item),
-            rule,
-            route_info,
-        }
-    }
-
     /// Deep match: check hostname, section_name, and headers
     pub fn deep_match(&self, session: &Session, listener_name: &str, hostname: &str) -> Result<bool, EdError> {
         let req_header = session.req_header();
 
         // Check Hostname (if route specifies hostnames)
         if let Some(ref route_hostnames) = self.route_info.hostnames {
-            if !route_hostnames.is_empty() {
-                if !Self::match_hostname(hostname, route_hostnames) {
+            if !route_hostnames.is_empty()
+                && !Self::match_hostname(hostname, route_hostnames) {
                     return Ok(false);
                 }
-            }
         }
 
         // Check SectionName (if parent_refs specify section_name)
@@ -123,7 +104,7 @@ impl GrpcRouteRuleUnit {
             // At least one parent_ref must match: section_name is None or equals listener_name
             let matches = parent_refs
                 .iter()
-                .any(|pr| pr.section_name.as_ref().map_or(true, |name| name == listener_name));
+                .any(|pr| pr.section_name.as_ref().is_none_or(|name| name == listener_name));
 
             if !matches {
                 return Ok(false);
@@ -164,9 +145,9 @@ impl GrpcRouteRuleUnit {
 
     /// Check if hostname matches a pattern (supports wildcard *.example.com)
     fn hostname_matches(hostname: &str, pattern: &str) -> bool {
-        if pattern.starts_with("*.") {
+        if let Some(suffix) = pattern.strip_prefix("*.") {
             // Wildcard match: *.example.com matches foo.example.com but not example.com
-            let suffix = &pattern[2..]; // Remove "*."
+            // Remove "*."
             if let Some(dot_pos) = hostname.find('.') {
                 let hostname_suffix = &hostname[dot_pos + 1..];
                 return hostname_suffix == suffix;

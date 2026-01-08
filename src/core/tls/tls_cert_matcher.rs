@@ -11,6 +11,12 @@ pub struct TlsCertMatcher {
     matcher: ArcSwap<HashHost<Vec<Arc<EdgionTls>>>>,
 }
 
+impl Default for TlsCertMatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TlsCertMatcher {
     pub fn new() -> Self {
         Self {
@@ -43,7 +49,7 @@ impl TlsCertMatcher {
     }
 }
 
-pub static TLS_CERT_MATCHER: LazyLock<TlsCertMatcher> = LazyLock::new(|| TlsCertMatcher::new());
+pub static TLS_CERT_MATCHER: LazyLock<TlsCertMatcher> = LazyLock::new(TlsCertMatcher::new);
 
 pub fn get_tls_cert_matcher() -> &'static TlsCertMatcher {
     &TLS_CERT_MATCHER

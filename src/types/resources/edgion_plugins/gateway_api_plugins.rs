@@ -16,7 +16,7 @@ use crate::types::resources::http_route::{
 /// - Gateway API standard plugins: keep original names (RequestHeaderModifier, etc.)
 /// - Custom Edgion plugins: use EdgionXxx naming (EdgionRateLimit, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", content = "config", rename_all = "camelCase")]
+#[serde(tag = "type", content = "config")]
 pub enum EdgionPlugin {
     // ========== Gateway API standard plugins ==========
     /// Request header modifier filter

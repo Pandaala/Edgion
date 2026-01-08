@@ -78,7 +78,6 @@ mod tests {
                     group: "".to_string(),
                     kind: "Service".to_string(),
                     name: target_name.to_string(),
-                    namespace: None,
                     section_name: None,
                 }],
                 validation: BackendTLSPolicyValidation {

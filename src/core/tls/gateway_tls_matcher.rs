@@ -82,7 +82,7 @@ impl GatewayTlsMatcher {
     pub fn match_sni(&self, sni: &str) -> Result<GatewayTlsEntry, EdError> {
         // Fast path: skip if no Gateway TLS configured (most common case)
         if self.is_empty() {
-            return Err(EdError::SniNotMatch(format!("Gateway TLS not configured")));
+            return Err(EdError::SniNotMatch("Gateway TLS not configured".to_string()));
         }
 
         // Slow path: actual HashMap lookup

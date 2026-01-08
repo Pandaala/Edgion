@@ -3,6 +3,9 @@ use crate::types::{WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 use kube::{Resource, ResourceExt};
 use std::collections::HashMap;
 
+/// Result type for get_events_from_resource_version: (current_version, optional_events)
+type EventsResult<T> = Result<(u64, Option<Vec<WatcherEvent<T>>>), String>;
+
 /// Event storage - circular queue
 pub struct EventStore<T> {
     capacity: usize,
@@ -125,10 +128,7 @@ impl<T: Clone> EventStore<T> {
     }
 
     /// Get events starting from specified version
-    pub fn get_events_from_resource_version(
-        &self,
-        from_version: u64,
-    ) -> Result<(u64, Option<Vec<WatcherEvent<T>>>), String> {
+    pub fn get_events_from_resource_version(&self, from_version: u64) -> EventsResult<T> {
         if from_version > self.resource_version {
             return Err(WATCH_ERR_VERSION_UNEXPECTED.to_owned());
         } else if from_version == self.resource_version {

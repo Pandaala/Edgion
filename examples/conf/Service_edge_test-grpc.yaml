@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: test-grpc
-  namespace: edge
+  namespace: edgion-test
 spec:
   ports:
     - name: grpc-30021

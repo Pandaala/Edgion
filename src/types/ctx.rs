@@ -228,6 +228,12 @@ pub struct EdgionHttpContext {
     pub upstream_start_time: Option<Instant>,
 }
 
+impl Default for EdgionHttpContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EdgionHttpContext {
     pub fn new() -> Self {
         Self {

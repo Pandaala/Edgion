@@ -60,9 +60,9 @@ pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
                 // Add to route_service_policies map
                 route_service_policies
                     .entry(route_key.clone())
-                    .or_insert_with(HashMap::new)
+                    .or_default()
                     .entry(service_key.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(lb_policy);
 
                 tracing::debug!(

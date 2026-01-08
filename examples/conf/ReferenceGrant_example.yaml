@@ -1,14 +1,14 @@
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
-  name: allow-gateway-to-secret
-  namespace: secret-namespace
+  name: allow-default-to-test-secrets
+  namespace: edgion-test
 spec:
-  # Allow Gateway from gateway-namespace to reference Secrets in this namespace
+  # 允许 edgion-default namespace 中的 Gateway 引用 edgion-test 中的 Secret
   from:
   - group: gateway.networking.k8s.io
     kind: Gateway
-    namespace: gateway-namespace
+    namespace: edgion-default
   to:
   - group: ""
     kind: Secret
@@ -16,17 +16,23 @@ spec:
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
-  name: allow-routes-to-backend
-  namespace: backend-namespace
+  name: allow-default-to-test-services
+  namespace: edgion-test
 spec:
-  # Allow HTTPRoute and TCPRoute from route-namespace to reference Services in this namespace
+  # 允许 edgion-default namespace 中的 HTTPRoute/GRPCRoute 引用 edgion-test 中的 Service
   from:
   - group: gateway.networking.k8s.io
     kind: HTTPRoute
-    namespace: route-namespace
+    namespace: edgion-default
+  - group: gateway.networking.k8s.io
+    kind: GRPCRoute
+    namespace: edgion-default
   - group: gateway.networking.k8s.io
     kind: TCPRoute
-    namespace: route-namespace
+    namespace: edgion-default
+  - group: gateway.networking.k8s.io
+    kind: UDPRoute
+    namespace: edgion-default
   to:
   - group: ""
     kind: Service
@@ -34,16 +40,17 @@ spec:
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
-  name: allow-specific-service
-  namespace: production-namespace
+  name: allow-test-to-default-services
+  namespace: edgion-default
 spec:
-  # Allow HTTPRoute from frontend-namespace to reference a specific Service
+  # 允许 edgion-test namespace 中的 Route 引用 edgion-default 中的 Service
   from:
   - group: gateway.networking.k8s.io
     kind: HTTPRoute
-    namespace: frontend-namespace
+    namespace: edgion-test
+  - group: gateway.networking.k8s.io
+    kind: GRPCRoute
+    namespace: edgion-test
   to:
   - group: ""
     kind: Service
-    name: critical-backend-service
-

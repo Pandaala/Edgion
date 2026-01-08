@@ -1,5 +1,9 @@
 # Edgion Gateway 开发规则
 
+## Git 操作限制
+- **禁止执行删除远程分支的操作** (`git push --delete`, `git push origin :branch`)
+- 如果用户要求删除远程分支，提供命令但不要执行，让用户自己操作
+
 ## 构建与测试
 - 开发时用 debug 模式：`cargo run`（不带 --release）
 - 快速检查用：`cargo check`

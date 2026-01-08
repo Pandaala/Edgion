@@ -26,6 +26,12 @@ pub struct GrpcRouteRules {
     pub match_engine: Option<Arc<GrpcMatchEngine>>,
 }
 
+impl Default for GrpcRouteRules {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GrpcRouteRules {
     pub fn new() -> Self {
         Self {
@@ -94,6 +100,12 @@ pub struct DomainGrpcRouteRules {
     pub grpc_routes: ArcSwap<GrpcRouteRules>,
 }
 
+impl Default for DomainGrpcRouteRules {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DomainGrpcRouteRules {
     pub fn new() -> Self {
         Self {
@@ -122,6 +134,12 @@ pub struct GrpcRouteManager {
     /// Key format: "namespace/name"
     /// Uses Mutex since route updates are serialized
     pub grpc_routes: Mutex<HashMap<RouteKey, GRPCRoute>>,
+}
+
+impl Default for GrpcRouteManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GrpcRouteManager {

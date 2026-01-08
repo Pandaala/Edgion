@@ -86,7 +86,7 @@ impl<T: Clone> BackendSelector<T> {
         // Filter out items with weight = 0 and collect valid items with their weights
         let valid_items: Vec<(T, usize)> = items
             .into_iter()
-            .zip(weights.into_iter())
+            .zip(weights)
             .filter_map(|(item, weight)| {
                 let w = weight.unwrap_or(1);
                 if w > 0 {

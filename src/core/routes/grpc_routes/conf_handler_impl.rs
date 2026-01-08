@@ -1,5 +1,5 @@
 use crate::core::conf_sync::traits::ConfHandler;
-use crate::core::routes::grpc_routes::match_unit::GrpcRouteInfo;
+use crate::core::routes::grpc_routes::match_unit::{GrpcMatchInfo, GrpcRouteInfo};
 use crate::core::routes::grpc_routes::routes_mgr::{DomainGrpcRouteRules, GrpcRouteRules};
 use crate::core::routes::grpc_routes::{
     get_global_grpc_route_manager, GrpcMatchEngine, GrpcRouteManager, GrpcRouteRuleUnit,
@@ -117,16 +117,18 @@ impl GrpcRouteManager {
                     if let Some(matches) = &rule.matches {
                         for (match_id, match_item) in matches.iter().enumerate() {
                             // Create GrpcRouteRuleUnit
-                            let unit = Arc::new(GrpcRouteRuleUnit::new(
-                                route_namespace.to_string(),
-                                route_name.to_string(),
-                                rule_id,
-                                match_id,
-                                resource_key.clone(),
-                                match_item.clone(),
-                                rule_arc.clone(),
-                                route_info.clone(),
-                            ));
+                            let unit = Arc::new(GrpcRouteRuleUnit {
+                                resource_key: resource_key.clone(),
+                                matched_info: GrpcMatchInfo::new(
+                                    route_namespace.to_string(),
+                                    route_name.to_string(),
+                                    rule_id,
+                                    match_id,
+                                    match_item.clone(),
+                                ),
+                                rule: rule_arc.clone(),
+                                route_info: route_info.clone(),
+                            });
 
                             route_rules_list.push(unit);
                         }

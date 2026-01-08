@@ -69,6 +69,7 @@ enum Commands {
     // proto test
     Http,
     HttpMatch,    // HTTP Match Rules test
+    HttpRedirect, // HTTP to HTTPS redirect test
     HttpSecurity, // HTTP Security tests (hostname validation)
     Https,
     Grpc,
@@ -189,6 +190,13 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::HttpMatchTestSuite));
+        }
+        Commands::HttpRedirect => {
+            if !cli.gateway {
+                eprintln!("Error: HTTP Redirect tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HttpRedirectTestSuite));
         }
         Commands::HttpSecurity => {
             if !cli.gateway {

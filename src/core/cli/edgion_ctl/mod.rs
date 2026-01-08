@@ -91,7 +91,7 @@ impl Cli {
                 namespace,
                 output,
             } => {
-                let format = OutputFormat::from_str(output)?;
+                let format = OutputFormat::parse(output)?;
                 commands::get::get(&client, kind, name.as_deref(), namespace.as_deref(), format).await
             }
             Commands::Delete {

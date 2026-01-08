@@ -1,4 +1,4 @@
-/// Global definitions and constants for Edgion
+//! Global definitions and constants for Edgion
 
 // Component names
 pub const COMPONENT_EDGION_CONTROLLER: &str = "edgion-controller";

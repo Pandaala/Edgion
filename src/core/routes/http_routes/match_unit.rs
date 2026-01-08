@@ -20,26 +20,6 @@ pub struct HttpRouteRuleUnit {
 }
 
 impl HttpRouteRuleUnit {
-    pub fn new(
-        namespace: String,
-        name: String,
-        rule_id: usize,
-        match_id: usize,
-        resource_key: String,
-        match_item: HTTPRouteMatch,
-        rule: Arc<HTTPRouteRule>,
-        path_regex: Option<Regex>,
-        parent_refs: Option<Vec<ParentReference>>,
-    ) -> HttpRouteRuleUnit {
-        Self {
-            resource_key,
-            matched_info: MatchInfo::new(namespace, name, rule_id, match_id, match_item),
-            rule,
-            path_regex,
-            parent_refs,
-        }
-    }
-
     /// Check if this is a regex route
     pub fn is_regex_route(&self) -> bool {
         self.path_regex.is_some()
@@ -199,14 +179,14 @@ impl HttpRouteRuleUnit {
         let query_params = req_header
             .uri
             .query()
-            .map(|q| Self::parse_query_string(q))
+            .map(Self::parse_query_string)
             .unwrap_or_default();
 
         // 0. Check SectionName (if parent_refs specify section_name)
         if let Some(ref parent_refs) = parent_refs {
             let matches = parent_refs
                 .iter()
-                .any(|pr| pr.section_name.as_ref().map_or(true, |name| name == listener_name));
+                .any(|pr| pr.section_name.as_ref().is_none_or(|name| name == listener_name));
 
             if !matches {
                 return Ok(false);

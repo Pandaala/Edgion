@@ -18,6 +18,12 @@ pub struct TcpRouteManager {
     gateway_tcp_routes_map: Arc<DashMap<String, Arc<GatewayTcpRoutes>>>,
 }
 
+impl Default for TcpRouteManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TcpRouteManager {
     pub fn new() -> Self {
         Self {
@@ -70,7 +76,7 @@ impl TcpRouteManager {
                 for (gateway_key, listener_name) in gateway_listeners {
                     affected
                         .entry(gateway_key)
-                        .or_insert_with(HashSet::new)
+                        .or_default()
                         .insert(listener_name);
                 }
             }
@@ -84,7 +90,7 @@ impl TcpRouteManager {
                 for (gateway_key, listener_name) in gateway_listeners {
                     affected
                         .entry(gateway_key)
-                        .or_insert_with(HashSet::new)
+                        .or_default()
                         .insert(listener_name);
                 }
             }
@@ -159,11 +165,11 @@ impl TcpRouteManager {
             let gateway_listeners = self.extract_gateway_listener_pairs_from_route(route);
 
             for (gateway_key, listener_name) in gateway_listeners {
-                let gateway_map = gateway_routes.entry(gateway_key).or_insert_with(HashMap::new);
+                let gateway_map = gateway_routes.entry(gateway_key).or_default();
 
                 gateway_map
                     .entry(listener_name)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(route.clone());
             }
         }
@@ -215,7 +221,7 @@ impl TcpRouteManager {
         for (gateway_key, listener_name) in gateway_listeners {
             affected
                 .entry(gateway_key)
-                .or_insert_with(HashSet::new)
+                .or_default()
                 .insert(listener_name);
         }
 
@@ -284,7 +290,7 @@ impl TcpRouteManager {
                 let namespace = parent_ref
                     .namespace
                     .as_deref()
-                    .or_else(|| route.metadata.namespace.as_deref())
+                    .or(route.metadata.namespace.as_deref())
                     .unwrap_or("default");
                 let gateway_key = format!("{}/{}", namespace, parent_ref.name);
 
@@ -304,5 +310,5 @@ impl TcpRouteManager {
 static GLOBAL_TCP_ROUTE_MANAGER: OnceLock<TcpRouteManager> = OnceLock::new();
 
 pub fn get_global_tcp_route_manager() -> &'static TcpRouteManager {
-    GLOBAL_TCP_ROUTE_MANAGER.get_or_init(|| TcpRouteManager::new())
+    GLOBAL_TCP_ROUTE_MANAGER.get_or_init(TcpRouteManager::new)
 }

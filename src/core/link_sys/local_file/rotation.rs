@@ -2,16 +2,16 @@
 
 use chrono::Local;
 use std::fs::{self, File, OpenOptions};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::types::link_sys::RotationStrategy;
 
 /// Generate rotated file path based on strategy
 /// e.g., "logs/access.log" with Daily => "logs/access.2025-12-05.log"
 /// For Size strategy, use `get_size_rotated_path` instead
-pub fn get_rotated_path(base_path: &PathBuf, strategy: &RotationStrategy) -> PathBuf {
+pub fn get_rotated_path(base_path: &Path, strategy: &RotationStrategy) -> PathBuf {
     match strategy {
-        RotationStrategy::Never | RotationStrategy::Size(_) => base_path.clone(),
+        RotationStrategy::Never | RotationStrategy::Size(_) => base_path.to_path_buf(),
         RotationStrategy::Daily => {
             let date_suffix = Local::now().format("%Y-%m-%d");
             append_suffix(base_path, &date_suffix.to_string())
@@ -25,9 +25,9 @@ pub fn get_rotated_path(base_path: &PathBuf, strategy: &RotationStrategy) -> Pat
 
 /// Generate rotated file path for Size strategy with index
 /// e.g., "logs/access.log" with index 1 => "logs/access.1.log"
-pub fn get_size_rotated_path(base_path: &PathBuf, index: u32) -> PathBuf {
+pub fn get_size_rotated_path(base_path: &Path, index: u32) -> PathBuf {
     if index == 0 {
-        base_path.clone()
+        base_path.to_path_buf()
     } else {
         append_suffix(base_path, &index.to_string())
     }
@@ -35,7 +35,7 @@ pub fn get_size_rotated_path(base_path: &PathBuf, index: u32) -> PathBuf {
 
 /// Find the next available index for size-based rotation
 /// Scans existing files and returns the next index to use
-pub fn find_next_size_index(base_path: &PathBuf) -> u32 {
+pub fn find_next_size_index(base_path: &Path) -> u32 {
     let parent = match base_path.parent() {
         Some(p) => p,
         None => return 0,
@@ -68,7 +68,7 @@ pub fn find_next_size_index(base_path: &PathBuf) -> u32 {
 
 /// Append suffix before file extension
 /// e.g., "logs/access.log" + "2025-12-05" => "logs/access.2025-12-05.log"
-fn append_suffix(path: &PathBuf, suffix: &str) -> PathBuf {
+fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("log");
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("log");
     let new_name = format!("{}.{}.{}", stem, suffix, ext);
@@ -86,7 +86,7 @@ pub fn get_rotation_key(strategy: &RotationStrategy) -> String {
 }
 
 /// Open file for writing, creating parent directories if needed
-pub fn open_log_file(path: &PathBuf) -> Result<File, std::io::Error> {
+pub fn open_log_file(path: &Path) -> Result<File, std::io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -97,7 +97,7 @@ pub fn open_log_file(path: &PathBuf) -> Result<File, std::io::Error> {
 ///
 /// Scans directory for files matching the pattern: {stem}.*.{ext}
 /// Sorts by modification time and removes oldest files exceeding max_files
-pub fn cleanup_old_files(base_path: &PathBuf, max_files: usize) {
+pub fn cleanup_old_files(base_path: &Path, max_files: usize) {
     if max_files == 0 {
         return; // 0 means unlimited
     }

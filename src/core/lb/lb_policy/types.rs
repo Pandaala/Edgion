@@ -13,7 +13,7 @@ pub enum LbPolicy {
 
 impl LbPolicy {
     /// Parse policy from string
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "consistent" | "consistent-hash" | "ketama" => Some(Self::Consistent),
             "leastconn" | "least-connection" | "leastconnection" | "least_connection" => Some(Self::LeastConnection),
@@ -50,7 +50,7 @@ impl LbPolicy {
             .split(',')
             .filter_map(|s| {
                 let trimmed = s.trim();
-                match Self::from_str(trimmed) {
+                match Self::parse(trimmed) {
                     Some(policy) => Some(policy),
                     None => {
                         if !trimmed.is_empty() {
