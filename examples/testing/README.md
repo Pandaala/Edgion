@@ -655,10 +655,10 @@ cd examples/testing
 
 ### Generation Rules
 
-- **Smart Skip**: Automatically skips if `Secret_edge_edge-tls.yaml` already exists
+- **Smart Skip**: Automatically skips if `Secret_edgion-test_edge-tls.yaml` already exists
 - **Regenerate On Demand**:
   ```bash
-  rm ../conf/Secret_edge_edge-tls.yaml
+  rm ../conf/Secret_edgion-test_edge-tls.yaml
   ./scripts/generate_certs.sh
   ```
 
@@ -677,7 +677,7 @@ cd examples/testing
 
 ```
 examples/conf/
-├── Secret_edge_edge-tls.yaml     # TLS certificate Secret
+├── Secret_edgion-test_edge-tls.yaml     # TLS certificate Secret
 └── EdgionTls_edge_edge-tls.yaml  # TLS certificate config
 
 examples/testing/certs/
@@ -700,7 +700,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: tls-terminate-gateway
-  namespace: edge
+  namespace: edgion-test
   annotations:
     edgion.io/backend-protocol: tcp  # Indicates TCP backend
 spec:
@@ -718,7 +718,7 @@ apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TLSRoute
 metadata:
   name: test-tls-tcp
-  namespace: edge
+  namespace: edgion-test
 spec:
   parentRefs:
     - name: tls-terminate-gateway
@@ -814,7 +814,7 @@ Configuration files are located in `examples/conf/`:
 ### TLS Resources
 
 - `EdgionTls_edge_edge-tls.yaml` - TLS certificate configuration
-- `Secret_edge_edge-tls.yaml` - TLS certificate data (auto-generated, gitignored)
+- `Secret_edgion-test_edge-tls.yaml` - TLS certificate data (auto-generated, gitignored)
 
 ### Edgion Custom Resources
 
@@ -853,7 +853,7 @@ This section maps each test suite to its required configuration files. Use this 
 - `HTTPRoute_edge_test-http.yaml` - HTTPS routing rules (Host: test.example.com, path: /secure/)
 - `Gateway_edge_tls-terminate-gateway.yaml` - TLS termination Gateway (port 18443)
 - `EdgionTls_edge_edge-tls.yaml` - TLS certificate configuration
-- `Secret_edge_edge-tls.yaml` - TLS certificate Secret
+- `Secret_edgion-test_edge-tls.yaml` - TLS certificate Secret
 - `GatewayClass__public-gateway.yaml` - GatewayClass configuration
 
 **Generated Certificates** (by `generate_certs.sh`):
@@ -886,7 +886,7 @@ This section maps each test suite to its required configuration files. Use this 
 - `GRPCRoute_edge_test-grpc-https.yaml` - gRPC TLS routing rules (Host: grpc-tls.test.example.com)
 - `Gateway_edge_tls-terminate-gateway.yaml` - TLS termination Gateway (port 18443)
 - `EdgionTls_edge_edge-tls.yaml` - TLS certificate configuration
-- `Secret_edge_edge-tls.yaml` - TLS certificate Secret
+- `Secret_edgion-test_edge-tls.yaml` - TLS certificate Secret
 - `GatewayClass__public-gateway.yaml` - GatewayClass configuration
 
 **Generated Certificates** (by `generate_certs.sh`):
@@ -1150,7 +1150,7 @@ The main test sends 100 requests and analyzes the `backend_context.name` field i
 - UDP: `Service_edge_test-udp.yaml` + `EndpointSlice_edge_test-udp.yaml`
 
 **TLS/mTLS Configurations**:
-- Standard TLS: `Gateway_edge_tls-terminate-gateway.yaml` + `EdgionTls_edge_edge-tls.yaml` + `Secret_edge_edge-tls.yaml`
+- Standard TLS: `Gateway_edge_tls-terminate-gateway.yaml` + `EdgionTls_edge_edge-tls.yaml` + `Secret_edgion-test_edge-tls.yaml`
 - mTLS: `Gateway_edge_mtls-test-gateway.yaml` + `EdgionTls_edge_mtls-test-*.yaml` + `Secret_edge_*-ca.yaml`
 
 ---
@@ -1174,10 +1174,10 @@ tail -100 examples/testing/logs/gateway.log
 
 ```bash
 # Check if certificate is generated
-ls examples/conf/Secret_edge_edge-tls.yaml
+ls examples/conf/Secret_edgion-test_edge-tls.yaml
 
 # Regenerate certificate
-rm examples/conf/Secret_edge_edge-tls.yaml
+rm examples/conf/Secret_edgion-test_edge-tls.yaml
 ./scripts/generate_certs.sh
 
 # Check HTTPS listener

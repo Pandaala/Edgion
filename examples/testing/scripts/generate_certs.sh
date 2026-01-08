@@ -41,12 +41,12 @@ CERTS_DIR="$PROJECT_ROOT/examples/testing/certs"
 mkdir -p "$CERTS_DIR"
 
 # Check if Secret file already exists
-if [ -f "$CONF_DIR/Secret_edge_edge-tls.yaml" ]; then
+if [ -f "$CONF_DIR/Secret_edgion-test_edge-tls.yaml" ]; then
     echo_info "TLS Secret file already exists, skipping generation..."
-    echo_info "  - $CONF_DIR/Secret_edge_edge-tls.yaml"
+    echo_info "  - $CONF_DIR/Secret_edgion-test_edge-tls.yaml"
     echo ""
     echo_warning "To regenerate certificates, delete the Secret file and run this script again:"
-    echo_warning "  rm $CONF_DIR/Secret_edge_edge-tls.yaml"
+    echo_warning "  rm $CONF_DIR/Secret_edgion-test_edge-tls.yaml"
     echo_warning "  ./scripts/generate_certs.sh"
     exit 0
 fi
@@ -109,10 +109,10 @@ EOF
 # Create Secret YAML for edge-tls
 create_secret_yaml \
     "edge-tls" \
-    "edge" \
+    "edgion-test" \
     "$TEMP_DIR/edge-tls.crt" \
     "$TEMP_DIR/edge-tls.key" \
-    "$CONF_DIR/Secret_edge_edge-tls.yaml"
+    "$CONF_DIR/Secret_edgion-test_edge-tls.yaml"
 
 # Copy certificate to certs directory for client testing
 echo_info "Copying certificate to certs directory for client testing..."
@@ -129,7 +129,7 @@ echo_info "=========================================="
 echo_info "Certificate generation completed!"
 echo_info "=========================================="
 echo_info "Generated Secret YAML file:"
-echo_info "  - $CONF_DIR/Secret_edge_edge-tls.yaml"
+echo_info "  - $CONF_DIR/Secret_edgion-test_edge-tls.yaml"
 echo_info ""
 echo_info "Certificate for client testing:"
 echo_info "  - $CERTS_DIR/ca.pem"

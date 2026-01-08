@@ -2,10 +2,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: timeout-debug
-  namespace: default
+  namespace: edgion-default
 spec:
   upstreamResponseFilterPlugins:
     - enable: true
-      type: debugAccessLogToHeader
+      type: DebugAccessLogToHeader
       config: {}
 

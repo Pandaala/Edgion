@@ -2,14 +2,14 @@ apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
   name: test-tcp-filtered
-  namespace: edge
+  namespace: edgion-test
   annotations:
     # Reference EdgionStreamPlugins using annotation
     edgion.io/stream-plugins: test-ip-filter
 spec:
   parentRefs:
     - name: example-gateway
-      namespace: edge
+      namespace: edgion-test
       sectionName: tcp-filtered
   rules:
     - backendRefs:

@@ -2,11 +2,11 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: weighted-backend
-  namespace: default
+  namespace: edgion-default
 spec:
   parentRefs:
     - name: example-gateway
-      namespace: edge
+      namespace: edgion-test
   hostnames:
     - "weighted-backend.example.com"
   rules:
@@ -22,15 +22,15 @@ spec:
             name: timeout-debug  # 复用现有的debug插件
       backendRefs:
         - name: backend-a
-          namespace: edge
+          namespace: edgion-test
           port: 30001
           weight: 50    # 50%
         - name: backend-b
-          namespace: edge
+          namespace: edgion-test
           port: 30001
           weight: 30    # 30%
         - name: backend-c
-          namespace: edge
+          namespace: edgion-test
           port: 30001
           weight: 20    # 20%
 

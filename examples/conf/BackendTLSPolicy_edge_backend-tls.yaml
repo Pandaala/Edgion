@@ -2,7 +2,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: backend-tls
-  namespace: edge
+  namespace: edgion-test
 spec:
   targetRefs:
     - group: ""

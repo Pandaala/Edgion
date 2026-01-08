@@ -38,6 +38,7 @@ pub struct BackendTLSPolicySpec {
 }
 
 /// BackendTLSPolicyTargetRef identifies an API object to apply policy to.
+/// Note: Per Gateway API spec, targetRef can only reference resources in the same namespace.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendTLSPolicyTargetRef {
@@ -49,11 +50,6 @@ pub struct BackendTLSPolicyTargetRef {
 
     /// Name is the name of the target resource.
     pub name: String,
-
-    /// Namespace is the namespace of the target resource.
-    /// When unspecified, the local namespace is inferred.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
 
     /// SectionName is the name of a section within the target resource.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,6 +84,7 @@ pub struct BackendTLSPolicyValidation {
 }
 
 /// BackendTLSPolicyCACertificateRef identifies a ConfigMap or Secret containing a CA certificate bundle.
+/// Note: Per Gateway API spec, caCertificateRef can only reference resources in the same namespace.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendTLSPolicyCACertificateRef {
@@ -101,11 +98,6 @@ pub struct BackendTLSPolicyCACertificateRef {
 
     /// Name is the name of the referent.
     pub name: String,
-
-    /// Namespace is the namespace of the referent. When unspecified, the local
-    /// namespace is inferred.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
 }
 
 /// SubjectAltName represents a Subject Alternative Name.
@@ -155,6 +147,7 @@ impl BackendTLSPolicy {
     }
 
     /// Check if this policy applies to a given target
+    /// Per Gateway API spec, targetRef can only reference resources in the same namespace as the policy.
     pub fn applies_to(&self, group: &str, kind: &str, name: &str, namespace: Option<&str>) -> bool {
         let policy_ns = self.namespace();
 
@@ -166,14 +159,10 @@ impl BackendTLSPolicy {
                 return false;
             }
 
-            // Check namespace match
-            match (&target.namespace, namespace, policy_ns) {
-                // Target has explicit namespace
-                (Some(target_ns), Some(resource_ns), _) => target_ns == resource_ns,
-                // Target uses implicit namespace (same as policy)
-                (None, Some(resource_ns), Some(policy_ns)) => policy_ns == resource_ns,
-                // Both use implicit namespace
-                (None, None, _) => true,
+            // Check namespace match - target must be in the same namespace as the policy
+            match (namespace, policy_ns) {
+                (Some(resource_ns), Some(policy_ns)) => policy_ns == resource_ns,
+                (None, None) => true,
                 _ => false,
             }
         })

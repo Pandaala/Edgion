@@ -2,12 +2,12 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: match-test
-  namespace: default
+  namespace: edgion-default
   resourceVersion: "1766852000000000000"
 spec:
   parentRefs:
     - name: example-gateway
-      namespace: edge
+      namespace: edgion-test
   hostnames:
     - "match-test.example.com"
   rules:
@@ -18,7 +18,7 @@ spec:
             value: /api/v1
       backendRefs:
         - name: test-http
-          namespace: edge
+          namespace: edgion-test
           port: 30001
 
     # Rule 2: Exact 路径匹配
@@ -28,7 +28,7 @@ spec:
             value: /exact/path
       backendRefs:
         - name: test-http
-          namespace: edge
+          namespace: edgion-test
           port: 30001
 
     # Rule 3: RegularExpression 路径匹配
@@ -38,7 +38,7 @@ spec:
             value: "^/users/[0-9]+$"
       backendRefs:
         - name: test-http
-          namespace: edge
+          namespace: edgion-test
           port: 30001
 
     # Rule 4: Header Exact 匹配
@@ -52,7 +52,7 @@ spec:
               value: CustomValue
       backendRefs:
         - name: test-http
-          namespace: edge
+          namespace: edgion-test
           port: 30001
 
     # Rule 5: Header RegularExpression 匹配
@@ -66,7 +66,7 @@ spec:
               value: "^v[0-9]+\\.[0-9]+$"
       backendRefs:
         - name: test-http
-          namespace: edge
+          namespace: edgion-test
           port: 30001
 
     # Rule 6: Query Parameter 匹配
@@ -83,7 +83,7 @@ spec:
               value: "^[0-9]+$"
       backendRefs:
         - name: test-http
-          namespace: edge
+          namespace: edgion-test
           port: 30001
 
     # Rule 7: HTTP Method 匹配（使用 /echo 因为支持 POST）
@@ -94,7 +94,7 @@ spec:
           method: POST
       backendRefs:
         - name: test-http
-          namespace: edge
+          namespace: edgion-test
           port: 30001
 
     # Rule 8: 综合匹配（使用 /echo，支持 POST）
@@ -116,6 +116,6 @@ spec:
               value: update
       backendRefs:
         - name: test-http
-          namespace: edge
+          namespace: edgion-test
           port: 30001
 

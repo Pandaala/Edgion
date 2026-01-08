@@ -2,7 +2,7 @@ apiVersion: edgion.io/v1
 kind: LinkSys
 metadata:
   name: example-redis
-  namespace: default
+  namespace: edgion-default
 spec:
   type: redis
   config:
@@ -18,7 +18,7 @@ spec:
       # Or use secret reference
       # secretRef:
       #   name: redis-secret
-      #   namespace: default
+      #   namespace: edgion-default
       #   usernameKey: username
       #   passwordKey: password
     
@@ -73,7 +73,7 @@ spec:
       #     -----END CERTIFICATE-----
       #   secretRef:
       #     name: redis-tls-secret
-      #     namespace: default
+      #     namespace: edgion-default
       # insecureSkipVerify: false
     
     # Observability

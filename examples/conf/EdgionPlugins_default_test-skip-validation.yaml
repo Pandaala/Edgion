@@ -2,7 +2,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: test-skip-validation
-  namespace: default
+  namespace: edgion-default
   annotations:
     edgion.io/skip-load-validation: "true"
 spec:

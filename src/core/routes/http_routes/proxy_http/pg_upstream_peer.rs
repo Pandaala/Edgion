@@ -228,12 +228,8 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttp, peer: &mut Box<HttpPeer
     peer.options.read_timeout = Some(effective_backend_timeout);
     peer.options.write_timeout = Some(effective_backend_timeout);
 
-    // Idle timeout: route-level overrides global
-    peer.options.idle_timeout = Some(
-        route_timeouts
-            .and_then(|rt| rt.idle_timeout)
-            .unwrap_or(backend_timeout.idle_timeout),
-    );
+    // Idle timeout: use global config from EdgionGatewayConfig
+    peer.options.idle_timeout = Some(backend_timeout.idle_timeout);
 }
 
 /// Update peer address info and metrics (inline for performance)

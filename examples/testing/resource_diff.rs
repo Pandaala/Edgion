@@ -382,7 +382,7 @@ async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
     let secret_ids: HashSet<(String, String)> = secrets
         .iter()
         .map(|s| {
-            let ns = s.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
+            let ns = s.metadata.namespace.clone().unwrap_or_else(|| "edgion-default".to_string());
             (ns, s.metadata.name.clone())
         })
         .collect();
@@ -401,7 +401,7 @@ async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
                             cert_ref.get("namespace").and_then(|v| v.as_str()),
                         ) {
                             let ns =
-                                namespace.unwrap_or_else(|| tls.metadata.namespace.as_deref().unwrap_or("default"));
+                                namespace.unwrap_or_else(|| tls.metadata.namespace.as_deref().unwrap_or("edgion-default"));
                             if !secret_ids.contains(&(ns.to_string(), name.to_string())) {
                                 missing.push(format!("{}/{}", ns, name));
                             }
@@ -414,7 +414,7 @@ async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
                 issues.push(SecretIssue {
                     resource: format!(
                         "{}/{}",
-                        tls.metadata.namespace.unwrap_or_else(|| "default".to_string()),
+                        tls.metadata.namespace.unwrap_or_else(|| "edgion-default".to_string()),
                         tls.metadata.name
                     ),
                     kind: "EdgionTls".to_string(),
@@ -439,7 +439,7 @@ async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
                                         cert_ref.get("name").and_then(|v| v.as_str()),
                                         cert_ref.get("namespace").and_then(|v| v.as_str()),
                                     ) {
-                                        let ns = namespace.unwrap_or("default");
+                                        let ns = namespace.unwrap_or("edgion-default");
                                         if !secret_ids.contains(&(ns.to_string(), name.to_string())) {
                                             missing.push(format!("{}/{}", ns, name));
                                         }

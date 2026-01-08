@@ -2,11 +2,11 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
 metadata:
   name: test-grpc-https
-  namespace: edge
+  namespace: edgion-test
 spec:
   parentRefs:
     - name: example-gateway
-      namespace: edge
+      namespace: edgion-test
       sectionName: grpc  # 绑定到 grpc listener (18443, HTTPS)
 
   hostnames:

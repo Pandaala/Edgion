@@ -2,12 +2,12 @@ apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
   name: test-ip-filter
-  namespace: edge
+  namespace: edgion-test
 spec:
   plugins:
     # IP restriction for stream connections - allows localhost for testing
     - enable: true
-      type: ipRestriction
+      type: IpRestriction
       config:
         # IP source: remoteAddr (direct connection)
         ipSource: remoteAddr

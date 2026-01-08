@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: backend-b
-  namespace: edge
+  namespace: edgion-test
 spec:
   ports:
     - name: http

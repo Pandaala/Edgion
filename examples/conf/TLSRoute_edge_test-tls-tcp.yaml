@@ -2,11 +2,11 @@ apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TLSRoute
 metadata:
   name: test-tls-tcp
-  namespace: edge
+  namespace: edgion-test
 spec:
   parentRefs:
     - name: tls-terminate-gateway
-      namespace: edge
+      namespace: edgion-test
       sectionName: tls-terminate-tcp
   hostnames:
     - "tcp.example.com"  # SNI hostname

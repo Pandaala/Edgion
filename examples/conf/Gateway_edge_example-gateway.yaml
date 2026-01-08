@@ -2,7 +2,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: example-gateway
-  namespace: edge
+  namespace: edgion-test
 spec:
   gatewayClassName: public-gateway
   listeners:

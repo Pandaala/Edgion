@@ -2,11 +2,11 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
 metadata:
   name: match-test
-  namespace: edge
+  namespace: edgion-test
 spec:
   parentRefs:
     - name: example-gateway
-      namespace: edge
+      namespace: edgion-test
       sectionName: http
 
   hostnames:
@@ -35,10 +35,9 @@ spec:
         - name: test-grpc
           port: 30021
 
-    # Rule 3: Catch-all match (no service/method)
-    - matches:
-        - method: {}
-      backendRefs:
+    # Rule 3: Default/fallback route (no method match = catch all for this hostname)
+    # Note: Without 'matches', this rule matches all requests for the hostname
+    - backendRefs:
         - name: test-grpc
           port: 30021
 

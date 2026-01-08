@@ -2,20 +2,20 @@ apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: mtls-test-optional
-  namespace: edge
+  namespace: edgion-test
 spec:
   parentRefs:
     - name: mtls-test-gateway
-      namespace: edge
+      namespace: edgion-test
   hosts:
     - mtls-optional.example.com
   secretRef:
     name: mtls-server
-    namespace: edge
+    namespace: edgion-test
   clientAuth:
     mode: OptionalMutual
     caSecretRef:
       name: client-ca
-      namespace: edge
+      namespace: edgion-test
     verifyDepth: 1
 

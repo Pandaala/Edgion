@@ -2,11 +2,11 @@ apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
   name: test-tcp
-  namespace: edge
+  namespace: edgion-test
 spec:
   parentRefs:
     - name: example-gateway
-      namespace: edge
+      namespace: edgion-test
       sectionName: tcp
       port: 19000
   rules:

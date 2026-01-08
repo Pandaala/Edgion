@@ -2,7 +2,7 @@ apiVersion: discovery.k8s.io/v1
 kind: EndpointSlice
 metadata:
   name: test-http
-  namespace: edge
+  namespace: edgion-test
   labels:
     kubernetes.io/service-name: test-http
 addressType: IPv4

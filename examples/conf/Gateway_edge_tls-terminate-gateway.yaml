@@ -2,7 +2,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: tls-terminate-gateway
-  namespace: edge
+  namespace: edgion-test
   annotations:
     # Custom annotation: indicates this TLS listener needs to terminate to TCP backend
     edgion.io/backend-protocol: tcp

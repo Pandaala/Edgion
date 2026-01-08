@@ -2,12 +2,12 @@ apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
   name: example-stream-ip
-  namespace: default
+  namespace: edgion-default
 spec:
   plugins:
     # IP restriction for stream connections
     - enable: true
-      type: ipRestriction
+      type: IpRestriction
       config:
         # IP source: clientIp (from proxy headers) or remoteAddr (direct connection)
         ipSource: remoteAddr

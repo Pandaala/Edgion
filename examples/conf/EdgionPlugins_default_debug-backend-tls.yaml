@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: debug-backend-tls
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: DebugAccessLogToHeader
+      config:
+        enabled: true

@@ -2,7 +2,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: redirect-gateway
-  namespace: edge
+  namespace: edgion-test
   annotations:
     # 启用 HTTP 到 HTTPS 重定向
     edgion.io/http-to-https-redirect: "true"

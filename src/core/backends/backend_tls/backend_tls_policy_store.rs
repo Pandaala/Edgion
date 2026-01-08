@@ -108,14 +108,14 @@ impl BackendTLSPolicyStore {
 
     /// Build a target key from target reference components
     /// Key format: namespace/name
+    /// Per Gateway API spec, targetRef can only reference resources in the same namespace as the policy.
     #[inline]
     fn build_target_key(
         policy_namespace: &str,
         target_ref: &crate::types::resources::backend_tls_policy::BackendTLSPolicyTargetRef,
     ) -> String {
-        let target_namespace = target_ref.namespace.as_deref().unwrap_or(policy_namespace);
         let target_name = &target_ref.name;
-        format!("{}/{}", target_namespace, target_name)
+        format!("{}/{}", policy_namespace, target_name)
     }
 
     /// Extract all target keys from a policy

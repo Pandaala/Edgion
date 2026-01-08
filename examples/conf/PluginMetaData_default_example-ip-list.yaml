@@ -2,7 +2,7 @@ apiVersion: edgion.io/v1
 kind: PluginMetaData
 metadata:
   name: example-ip-list
-  namespace: default
+  namespace: edgion-default
 spec:
   ipList:
     items:

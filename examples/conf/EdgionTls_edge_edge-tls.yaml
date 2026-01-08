@@ -2,15 +2,15 @@ apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: edge-tls
-  namespace: edge
+  namespace: edgion-test
 spec:
   parentRefs:
     - name: example-gateway
-      namespace: edge
+      namespace: edgion-test
   hosts:
     - test.example.com
     - grpc.example.com
   secretRef:
     name: edge-tls
-    namespace: edge
+    namespace: edgion-test
 

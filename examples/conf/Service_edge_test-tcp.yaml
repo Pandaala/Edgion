@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: test-tcp
-  namespace: edge
+  namespace: edgion-test
 spec:
   ports:
     - name: tcp-30010

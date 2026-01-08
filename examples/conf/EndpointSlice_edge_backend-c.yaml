@@ -2,7 +2,7 @@ apiVersion: discovery.k8s.io/v1
 kind: EndpointSlice
 metadata:
   name: backend-c-slice
-  namespace: edge
+  namespace: edgion-test
   labels:
     kubernetes.io/service-name: backend-c
 addressType: IPv4

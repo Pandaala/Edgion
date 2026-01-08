@@ -10,7 +10,7 @@ use crate::types::resources::edgion_plugins::IpRestrictionConfig;
 /// Currently supports:
 /// - IpRestriction: IP-based access control for TCP/UDP connections
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", content = "config", rename_all = "camelCase")]
+#[serde(tag = "type", content = "config")]
 pub enum EdgionStreamPlugin {
     /// IP Restriction filter (allow/deny based on IP address or CIDR)
     /// Controls access to TCP/UDP connections based on client IP

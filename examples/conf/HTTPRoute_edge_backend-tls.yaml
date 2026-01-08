@@ -2,11 +2,11 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: backend-tls-test
-  namespace: edge
+  namespace: edgion-test
 spec:
   parentRefs:
     - name: example-gateway
-      namespace: edge
+      namespace: edgion-test
   hostnames:
     - "test.example.com"
   rules:
@@ -17,8 +17,8 @@ spec:
       filters:
         - type: ExtensionRef
           extensionRef:
-            group: gateway.edgion.io
-            kind: DebugAccessLogToHeader
+            group: edgion.io
+            kind: EdgionPlugins
             name: debug-backend-tls
       backendRefs:
         - name: test-backend-tls
