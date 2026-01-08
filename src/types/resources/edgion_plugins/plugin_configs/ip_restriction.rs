@@ -86,34 +86,28 @@ pub struct IpRestrictionConfig {
 /// IP source for extracting client IP address
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum IpSource {
     /// Extract from X-Forwarded-For (first IP) or fallback to X-Real-IP
+    #[default]
     ClientIp,
     /// Use direct TCP connection peer address
     RemoteAddr,
 }
 
-impl Default for IpSource {
-    fn default() -> Self {
-        IpSource::ClientIp
-    }
-}
 
 /// Default action when no rules match
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DefaultAction {
     /// Allow access when no rules match (default)
+    #[default]
     Allow,
     /// Deny access when no rules match
     Deny,
 }
 
-impl Default for DefaultAction {
-    fn default() -> Self {
-        DefaultAction::Allow
-    }
-}
 
 fn default_status() -> u16 {
     403

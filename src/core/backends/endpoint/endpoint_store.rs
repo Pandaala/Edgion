@@ -46,6 +46,16 @@ where
     endpoints: ArcSwap<HashMap<String, Arc<EndpointLoadBalancer<S>>>>,
 }
 
+impl<S> Default for EndpointStore<S>
+where
+    S: BackendSelection + 'static,
+    S::Iter: pingora_load_balancing::selection::BackendIter,
+ {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<S> EndpointStore<S>
 where
     S: BackendSelection + 'static,

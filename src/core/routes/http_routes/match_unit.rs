@@ -199,14 +199,14 @@ impl HttpRouteRuleUnit {
         let query_params = req_header
             .uri
             .query()
-            .map(|q| Self::parse_query_string(q))
+            .map(Self::parse_query_string)
             .unwrap_or_default();
 
         // 0. Check SectionName (if parent_refs specify section_name)
         if let Some(ref parent_refs) = parent_refs {
             let matches = parent_refs
                 .iter()
-                .any(|pr| pr.section_name.as_ref().map_or(true, |name| name == listener_name));
+                .any(|pr| pr.section_name.as_ref().is_none_or(|name| name == listener_name));
 
             if !matches {
                 return Ok(false);

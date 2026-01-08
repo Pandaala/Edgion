@@ -104,9 +104,9 @@ fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Ve
                 .and_then(|cookies| {
                     // Parse cookies: "name1=value1; name2=value2"
                     cookies.split(';').map(|s| s.trim()).find_map(|cookie| {
-                        let mut parts = cookie.splitn(2, '=');
-                        let name = parts.next()?;
-                        let value = parts.next()?;
+                        let (name, value) = cookie.split_once('=')?;
+                        
+                        
                         if name == cookie_name {
                             Some(value.as_bytes().to_vec())
                         } else {
@@ -124,9 +124,9 @@ fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Ve
                 .and_then(|query| {
                     // Parse query string: "name1=value1&name2=value2"
                     query.split('&').find_map(|param| {
-                        let mut parts = param.splitn(2, '=');
-                        let name = parts.next()?;
-                        let value = parts.next()?;
+                        let (name, value) = param.split_once('=')?;
+                        
+                        
                         if name == arg_name {
                             Some(value.as_bytes().to_vec())
                         } else {

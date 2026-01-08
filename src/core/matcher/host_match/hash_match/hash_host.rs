@@ -6,6 +6,12 @@ pub struct HashHost<T> {
     map: HashMap<String, T>,
 }
 
+impl<T> Default for HashHost<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> HashHost<T> {
     pub fn new() -> HashHost<T> {
         HashHost { map: HashMap::new() }
@@ -18,12 +24,10 @@ impl<T> HashHost<T> {
             } else {
                 return false;
             }
+        } else if is_valid_domain(k) {
+            k.to_string()
         } else {
-            if is_valid_domain(k) {
-                k.to_string()
-            } else {
-                return false;
-            }
+            return false;
         };
 
         self.map.insert(key, v);

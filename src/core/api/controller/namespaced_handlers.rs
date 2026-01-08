@@ -188,7 +188,7 @@ pub async fn list_namespaced(
             let filtered: Vec<_> = list_data
                 .data
                 .into_iter()
-                .filter(|r| r.namespace().as_deref() == Some(ns.as_str()))
+                .filter(|r| r.namespace() == Some(ns.as_str()))
                 .collect();
             list_to_json!(filtered)
         }
@@ -197,7 +197,7 @@ pub async fn list_namespaced(
             let filtered: Vec<_> = list_data
                 .data
                 .into_iter()
-                .filter(|r| r.namespace().as_deref() == Some(ns.as_str()))
+                .filter(|r| r.namespace() == Some(ns.as_str()))
                 .collect();
             list_to_json!(filtered)
         }
@@ -206,7 +206,7 @@ pub async fn list_namespaced(
             let filtered: Vec<_> = list_data
                 .data
                 .into_iter()
-                .filter(|r| r.namespace().as_deref() == Some(ns.as_str()))
+                .filter(|r| r.namespace() == Some(ns.as_str()))
                 .collect();
             list_to_json!(filtered)
         }
@@ -215,7 +215,7 @@ pub async fn list_namespaced(
             let filtered: Vec<_> = list_data
                 .data
                 .into_iter()
-                .filter(|r| r.namespace().as_deref() == Some(ns.as_str()))
+                .filter(|r| r.namespace() == Some(ns.as_str()))
                 .collect();
             list_to_json!(filtered)
         }
@@ -337,7 +337,7 @@ pub async fn get_namespaced(
             list_data
                 .data
                 .into_iter()
-                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .find(|r| r.name_any() == name && r.namespace() == Some(ns.as_str()))
                 .and_then(|r| serde_json::to_value(r).ok())
         }
         crate::types::ResourceKind::EdgionStreamPlugins => {
@@ -345,7 +345,7 @@ pub async fn get_namespaced(
             list_data
                 .data
                 .into_iter()
-                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .find(|r| r.name_any() == name && r.namespace() == Some(ns.as_str()))
                 .and_then(|r| serde_json::to_value(r).ok())
         }
         crate::types::ResourceKind::ReferenceGrant => {
@@ -353,7 +353,7 @@ pub async fn get_namespaced(
             list_data
                 .data
                 .into_iter()
-                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .find(|r| r.name_any() == name && r.namespace() == Some(ns.as_str()))
                 .and_then(|r| serde_json::to_value(r).ok())
         }
         crate::types::ResourceKind::BackendTLSPolicy => {
@@ -361,7 +361,7 @@ pub async fn get_namespaced(
             list_data
                 .data
                 .into_iter()
-                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .find(|r| r.name_any() == name && r.namespace() == Some(ns.as_str()))
                 .and_then(|r| serde_json::to_value(r).ok())
         }
         crate::types::ResourceKind::PluginMetaData => {
@@ -508,7 +508,7 @@ pub async fn create_namespaced(
             list_data
                 .data
                 .iter()
-                .any(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .any(|r| r.name_any() == name && r.namespace() == Some(ns.as_str()))
         }
         crate::types::ResourceKind::PluginMetaData => {
             let list_data = state.config_server.plugin_metadata.list();
@@ -1062,7 +1062,7 @@ pub async fn delete_namespaced(
             let mut plugins = list_data
                 .data
                 .into_iter()
-                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .find(|r| r.name_any() == name && r.namespace() == Some(ns.as_str()))
                 .ok_or(StatusCode::NOT_FOUND)?;
             let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
             update_resource_version(&mut plugins);

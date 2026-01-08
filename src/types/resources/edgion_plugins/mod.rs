@@ -86,17 +86,17 @@ impl EdgionPlugins {
 
     /// Check if this plugin has any plugins defined
     pub fn has_plugins(&self) -> bool {
-        self.spec.request_plugins.as_ref().map_or(false, |p| !p.is_empty())
+        self.spec.request_plugins.as_ref().is_some_and(|p| !p.is_empty())
             || self
                 .spec
                 .upstream_response_filter_plugins
                 .as_ref()
-                .map_or(false, |p| !p.is_empty())
+                .is_some_and(|p| !p.is_empty())
             || self
                 .spec
                 .upstream_response_plugins
                 .as_ref()
-                .map_or(false, |p| !p.is_empty())
+                .is_some_and(|p| !p.is_empty())
     }
 
     /// Get the total number of plugins

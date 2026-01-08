@@ -41,7 +41,7 @@ impl ConfigServer {
                 let gateway_namespace = first_ref
                     .namespace
                     .as_ref()
-                    .or_else(|| resource.metadata.namespace.as_ref());
+                    .or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -60,7 +60,7 @@ impl ConfigServer {
                         first_ref
                             .namespace
                             .as_ref()
-                            .or_else(|| resource.metadata.namespace.as_ref()),
+                            .or(resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "HTTPRoute references a Gateway that does not exist, skipping")
@@ -103,7 +103,7 @@ impl ConfigServer {
                 let gateway_namespace = first_ref
                     .namespace
                     .as_ref()
-                    .or_else(|| resource.metadata.namespace.as_ref());
+                    .or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -122,7 +122,7 @@ impl ConfigServer {
                         first_ref
                             .namespace
                             .as_ref()
-                            .or_else(|| resource.metadata.namespace.as_ref()),
+                            .or(resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "GRPCRoute references a Gateway that does not exist, skipping")
@@ -165,7 +165,7 @@ impl ConfigServer {
                 let gateway_namespace = first_ref
                     .namespace
                     .as_ref()
-                    .or_else(|| resource.metadata.namespace.as_ref());
+                    .or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -184,7 +184,7 @@ impl ConfigServer {
                         first_ref
                             .namespace
                             .as_ref()
-                            .or_else(|| resource.metadata.namespace.as_ref()),
+                            .or(resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "TCPRoute references a Gateway that does not exist, skipping")
@@ -224,7 +224,7 @@ impl ConfigServer {
                 let gateway_namespace = first_ref
                     .namespace
                     .as_ref()
-                    .or_else(|| resource.metadata.namespace.as_ref());
+                    .or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -243,7 +243,7 @@ impl ConfigServer {
                         first_ref
                             .namespace
                             .as_ref()
-                            .or_else(|| resource.metadata.namespace.as_ref()),
+                            .or(resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "UDPRoute references a Gateway that does not exist, skipping")
@@ -283,7 +283,7 @@ impl ConfigServer {
                 let gateway_namespace = first_ref
                     .namespace
                     .as_ref()
-                    .or_else(|| resource.metadata.namespace.as_ref());
+                    .or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -323,7 +323,7 @@ impl ConfigServer {
                 let gateway_namespace = first_ref
                     .namespace
                     .as_ref()
-                    .or_else(|| resource.metadata.namespace.as_ref());
+                    .or(resource.metadata.namespace.as_ref());
                 let gateway_name = Some(&first_ref.name);
 
                 self.has_gateway(gateway_namespace, gateway_name)
@@ -342,7 +342,7 @@ impl ConfigServer {
                         first_ref
                             .namespace
                             .as_ref()
-                            .or_else(|| resource.metadata.namespace.as_ref()),
+                            .or(resource.metadata.namespace.as_ref()),
                         first_ref.name
                     );
                     (info, "EdgionTls references a Gateway that does not exist, skipping")
@@ -546,7 +546,7 @@ impl ConfigServer {
 
         // Build secret key
         let secret_namespace = resource.metadata.namespace.as_ref();
-        let secret_name = resource.metadata.name.as_ref().map(|s| s.as_str()).unwrap_or("");
+        let secret_name = resource.metadata.name.as_deref().unwrap_or("");
         let secret_key = if let Some(ns) = secret_namespace {
             format!("{}/{}", ns, secret_name)
         } else {

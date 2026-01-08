@@ -224,11 +224,8 @@ fn check_san_matches_from_der(der_data: &[u8], declared_hosts: &[String]) -> Res
         if ext.oid == x509_parser::oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME {
             if let ParsedExtension::SubjectAlternativeName(san) = ext.parsed_extension() {
                 for name in &san.general_names {
-                    match name {
-                        GeneralName::DNSName(dns) => {
-                            san_list.push(dns.to_string());
-                        }
-                        _ => {}
+                    if let GeneralName::DNSName(dns) = name {
+                        san_list.push(dns.to_string());
                     }
                 }
             }
@@ -276,8 +273,8 @@ fn is_host_covered(declared: &str, san_list: &[String]) -> bool {
         }
 
         // Wildcard match: *.example.com covers api.example.com
-        if san_lower.starts_with("*.") {
-            let san_suffix = &san_lower[2..]; // Remove "*."
+        if let Some(san_suffix) = san_lower.strip_prefix("*.") {
+            // Remove "*."
             if let Some(dot_pos) = declared_lower.find('.') {
                 let declared_suffix = &declared_lower[dot_pos + 1..];
                 if san_suffix == declared_suffix {
@@ -287,11 +284,10 @@ fn is_host_covered(declared: &str, san_list: &[String]) -> bool {
         }
 
         // Reverse wildcard: declared *.example.com is covered by *.example.com
-        if declared_lower.starts_with("*.") && san_lower.starts_with("*.") {
-            if declared_lower == san_lower {
+        if declared_lower.starts_with("*.") && san_lower.starts_with("*.")
+            && declared_lower == san_lower {
                 return true;
             }
-        }
     }
 
     false

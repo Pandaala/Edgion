@@ -18,6 +18,12 @@ pub struct TlsRouteManager {
     gateway_tls_routes_map: Arc<DashMap<String, Arc<GatewayTlsRoutes>>>,
 }
 
+impl Default for TlsRouteManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TlsRouteManager {
     pub fn new() -> Self {
         Self {
@@ -65,12 +71,12 @@ impl TlsRouteManager {
             let hostnames = self.extract_hostnames_from_route(route);
 
             for gateway_key in gateway_keys {
-                let gateway_map = gateway_routes.entry(gateway_key).or_insert_with(HashMap::new);
+                let gateway_map = gateway_routes.entry(gateway_key).or_default();
 
                 for hostname in &hostnames {
                     gateway_map
                         .entry(hostname.clone())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(route.clone());
                 }
             }
@@ -160,7 +166,7 @@ impl TlsRouteManager {
                 let namespace = parent_ref
                     .namespace
                     .as_deref()
-                    .or_else(|| route.metadata.namespace.as_deref())
+                    .or(route.metadata.namespace.as_deref())
                     .unwrap_or("default");
                 let gateway_key = format!("{}/{}", namespace, parent_ref.name);
                 gateway_keys.insert(gateway_key);
@@ -174,5 +180,5 @@ impl TlsRouteManager {
 static GLOBAL_TLS_ROUTE_MANAGER: OnceLock<TlsRouteManager> = OnceLock::new();
 
 pub fn get_global_tls_route_manager() -> &'static TlsRouteManager {
-    GLOBAL_TLS_ROUTE_MANAGER.get_or_init(|| TlsRouteManager::new())
+    GLOBAL_TLS_ROUTE_MANAGER.get_or_init(TlsRouteManager::new)
 }

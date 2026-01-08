@@ -4,6 +4,7 @@ use std::time::Duration;
 
 /// Pre-parsed timeout configurations for runtime use
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ParsedTimeouts {
     pub client: ParsedClientTimeout,
     pub backend: ParsedBackendTimeout,
@@ -37,14 +38,6 @@ impl ParsedTimeouts {
     }
 }
 
-impl Default for ParsedTimeouts {
-    fn default() -> Self {
-        Self {
-            client: ParsedClientTimeout::default(),
-            backend: ParsedBackendTimeout::default(),
-        }
-    }
-}
 
 impl ParsedClientTimeout {
     fn from_config(config: &ClientTimeout) -> Self {

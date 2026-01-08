@@ -232,7 +232,7 @@ impl CompressEvent {
 
     /// Add an event for a resource key
     pub fn add_event(&mut self, key: String, change: crate::core::conf_sync::traits::ResourceChange) {
-        self.events.entry(key).or_insert_with(Vec::new).push(change);
+        self.events.entry(key).or_default().push(change);
     }
 
     /// Clear all events

@@ -106,7 +106,7 @@ async fn get_httproute(
 
     let list_data = client.routes().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
@@ -136,7 +136,7 @@ async fn get_grpcroute(
 
     let list_data = client.grpc_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
@@ -166,7 +166,7 @@ async fn get_tcproute(
 
     let list_data = client.tcp_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
@@ -196,7 +196,7 @@ async fn get_udproute(
 
     let list_data = client.udp_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
@@ -226,7 +226,7 @@ async fn get_tlsroute(
 
     let list_data = client.tls_routes().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
@@ -256,7 +256,7 @@ async fn get_service(
 
     let list_data = client.services().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
@@ -286,7 +286,7 @@ async fn get_endpointslice(
 
     let list_data = client.endpoint_slices().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
@@ -316,7 +316,7 @@ async fn get_endpoints(
 
     let list_data = client.endpoints().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
@@ -346,7 +346,7 @@ async fn get_edgiontls(
 
     let list_data = client.edgion_tls().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
@@ -376,12 +376,12 @@ async fn get_edgionplugins(
 
     let list_data = client.edgion_plugins().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
         .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+        .find(|r| r.name_any() == name && r.namespace() == namespace)
     {
         Some(plugins) => Json(ApiResponse::success(plugins)),
         None => Json(ApiResponse::error(format!("EdgionPlugins not found: {}", key))),
@@ -406,12 +406,12 @@ async fn get_edgionstreamplugins(
 
     let list_data = client.edgion_stream_plugins().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
         .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+        .find(|r| r.name_any() == name && r.namespace() == namespace)
     {
         Some(resource) => Json(ApiResponse::success(resource)),
         None => Json(ApiResponse::error(format!("EdgionStreamPlugins not found: {}", key))),
@@ -436,12 +436,12 @@ async fn get_referencegrants(
 
     let list_data = client.reference_grants().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
         .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+        .find(|r| r.name_any() == name && r.namespace() == namespace)
     {
         Some(resource) => Json(ApiResponse::success(resource)),
         None => Json(ApiResponse::error(format!("ReferenceGrant not found: {}", key))),
@@ -466,12 +466,12 @@ async fn get_backendtlspolicies(
 
     let list_data = client.backend_tls_policies().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
         .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+        .find(|r| r.name_any() == name && r.namespace() == namespace)
     {
         Some(resource) => Json(ApiResponse::success(resource)),
         None => Json(ApiResponse::error(format!("BackendTLSPolicy not found: {}", key))),
@@ -496,7 +496,7 @@ async fn get_pluginmetadata(
 
     let list_data = client.plugin_metadata().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data
@@ -526,7 +526,7 @@ async fn get_linksys(
 
     let list_data = client.link_sys().list();
     let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_ref().map(|s| s.as_str());
+    let namespace = query.namespace.as_deref();
 
     match list_data
         .data

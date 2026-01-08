@@ -22,9 +22,9 @@ fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
         .annotations
         .as_ref()
         .and_then(|annotations| annotations.get(listener_builder::ANNOTATION_ENABLE_HTTP2))
-        .and_then(|value| match value.to_lowercase().as_str() {
-            "false" | "0" | "no" | "off" => Some(false),
-            _ => Some(true),
+        .map(|value| match value.to_lowercase().as_str() {
+            "false" | "0" | "no" | "off" => false,
+            _ => true,
         })
         .unwrap_or(true) // Default to true if annotation is not present
 }
@@ -129,7 +129,7 @@ impl GatewayBase {
                     .unwrap_or_default();
 
                 // Parse HTTP/2 setting from Gateway annotation
-                let enable_http2 = parse_enable_http2_annotation(&gateway);
+                let enable_http2 = parse_enable_http2_annotation(gateway);
 
                 if !enable_http2 {
                     tracing::info!(

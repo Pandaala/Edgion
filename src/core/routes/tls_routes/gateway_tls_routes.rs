@@ -50,8 +50,7 @@ impl GatewayTlsRoutes {
     pub fn get_routes_for_hostname(&self, hostname: &str) -> Vec<Arc<TLSRoute>> {
         let hostname_routes = self.hostname_routes_map.load();
         hostname_routes
-            .get(hostname)
-            .map(|routes| routes.clone())
+            .get(hostname).cloned()
             .unwrap_or_default()
     }
 

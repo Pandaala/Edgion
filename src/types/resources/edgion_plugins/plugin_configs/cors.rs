@@ -161,9 +161,9 @@ impl CorsConfig {
                 let origin = origin.trim();
                 if !origin.is_empty() {
                     // Check for subdomain wildcard: *.example.com
-                    if origin.starts_with("*.") {
+                    if let Some(domain) = origin.strip_prefix("*.") {
                         // Convert to regex: ^https?://[^/]+\.example\.com$
-                        let domain = &origin[2..]; // Remove "*."
+                        // Remove "*."
                         let pattern = format!(r"^https?://[^/]+\.{}$", regex::escape(domain));
                         wildcard_patterns.push(pattern);
                     } else {

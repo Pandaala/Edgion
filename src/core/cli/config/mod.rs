@@ -59,6 +59,7 @@ pub struct EdgionControllerConfig {
 
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
+#[derive(Default)]
 pub struct ServerConfig {
     /// gRPC listen address for operator
     #[arg(long, value_name = "ADDR")]
@@ -120,6 +121,7 @@ pub struct LoggingConfig {
 
 /// Configuration directory settings
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
+#[derive(Default)]
 pub struct ConfConfig {
     /// Configuration directory path
     #[arg(long = "conf-dir", value_name = "DIR")]
@@ -272,17 +274,6 @@ fn default_capacity() -> u32 {
     200
 }
 
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            grpc_listen: None,
-            admin_listen: None,
-            gateway_class: None,
-            watch_namespaces: Vec::new(),
-            label_selector: None,
-        }
-    }
-}
 
 impl Default for LoggingConfig {
     fn default() -> Self {
@@ -296,11 +287,6 @@ impl Default for LoggingConfig {
     }
 }
 
-impl Default for ConfConfig {
-    fn default() -> Self {
-        Self { dir: None }
-    }
-}
 
 impl Default for DebugConfig {
     fn default() -> Self {

@@ -104,7 +104,7 @@ pub async fn upstream_peer_grpc(
 
     // 6. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
-    update_peer_metrics(edgion_http, &mut peer, ctx);
+    update_peer_metrics(edgion_http, &peer, ctx);
 
     Ok(peer)
 }
@@ -129,7 +129,7 @@ pub async fn upstream_peer_http(
 
     // 4. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
-    update_peer_metrics(edgion_http, &mut peer, ctx);
+    update_peer_metrics(edgion_http, &peer, ctx);
 
     Ok(peer)
 }

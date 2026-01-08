@@ -147,7 +147,7 @@ impl RouteManager {
                         parent_ref.name.clone()
                     };
 
-                    let hostname_set = gateway_hostnames.entry(gateway_key).or_insert_with(HashSet::new);
+                    let hostname_set = gateway_hostnames.entry(gateway_key).or_default();
                     for hostname in &all_hostnames {
                         hostname_set.insert(hostname.clone());
                     }
@@ -172,7 +172,7 @@ impl RouteManager {
                                 parent_ref.name.clone()
                             };
 
-                            let hostname_set = gateway_hostnames.entry(gateway_key).or_insert_with(HashSet::new);
+                            let hostname_set = gateway_hostnames.entry(gateway_key).or_default();
                             for hostname in hostnames {
                                 hostname_set.insert(hostname.clone());
                             }
@@ -503,7 +503,7 @@ impl RouteManager {
         let mut resource_keys = domain_hashmap
             .get(hostname)
             .map(|rr| rr.resource_keys.read().unwrap().clone())
-            .unwrap_or_else(HashSet::new);
+            .unwrap_or_default();
 
         // Step 1: Remove resource keys
         for key in remove.iter() {
@@ -554,7 +554,7 @@ impl RouteManager {
                         if let Some(matches) = &rule.matches {
                             for (match_id, match_item) in matches.iter().enumerate() {
                                 // Check if this is a regex path
-                                if Self::is_regex_path(&match_item) {
+                                if Self::is_regex_path(match_item) {
                                     // Create regex route
                                     if let Ok(regex_unit) = Self::create_regex_route_unit(
                                         route_namespace,
@@ -677,7 +677,7 @@ fn parse_http_routes_to_gateway_domain_rules(
             // Get or create the domain map for this gateway
             let domain_map = gateway_domain_rules
                 .entry(gateway_key.clone())
-                .or_insert_with(HashMap::new);
+                .or_default();
 
             // Process each hostname and rule combination
             for hostname in hostnames {

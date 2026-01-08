@@ -33,8 +33,7 @@ impl RadixPath {
             if segment.is_empty() {
                 return;
             }
-            if segment.starts_with(':') {
-                let param_name = &segment[1..];
+            if let Some(param_name) = segment.strip_prefix(':') {
                 if param_name.is_empty() {
                     panic!("Empty param name in path: {}", path);
                 }
@@ -45,7 +44,7 @@ impl RadixPath {
         };
 
         let mut chars = path.chars().peekable();
-        while let Some(c) = chars.next() {
+        for c in chars {
             if c == '/' {
                 process_segment(current_segment.clone(), &mut raw_segments);
                 current_segment.clear();

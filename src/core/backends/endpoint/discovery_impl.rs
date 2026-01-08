@@ -41,7 +41,7 @@ impl EndpointExt for Endpoints {
                     port
                 } else if let Some(ports) = &subset.ports {
                     // Use first port from subset
-                    ports.first().and_then(|p| Some(p.port as u16)).unwrap_or(port)
+                    ports.first().map(|p| p.port as u16).unwrap_or(port)
                 } else {
                     port
                 };

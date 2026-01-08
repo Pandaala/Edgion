@@ -107,7 +107,7 @@ impl RadixRouteMatchEngine {
                                 tracing::trace!("Skipping path with variables for exact match");
                                 continue;
                             }
-                            if !radix_path.matches(&path) {
+                            if !radix_path.matches(path) {
                                 tracing::trace!("Pattern match failed");
                                 continue;
                             }
@@ -156,7 +156,7 @@ impl RadixRouteMatchEngine {
                             radix_path.is_prefix_match,
                             radix_path.route_idx
                         );
-                        if radix_path.matches(&path) {
+                        if radix_path.matches(path) {
                             tracing::trace!("Pattern matched");
                             matched_paths.push(path_idx);
                         } else {
@@ -289,7 +289,7 @@ impl RadixRouteMatchEngine {
                 // Add path_idx to the tree_value mapping
                 self.tree_value_to_path_idx
                     .entry(tree_value as u32)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(path_idx);
 
                 total_paths += 1;

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Generic log configuration applicable to all log types
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Args)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct LogConfig {
     /// Enable or disable this log
     #[arg(skip)]
@@ -20,14 +21,6 @@ pub struct LogConfig {
     pub output: StringOutput,
 }
 
-impl Default for LogConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            output: StringOutput::default(),
-        }
-    }
-}
 
 impl LogConfig {
     /// Create a new LogConfig with default output to a given path

@@ -158,7 +158,7 @@ impl ReferenceGrantStore {
 
         for grant in grants.values() {
             if let Some(ns) = grant.namespace() {
-                index.entry(ns.to_string()).or_insert_with(Vec::new).push(grant.clone());
+                index.entry(ns.to_string()).or_default().push(grant.clone());
             }
         }
 

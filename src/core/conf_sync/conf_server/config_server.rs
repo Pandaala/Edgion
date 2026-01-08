@@ -1067,7 +1067,7 @@ impl ConfigServer {
             println!("  [{}] {}", idx, format_resource_info(gw));
         }
 
-        println!(""); // Empty line before user conf resources
+        println!(); // Empty line before user conf resources
 
         // HTTP Routes
         tracing::debug!(

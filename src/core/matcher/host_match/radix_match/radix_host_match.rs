@@ -177,7 +177,7 @@ impl<T> RadixHostMatchEngine<T> {
             // Map tree_value to host_idx (append to list)
             self.tree_value_to_host_idx
                 .entry(tree_value as u32)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(host_idx);
         }
 

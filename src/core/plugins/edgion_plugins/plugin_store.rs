@@ -20,6 +20,12 @@ pub struct PluginStore {
     plugins: ArcSwap<Arc<PluginMap>>,
 }
 
+impl Default for PluginStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PluginStore {
     pub fn new() -> Self {
         Self {
@@ -56,7 +62,7 @@ impl PluginStore {
     /// Update edgion_plugins atomically (clone map + modify + swap)
     pub fn update(&self, add_or_update: HashMap<String, EdgionPlugins>, remove: &HashSet<String>) {
         let current = self.plugins.load();
-        let current_map: &PluginMap = &**current;
+        let current_map: &PluginMap = &current;
         let mut new_map: PluginMap = current_map.clone();
 
         for key in remove {

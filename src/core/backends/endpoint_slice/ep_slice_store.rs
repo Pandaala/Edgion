@@ -62,6 +62,16 @@ where
     ep_slices: RwLock<HashMap<String, (EndpointSlice, String)>>,
 }
 
+impl<S> Default for EpSliceStore<S>
+where
+    S: BackendSelection + 'static,
+    S::Iter: pingora_load_balancing::selection::BackendIter,
+ {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<S> EpSliceStore<S>
 where
     S: BackendSelection + 'static,

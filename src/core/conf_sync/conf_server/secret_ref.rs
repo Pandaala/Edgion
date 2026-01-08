@@ -83,7 +83,7 @@ impl SecretRefManager {
         {
             let mut refs = self.refs.write().unwrap();
             refs.entry(secret_key.clone())
-                .or_insert_with(HashSet::new)
+                .or_default()
                 .insert(resource_ref.clone());
         }
 
@@ -91,7 +91,7 @@ impl SecretRefManager {
         {
             let mut deps = self.dependencies.write().unwrap();
             deps.entry(resource_key.clone())
-                .or_insert_with(HashSet::new)
+                .or_default()
                 .insert(secret_key.clone());
         }
 

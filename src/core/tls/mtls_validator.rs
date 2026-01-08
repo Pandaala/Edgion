@@ -77,14 +77,14 @@ fn matches_pattern(value: &str, pattern: &str) -> bool {
         return true;
     }
 
-    if pattern.starts_with("*.") {
+    if let Some(suffix) = pattern.strip_prefix("*.") {
         // Wildcard match: *.example.com
         // SAFETY: Check pattern length before slicing to prevent panic
         if pattern.len() < 3 {
             // Pattern is just "*." with no suffix - invalid
             return false;
         }
-        let suffix = &pattern[2..]; // Remove "*."
+        // Remove "*."
 
         if value.ends_with(suffix) {
             // Check that there's exactly one subdomain level

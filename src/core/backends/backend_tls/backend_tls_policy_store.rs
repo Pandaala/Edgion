@@ -94,7 +94,7 @@ impl BackendTLSPolicyStore {
             for target_ref in &policy.spec.target_refs {
                 let target_key = Self::build_target_key(policy_namespace, target_ref);
 
-                index.entry(target_key).or_insert_with(Vec::new).push(policy.clone());
+                index.entry(target_key).or_default().push(policy.clone());
             }
         }
 
@@ -320,8 +320,7 @@ impl BackendTLSPolicyStore {
 
         // O(1) lookup in reverse index
         index
-            .get(&target_key)
-            .map(|policies| policies.clone())
+            .get(&target_key).cloned()
             .unwrap_or_default()
     }
 
