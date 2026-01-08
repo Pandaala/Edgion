@@ -1,8 +1,8 @@
 pub mod edgion_gateway_config;
 mod err_resp;
-pub mod gateway_handler;
 pub mod gateway_base;
 pub mod gateway_class;
+pub mod gateway_handler;
 pub mod gateway_store;
 pub mod listener_builder;
 pub mod preflight_handler;

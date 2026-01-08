@@ -74,10 +74,7 @@ impl TcpRouteManager {
                 let gateway_listeners = self.extract_gateway_listener_pairs_from_route(&route);
 
                 for (gateway_key, listener_name) in gateway_listeners {
-                    affected
-                        .entry(gateway_key)
-                        .or_default()
-                        .insert(listener_name);
+                    affected.entry(gateway_key).or_default().insert(listener_name);
                 }
             }
         }
@@ -88,10 +85,7 @@ impl TcpRouteManager {
                 let gateway_listeners = self.extract_gateway_listener_pairs_from_route(&route);
 
                 for (gateway_key, listener_name) in gateway_listeners {
-                    affected
-                        .entry(gateway_key)
-                        .or_default()
-                        .insert(listener_name);
+                    affected.entry(gateway_key).or_default().insert(listener_name);
                 }
             }
         }
@@ -167,10 +161,7 @@ impl TcpRouteManager {
             for (gateway_key, listener_name) in gateway_listeners {
                 let gateway_map = gateway_routes.entry(gateway_key).or_default();
 
-                gateway_map
-                    .entry(listener_name)
-                    .or_default()
-                    .push(route.clone());
+                gateway_map.entry(listener_name).or_default().push(route.clone());
             }
         }
 
@@ -219,10 +210,7 @@ impl TcpRouteManager {
         // Group by gateway_key
         let mut affected: HashMap<String, HashSet<String>> = HashMap::new();
         for (gateway_key, listener_name) in gateway_listeners {
-            affected
-                .entry(gateway_key)
-                .or_default()
-                .insert(listener_name);
+            affected.entry(gateway_key).or_default().insert(listener_name);
         }
 
         let affected_count = affected.len();

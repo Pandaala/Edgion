@@ -36,9 +36,7 @@ impl GatewayTcpRoutes {
     /// Get all routes for a specific listener name
     pub fn get_routes_for_listener(&self, listener_name: &str) -> Vec<Arc<TCPRoute>> {
         let listener_routes = self.listener_routes_map.load();
-        listener_routes
-            .get(listener_name).cloned()
-            .unwrap_or_default()
+        listener_routes.get(listener_name).cloned().unwrap_or_default()
     }
 
     /// Get all listener names that have routes

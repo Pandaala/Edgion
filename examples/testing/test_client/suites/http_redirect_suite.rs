@@ -46,10 +46,7 @@ impl HttpRedirectTestSuite {
 
                             // 验证是 301 重定向
                             if status.as_u16() != 301 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 301, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 301, got {}", status));
                             }
 
                             // 验证 Location 头
@@ -66,16 +63,11 @@ impl HttpRedirectTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Location mismatch. Expected: {}, Got: {}",
-                                                expected, location_str
-                                            ),
+                                            format!("Location mismatch. Expected: {}, Got: {}", expected, location_str),
                                         )
                                     }
                                 }
-                                None => {
-                                    TestResult::failed(start.elapsed(), "Missing Location header".to_string())
-                                }
+                                None => TestResult::failed(start.elapsed(), "Missing Location header".to_string()),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -100,20 +92,14 @@ impl HttpRedirectTestSuite {
                         .build()
                         .unwrap();
 
-                    let url = format!(
-                        "http://{}:{}/api/users?page=1&limit=10",
-                        ctx.target_host, REDIRECT_PORT
-                    );
+                    let url = format!("http://{}:{}/api/users?page=1&limit=10", ctx.target_host, REDIRECT_PORT);
 
                     match client.get(&url).header("Host", "api.example.com").send().await {
                         Ok(response) => {
                             let status = response.status();
 
                             if status.as_u16() != 301 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 301, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 301, got {}", status));
                             }
 
                             match response.headers().get("location") {
@@ -133,9 +119,7 @@ impl HttpRedirectTestSuite {
                                         )
                                     }
                                 }
-                                None => {
-                                    TestResult::failed(start.elapsed(), "Missing Location header".to_string())
-                                }
+                                None => TestResult::failed(start.elapsed(), "Missing Location header".to_string()),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -187,9 +171,7 @@ impl HttpRedirectTestSuite {
                                         )
                                     }
                                 }
-                                None => {
-                                    TestResult::failed(start.elapsed(), "Missing Location header".to_string())
-                                }
+                                None => TestResult::failed(start.elapsed(), "Missing Location header".to_string()),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -232,10 +214,7 @@ impl HttpRedirectTestSuite {
                                     format!("POST request redirected with {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 301 for POST, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 301 for POST, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -261,4 +240,3 @@ impl TestSuite for HttpRedirectTestSuite {
         ]
     }
 }
-

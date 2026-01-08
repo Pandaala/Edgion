@@ -176,11 +176,7 @@ impl HttpRouteRuleUnit {
         let method = req_header.method.as_str();
 
         // Parse query parameters from URI (if present)
-        let query_params = req_header
-            .uri
-            .query()
-            .map(Self::parse_query_string)
-            .unwrap_or_default();
+        let query_params = req_header.uri.query().map(Self::parse_query_string).unwrap_or_default();
 
         // 0. Check SectionName (if parent_refs specify section_name)
         if let Some(ref parent_refs) = parent_refs {

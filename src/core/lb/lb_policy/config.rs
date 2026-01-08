@@ -24,9 +24,7 @@ pub fn get_policies_for_service(service_key: &str) -> Vec<LbPolicy> {
 /// Parse policy list from string (e.g., "consistent,leastconn")
 #[allow(dead_code)]
 pub fn parse_policies(s: &str) -> Vec<LbPolicy> {
-    s.split(',')
-        .filter_map(|part| LbPolicy::parse(part.trim()))
-        .collect()
+    s.split(',').filter_map(|part| LbPolicy::parse(part.trim())).collect()
 }
 
 /// Parse service key into namespace and name

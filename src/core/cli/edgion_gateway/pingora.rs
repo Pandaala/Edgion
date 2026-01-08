@@ -23,8 +23,7 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
     let grace_period_seconds = Some(config.server.grace_period_seconds.unwrap_or(30));
 
     // Graceful shutdown timeout (default: 10 seconds)
-    let graceful_shutdown_timeout_seconds =
-        Some(config.server.graceful_shutdown_timeout_seconds.unwrap_or(10));
+    let graceful_shutdown_timeout_seconds = Some(config.server.graceful_shutdown_timeout_seconds.unwrap_or(10));
 
     // Upstream keepalive pool size (default: 128)
     let upstream_keepalive_pool_size = config.server.upstream_keepalive_pool_size.unwrap_or(128);

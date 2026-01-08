@@ -26,8 +26,7 @@ pub enum TlsVersion {
 }
 
 /// Client authentication mode for mTLS
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 pub enum ClientAuthMode {
     /// Single-way TLS: only verify server certificate (default)
     #[default]
@@ -37,7 +36,6 @@ pub enum ClientAuthMode {
     /// Optional mutual TLS: client certificate is optional
     OptionalMutual,
 }
-
 
 /// Client authentication configuration for mTLS
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -214,8 +212,7 @@ pub struct RevocationCheckConfig {
     pub fail_open: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 pub enum RevocationMode {
     #[serde(rename = "off")]
     #[default]
@@ -225,7 +222,6 @@ pub enum RevocationMode {
     #[serde(rename = "crl")]
     Crl,
 }
-
 
 /// Early data (0-RTT) configuration (reserved)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -348,10 +344,9 @@ impl EdgionTls {
             }
 
             // Wildcard match_engine: only allow * at the beginning in "*.*.*.domain" format
-            if host_lower.starts_with('*')
-                && Self::wildcard_match(&host_lower, &hostname_lower) {
-                    return true;
-                }
+            if host_lower.starts_with('*') && Self::wildcard_match(&host_lower, &hostname_lower) {
+                return true;
+            }
         }
 
         false

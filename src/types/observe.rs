@@ -21,7 +21,6 @@ pub struct LogConfig {
     pub output: StringOutput,
 }
 
-
 impl LogConfig {
     /// Create a new LogConfig with default output to a given path
     pub fn with_path(path: impl Into<String>, enabled: bool) -> Self {

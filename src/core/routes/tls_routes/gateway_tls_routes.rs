@@ -49,9 +49,7 @@ impl GatewayTlsRoutes {
     /// Get all routes for a specific hostname
     pub fn get_routes_for_hostname(&self, hostname: &str) -> Vec<Arc<TLSRoute>> {
         let hostname_routes = self.hostname_routes_map.load();
-        hostname_routes
-            .get(hostname).cloned()
-            .unwrap_or_default()
+        hostname_routes.get(hostname).cloned().unwrap_or_default()
     }
 
     /// Update the routes map (called by TlsRouteManager during config sync)

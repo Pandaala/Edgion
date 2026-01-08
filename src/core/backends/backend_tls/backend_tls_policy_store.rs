@@ -319,9 +319,7 @@ impl BackendTLSPolicyStore {
         let target_key = format!("{}/{}", target_namespace, name);
 
         // O(1) lookup in reverse index
-        index
-            .get(&target_key).cloned()
-            .unwrap_or_default()
+        index.get(&target_key).cloned().unwrap_or_default()
     }
 
     /// Count of policies

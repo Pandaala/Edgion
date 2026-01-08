@@ -3,8 +3,7 @@ use crate::types::EdgionGatewayConfig;
 use std::time::Duration;
 
 /// Pre-parsed timeout configurations for runtime use
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ParsedTimeouts {
     pub client: ParsedClientTimeout,
     pub backend: ParsedBackendTimeout,
@@ -37,7 +36,6 @@ impl ParsedTimeouts {
         }
     }
 }
-
 
 impl ParsedClientTimeout {
     fn from_config(config: &ClientTimeout) -> Self {

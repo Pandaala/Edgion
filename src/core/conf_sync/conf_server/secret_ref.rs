@@ -82,17 +82,13 @@ impl SecretRefManager {
         // Add to forward index
         {
             let mut refs = self.refs.write().unwrap();
-            refs.entry(secret_key.clone())
-                .or_default()
-                .insert(resource_ref.clone());
+            refs.entry(secret_key.clone()).or_default().insert(resource_ref.clone());
         }
 
         // Add to reverse index
         {
             let mut deps = self.dependencies.write().unwrap();
-            deps.entry(resource_key.clone())
-                .or_default()
-                .insert(secret_key.clone());
+            deps.entry(resource_key.clone()).or_default().insert(secret_key.clone());
         }
 
         tracing::debug!(
