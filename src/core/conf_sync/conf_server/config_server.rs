@@ -14,6 +14,7 @@ use anyhow::Result;
 // internal key
 pub type NsNameKey = String;
 
+#[allow(clippy::large_enum_variant)]
 pub enum ResourceItem {
     GatewayClass(GatewayClass),
     EdgionGatewayConfig(EdgionGatewayConfig),

@@ -18,9 +18,9 @@ impl<T> HashHost<T> {
     }
 
     pub fn insert(&mut self, k: &str, v: T) -> bool {
-        let key = if k.starts_with("*.") {
-            if is_valid_domain(&k[2..]) {
-                k[1..].to_string() // "*.aaa.com" -> ".aaa.com" to distinguish from "aaa.com"
+        let key = if let Some(rest) = k.strip_prefix("*.") {
+            if is_valid_domain(rest) {
+                format!(".{}", rest) // "*.aaa.com" -> ".aaa.com" to distinguish from "aaa.com"
             } else {
                 return false;
             }

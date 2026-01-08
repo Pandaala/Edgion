@@ -87,24 +87,6 @@ pub struct GrpcRouteRuleUnit {
 }
 
 impl GrpcRouteRuleUnit {
-    pub fn new(
-        namespace: String,
-        name: String,
-        rule_id: usize,
-        match_id: usize,
-        resource_key: String,
-        match_item: GRPCRouteMatch,
-        rule: Arc<GRPCRouteRule>,
-        route_info: Arc<GrpcRouteInfo>,
-    ) -> Self {
-        Self {
-            resource_key,
-            matched_info: GrpcMatchInfo::new(namespace, name, rule_id, match_id, match_item),
-            rule,
-            route_info,
-        }
-    }
-
     /// Deep match: check hostname, section_name, and headers
     pub fn deep_match(&self, session: &Session, listener_name: &str, hostname: &str) -> Result<bool, EdError> {
         let req_header = session.req_header();

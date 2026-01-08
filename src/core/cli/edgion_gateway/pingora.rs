@@ -10,31 +10,38 @@ use std::sync::Arc;
 
 /// Create Pingora ServerConf from local toml configuration
 fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
-    let mut conf = ServerConf::default();
-
-    // Ensure daemon mode is disabled (we don't run as daemon)
-    conf.daemon = false;
-
-    // 1. Number of worker threads (default: number of CPU cores)
-    conf.threads = config
+    // Number of worker threads (default: number of CPU cores)
+    let threads = config
         .server
         .threads
         .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
 
-    // 2. Enable work stealing (default: true)
-    conf.work_stealing = config.server.work_stealing.unwrap_or(true);
+    // Enable work stealing (default: true)
+    let work_stealing = config.server.work_stealing.unwrap_or(true);
 
-    // 3. Grace period for shutdown (default: 30 seconds)
-    conf.grace_period_seconds = Some(config.server.grace_period_seconds.unwrap_or(30));
+    // Grace period for shutdown (default: 30 seconds)
+    let grace_period_seconds = Some(config.server.grace_period_seconds.unwrap_or(30));
 
-    // 4. Graceful shutdown timeout (default: 10 seconds)
-    conf.graceful_shutdown_timeout_seconds = Some(config.server.graceful_shutdown_timeout_seconds.unwrap_or(10));
+    // Graceful shutdown timeout (default: 10 seconds)
+    let graceful_shutdown_timeout_seconds =
+        Some(config.server.graceful_shutdown_timeout_seconds.unwrap_or(10));
 
-    // 5. Upstream keepalive pool size (default: 128)
-    conf.upstream_keepalive_pool_size = config.server.upstream_keepalive_pool_size.unwrap_or(128);
+    // Upstream keepalive pool size (default: 128)
+    let upstream_keepalive_pool_size = config.server.upstream_keepalive_pool_size.unwrap_or(128);
 
-    // 6. Error log file path (optional)
-    conf.error_log = config.server.error_log.clone();
+    // Error log file path (optional)
+    let error_log = config.server.error_log.clone();
+
+    let conf = ServerConf {
+        daemon: false, // Ensure daemon mode is disabled (we don't run as daemon)
+        threads,
+        work_stealing,
+        grace_period_seconds,
+        graceful_shutdown_timeout_seconds,
+        upstream_keepalive_pool_size,
+        error_log,
+        ..Default::default()
+    };
 
     tracing::debug!(
         threads = conf.threads,

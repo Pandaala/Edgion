@@ -1,5 +1,5 @@
-pub mod proto {
+mod inner {
     tonic::include_proto!("conf_sync");
 }
 
-pub use proto::*;
+pub use inner::*;

@@ -45,8 +45,7 @@ pub fn is_valid_domain(s: &str) -> bool {
             }
 
             // Check all characters in label
-            for j in label_start..i {
-                let ch = bytes[j];
+            for &ch in &bytes[label_start..i] {
                 if !ch.is_ascii_alphanumeric() && ch != b'-' {
                     return false;
                 }

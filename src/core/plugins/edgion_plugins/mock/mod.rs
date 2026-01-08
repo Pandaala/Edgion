@@ -1,3 +1,3 @@
-mod mock;
+mod plugin;
 
-pub use mock::Mock;
+pub use plugin::Mock;

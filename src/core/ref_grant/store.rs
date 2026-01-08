@@ -84,6 +84,7 @@ impl ReferenceGrantStore {
     ///
     /// # Returns
     /// `true` if the reference is allowed by at least one ReferenceGrant, `false` otherwise
+    #[allow(clippy::too_many_arguments)]
     pub fn check_reference_allowed(
         &self,
         from_namespace: &str,

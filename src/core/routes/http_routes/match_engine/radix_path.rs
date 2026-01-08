@@ -43,7 +43,7 @@ impl RadixPath {
             }
         };
 
-        let mut chars = path.chars().peekable();
+        let chars = path.chars().peekable();
         for c in chars {
             if c == '/' {
                 process_segment(current_segment.clone(), &mut raw_segments);

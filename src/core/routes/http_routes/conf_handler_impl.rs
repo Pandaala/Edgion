@@ -6,7 +6,7 @@ use crate::core::routes::http_routes::match_engine::radix_route_match::RadixRout
 use crate::core::routes::http_routes::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::core::routes::http_routes::routes_mgr::RouteRules;
 use crate::core::routes::http_routes::{get_global_route_manager, HttpRouteRuleUnit, RouteManager};
-use crate::types::{HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ResourceMeta};
+use crate::types::{HTTPRoute, HTTPRouteMatch, HTTPRouteRule, MatchInfo, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -14,6 +14,21 @@ use std::time::Instant;
 
 type GatewayKey = String;
 type DomainStr = String;
+/// (normal_routes, regex_routes) tuple for a domain
+type RouteRulesPair = (Vec<Arc<HttpRouteRuleUnit>>, Vec<Arc<HttpRouteRuleUnit>>);
+/// Domain -> (normal_routes, regex_routes) mapping
+type DomainRouteRulesMap = HashMap<DomainStr, RouteRulesPair>;
+/// Gateway -> Domain -> Routes mapping
+type GatewayDomainRulesMap = HashMap<GatewayKey, DomainRouteRulesMap>;
+
+/// Validated HTTPRoute data extracted from an HTTPRoute resource
+struct ValidatedHttpRoute<'a> {
+    parent_refs: &'a Vec<crate::types::resources::common::ParentReference>,
+    rules: &'a Vec<crate::types::HTTPRouteRule>,
+    hostnames: &'a Vec<String>,
+    namespace: String,
+    name: String,
+}
 
 /// Implement ConfHandler for Arc<RouteManager> to allow using the global instance
 impl ConfHandler<HTTPRoute> for Arc<RouteManager> {
@@ -63,6 +78,7 @@ impl RouteManager {
     }
 
     /// Create a regex route unit from match_item
+    #[allow(clippy::too_many_arguments)]
     fn create_regex_route_unit(
         namespace: &str,
         name: &str,
@@ -81,17 +97,19 @@ impl RouteManager {
 
         let regex = Regex::new(path_value).map_err(|e| format!("Invalid regex '{}': {}", path_value, e))?;
 
-        Ok(HttpRouteRuleUnit::new(
-            namespace.to_string(),
-            name.to_string(),
-            rule_id,
-            match_id,
-            resource_key.to_string(),
-            match_item.clone(),
+        Ok(HttpRouteRuleUnit {
+            resource_key: resource_key.to_string(),
+            matched_info: MatchInfo::new(
+                namespace.to_string(),
+                name.to_string(),
+                rule_id,
+                match_id,
+                match_item.clone(),
+            ),
             rule,
-            Some(regex),
+            path_regex: Some(regex),
             parent_refs,
-        ))
+        })
     }
 }
 
@@ -258,17 +276,19 @@ impl RouteManager {
                                     regex_routes_list.push(Arc::new(regex_unit));
                                 }
                             } else {
-                                let rule_unit = HttpRouteRuleUnit::new(
-                                    route_namespace.to_string(),
-                                    route_name.to_string(),
-                                    rule_id,
-                                    match_id,
-                                    resource_key.clone(),
-                                    match_item.clone(),
-                                    rule_arc.clone(),
-                                    None,
-                                    route.spec.parent_refs.clone(),
-                                );
+                                let rule_unit = HttpRouteRuleUnit {
+                                    resource_key: resource_key.clone(),
+                                    matched_info: MatchInfo::new(
+                                        route_namespace.to_string(),
+                                        route_name.to_string(),
+                                        rule_id,
+                                        match_id,
+                                        match_item.clone(),
+                                    ),
+                                    rule: rule_arc.clone(),
+                                    path_regex: None,
+                                    parent_refs: route.spec.parent_refs.clone(),
+                                };
                                 route_rules_list.push(Arc::new(rule_unit));
                             }
                         }
@@ -423,17 +443,19 @@ impl RouteManager {
                                         regex_routes_list.push(Arc::new(regex_unit));
                                     }
                                 } else {
-                                    let rule_unit = HttpRouteRuleUnit::new(
-                                        route_namespace.to_string(),
-                                        route_name.to_string(),
-                                        rule_id,
-                                        match_id,
-                                        resource_key.clone(),
-                                        match_item.clone(),
-                                        rule_arc.clone(),
-                                        None,
-                                        route.spec.parent_refs.clone(),
-                                    );
+                                    let rule_unit = HttpRouteRuleUnit {
+                                        resource_key: resource_key.clone(),
+                                        matched_info: MatchInfo::new(
+                                            route_namespace.to_string(),
+                                            route_name.to_string(),
+                                            rule_id,
+                                            match_id,
+                                            match_item.clone(),
+                                        ),
+                                        rule: rule_arc.clone(),
+                                        path_regex: None,
+                                        parent_refs: route.spec.parent_refs.clone(),
+                                    };
                                     route_rules_list.push(Arc::new(rule_unit));
                                 }
                             }
@@ -570,17 +592,19 @@ impl RouteManager {
                                     }
                                 } else {
                                     // Create normal route (exact/prefix)
-                                    let rule_unit = HttpRouteRuleUnit::new(
-                                        route_namespace.to_string(),
-                                        route_name.to_string(),
-                                        rule_id,
-                                        match_id,
-                                        resource_key.clone(),
-                                        match_item.clone(),
-                                        rule_arc.clone(),
-                                        None,
-                                        route.spec.parent_refs.clone(),
-                                    );
+                                    let rule_unit = HttpRouteRuleUnit {
+                                        resource_key: resource_key.clone(),
+                                        matched_info: MatchInfo::new(
+                                            route_namespace.to_string(),
+                                            route_name.to_string(),
+                                            rule_id,
+                                            match_id,
+                                            match_item.clone(),
+                                        ),
+                                        rule: rule_arc.clone(),
+                                        path_regex: None,
+                                        parent_refs: route.spec.parent_refs.clone(),
+                                    };
                                     route_rules_list.push(Arc::new(rule_unit));
                                 }
                             }
@@ -649,11 +673,8 @@ impl RouteManager {
 /// The tuple contains (normal_routes, regex_routes), both using Arc<HttpRouteRuleUnit>
 fn parse_http_routes_to_gateway_domain_rules(
     data: &HashMap<String, HTTPRoute>,
-) -> HashMap<GatewayKey, HashMap<DomainStr, (Vec<Arc<HttpRouteRuleUnit>>, Vec<Arc<HttpRouteRuleUnit>>)>> {
-    let mut gateway_domain_rules: HashMap<
-        GatewayKey,
-        HashMap<DomainStr, (Vec<Arc<HttpRouteRuleUnit>>, Vec<Arc<HttpRouteRuleUnit>>)>,
-    > = HashMap::new();
+) -> GatewayDomainRulesMap {
+    let mut gateway_domain_rules: GatewayDomainRulesMap = HashMap::new();
 
     let mut processed_routes = 0;
     let mut skipped_routes = 0;
@@ -661,8 +682,8 @@ fn parse_http_routes_to_gateway_domain_rules(
     // Iterate through all HTTPRoutes and collect rules
     for (_key, route) in data.iter() {
         // Validate HTTPRoute and extract required fields
-        let (parent_refs, rules, hostnames, route_namespace, route_name) = match validate_http_route(route) {
-            Some(validated) => validated,
+        let validated = match validate_http_route(route) {
+            Some(v) => v,
             None => {
                 skipped_routes += 1;
                 continue;
@@ -670,9 +691,9 @@ fn parse_http_routes_to_gateway_domain_rules(
         };
 
         // Process each parent gateway reference
-        for parent_ref in parent_refs {
+        for parent_ref in validated.parent_refs {
             // Build gateway key
-            let gateway_key = parent_ref.build_parent_key(Some(&route_namespace));
+            let gateway_key = parent_ref.build_parent_key(Some(&validated.namespace));
 
             // Get or create the domain map for this gateway
             let domain_map = gateway_domain_rules
@@ -680,8 +701,8 @@ fn parse_http_routes_to_gateway_domain_rules(
                 .or_default();
 
             // Process each hostname and rule combination
-            for hostname in hostnames {
-                for (rule_id, rule) in rules.iter().enumerate() {
+            for hostname in validated.hostnames {
+                for (rule_id, rule) in validated.rules.iter().enumerate() {
                     let rule_arc = Arc::new(rule.clone());
 
                     // Each rule may have multiple matches
@@ -695,8 +716,8 @@ fn parse_http_routes_to_gateway_domain_rules(
                             if RouteManager::is_regex_path(match_item) {
                                 // Create regex route
                                 match RouteManager::create_regex_route_unit(
-                                    &route_namespace,
-                                    &route_name,
+                                    &validated.namespace,
+                                    &validated.name,
                                     rule_id,
                                     match_id,
                                     &route.key_name(),
@@ -713,22 +734,24 @@ fn parse_http_routes_to_gateway_domain_rules(
                                 }
                             } else {
                                 // Create normal route
-                                let rule_unit = HttpRouteRuleUnit::new(
-                                    route_namespace.clone(),
-                                    route_name.clone(),
-                                    rule_id,
-                                    match_id,
-                                    route.key_name(),
-                                    match_item.clone(),
-                                    rule_arc.clone(),
-                                    None,
-                                    route.spec.parent_refs.clone(),
-                                );
+                                let rule_unit = HttpRouteRuleUnit {
+                                    resource_key: route.key_name(),
+                                    matched_info: MatchInfo::new(
+                                        validated.namespace.clone(),
+                                        validated.name.clone(),
+                                        rule_id,
+                                        match_id,
+                                        match_item.clone(),
+                                    ),
+                                    rule: rule_arc.clone(),
+                                    path_regex: None,
+                                    parent_refs: route.spec.parent_refs.clone(),
+                                };
                                 split.0.push(Arc::new(rule_unit));
                             }
                         }
                     } else {
-                        tracing::warn!(route_name=%route_name, route_namespace=%route_namespace, "route missing match");
+                        tracing::warn!(route_name=%validated.name, route_namespace=%validated.namespace, "route missing match");
                     }
                 }
             }
@@ -749,16 +772,8 @@ fn parse_http_routes_to_gateway_domain_rules(
 }
 
 /// Validate HTTPRoute and extract required fields
-/// Returns Some((parent_refs, rules, hostnames, namespace, name)) if valid, None otherwise
-fn validate_http_route(
-    route: &HTTPRoute,
-) -> Option<(
-    &Vec<crate::types::resources::common::ParentReference>,
-    &Vec<crate::types::HTTPRouteRule>,
-    &Vec<String>,
-    String,
-    String,
-)> {
+/// Returns Some(ValidatedHttpRoute) if valid, None otherwise
+fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
     // Check parent_refs
     let parent_refs = match &route.spec.parent_refs {
         Some(refs) if !refs.is_empty() => refs,
@@ -804,7 +819,13 @@ fn validate_http_route(
         }
     };
 
-    Some((parent_refs, rules, hostnames, route_namespace, route_name))
+    Some(ValidatedHttpRoute {
+        parent_refs,
+        rules,
+        hostnames,
+        namespace: route_namespace,
+        name: route_name,
+    })
 }
 
 impl ConfHandler<HTTPRoute> for RouteManager {

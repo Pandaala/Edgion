@@ -78,23 +78,16 @@ impl EdgionUdp {
         // Main packet receiving loop
         let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE];
 
-        loop {
-            match self.socket.recv_from(&mut buf).await {
-                Ok((len, client_addr)) => {
-                    let data = buf[..len].to_vec();
-                    let this = self.clone();
+        while let Ok((len, client_addr)) = self.socket.recv_from(&mut buf).await {
+            let data = buf[..len].to_vec();
+            let this = self.clone();
 
-                    // Handle packet asynchronously
-                    tokio::spawn(async move {
-                        this.handle_client_packet(data, client_addr).await;
-                    });
-                }
-                Err(_) => {
-                    // Socket error, break the loop
-                    break;
-                }
-            }
+            // Handle packet asynchronously
+            tokio::spawn(async move {
+                this.handle_client_packet(data, client_addr).await;
+            });
         }
+        // Socket error occurred, loop ended
     }
 
     /// Handle a packet received from a client

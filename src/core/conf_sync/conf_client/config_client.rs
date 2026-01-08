@@ -109,7 +109,7 @@ impl ConfigClient {
         gateway_classes_cache.set_conf_processor(gateway_class_handler);
 
         let gateways_cache = ClientCache::new(client_id.clone(), client_name.clone());
-        let gateway_handler = crate::core::gateway::gateway::create_gateway_handler();
+        let gateway_handler = crate::core::gateway::gateway_handler::create_gateway_handler();
         gateways_cache.set_conf_processor(gateway_handler);
 
         let edgion_gateway_configs_cache = ClientCache::new(client_id.clone(), client_name.clone());

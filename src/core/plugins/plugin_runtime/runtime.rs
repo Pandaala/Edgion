@@ -182,7 +182,7 @@ impl PluginRuntime {
             EdgionPlugin::BasicAuth(config) => Some(Box::new(BasicAuth::new(config))),
             EdgionPlugin::Cors(config) => Some(Box::new(Cors::new(config))),
             EdgionPlugin::Csrf(config) => Some(Box::new(Csrf::new(config))),
-            EdgionPlugin::IpRestriction(config) => Some(IpRestriction::new(config)),
+            EdgionPlugin::IpRestriction(config) => Some(IpRestriction::create(config)),
             EdgionPlugin::Mock(config) => Some(Box::new(Mock::new(config))),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =

@@ -544,7 +544,7 @@ async fn list_linksys(State(client): State<Arc<ConfigClient>>) -> Json<ListRespo
     Json(ListResponse::success(list_data.data))
 }
 
-/// Get Secret by namespace and name
+// Get Secret by namespace and name
 // async fn get_secret(
 //     State(client): State<Arc<ConfigClient>>,
 //     Query(query): Query<ResourceQuery>,

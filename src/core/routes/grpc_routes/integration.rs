@@ -1,10 +1,11 @@
+//! Integration helpers for http_routes
+//!
+//! This module provides clean integration interfaces for http_routes to call,
+//! encapsulating all gRPC-specific logic within grpc_routes module.
+
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
 use crate::types::EdgionHttpContext;
-///! Integration helpers for http_routes
-///!
-///! This module provides clean integration interfaces for http_routes to call,
-///! encapsulating all gRPC-specific logic within grpc_routes module.
 use pingora_proxy::Session;
 use std::sync::Arc;
 

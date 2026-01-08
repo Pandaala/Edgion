@@ -234,7 +234,7 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttp, peer: &mut Box<HttpPeer
 
 /// Update peer address info and metrics (inline for performance)
 #[inline]
-pub fn update_peer_metrics(_edgion_http: &EdgionHttp, peer: &Box<HttpPeer>, ctx: &mut EdgionHttpContext) {
+pub fn update_peer_metrics(_edgion_http: &EdgionHttp, peer: &HttpPeer, ctx: &mut EdgionHttpContext) {
     // Increment try count
     ctx.try_cnt += 1;
 

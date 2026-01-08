@@ -22,10 +22,7 @@ fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
         .annotations
         .as_ref()
         .and_then(|annotations| annotations.get(listener_builder::ANNOTATION_ENABLE_HTTP2))
-        .map(|value| match value.to_lowercase().as_str() {
-            "false" | "0" | "no" | "off" => false,
-            _ => true,
-        })
+        .map(|value| !matches!(value.to_lowercase().as_str(), "false" | "0" | "no" | "off"))
         .unwrap_or(true) // Default to true if annotation is not present
 }
 
