@@ -1,0 +1,21 @@
+# gRPC Match 测试套件 Gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: grpc-match-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: grpc
+      protocol: HTTP
+      port: 31060
+    - name: https
+      protocol: HTTPS
+      port: 31061
+      hostname: "*.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: grpc-match-tls
+            namespace: edgion-test

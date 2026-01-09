@@ -1,0 +1,58 @@
+{
+  "current_max": 31180,
+  "suites": {
+    "http": {
+      "http": 31000
+    },
+    "http-match": {
+      "http": 31020,
+      "https": 31021
+    },
+    "http-security": {
+      "http": 31030
+    },
+    "http-redirect": {
+      "http": 31040
+    },
+    "grpc": {
+      "grpc": 31050
+    },
+    "grpc-match": {
+      "grpc": 31060
+    },
+    "websocket": {
+      "http": 31080
+    },
+    "tcp": {
+      "tcp": 31090,
+      "tcp_filtered": 31091
+    },
+    "udp": {
+      "udp": 31100
+    },
+    "mtls": {
+      "https": 31110
+    },
+    "lb-policy": {
+      "http": 31120
+    },
+    "weighted-backend": {
+      "http": 31130
+    },
+    "timeout": {
+      "http": 31140
+    },
+    "security": {
+      "http": 31150
+    },
+    "real-ip": {
+      "http": 31160
+    },
+    "backend-tls": {
+      "http": 31170
+    },
+    "plugin-logs": {
+      "http": 31180
+    }
+  }
+}

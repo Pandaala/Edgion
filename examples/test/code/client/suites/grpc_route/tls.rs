@@ -37,7 +37,7 @@ impl GrpcTlsTestSuite {
                 let grpc_url = format!("https://127.0.0.1:{}", ctx.grpc_https_port);
 
                 // 读取 CA 证书
-                let ca_pem = match std::fs::read_to_string("examples/testing/certs/ca.pem") {
+                let ca_pem = match std::fs::read_to_string("examples/test/certs/ca.pem") {
                     Ok(pem) => pem,
                     Err(e) => {
                         return TestResult::failed(start.elapsed(), format!("Failed to read CA certificate: {}", e));

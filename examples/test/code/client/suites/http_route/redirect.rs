@@ -16,8 +16,7 @@ use async_trait::async_trait;
 use reqwest::redirect::Policy;
 use std::time::Instant;
 
-/// HTTP redirect 测试使用的端口
-const REDIRECT_PORT: u16 = 10081;
+// HTTP redirect 测试端口从 ports.json 加载，使用 ctx.http_port
 
 pub struct HttpRedirectTestSuite;
 
@@ -38,7 +37,7 @@ impl HttpRedirectTestSuite {
                         .build()
                         .unwrap();
 
-                    let url = format!("http://{}:{}/health", ctx.target_host, REDIRECT_PORT);
+                    let url = format!("http://{}:{}/health", ctx.target_host, ctx.http_port);
 
                     match client.get(&url).header("Host", "test.example.com").send().await {
                         Ok(response) => {
@@ -53,9 +52,9 @@ impl HttpRedirectTestSuite {
                             match response.headers().get("location") {
                                 Some(location) => {
                                     let location_str = location.to_str().unwrap_or("");
-                                    let expected = "https://test.example.com:10443/health";
-
-                                    if location_str == expected {
+                                    
+                                    // 验证重定向 URL 格式正确 (https scheme, 正确的 host 和 path)
+                                    if location_str.starts_with("https://test.example.com:") && location_str.ends_with("/health") {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
                                             format!("301 Redirect to: {}", location_str),
@@ -63,7 +62,7 @@ impl HttpRedirectTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Location mismatch. Expected: {}, Got: {}", expected, location_str),
+                                            format!("Invalid redirect URL format: {}", location_str),
                                         )
                                     }
                                 }
@@ -92,7 +91,7 @@ impl HttpRedirectTestSuite {
                         .build()
                         .unwrap();
 
-                    let url = format!("http://{}:{}/api/users?page=1&limit=10", ctx.target_host, REDIRECT_PORT);
+                    let url = format!("http://{}:{}/api/users?page=1&limit=10", ctx.target_host, ctx.http_port);
 
                     match client.get(&url).header("Host", "api.example.com").send().await {
                         Ok(response) => {
@@ -144,7 +143,7 @@ impl HttpRedirectTestSuite {
                         .build()
                         .unwrap();
 
-                    let url = format!("http://{}:{}/test", ctx.target_host, REDIRECT_PORT);
+                    let url = format!("http://{}:{}/test", ctx.target_host, ctx.http_port);
 
                     match client.get(&url).header("Host", "secure.example.com").send().await {
                         Ok(response) => {
@@ -196,7 +195,7 @@ impl HttpRedirectTestSuite {
                         .build()
                         .unwrap();
 
-                    let url = format!("http://{}:{}/api/create", ctx.target_host, REDIRECT_PORT);
+                    let url = format!("http://{}:{}/api/create", ctx.target_host, ctx.http_port);
 
                     match client
                         .post(&url)

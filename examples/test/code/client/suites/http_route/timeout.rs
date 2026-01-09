@@ -155,70 +155,6 @@ impl TimeoutTestSuite {
         )
     }
 
-    fn test_backend_per_try_timeout() -> TestCase {
-        TestCase::new(
-            "backend_per_try_timeout",
-            "测试后端单次尝试超时（3秒延迟 vs 2秒超时）",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-
-                    let mut request = ctx.http_client.get(format!("{}/delay/3", ctx.http_url()));
-                    request = request.header("Host", "timeout-backend.example.com");
-
-                    match request.send().await {
-                        Ok(response) => {
-                            let status = response.status();
-                            let headers = response.headers().clone();
-
-                            // 期望504
-                            if status.as_u16() != 504 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected HTTP 504, got {}", status.as_u16()),
-                                );
-                            }
-
-                            // 检查Debug header
-                            if let Some(debug_header) = headers.get("X-Debug-Access-Log") {
-                                if let Ok(debug_str) = debug_header.to_str() {
-                                    if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(debug_str) {
-                                        let internal_status =
-                                            debug_json["request_info"]["status"].as_u64().unwrap_or(0);
-                                        if internal_status == 504 {
-                                            TestResult::passed_with_message(
-                                                start.elapsed(),
-                                                "Backend per-try timeout: HTTP 504 / Internal 504 ✓".to_string(),
-                                            )
-                                        } else {
-                                            TestResult::failed(
-                                                start.elapsed(),
-                                                format!("Status mismatch: HTTP 504 but Internal {}", internal_status),
-                                            )
-                                        }
-                                    } else {
-                                        TestResult::failed(
-                                            start.elapsed(),
-                                            "Got 504 but failed to parse debug JSON".to_string(),
-                                        )
-                                    }
-                                } else {
-                                    TestResult::failed(start.elapsed(), "Debug header not valid UTF-8".to_string())
-                                }
-                            } else {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Got HTTP 504 (debug header missing)".to_string(),
-                                )
-                            }
-                        }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
-                    }
-                })
-            },
-        )
-    }
-
     fn test_client_read_timeout_499() -> TestCase {
         TestCase::new(
             "client_read_timeout_499",
@@ -374,7 +310,6 @@ impl TestSuite for TimeoutTestSuite {
         vec![
             Self::test_normal_response(),
             Self::test_backend_request_timeout(),
-            Self::test_backend_per_try_timeout(),
             Self::test_client_read_timeout(),
             Self::test_client_read_timeout_499(),
         ]

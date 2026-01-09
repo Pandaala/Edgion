@@ -17,9 +17,6 @@ pub use http_route::{
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite, GrpcTlsTestSuite};
 
 pub use tcp_route::TcpTestSuite;
-// StreamPluginsTestSuite 暂未使用
-#[allow(unused_imports)]
-pub use tcp_route::StreamPluginsTestSuite;
 
 pub use udp_route::UdpTestSuite;
 

@@ -47,9 +47,27 @@ impl TestContext {
         access_log_path: PathBuf,
     ) -> Self {
         // Configure HTTP client to accept self-signed certificates for HTTPS testing
-        let http_client = reqwest::Client::builder()
+        let mut client_builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
-            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_certs(true);
+        
+        // Add DNS resolution for HTTPS hosts to support proper SNI
+        // This maps hostnames to 127.0.0.1 so the client sends correct SNI
+        if let Some(ref host) = http_host {
+            // Resolve HTTP host for HTTPS connections
+            let addr: std::net::SocketAddr = format!("127.0.0.1:{}", https_port).parse().unwrap();
+            client_builder = client_builder.resolve(host, addr);
+            // Also resolve for regular HTTP port
+            let http_addr: std::net::SocketAddr = format!("127.0.0.1:{}", http_port).parse().unwrap();
+            client_builder = client_builder.resolve(host, http_addr);
+        }
+        if let Some(ref host) = grpc_host {
+            // Resolve gRPC host for gRPC-TLS connections
+            let addr: std::net::SocketAddr = format!("127.0.0.1:{}", grpc_https_port).parse().unwrap();
+            client_builder = client_builder.resolve(host, addr);
+        }
+        
+        let http_client = client_builder
             .build()
             .expect("Failed to create HTTP client");
 

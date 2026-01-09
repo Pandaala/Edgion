@@ -3,6 +3,7 @@
 
 mod framework;
 mod log_analyzer;
+mod port_config;
 mod reporter;
 mod suites;
 
@@ -102,6 +103,30 @@ async fn main() -> Result<()> {
         tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init();
     }
 
+    // Get command name for port lookup
+    let command_name = match &cli.command {
+        Commands::Http => "http",
+        Commands::Https => "https",
+        Commands::HttpMatch => "http-match",
+        Commands::HttpSecurity => "http-security",
+        Commands::HttpRedirect => "http-redirect",
+        Commands::Grpc => "grpc",
+        Commands::GrpcMatch => "grpc-match",
+        Commands::GrpcTls => "grpc-tls",
+        Commands::Websocket => "websocket",
+        Commands::Tcp => "tcp",
+        Commands::Udp => "udp",
+        Commands::Mtls => "mtls",
+        Commands::LbPolicy => "lb-policy",
+        Commands::WeightedBackend => "weighted-backend",
+        Commands::Timeout => "timeout",
+        Commands::Security => "security",
+        Commands::RealIp => "real-ip",
+        Commands::BackendTls => "backend-tls",
+        Commands::PluginLogs => "plugin-logs",
+        Commands::All => "http", // Default to http for "all"
+    };
+
     // Determine ports and host based on gateway flag
     let (
         http_port,
@@ -115,26 +140,41 @@ async fn main() -> Result<()> {
         http_host,
         grpc_host,
     ) = if cli.gateway {
-        // Gateway mode: use Gateway ports
-        (
-            10080, // Gateway HTTP port
-            10080, // Gateway HTTP port (gRPC uses HTTP listener)
-            19000, // Gateway TCP port (sectionName: tcp)
-            19010, // Gateway TCP filtered port (sectionName: tcp-filtered) - for sectionName testing
-            19002, // Gateway UDP port
-            10080, // WebSocket through HTTP Gateway
-            18443, // Gateway HTTPS port
-            18443, // Gateway gRPC-HTTPS port
-            Some("test.example.com".to_string()),
-            Some("grpc.example.com".to_string()),
-        )
+        // Gateway mode: load ports from ports.json
+        let suite_name = port_config::command_to_suite(command_name);
+        match port_config::PortConfig::load() {
+            Ok(config) => {
+                let ports = config.get_ports(suite_name);
+                (
+                    ports.http.unwrap_or(31000),
+                    ports.grpc.unwrap_or(ports.http.unwrap_or(31000)), // gRPC uses HTTP listener if not specified
+                    ports.tcp.unwrap_or(31090),
+                    ports.tcp_filtered.unwrap_or(31091),
+                    ports.udp.unwrap_or(31100),
+                    ports.http.unwrap_or(31000), // WebSocket uses HTTP port
+                    ports.https.unwrap_or(ports.http.map(|p| p + 1).unwrap_or(31001)),
+                    ports.grpc_tls.unwrap_or(31070),
+                    Some("test.example.com".to_string()),
+                    Some("grpc.example.com".to_string()),
+                )
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to load ports.json: {}. Using default ports.", e);
+                // Fallback to old default ports
+                (
+                    31000, 31000, 31090, 31091, 31100, 31000, 31001, 31070,
+                    Some("test.example.com".to_string()),
+                    Some("grpc.example.com".to_string()),
+                )
+            }
+        }
     } else {
-        // Direct mode: use CLI provided ports
+        // Direct mode: use CLI provided ports (pointing to test_server)
         (
             cli.http_port,
             cli.grpc_port,
             cli.tcp_port,
-            19010, // tcp_filtered_port - same as gateway mode for consistency
+            cli.tcp_port + 1, // tcp_filtered_port
             cli.udp_port,
             cli.websocket_port,
             cli.https_port,

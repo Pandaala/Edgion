@@ -6,7 +6,7 @@ metadata:
   namespace: edgion-test
 spec:
   parentRefs:
-    - name: example-gateway
+    - name: http-test-gateway
       namespace: edgion-test
 
   hostnames:

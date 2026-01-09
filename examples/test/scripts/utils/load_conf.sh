@@ -95,11 +95,35 @@ check_services() {
 }
 
 # =============================================================================
+# 复制配置文件到 CONFIG_DIR（用于 Gateway 启动前预加载）
+# =============================================================================
+copy_file_to_config() {
+    local file=$1
+    local filename=$(basename "$file")
+    local config_dir="${EDGION_WORK_DIR:-}/config"
+    
+    if [ -z "$config_dir" ] || [ ! -d "$config_dir" ]; then
+        # 如果 CONFIG_DIR 不存在，使用 edgion-ctl API 方式
+        return 1
+    fi
+    
+    log_info "复制 $filename 到 $config_dir"
+    cp "$file" "$config_dir/"
+    return 0
+}
+
+# =============================================================================
 # 使用 edgion-ctl 加载单个文件
 # =============================================================================
 apply_file() {
     local file=$1
     local filename=$(basename "$file")
+    
+    # 优先使用文件复制方式（Gateway 启动前）
+    if copy_file_to_config "$file"; then
+        log_success "$filename 复制完成"
+        return 0
+    fi
     
     log_info "加载 $filename..."
     

@@ -66,10 +66,19 @@ impl TcpTestSuite {
     fn test_tcp_section_name_filtered() -> TestCase {
         TestCase::new(
             "tcp_section_name_filtered",
-            "测试 TCP sectionName 匹配 (tcp-filtered listener)",
+            "测试 TCP sectionName 匹配 (tcp-filtered listener, 仅 Gateway 模式)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    
+                    // 这个测试只在 Gateway 模式下有意义
+                    if !ctx.gateway {
+                        return TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Skipped in Direct mode (Gateway only test)".to_string(),
+                        );
+                    }
+                    
                     let test_data = b"Hello TCP Filtered";
 
                     match TcpStream::connect(&ctx.tcp_filtered_addr()).await {
