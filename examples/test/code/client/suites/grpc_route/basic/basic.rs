@@ -11,9 +11,9 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::time::Instant;
 
-// Use proto module from parent
-use super::test::test_service_client::TestServiceClient;
-use super::test::HelloRequest;
+// Use proto module from grpc_route
+use super::super::test::test_service_client::TestServiceClient;
+use super::super::test::HelloRequest;
 
 pub struct GrpcTestSuite;
 

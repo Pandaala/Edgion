@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # 加载测试配置
-# 使用 edgion-ctl 加载指定 suite 的配置到 controller
+# 支持新的两级目录结构: Resource/Item (如 HTTPRoute/Match)
 # =============================================================================
 
 set -e
@@ -53,19 +53,22 @@ log_section() {
 # 帮助信息
 # =============================================================================
 show_help() {
-    echo "加载测试配置"
+    echo "加载测试配置（支持两级目录结构）"
     echo ""
     echo "用法: $0 [OPTIONS] <SUITE>"
     echo ""
-    echo "SUITE:"
-    echo "  base         基础配置 (GatewayClass, Gateway, EdgionGatewayConfig)"
-    echo "  http         HTTP 测试配置"
-    echo "  https        HTTPS 测试配置"
-    echo "  grpc         gRPC 测试配置"
-    echo "  tcp          TCP 测试配置"
-    echo "  udp          UDP 测试配置"
-    echo "  websocket    WebSocket 测试配置"
-    echo "  all          加载所有配置"
+    echo "SUITE (支持多级路径):"
+    echo "  base                    基础配置 (GatewayClass, EdgionGatewayConfig)"
+    echo "  HTTPRoute               HTTPRoute 全部测试配置"
+    echo "  HTTPRoute/Basic         HTTPRoute 基础测试"
+    echo "  HTTPRoute/Match         HTTPRoute 匹配测试"
+    echo "  HTTPRoute/Backend       HTTPRoute 后端相关测试 (含 LBPolicy, WeightedBackend, Timeout)"
+    echo "  HTTPRoute/Filters       HTTPRoute 过滤器测试 (含 Redirect, Security)"
+    echo "  HTTPRoute/Protocol      HTTPRoute 协议测试 (含 WebSocket)"
+    echo "  grpc                    gRPC 测试配置"
+    echo "  tcp                     TCP 测试配置"
+    echo "  udp                     UDP 测试配置"
+    echo "  all                     加载所有配置"
     echo ""
     echo "OPTIONS:"
     echo "  --verify     加载后验证资源同步"
@@ -73,9 +76,10 @@ show_help() {
     echo "  -h, --help   显示帮助"
     echo ""
     echo "示例:"
-    echo "  $0 base          # 加载基础配置"
-    echo "  $0 http          # 加载 HTTP 测试配置"
-    echo "  $0 --verify http # 加载并验证 HTTP 配置"
+    echo "  $0 base                      # 加载基础配置"
+    echo "  $0 HTTPRoute/Match           # 加载 HTTPRoute 匹配测试配置"
+    echo "  $0 HTTPRoute/Backend         # 加载 HTTPRoute 后端测试配置"
+    echo "  $0 --verify HTTPRoute/Basic  # 加载并验证 HTTPRoute 基础配置"
 }
 
 # =============================================================================
@@ -103,7 +107,6 @@ copy_file_to_config() {
     local config_dir="${EDGION_WORK_DIR:-}/config"
     
     if [ -z "$config_dir" ] || [ ! -d "$config_dir" ]; then
-        # 如果 CONFIG_DIR 不存在，使用 edgion-ctl API 方式
         return 1
     fi
     
@@ -137,9 +140,9 @@ apply_file() {
 }
 
 # =============================================================================
-# 加载目录下所有 yaml 文件
+# 递归加载目录下所有 yaml 文件
 # =============================================================================
-load_directory() {
+load_directory_recursive() {
     local dir=$1
     local suite_name=$2
     local failed=false
@@ -150,8 +153,8 @@ load_directory() {
         return 1
     fi
     
-    # 获取所有 yaml 文件
-    local files=$(find "$dir" -maxdepth 1 -name "*.yaml" -o -name "*.yml" | sort)
+    # 递归获取所有 yaml 文件
+    local files=$(find "$dir" -type f \( -name "*.yaml" -o -name "*.yml" \) | sort)
     
     if [ -z "$files" ]; then
         log_warn "$suite_name: 无配置文件"
@@ -205,6 +208,30 @@ verify_sync() {
         --gateway-url "$GATEWAY_ADMIN_URL"
     
     return $?
+}
+
+# =============================================================================
+# 获取所有可加载的 suite 列表
+# =============================================================================
+get_all_suites() {
+    local suites="base"
+    
+    # HTTPRoute 下的所有子目录
+    for subdir in "${CONF_DIR}/HTTPRoute"/*; do
+        if [ -d "$subdir" ]; then
+            local name=$(basename "$subdir")
+            suites="$suites HTTPRoute/$name"
+        fi
+    done
+    
+    # 其他资源类型
+    for resource in grpc grpc-match tcp udp mtls security real-ip backend-tls plugins; do
+        if [ -d "${CONF_DIR}/${resource}" ]; then
+            suites="$suites $resource"
+        fi
+    done
+    
+    echo "$suites"
 }
 
 # =============================================================================
@@ -271,7 +298,8 @@ main() {
     
     # 处理 "all"
     if [ "$suites" = "all" ]; then
-        suites="base http https grpc tcp udp websocket"
+        suites=$(get_all_suites)
+        log_info "加载全部配置: $suites"
     fi
     
     local failed=false
@@ -282,7 +310,7 @@ main() {
         
         local suite_dir="${CONF_DIR}/${suite}"
         
-        if ! load_directory "$suite_dir" "$suite"; then
+        if ! load_directory_recursive "$suite_dir" "$suite"; then
             failed=true
         fi
     done

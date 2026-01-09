@@ -391,7 +391,7 @@ generate_certs() {
 }
 
 # =============================================================================
-# 获取要加载的套件列表
+# 获取要加载的套件列表（支持两级目录结构）
 # =============================================================================
 get_suites_to_load() {
     local conf_dir="${PROJECT_ROOT}/examples/test/conf"
@@ -400,14 +400,48 @@ get_suites_to_load() {
         # 使用用户指定的套件
         echo "$SUITES" | tr ',' ' '
     else
-        # 默认：扫描 conf 目录下所有子目录（排除 base）
+        # 默认：扫描 conf 目录下所有子目录
         local suites=""
-        for dir in "$conf_dir"/*/; do
-            local name=$(basename "$dir")
-            if [ "$name" != "base" ]; then
-                suites="$suites $name"
+        
+        # 处理具有两级结构的资源类型 (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute 等)
+        for resource_dir in "${conf_dir}"/*; do
+            if [ -d "$resource_dir" ]; then
+                local resource_name=$(basename "$resource_dir")
+                
+                # 跳过 base 目录
+                if [ "$resource_name" = "base" ]; then
+                    continue
+                fi
+                
+                # 检查是否有子目录结构
+                local has_subdir=false
+                for subdir in "$resource_dir"/*; do
+                    if [ -d "$subdir" ]; then
+                        has_subdir=true
+                        local subdir_name=$(basename "$subdir")
+                        
+                        # 检查是否有更深一层的子目录
+                        local has_deep_subdir=false
+                        for deepdir in "$subdir"/*; do
+                            if [ -d "$deepdir" ]; then
+                                has_deep_subdir=true
+                                suites="$suites ${resource_name}/${subdir_name}/$(basename "$deepdir")"
+                            fi
+                        done
+                        
+                        if ! $has_deep_subdir; then
+                            suites="$suites ${resource_name}/${subdir_name}"
+                        fi
+                    fi
+                done
+                
+                # 如果没有子目录，直接添加资源目录
+                if ! $has_subdir; then
+                    suites="$suites $resource_name"
+                fi
             fi
         done
+        
         echo $suites
     fi
 }

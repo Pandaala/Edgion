@@ -1,4 +1,4 @@
-// Plugins 测试套件
+// Gateway Plugins 测试模块
 
 mod logs;
 

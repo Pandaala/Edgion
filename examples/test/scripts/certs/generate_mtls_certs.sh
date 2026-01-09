@@ -46,7 +46,7 @@ trap "rm -rf $TEMP_DIR" EXIT
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-CONF_DIR="$PROJECT_ROOT/examples/test/conf/mtls"
+CONF_DIR="$PROJECT_ROOT/examples/test/conf/EdgionTls/mTLS"
 CERTS_DIR="$PROJECT_ROOT/examples/test/certs/mtls"
 
 # Create directories

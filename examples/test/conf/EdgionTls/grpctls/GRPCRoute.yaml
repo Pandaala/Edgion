@@ -1,0 +1,21 @@
+# EdgionTls gRPC TLS 测试 GRPCRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: edgiontls-grpctls-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: edgiontls-grpctls-gateway
+      namespace: edgion-test
+      sectionName: grpctls
+  hostnames:
+    - grpc.example.com
+  rules:
+    - matches:
+        - method:
+            service: test.TestService
+      backendRefs:
+        - name: test-grpc-tls
+          namespace: edgion-test
+          port: 30022

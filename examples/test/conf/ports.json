@@ -1,58 +1,64 @@
 {
-  "current_max": 31180,
+  "current_max": 31210,
   "suites": {
-    "http": {
+    "HTTPRoute/Basic": {
       "http": 31000
     },
-    "http-match": {
+    "HTTPRoute/Match": {
       "http": 31020,
       "https": 31021
     },
-    "http-security": {
-      "http": 31030
+    "HTTPRoute/Backend/LBPolicy": {
+      "http": 31120
     },
-    "http-redirect": {
+    "HTTPRoute/Backend/WeightedBackend": {
+      "http": 31130
+    },
+    "HTTPRoute/Backend/Timeout": {
+      "http": 31140
+    },
+    "HTTPRoute/Filters/Redirect": {
       "http": 31040
     },
-    "grpc": {
-      "grpc": 31050
+    "HTTPRoute/Filters/Security": {
+      "http": 31030
     },
-    "grpc-match": {
-      "grpc": 31060
-    },
-    "websocket": {
+    "HTTPRoute/Protocol/WebSocket": {
       "http": 31080
     },
-    "tcp": {
+    "GRPCRoute/Basic": {
+      "grpc": 31050
+    },
+    "GRPCRoute/Match": {
+      "grpc": 31060
+    },
+    "TCPRoute/Basic": {
       "tcp": 31090,
       "tcp_filtered": 31091
     },
-    "udp": {
+    "UDPRoute/Basic": {
       "udp": 31100
     },
-    "mtls": {
-      "https": 31110
-    },
-    "lb-policy": {
-      "http": 31120
-    },
-    "weighted-backend": {
-      "http": 31130
-    },
-    "timeout": {
-      "http": 31140
-    },
-    "security": {
+    "Gateway/Security": {
       "http": 31150
     },
-    "real-ip": {
+    "Gateway/RealIP": {
       "http": 31160
     },
-    "backend-tls": {
+    "Gateway/TLS/BackendTLS": {
       "http": 31170
     },
-    "plugin-logs": {
+    "Gateway/Plugins": {
       "http": 31180
+    },
+    "EdgionTls/https": {
+      "https": 31190
+    },
+    "EdgionTls/grpctls": {
+      "grpc_tls": 31200
+    },
+    "EdgionTls/mTLS": {
+      "https": 31110
     }
   }
 }

@@ -1,27 +1,26 @@
 // 测试套件模块
 
+pub mod edgion_tls;
+pub mod gateway;
 pub mod grpc_route;
 pub mod http_route;
-pub mod plugins;
-pub mod security;
 pub mod tcp_route;
-pub mod tls;
 pub mod udp_route;
 
 // Re-export all test suites for convenience
 pub use http_route::{
-    HttpMatchTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite, HttpsTestSuite, LBPolicyTestSuite,
+    HttpMatchTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite, LBPolicyTestSuite,
     TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
-pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite, GrpcTlsTestSuite};
+pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};
 
 pub use tcp_route::TcpTestSuite;
 
 pub use udp_route::UdpTestSuite;
 
-pub use tls::{BackendTlsTestSuite, MtlsTestSuite};
+// EdgionTls 相关测试
+pub use edgion_tls::{GrpcTlsTestSuite, HttpsTestSuite, MtlsTestSuite};
 
-pub use plugins::PluginLogsTestSuite;
-
-pub use security::{RealIpTestSuite, SecurityTestSuite};
+// Gateway 相关测试
+pub use gateway::{BackendTlsTestSuite, PluginLogsTestSuite, RealIpTestSuite, SecurityTestSuite};

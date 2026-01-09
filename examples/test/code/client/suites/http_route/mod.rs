@@ -1,21 +1,20 @@
 // HTTP Route 测试套件
+// 注：HTTPS 已移至 EdgionTls 资源模块
 
+// 基础测试
 mod basic;
-mod https;
-mod lb_policy;
-mod matches;
-mod redirect;
-mod security;
-mod timeout;
-mod websocket;
-mod weighted_backend;
 
+// 子模块 - 按功能分类
+mod backend;
+mod filters;
+mod r#match;
+mod protocol;
+
+// 导出基础测试
 pub use basic::HttpTestSuite;
-pub use https::HttpsTestSuite;
-pub use lb_policy::LBPolicyTestSuite;
-pub use matches::HttpMatchTestSuite;
-pub use redirect::HttpRedirectTestSuite;
-pub use security::HttpSecurityTestSuite;
-pub use timeout::TimeoutTestSuite;
-pub use websocket::WebSocketTestSuite;
-pub use weighted_backend::WeightedBackendTestSuite;
+
+// 导出子模块测试
+pub use backend::{LBPolicyTestSuite, TimeoutTestSuite, WeightedBackendTestSuite};
+pub use filters::{HttpRedirectTestSuite, HttpSecurityTestSuite};
+pub use protocol::WebSocketTestSuite;
+pub use r#match::HttpMatchTestSuite;
