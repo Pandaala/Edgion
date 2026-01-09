@@ -430,9 +430,14 @@ impl EdgionControllerConfig {
     /// Convert to SysLogConfig (for system logging)
     pub fn to_log_config(&self) -> crate::core::observe::SysLogConfig {
         use crate::core::observe::SysLogConfig;
+        use crate::types::work_dir;
+
+        // Use work_dir to resolve the log directory path
+        // This ensures relative paths like "logs" are resolved to work_dir/logs
+        let log_dir = work_dir().resolve(&self.log_dir());
 
         SysLogConfig {
-            log_dir: PathBuf::from(self.log_dir()),
+            log_dir,
             file_prefix: self.logging.log_prefix.clone(),
             json_format: self.json_format(),
             console: true,

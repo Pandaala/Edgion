@@ -274,6 +274,7 @@ start_controller() {
     
     "${PROJECT_ROOT}/target/debug/edgion-controller" \
         -c "$CONTROLLER_CONFIG" \
+        --work-dir "${WORK_DIR}" \
         --conf-dir "$CONFIG_DIR" \
         --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}" \
         > "${LOG_DIR}/controller.log" 2>&1 &
@@ -307,6 +308,7 @@ start_gateway() {
     EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log" \
     "${PROJECT_ROOT}/target/debug/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
+        --work-dir "${WORK_DIR}" \
         > "${LOG_DIR}/gateway.log" 2>&1 &
     
     local pid=$!
