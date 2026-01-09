@@ -1,0 +1,86 @@
+# HTTP 路由配置
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: test-http
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: example-gateway
+      namespace: edgion-test
+
+  hostnames:
+    - "test.example.com"
+  
+  rules:
+    # 规则1: 健康检查端点（精确匹配）
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则2: Echo 端点（前缀匹配）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /echo
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则3: Headers 端点（精确匹配）- 用于 Real IP 测试
+    - matches:
+        - path:
+            type: Exact
+            value: /headers
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则4: Status 端点（前缀匹配）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /status/
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则5: Delay 端点（前缀匹配）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /delay/
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则6: WebSocket 端点（前缀匹配）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /ws
+      backendRefs:
+        - name: test-websocket
+          port: 30005
+
+    # 规则7: API 路径（前缀匹配）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则8: HTTPS 专用测试路径
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /secure/
+      backendRefs:
+        - name: test-http
+          port: 30001

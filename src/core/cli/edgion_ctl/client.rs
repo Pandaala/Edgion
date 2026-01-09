@@ -42,34 +42,40 @@ impl EdgionClient {
     }
 
     /// GET request - list all resources of a kind (cross-namespace)
+    /// Uses K8s-style API: /api/v1/namespaced/{kind}
     pub async fn list_all(&self, kind: &str) -> Result<Response> {
-        let url = self.build_url(&format!("/api/{}", kind));
+        let url = self.build_url(&format!("/api/v1/namespaced/{}", kind));
         self.client.get(&url).send().await.context("Failed to send GET request")
     }
 
     /// GET request - list resources in a namespace
+    /// Uses K8s-style API: /api/v1/namespaced/{kind}/{namespace}
     pub async fn list_namespaced(&self, kind: &str, namespace: &str) -> Result<Response> {
-        let url = self.build_url(&format!("/api/namespaces/{}/{}", namespace, kind));
+        let url = self.build_url(&format!("/api/v1/namespaced/{}/{}", kind, namespace));
         self.client.get(&url).send().await.context("Failed to send GET request")
     }
 
     /// GET request - get a specific resource
+    /// Namespaced: /api/v1/namespaced/{kind}/{namespace}/{name}
+    /// Cluster: /api/v1/cluster/{kind}/{name}
     pub async fn get(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<Response> {
         let url = if let Some(ns) = namespace {
-            self.build_url(&format!("/api/namespaces/{}/{}/{}", ns, kind, name))
+            self.build_url(&format!("/api/v1/namespaced/{}/{}/{}", kind, ns, name))
         } else {
-            self.build_url(&format!("/api/cluster/{}/{}", kind, name))
+            self.build_url(&format!("/api/v1/cluster/{}/{}", kind, name))
         };
 
         self.client.get(&url).send().await.context("Failed to send GET request")
     }
 
     /// POST request - create a resource
+    /// Namespaced: /api/v1/namespaced/{kind}/{namespace}
+    /// Cluster: /api/v1/cluster/{kind}
     pub async fn create(&self, kind: &str, namespace: Option<&str>, body: String) -> Result<Response> {
         let url = if let Some(ns) = namespace {
-            self.build_url(&format!("/api/namespaces/{}/{}", ns, kind))
+            self.build_url(&format!("/api/v1/namespaced/{}/{}", kind, ns))
         } else {
-            self.build_url(&format!("/api/cluster/{}", kind))
+            self.build_url(&format!("/api/v1/cluster/{}", kind))
         };
 
         self.client
@@ -82,11 +88,13 @@ impl EdgionClient {
     }
 
     /// PUT request - update a resource
+    /// Namespaced: /api/v1/namespaced/{kind}/{namespace}/{name}
+    /// Cluster: /api/v1/cluster/{kind}/{name}
     pub async fn update(&self, kind: &str, namespace: Option<&str>, name: &str, body: String) -> Result<Response> {
         let url = if let Some(ns) = namespace {
-            self.build_url(&format!("/api/namespaces/{}/{}/{}", ns, kind, name))
+            self.build_url(&format!("/api/v1/namespaced/{}/{}/{}", kind, ns, name))
         } else {
-            self.build_url(&format!("/api/cluster/{}/{}", kind, name))
+            self.build_url(&format!("/api/v1/cluster/{}/{}", kind, name))
         };
 
         self.client
@@ -99,11 +107,13 @@ impl EdgionClient {
     }
 
     /// DELETE request - delete a resource
+    /// Namespaced: /api/v1/namespaced/{kind}/{namespace}/{name}
+    /// Cluster: /api/v1/cluster/{kind}/{name}
     pub async fn delete(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<Response> {
         let url = if let Some(ns) = namespace {
-            self.build_url(&format!("/api/namespaces/{}/{}/{}", ns, kind, name))
+            self.build_url(&format!("/api/v1/namespaced/{}/{}/{}", kind, ns, name))
         } else {
-            self.build_url(&format!("/api/cluster/{}/{}", kind, name))
+            self.build_url(&format!("/api/v1/cluster/{}/{}", kind, name))
         };
 
         self.client
@@ -115,7 +125,7 @@ impl EdgionClient {
 
     /// POST request - reload all resources
     pub async fn reload(&self) -> Result<Response> {
-        let url = self.build_url("/api/reload");
+        let url = self.build_url("/api/v1/reload");
         self.client
             .post(&url)
             .send()
