@@ -156,25 +156,19 @@ main() {
         log_info "跳过启动步骤"
     fi
     
-    # 完成
-    log_section "准备完成"
-    log_success "集成测试环境已就绪！"
-    echo ""
-    echo "服务状态:"
-    echo "  - test_server:       http://127.0.0.1:30001"
-    echo "  - edgion-controller: http://127.0.0.1:5800"
-    echo "  - edgion-gateway:    http://127.0.0.1:10080"
-    echo ""
+    # 第三步: 运行测试
+    log_section "第三步: 运行 HTTP 测试 (Direct 模式)"
     
-    if $DO_CLEANUP; then
-        log_info "脚本结束后将自动停止所有服务"
+    if "${PROJECT_ROOT}/target/debug/examples/test_client" http; then
+        log_success "HTTP 测试通过"
     else
-        echo "服务将保持运行，手动停止:"
-        echo "  ${UTILS_DIR}/kill_all.sh"
+        log_error "HTTP 测试失败"
+        exit 1
     fi
-    echo ""
     
-    # TODO: 后续添加具体测试逻辑
+    # 完成
+    log_section "测试完成"
+    log_success "所有测试通过！"
 }
 
 main "$@"
