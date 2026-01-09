@@ -77,8 +77,8 @@ pub fn add_http_listener(
     enable_http2: bool,
 ) -> Result<()> {
     let listener_name = context.listener.name.clone();
-    let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
-    let addr = format!("{}:{}", host, context.listener.port);
+    // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
+    let addr = format!("0.0.0.0:{}", context.listener.port);
 
     // Check if HTTP to HTTPS redirect is enabled (only for non-TLS listeners)
     let http_to_https_redirect = !enable_tls
@@ -237,8 +237,8 @@ pub fn add_http_listener(
 #[allow(dead_code)]
 pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Result<()> {
     let listener_name = context.listener.name.clone();
-    let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
-    let addr = format!("{}:{}", host, context.listener.port);
+    // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
+    let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
     // Pre-fetch TCP routes for this gateway (similar to HTTP approach)
@@ -280,8 +280,8 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
 #[allow(dead_code)]
 pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Result<()> {
     let listener_name = context.listener.name.clone();
-    let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
-    let addr = format!("{}:{}", host, context.listener.port);
+    // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
+    let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
     // Get UDP routes for this gateway
@@ -329,8 +329,8 @@ pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Resu
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &ListenerContext) -> Result<()> {
     let listener_name = context.listener.name.clone();
-    let host = context.listener.hostname.as_deref().unwrap_or("0.0.0.0");
-    let addr = format!("{}:{}", host, context.listener.port);
+    // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
+    let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
     // Get TLS routes for this gateway
