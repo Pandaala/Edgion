@@ -21,8 +21,8 @@ spec:
             kind: EdgionPlugins
             name: timeout-debug
       timeouts:
-        request: "10s"          # 请求总超时（包含所有重试）
-        backendRequest: "3s"    # 后端请求超时
+        request: "5s"           # 请求总超时（包含所有重试）
+        backendRequest: "1s"    # 后端请求超时
       backendRefs:
         - name: test-http
           namespace: edgion-test

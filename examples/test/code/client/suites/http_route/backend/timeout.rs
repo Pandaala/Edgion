@@ -94,12 +94,12 @@ impl TimeoutTestSuite {
     fn test_backend_request_timeout() -> TestCase {
         TestCase::new(
             "backend_request_timeout",
-            "测试后端请求总超时（5秒延迟 vs 3秒超时）",
+            "测试后端请求总超时（2秒延迟 vs 1秒超时）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let mut request = ctx.http_client.get(format!("{}/delay/5", ctx.http_url()));
+                    let mut request = ctx.http_client.get(format!("{}/delay/2", ctx.http_url()));
                     request = request.header("Host", "timeout-backend.example.com");
 
                     match request.send().await {
@@ -158,20 +158,20 @@ impl TimeoutTestSuite {
     fn test_client_read_timeout_499() -> TestCase {
         TestCase::new(
             "client_read_timeout_499",
-            "测试客户端主动断开连接返回499（reqwest超时3秒，服务端延迟10秒）",
+            "测试客户端主动断开连接返回499（reqwest超时1秒，服务端延迟3秒）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 创建一个3秒超时的HTTP客户端，模拟客户端主动断开
+                    // 创建一个1秒超时的HTTP客户端，模拟客户端主动断开
                     let short_timeout_client = reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(3))
+                        .timeout(std::time::Duration::from_secs(1))
                         .build()
                         .expect("Failed to create short timeout client");
 
-                    // 服务端延迟10秒（不会触发服务端超时，因为backend timeout是100s）
-                    // 但客户端3秒后会主动断开
-                    let mut request = short_timeout_client.get(format!("{}/delay/10", ctx.http_url()));
+                    // 服务端延迟3秒（不会触发服务端超时，因为backend timeout是10s）
+                    // 但客户端1秒后会主动断开
+                    let mut request = short_timeout_client.get(format!("{}/delay/3", ctx.http_url()));
                     request = request.header("Host", "timeout-client.example.com");
 
                     match request.send().await {
@@ -200,12 +200,12 @@ impl TimeoutTestSuite {
                                 || error_msg.to_lowercase().contains("time out")
                                 || error_msg.contains("deadline");
 
-                            if is_timeout || elapsed.as_secs() >= 2 && elapsed.as_secs() <= 5 {
-                                // 客户端确实超时了（约3秒）
+                            if is_timeout || elapsed.as_millis() >= 500 && elapsed.as_secs() <= 3 {
+                                // 客户端确实超时了（约1秒）
                                 TestResult::passed_with_message(
                                 elapsed,
-                                format!("Client closed connection after ~{}s (reqwest timeout 3s) - Gateway should log this as 499. Error: {}", 
-                                    elapsed.as_secs(), error_msg)
+                                format!("Client closed connection after ~{}ms (reqwest timeout 1s) - Gateway should log this as 499. Error: {}", 
+                                    elapsed.as_millis(), error_msg)
                             )
                             } else {
                                 TestResult::failed(
@@ -227,18 +227,18 @@ impl TimeoutTestSuite {
     fn test_client_read_timeout() -> TestCase {
         TestCase::new(
             "client_read_timeout",
-            "测试客户端读超时（20秒延迟，框架30秒超时，观察gateway行为）",
+            "测试客户端读超时（3秒延迟，框架5秒超时，观察gateway行为）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 创建一个超时时间更长的HTTP客户端（25秒），模拟一个长时间等待但不会先超时的客户端
+                    // 创建一个超时时间更长的HTTP客户端（5秒），模拟一个长时间等待但不会先超时的客户端
                     let long_timeout_client = reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(25))
+                        .timeout(std::time::Duration::from_secs(5))
                         .build()
                         .expect("Failed to create long timeout client");
 
-                    let mut request = long_timeout_client.get(format!("{}/delay/20", ctx.http_url()));
+                    let mut request = long_timeout_client.get(format!("{}/delay/3", ctx.http_url()));
                     request = request.header("Host", "timeout-client.example.com");
 
                     match request.send().await {
@@ -248,13 +248,13 @@ impl TimeoutTestSuite {
                             let headers = response.headers().clone();
                             let elapsed = start.elapsed();
 
-                            // 正常情况下应该在20秒左右返回200
-                            // 因为backend timeout是100s，client timeout是60s
+                            // 正常情况下应该在3秒左右返回200
+                            // 因为backend timeout是10s，client timeout是5s
                             if status_code == 200 {
                                 TestResult::passed_with_message(
                                     elapsed,
                                     format!(
-                                        "Got 200 OK after {}s - client/backend timeouts not triggered (both > 20s)",
+                                        "Got 200 OK after {}s - client/backend timeouts not triggered (both > 3s)",
                                         elapsed.as_secs()
                                     ),
                                 )
@@ -290,7 +290,7 @@ impl TimeoutTestSuite {
                             let elapsed = start.elapsed();
                             TestResult::failed(
                                 elapsed,
-                                format!("Request failed: {} (should have returned 200 after 20s)", e),
+                                format!("Request failed: {} (should have returned 200 after 3s)", e),
                             )
                         }
                     }

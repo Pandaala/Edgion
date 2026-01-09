@@ -21,7 +21,7 @@ spec:
             kind: EdgionPlugins
             name: timeout-debug
       timeouts:
-        backendRequest: "100s"   # 设置长超时，避免后端先超时
+        backendRequest: "10s"    # 设置长超时，避免后端先超时
       backendRefs:
         - name: test-http
           namespace: edgion-test
