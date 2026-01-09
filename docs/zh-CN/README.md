@@ -4,24 +4,30 @@
 
 ## 📖 文档导航
 
-### 🚀 [用户指南](./user-guide/README.md)
+### 🚀 [快速开始](./getting-started/README.md)
 
-快速上手和功能使用教程：
-- [Stream Plugins 使用指南](./user-guide/stream-plugins-guide.md) - TCP/UDP 流式插件
-- [CORS 跨域配置](./user-guide/cors-user-guide.md) - 跨域资源共享
+安装部署和快速入门。
 
-### 🔧 [运维指南](./op-guide/README.md)
+### 📚 [用户指南](./user-guide/README.md)
 
-Gateway 平台级运维配置：
-- [HTTP to HTTPS 重定向](./op-guide/http-to-https-redirect-guide.md) - Gateway Annotation 配置
-- [启动配置文件](./op-guide/README.md#配置文件说明) - Controller/Gateway toml 配置
+面向应用开发者的路由和插件配置：
+- HTTPRoute / GRPCRoute / TCPRoute / UDPRoute
+- Edgion 扩展插件（BasicAuth、CORS、CSRF、IP限制等）
+- 负载均衡算法
 
-### 🛠️ [开发者文档](./developer-doc/README.md)
+### 🔧 [运维指南](./ops-guide/README.md)
 
-架构设计和开发指南：
-- [架构概览](./developer-doc/architecture-overview.md)
-- [添加新资源类型](./developer-doc/add-new-resource-guide.md)
-- [Annotations 参考](./developer-doc/annotations-guide.md)
+面向运维人员的 Gateway 配置：
+- Gateway / GatewayClass 配置
+- TLS / mTLS 配置
+- 访问日志和监控
+
+### 🛠️ [开发指南](./dev-guide/README.md)
+
+面向开发者的架构和扩展开发：
+- [架构概览](./dev-guide/architecture-overview.md)
+- [添加新资源类型](./dev-guide/add-new-resource-guide.md)
+- [Annotations 参考](./dev-guide/annotations-guide.md)
 
 ---
 
@@ -29,27 +35,14 @@ Gateway 平台级运维配置：
 
 | 类型 | 链接 | 说明 |
 |------|------|------|
-| 📚 用户指南 | [user-guide/](./user-guide/) | 插件和功能使用 |
-| 🔧 运维指南 | [op-guide/](./op-guide/) | Gateway/TLS 配置 |
-| 🛠️ 开发文档 | [developer-doc/](./developer-doc/) | 架构和开发 |
+| 📚 用户指南 | [user-guide/](./user-guide/) | 路由和插件配置 |
+| 🔧 运维指南 | [ops-guide/](./ops-guide/) | Gateway/TLS 配置 |
+| 🛠️ 开发指南 | [dev-guide/](./dev-guide/) | 架构和开发 |
 | 📦 示例配置 | [examples/conf/](../../examples/conf/) | YAML 配置示例 |
-| 🧪 测试 | [examples/testing/](../../examples/testing/) | 集成测试 |
-
----
-
-## 🌟 特性
-
-- ✅ 支持 Gateway API v1
-- ✅ TCP/UDP 流式插件系统
-- ✅ mTLS 双向认证
-- ✅ 动态证书加载（SNI-based）
-- ✅ IP 访问控制
-- ✅ 基于 Pingora 的高性能代理
 
 ---
 
 ## 📝 版本
 
 **当前版本**: v0.1.0  
-**最后更新**: 2025-12-25
-
+**最后更新**: 2026-01-09
