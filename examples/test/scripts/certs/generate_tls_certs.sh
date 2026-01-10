@@ -54,23 +54,23 @@ CERTS_DIR="$PROJECT_ROOT/examples/test/certs"
 mkdir -p "$CONF_DIR"
 mkdir -p "$CERTS_DIR"
 
-log_section "生成 TLS 证书"
-log_info "临时目录: $TEMP_DIR"
-log_info "配置目录: $CONF_DIR"
-log_info "证书目录: $CERTS_DIR"
+log_section "Generate TLS certificate"
+log_info "临时directory: $TEMP_DIR"
+log_info "configdirectory: $CONF_DIR"
+log_info "certificatedirectory: $CERTS_DIR"
 
 # Check if Secret file already exists
 if [ -f "$CONF_DIR/Secret_edgion-test_edge-tls.yaml" ]; then
-    log_info "TLS Secret 文件已存在，跳过生成..."
+    log_info "TLS Secret filealready存在，SkipGenerate..."
     log_info "  - $CONF_DIR/Secret_edgion-test_edge-tls.yaml"
     echo ""
-    log_warning "如需重新生成，请先删除 Secret 文件:"
+    log_warning "如需重新Generate，Please先删除 Secret file:"
     log_warning "  rm $CONF_DIR/Secret_edgion-test_edge-tls.yaml"
     exit 0
 fi
 
 # Generate single certificate with multiple SANs
-log_info "生成多域名证书 (test.example.com, grpc.example.com, tcp.example.com, match-test.example.com)..."
+log_info "Generate多域名certificate (test.example.com, grpc.example.com, tcp.example.com, match-test.example.com)..."
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout "$TEMP_DIR/edge-tls.key" \
   -out "$TEMP_DIR/edge-tls.crt" \
@@ -80,9 +80,9 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   2>/dev/null
 
 if [ $? -eq 0 ]; then
-    log_success "多域名证书生成成功"
+    log_success "多域名certificateGeneratesuccess"
 else
-    log_error "证书生成失败"
+    log_error "certificateGeneratefailed"
     exit 1
 fi
 
@@ -114,9 +114,9 @@ data:
 EOF
 
     if [ $? -eq 0 ]; then
-        log_success "Secret YAML 创建成功: $(basename $output_file)"
+        log_success "Secret YAML 创建success: $(basename $output_file)"
     else
-        log_error "Secret YAML 创建失败: $(basename $output_file)"
+        log_error "Secret YAML 创建failed: $(basename $output_file)"
         exit 1
     fi
 }
@@ -130,31 +130,31 @@ create_secret_yaml \
     "$CONF_DIR/Secret_edgion-test_edge-tls.yaml"
 
 # Copy certificate to certs directory for client testing
-log_info "复制证书到 certs 目录..."
+log_info "copycertificate到 certs directory..."
 cp "$TEMP_DIR/edge-tls.crt" "$CERTS_DIR/ca.pem"
 cp "$TEMP_DIR/edge-tls.crt" "$CERTS_DIR/server.crt"
 cp "$TEMP_DIR/edge-tls.key" "$CERTS_DIR/server.key"
 
 if [ $? -eq 0 ]; then
-    log_success "证书已复制到: $CERTS_DIR/"
+    log_success "certificatealreadycopy到: $CERTS_DIR/"
 else
-    log_error "证书复制失败"
+    log_error "certificatecopyfailed"
     exit 1
 fi
 
-log_section "完成"
-log_success "证书生成完成！"
+log_section "completed"
+log_success "certificateGeneratecompleted！"
 echo ""
-log_info "生成的文件:"
+log_info "Generate的file:"
 log_info "  Secret YAML:"
 log_info "    - $CONF_DIR/Secret_edgion-test_edge-tls.yaml"
 log_info ""
-log_info "  测试证书:"
+log_info "  Testcertificate:"
 log_info "    - $CERTS_DIR/ca.pem"
 log_info "    - $CERTS_DIR/server.crt"
 log_info "    - $CERTS_DIR/server.key"
 log_info ""
-log_info "证书包含域名:"
+log_info "certificate包含域名:"
 log_info "  - test.example.com (HTTP/HTTPS)"
 log_info "  - grpc.example.com (gRPC)"
 log_info "  - tcp.example.com (TCP)"

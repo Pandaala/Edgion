@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn concurrent_calls_are_unique_and_ordered() {
-        let handles: Vec<_> = (0..64).map(|_| thread::spawn(|| next_resource_version())).collect();
+        let handles: Vec<_> = (0..64).map(|_| thread::spawn(next_resource_version)).collect();
 
         let mut values: Vec<u64> = handles
             .into_iter()

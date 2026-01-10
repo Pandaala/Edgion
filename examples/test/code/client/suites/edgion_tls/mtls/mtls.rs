@@ -1,29 +1,29 @@
-// mTLS (Mutual TLS) 测试套件
-// 测试双向 TLS 认证功能
+// mTLS (Mutual TLS) Test suite
+// Test mutual TLS authentication
 //
-// 依赖的配置文件（位于 examples/conf/）：
-// - EndpointSlice_edge_test-http.yaml         # HTTP 后端服务发现
-// - Service_edge_test-http.yaml               # HTTP 服务定义
-// - HTTPRoute_edge_mtls-test.yaml             # mTLS 路由规则（Host: mtls*.example.com）
-// - Gateway_edge_mtls-test-gateway.yaml       # mTLS Gateway 配置（监听 10444 端口）
-// - EdgionTls_edge_mtls-test-mutual.yaml      # Mutual TLS 配置（Host: mtls.example.com）
-// - EdgionTls_edge_mtls-test-optional.yaml    # Optional mTLS 配置（Host: mtls-optional.example.com）
-// - EdgionTls_edge_mtls-test-san.yaml         # SAN 白名单配置（Host: mtls-san.example.com）
-// - EdgionTls_edge_mtls-test-chain.yaml       # 证书链配置（Host: mtls-chain.example.com）
-// - Secret_edge_mtls-server.yaml              # mTLS 服务端证书 Secret
-// - Secret_edge_client-ca.yaml                # 客户端 CA 证书 Secret
-// - Secret_edge_ca-chain.yaml                 # 中间 CA 证书链 Secret
-// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
+// Required config files (in examples/conf/):
+// - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
+// - Service_edge_test-http.yaml               # HTTP service definition
+// - HTTPRoute_edge_mtls-test.yaml             # mTLS routing rules（Host: mtls*.example.com）
+// - Gateway_edge_mtls-test-gateway.yaml       # mTLS Gateway config (listening port）
+// - EdgionTls_edge_mtls-test-mutual.yaml      # Mutual TLS config（Host: mtls.example.com）
+// - EdgionTls_edge_mtls-test-optional.yaml    # Optional mTLS config（Host: mtls-optional.example.com）
+// - EdgionTls_edge_mtls-test-san.yaml         # SAN 白名单config（Host: mtls-san.example.com）
+// - EdgionTls_edge_mtls-test-chain.yaml       # certificate chain config (Host: mtls-chain.example.com）
+// - Secret_edge_mtls-server.yaml              # mTLS server certificate Secret
+// - Secret_edge_client-ca.yaml                # Client CA certificate Secret
+// - Secret_edge_ca-chain.yaml                 # 中间 CA certificate链 Secret
+// - GatewayClass__public-gateway.yaml         # GatewayClass config
 //
-// 生成的证书文件（由 generate_mtls_certs.sh 生成）：
-// - examples/test/certs/mtls/valid-client.crt          # 有效客户端证书
-// - examples/test/certs/mtls/valid-client.key          # 有效客户端私钥
-// - examples/test/certs/mtls/invalid-client.crt        # 无效客户端证书（不受信任的 CA）
-// - examples/test/certs/mtls/invalid-client.key        # 无效客户端私钥
-// - examples/test/certs/mtls/nonmatching-client.crt    # SAN 不匹配的客户端证书
-// - examples/test/certs/mtls/nonmatching-client.key    # SAN 不匹配的客户端私钥
-// - examples/test/certs/mtls/chain-client-bundle.crt   # 带证书链的客户端证书
-// - examples/test/certs/mtls/chain-client.key          # 证书链客户端私钥
+// Generated certificate files (by generate_mtls_certs.sh):
+// - examples/test/certs/mtls/valid-client.crt          # 有效client certificate
+// - examples/test/certs/mtls/valid-client.key          # valid client private key
+// - examples/test/certs/mtls/invalid-client.crt        # 无效client certificate（不受信任的 CA）
+// - examples/test/certs/mtls/invalid-client.key        # invalid client private key
+// - examples/test/certs/mtls/nonmatching-client.crt    # SAN 不match的client certificate
+// - examples/test/certs/mtls/nonmatching-client.key    # SAN mismatched client private key
+// - examples/test/certs/mtls/chain-client-bundle.crt   # client certificate with chain
+// - examples/test/certs/mtls/chain-client.key          # certificate chain client private key
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -72,7 +72,7 @@ impl MtlsTestSuite {
     fn test_mutual_with_valid_cert() -> TestCase {
         TestCase::new(
             "mtls_mutual_valid_cert",
-            "Mutual TLS：带有效客户端证书（应成功）",
+            "Mutual TLS：with valid client certificate (should succeed)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -114,7 +114,7 @@ impl MtlsTestSuite {
     fn test_mutual_without_cert() -> TestCase {
         TestCase::new(
             "mtls_mutual_no_cert",
-            "Mutual TLS：不带客户端证书（应失败）",
+            "Mutual TLS：without client certificate (should fail)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -161,7 +161,7 @@ impl MtlsTestSuite {
     fn test_mutual_with_invalid_cert() -> TestCase {
         TestCase::new(
             "mtls_mutual_invalid_cert",
-            "Mutual TLS：带无效证书（应失败）",
+            "Mutual TLS：with invalid certificate (should fail)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -210,7 +210,7 @@ impl MtlsTestSuite {
     fn test_optional_with_cert() -> TestCase {
         TestCase::new(
             "mtls_optional_with_cert",
-            "Optional Mutual TLS：带证书（应成功）",
+            "Optional Mutual TLS：with certificate (should succeed)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -252,7 +252,7 @@ impl MtlsTestSuite {
     fn test_optional_without_cert() -> TestCase {
         TestCase::new(
             "mtls_optional_no_cert",
-            "Optional Mutual TLS：不带证书（应成功）",
+            "Optional Mutual TLS：不with certificate (should succeed)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -298,7 +298,7 @@ impl MtlsTestSuite {
     fn test_san_whitelist_matching() -> TestCase {
         TestCase::new(
             "mtls_san_whitelist_match",
-            "SAN 白名单：匹配的 SAN（应成功）",
+            "SAN 白名单：match的 SAN（should succeed）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -341,7 +341,7 @@ impl MtlsTestSuite {
     fn test_san_whitelist_non_matching() -> TestCase {
         TestCase::new(
             "mtls_san_whitelist_no_match",
-            "SAN 白名单：不匹配的 SAN（应失败）",
+            "SAN 白名单：不match的 SAN（should fail）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -386,7 +386,7 @@ impl MtlsTestSuite {
     fn test_cert_chain_depth() -> TestCase {
         TestCase::new(
             "mtls_cert_chain_depth",
-            "证书链：verifyDepth=2（应成功）",
+            "Certificate chain: verifyDepth=2（should succeed）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

@@ -1,5 +1,6 @@
-// TCP Route Basic 测试模块
+// TCP Route Basic test module
 
+#[allow(clippy::module_inception)]
 mod basic;
 
 pub use basic::TcpTestSuite;

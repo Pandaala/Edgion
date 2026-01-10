@@ -1,14 +1,14 @@
-// Timeout 测试套件
+// Timeout Test suite
 //
-// 依赖的配置文件（位于 examples/conf/）：
-// - HTTPRoute_default_timeout-backend.yaml    # 后端超时测试路由
-// - HTTPRoute_default_timeout-client.yaml     # 客户端超时测试路由
-// - EdgionPlugins_default_timeout-debug.yaml  # Debug插件配置
-// - EndpointSlice_edge_test-http.yaml         # HTTP 后端服务发现
-// - Service_edge_test-http.yaml               # HTTP 服务定义
-// - Gateway_edge_example-gateway.yaml         # Gateway 配置
+// Required config files (in examples/conf/):
+// - HTTPRoute_default_timeout-backend.yaml    # backend timeout test route
+// - HTTPRoute_default_timeout-client.yaml     # client timeout test route
+// - EdgionPlugins_default_timeout-debug.yaml  # Debug插件config
+// - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
+// - Service_edge_test-http.yaml               # HTTP service definition
+// - Gateway_edge_example-gateway.yaml         # Gateway config
 // - EdgionGatewayConfig__example-gateway.yaml # GatewayConfig（client.readTimeout: 60s）
-// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
+// - GatewayClass__public-gateway.yaml         # GatewayClass config
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -20,7 +20,7 @@ impl TimeoutTestSuite {
     fn test_normal_response() -> TestCase {
         TestCase::new(
             "normal_response",
-            "测试正常响应（基准对照）",
+            "Test normal response (baseline)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -40,7 +40,7 @@ impl TimeoutTestSuite {
                                 );
                             }
 
-                            // 检查Debug header
+                            // Check Debug header
                             if let Some(debug_header) = headers.get("X-Debug-Access-Log") {
                                 if let Ok(debug_str) = debug_header.to_str() {
                                     if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(debug_str) {
@@ -94,7 +94,7 @@ impl TimeoutTestSuite {
     fn test_backend_request_timeout() -> TestCase {
         TestCase::new(
             "backend_request_timeout",
-            "测试后端请求总超时（2秒延迟 vs 1秒超时）",
+            "Test backend request timeout（2s delay vs 1s timeout）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -115,7 +115,7 @@ impl TimeoutTestSuite {
                                 );
                             }
 
-                            // 检查Debug header中的内部状态码
+                            // Check Debug headerinternal status code
                             if let Some(debug_header) = headers.get("X-Debug-Access-Log") {
                                 if let Ok(debug_str) = debug_header.to_str() {
                                     if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(debug_str) {
@@ -158,25 +158,25 @@ impl TimeoutTestSuite {
     fn test_client_read_timeout_499() -> TestCase {
         TestCase::new(
             "client_read_timeout_499",
-            "测试客户端主动断开连接返回499（reqwest超时1秒，服务端延迟3秒）",
+            "Test client disconnect returns499（reqwest timeout1s，server delay3s）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 创建一个1秒超时的HTTP客户端，模拟客户端主动断开
+                    // Create 1s timeout HTTP client，simulate client disconnect
                     let short_timeout_client = reqwest::Client::builder()
                         .timeout(std::time::Duration::from_secs(1))
                         .build()
                         .expect("Failed to create short timeout client");
 
-                    // 服务端延迟3秒（不会触发服务端超时，因为backend timeout是10s）
-                    // 但客户端1秒后会主动断开
+                    // server delay3s（will not trigger server timeout, backend timeout is10s）
+                    // but client1s will disconnect
                     let mut request = short_timeout_client.get(format!("{}/delay/3", ctx.http_url()));
                     request = request.header("Host", "timeout-client.example.com");
 
                     match request.send().await {
                         Ok(response) => {
-                            // 如果成功返回了响应，说明没有超时（不应该发生）
+                            // If response returned, no timeout（should not happen）
                             let status = response.status();
                             let elapsed = start.elapsed();
                             TestResult::failed(
@@ -192,16 +192,16 @@ impl TimeoutTestSuite {
                             let elapsed = start.elapsed();
                             let error_msg = e.to_string();
 
-                            // reqwest客户端超时断开连接，这是预期的
-                            // Gateway应该检测到客户端断开并记录为499
-                            // 检查是否包含timeout、timed out、operation timed out等关键词
+                            // reqwest client timeout disconnect，this is expected
+                            // Gateway should detect disconnect and log as499
+                            // Check for timeout keywords
                             let is_timeout = error_msg.to_lowercase().contains("timeout")
                                 || error_msg.to_lowercase().contains("timed out")
                                 || error_msg.to_lowercase().contains("time out")
                                 || error_msg.contains("deadline");
 
                             if is_timeout || elapsed.as_millis() >= 500 && elapsed.as_secs() <= 3 {
-                                // 客户端确实超时了（约1秒）
+                                // Client timed out (about1s）
                                 TestResult::passed_with_message(
                                 elapsed,
                                 format!("Client closed connection after ~{}ms (reqwest timeout 1s) - Gateway should log this as 499. Error: {}", 
@@ -227,12 +227,12 @@ impl TimeoutTestSuite {
     fn test_client_read_timeout() -> TestCase {
         TestCase::new(
             "client_read_timeout",
-            "测试客户端读超时（3秒延迟，框架5秒超时，观察gateway行为）",
+            "Test client read timeout（3sdelay，framework5s timeout，observe gateway behavior）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 创建一个超时时间更长的HTTP客户端（5秒），模拟一个长时间等待但不会先超时的客户端
+                    // Create alonger timeout HTTP client（5s），simulate long wait client that won't timeout first
                     let long_timeout_client = reqwest::Client::builder()
                         .timeout(std::time::Duration::from_secs(5))
                         .build()
@@ -248,7 +248,7 @@ impl TimeoutTestSuite {
                             let headers = response.headers().clone();
                             let elapsed = start.elapsed();
 
-                            // 正常情况下应该在3秒左右返回200
+                            // normally should return in3s or so200
                             // 因为backend timeout是10s，client timeout是5s
                             if status_code == 200 {
                                 TestResult::passed_with_message(
@@ -259,7 +259,7 @@ impl TimeoutTestSuite {
                                     ),
                                 )
                             } else {
-                                // 检查Debug header获取内部状态码
+                                // Check Debug headerget internal status code
                                 if let Some(debug_header) = headers.get("X-Debug-Access-Log") {
                                     if let Ok(debug_str) = debug_header.to_str() {
                                         if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(debug_str) {

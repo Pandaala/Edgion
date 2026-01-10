@@ -1,14 +1,14 @@
-// HTTP Security 测试套件
+// HTTP Security Test suite
 //
-// 测试 HTTP 请求的安全验证，包括：
-// - Hostname 验证（缺失/空值）
+// Test HTTP request security validation，including:
+// - Hostname validation (missing/empty)
 //
-// 依赖的配置文件（位于 examples/conf/）：
-// - EndpointSlice_edge_test-http.yaml         # HTTP 后端服务发现
-// - Service_edge_test-http.yaml               # HTTP 服务定义
-// - httproute_default_example-route.yaml      # HTTP 路由规则（Host: test.example.com）
-// - Gateway_edge_example-gateway.yaml         # Gateway 配置
-// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
+// Required config files (in examples/conf/):
+// - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
+// - Service_edge_test-http.yaml               # HTTP service definition
+// - httproute_default_example-route.yaml      # HTTP routing rules（Host: test.example.com）
+// - Gateway_edge_example-gateway.yaml         # Gateway config
+// - GatewayClass__public-gateway.yaml         # GatewayClass config
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -22,7 +22,7 @@ impl HttpSecurityTestSuite {
     fn test_missing_hostname() -> TestCase {
         TestCase::new(
             "missing_hostname",
-            "测试缺失 Host header 时返回 400 Bad Request",
+            "Test missing Host header returns 400",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -80,7 +80,7 @@ impl HttpSecurityTestSuite {
     fn test_empty_hostname() -> TestCase {
         TestCase::new(
             "empty_hostname",
-            "测试空 Host header 时返回 400 Bad Request",
+            "Test empty Host header returns 400",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -138,7 +138,7 @@ impl HttpSecurityTestSuite {
     fn test_valid_hostname() -> TestCase {
         TestCase::new(
             "valid_hostname",
-            "测试有效 Host header 正常处理",
+            "Test valid Host header processed normally",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -170,7 +170,7 @@ impl HttpSecurityTestSuite {
     fn test_hostname_with_port() -> TestCase {
         TestCase::new(
             "hostname_with_port",
-            "测试 Host header 包含端口号",
+            "Test Host header with port",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

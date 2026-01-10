@@ -1,5 +1,5 @@
-// HTTP Route Backend 测试模块
-// 包含负载均衡策略、权重后端、超时等后端相关测试
+// HTTP Route Backend test module
+// Contains LB policy, weighted backend, timeout and other backend tests
 
 mod lb_policy;
 mod timeout;

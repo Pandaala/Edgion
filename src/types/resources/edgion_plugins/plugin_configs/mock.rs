@@ -119,11 +119,16 @@ mod tests {
 
     #[test]
     fn test_validate_invalid_status() {
-        let mut config = MockConfig::default();
-        config.status_code = 99;
+        let config = MockConfig {
+            status_code: 99,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
 
-        config.status_code = 600;
+        let config = MockConfig {
+            status_code: 600,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 

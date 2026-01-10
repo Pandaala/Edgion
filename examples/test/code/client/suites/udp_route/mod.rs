@@ -1,7 +1,7 @@
-// UDP Route 测试套件
+// UDP Route Test suite
 
-// 子模块 - 按功能分类
+// Sub-modules - by function
 mod basic;
 
-// 导出测试套件
+// 导出Test suite
 pub use basic::UdpTestSuite;

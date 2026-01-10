@@ -153,6 +153,7 @@ mod tests {
     use super::*;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
+    #[allow(clippy::too_many_arguments)]
     fn create_test_grant(
         namespace: &str,
         name: &str,

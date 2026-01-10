@@ -1,5 +1,5 @@
-// Edgion 统一测试服务器
-// 支持所有协议: HTTP/HTTPS, gRPC, WebSocket, TCP, UDP
+// Edgion Unified Test Server
+// Supports all protocols: HTTP/HTTPS, gRPC, WebSocket, TCP, UDP
 
 use anyhow::Result;
 use axum::{
@@ -18,41 +18,41 @@ use tracing::{error, info};
 
 #[derive(Parser, Debug)]
 #[command(name = "test-server")]
-#[command(about = "Edgion 统一测试服务器 - 支持所有协议")]
+#[command(about = "Edgion Unified Test Server - Supports all protocols")]
 struct Cli {
-    /// HTTP 服务器端口列表（逗号分隔）
+    /// HTTP server ports (comma-separated)
     #[arg(long, default_value = "30001")]
     http_ports: String,
 
-    /// gRPC 服务器端口列表（逗号分隔）
+    /// gRPC server ports (comma-separated)
     #[arg(long, default_value = "30021")]
     grpc_ports: String,
 
-    /// WebSocket 服务器端口
+    /// WebSocket server port
     #[arg(long, default_value = "30005")]
     websocket_port: u16,
 
-    /// TCP 服务器端口
+    /// TCP server port
     #[arg(long, default_value = "30010")]
     tcp_port: u16,
 
-    /// UDP 服务器端口
+    /// UDP server port
     #[arg(long, default_value = "30011")]
     udp_port: u16,
 
-    /// HTTPS 后端服务器端口（用于 Backend TLS 测试）
+    /// HTTPS backend server port (for Backend TLS testing)
     #[arg(long)]
     https_backend_port: Option<u16>,
 
-    /// TLS 证书文件路径
+    /// TLS certificate file path
     #[arg(long)]
     cert_file: Option<String>,
 
-    /// TLS 私钥文件路径
+    /// TLS private key file path
     #[arg(long)]
     key_file: Option<String>,
 
-    /// 日志级别
+    /// Log level
     #[arg(long, default_value = "info")]
     log_level: String,
 }
@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // 初始化日志
+    // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(match cli.log_level.as_str() {
             "trace" => tracing::Level::TRACE,
@@ -77,13 +77,13 @@ async fn main() -> Result<()> {
         .init();
 
     info!("========================================");
-    info!("Edgion 统一测试服务器");
+    info!("Edgion Unified Test Server");
     info!("========================================");
     info!("");
 
     let mut handles = Vec::new();
 
-    // 启动 HTTP 服务器
+    // Start HTTP server
     let http_ports: Vec<u16> = cli
         .http_ports
         .split(',')
@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
         handles.push(handle);
     }
 
-    // 启动 gRPC 服务器
+    // Start gRPC server
     let grpc_ports: Vec<u16> = cli
         .grpc_ports
         .split(',')
@@ -107,19 +107,19 @@ async fn main() -> Result<()> {
         handles.push(handle);
     }
 
-    // 启动 WebSocket 服务器
+    // Start WebSocket server
     let handle = tokio::spawn(start_websocket_server(cli.websocket_port));
     handles.push(handle);
 
-    // 启动 TCP 服务器
+    // Start TCP server
     let handle = tokio::spawn(start_tcp_server(cli.tcp_port));
     handles.push(handle);
 
-    // 启动 UDP 服务器
+    // Start UDP server
     let handle = tokio::spawn(start_udp_server(cli.udp_port));
     handles.push(handle);
 
-    // 启动 HTTPS 后端服务器（如果配置了）
+    // Start HTTPS backend server (if configured)
     if let Some(https_port) = cli.https_backend_port {
         if let (Some(cert), Some(key)) = (cli.cert_file.as_ref(), cli.key_file.as_ref()) {
             let handle = tokio::spawn(start_https_backend_server(https_port, cert.clone(), key.clone()));
@@ -131,10 +131,10 @@ async fn main() -> Result<()> {
 
     info!("");
     info!("========================================");
-    info!("所有服务器已启动，按 Ctrl+C 停止");
+    info!("All servers started, press Ctrl+C to stop");
     info!("========================================");
 
-    // 等待所有服务器
+    // Wait for all servers
     futures::future::join_all(handles).await;
 
     Ok(())

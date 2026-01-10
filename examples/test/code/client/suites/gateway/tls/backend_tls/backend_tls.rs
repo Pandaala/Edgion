@@ -1,24 +1,24 @@
-// Backend TLS 测试套件
-// 测试 Gateway 到后端服务器的 TLS 连接（BackendTLSPolicy）
+// Backend TLS Test suite
+// Test Gateway to backend TLS connection（BackendTLSPolicy）
 //
-// 测试场景：
-// - 客户端 → Gateway: HTTP (端口 18080)
-// - Gateway → 后端: HTTPS (端口 30051, 使用 BackendTLSPolicy)
-// - 后端服务器: 监听 30051，使用自签名证书
+// Test scenarios:
+// - Client → Gateway: HTTP (port 18080)
+// - Gateway → Backend: HTTPS (port 30051, using BackendTLSPolicy)
+// - Backend server: listening on 30051，with self-signed certificate
 //
-// 依赖的配置文件（位于 examples/conf/）：
-// - BackendTLSPolicy_edge_backend-tls.yaml   # BackendTLSPolicy 配置
-// - Service_edge_test-backend-tls.yaml       # HTTPS 后端服务定义
-// - EndpointSlice_edge_test-backend-tls.yaml # HTTPS 后端端点
-// - HTTPRoute_edge_backend-tls.yaml          # 路由规则（path: /backend-tls/）
-// - Secret_edge_backend-ca.yaml              # CA 证书 Secret
-// - Gateway_edge_tls-terminate-gateway.yaml  # Gateway 配置
-// - GatewayClass__public-gateway.yaml        # GatewayClass 配置
+// Required config files (in examples/conf/):
+// - BackendTLSPolicy_edge_backend-tls.yaml   # BackendTLSPolicy config
+// - Service_edge_test-backend-tls.yaml       # HTTPS backend service definition
+// - EndpointSlice_edge_test-backend-tls.yaml # HTTPS backend endpoint
+// - HTTPRoute_edge_backend-tls.yaml          # routing rules（path: /backend-tls/）
+// - Secret_edge_backend-ca.yaml              # CA certificate Secret
+// - Gateway_edge_tls-terminate-gateway.yaml  # Gateway config
+// - GatewayClass__public-gateway.yaml        # GatewayClass config
 //
-// 生成的证书文件：
-// - examples/testing/certs/backend/server.crt   # 后端服务器证书
-// - examples/testing/certs/backend/server.key   # 后端服务器私钥
-// - examples/testing/certs/backend/ca.crt       # CA 证书
+// Generated certificate files:
+// - examples/testing/certs/backend/server.crt   # backend server certificate
+// - examples/testing/certs/backend/server.key   # backend server private key
+// - examples/testing/certs/backend/ca.crt       # CA certificate
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -30,7 +30,7 @@ impl BackendTlsTestSuite {
     fn test_backend_tls_health() -> TestCase {
         TestCase::new(
             "backend_tls_health",
-            "测试后端 TLS 连接 - /backend-tls/health 端点",
+            "Test Backend TLS connection - /backend-tls/health endpoint",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -77,7 +77,7 @@ impl BackendTlsTestSuite {
     fn test_backend_tls_echo() -> TestCase {
         TestCase::new(
             "backend_tls_echo",
-            "测试后端 TLS 连接 - /backend-tls/echo 端点（请求转发）",
+            "Test Backend TLS connection - /backend-tls/echo endpoint（request forwarding）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -131,7 +131,7 @@ impl BackendTlsTestSuite {
     fn test_backend_tls_headers() -> TestCase {
         TestCase::new(
             "backend_tls_headers",
-            "测试后端 TLS 连接 - /backend-tls/headers 端点（验证 SNI）",
+            "Test Backend TLS connection - /backend-tls/headers endpoint（verify SNI）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

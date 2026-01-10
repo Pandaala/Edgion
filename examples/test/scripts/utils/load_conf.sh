@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# 加载测试配置
-# 支持新的两级目录结构: Resource/Item (如 HTTPRoute/Match)
+# LoadTestconfig
+# 支持新的两级directory结构: Resource/Item (如 HTTPRoute/Match)
 # =============================================================================
 
 set -e
@@ -13,18 +13,18 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 项目根目录
+# project根directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
-# 配置
+# config
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf"
 EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:5800}"
 GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5900}"
 
 # =============================================================================
-# 日志函数
+# log函数
 # =============================================================================
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -50,56 +50,56 @@ log_section() {
 }
 
 # =============================================================================
-# 帮助信息
+# helpinfo
 # =============================================================================
 show_help() {
-    echo "加载测试配置（支持两级目录结构）"
+    echo "LoadTestconfig（支持两级directory结构）"
     echo ""
     echo "用法: $0 [OPTIONS] <SUITE>"
     echo ""
-    echo "SUITE (支持多级路径):"
-    echo "  base                    基础配置 (GatewayClass, EdgionGatewayConfig)"
-    echo "  HTTPRoute               HTTPRoute 全部测试配置"
-    echo "  HTTPRoute/Basic         HTTPRoute 基础测试"
-    echo "  HTTPRoute/Match         HTTPRoute 匹配测试"
-    echo "  HTTPRoute/Backend       HTTPRoute 后端相关测试 (含 LBPolicy, WeightedBackend, Timeout)"
-    echo "  HTTPRoute/Filters       HTTPRoute 过滤器测试 (含 Redirect, Security)"
-    echo "  HTTPRoute/Protocol      HTTPRoute 协议测试 (含 WebSocket)"
-    echo "  grpc                    gRPC 测试配置"
-    echo "  tcp                     TCP 测试配置"
-    echo "  udp                     UDP 测试配置"
-    echo "  all                     加载所有配置"
+    echo "SUITE (支持多级path):"
+    echo "  base                    基础config (GatewayClass, EdgionGatewayConfig)"
+    echo "  HTTPRoute               HTTPRoute allTestconfig"
+    echo "  HTTPRoute/Basic         HTTPRoute 基础Test"
+    echo "  HTTPRoute/Match         HTTPRoute 匹配Test"
+    echo "  HTTPRoute/Backend       HTTPRoute after端相关Test (含 LBPolicy, WeightedBackend, Timeout)"
+    echo "  HTTPRoute/Filters       HTTPRoute 过滤器Test (含 Redirect, Security)"
+    echo "  HTTPRoute/Protocol      HTTPRoute 协议Test (含 WebSocket)"
+    echo "  grpc                    gRPC Testconfig"
+    echo "  tcp                     TCP Testconfig"
+    echo "  udp                     UDP Testconfig"
+    echo "  all                     Loadallconfig"
     echo ""
     echo "OPTIONS:"
-    echo "  --verify     加载后验证资源同步"
-    echo "  --wait N     等待 N 秒让配置生效 (默认: 2)"
-    echo "  -h, --help   显示帮助"
+    echo "  --verify     Loadafterverifyresourcesync"
+    echo "  --wait N     Wait N 秒让configtake effect (default: 2)"
+    echo "  -h, --help   Showhelp"
     echo ""
     echo "示例:"
-    echo "  $0 base                      # 加载基础配置"
-    echo "  $0 HTTPRoute/Match           # 加载 HTTPRoute 匹配测试配置"
-    echo "  $0 HTTPRoute/Backend         # 加载 HTTPRoute 后端测试配置"
-    echo "  $0 --verify HTTPRoute/Basic  # 加载并验证 HTTPRoute 基础配置"
+    echo "  $0 base                      # Load基础config"
+    echo "  $0 HTTPRoute/Match           # Load HTTPRoute 匹配Testconfig"
+    echo "  $0 HTTPRoute/Backend         # Load HTTPRoute after端Testconfig"
+    echo "  $0 --verify HTTPRoute/Basic  # Load并verify HTTPRoute 基础config"
 }
 
 # =============================================================================
-# 检查服务状态
+# Checkservicestatus
 # =============================================================================
 check_services() {
-    log_info "检查服务状态..."
+    log_info "Checkservicestatus..."
     
-    # 检查 controller
+    # Check controller
     if ! curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
-        log_error "Controller 未运行 (${CONTROLLER_URL})"
+        log_error "Controller 未Run (${CONTROLLER_URL})"
         return 1
     fi
     
-    log_success "Controller 运行中"
+    log_success "Controller Run中"
     return 0
 }
 
 # =============================================================================
-# 复制配置文件到 CONFIG_DIR（用于 Gateway 启动前预加载）
+# copyconfigfile到 CONFIG_DIR（For Gateway Start前预Load）
 # =============================================================================
 copy_file_to_config() {
     local file=$1
@@ -110,37 +110,37 @@ copy_file_to_config() {
         return 1
     fi
     
-    log_info "复制 $filename 到 $config_dir"
+    log_info "copy $filename 到 $config_dir"
     cp "$file" "$config_dir/"
     return 0
 }
 
 # =============================================================================
-# 使用 edgion-ctl 加载单个文件
+# use edgion-ctl Load单个file
 # =============================================================================
 apply_file() {
     local file=$1
     local filename=$(basename "$file")
     
-    # 优先使用文件复制方式（Gateway 启动前）
+    # 优先usefilecopy方式（Gateway Start前）
     if copy_file_to_config "$file"; then
-        log_success "$filename 复制完成"
+        log_success "$filename copycompleted"
         return 0
     fi
     
-    log_info "加载 $filename..."
+    log_info "Load $filename..."
     
     if "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$file" 2>&1; then
-        log_success "$filename 加载成功"
+        log_success "$filename Loadsuccess"
         return 0
     else
-        log_error "$filename 加载失败"
+        log_error "$filename Loadfailed"
         return 1
     fi
 }
 
 # =============================================================================
-# 递归加载目录下所有 yaml 文件
+# 递归Loaddirectory下all yaml file
 # =============================================================================
 load_directory_recursive() {
     local dir=$1
@@ -149,15 +149,15 @@ load_directory_recursive() {
     local count=0
     
     if [ ! -d "$dir" ]; then
-        log_warn "目录不存在: $dir"
+        log_warn "directory不存在: $dir"
         return 1
     fi
     
-    # 递归获取所有 yaml 文件
+    # 递归获取all yaml file
     local files=$(find "$dir" -type f \( -name "*.yaml" -o -name "*.yml" \) | sort)
     
     if [ -z "$files" ]; then
-        log_warn "$suite_name: 无配置文件"
+        log_warn "$suite_name: 无configfile"
         return 0
     fi
     
@@ -169,37 +169,37 @@ load_directory_recursive() {
     done
     
     if $failed; then
-        log_error "$suite_name: 部分配置加载失败"
+        log_error "$suite_name: partialconfigLoadfailed"
         return 1
     else
-        log_success "$suite_name: $count 个配置加载完成"
+        log_success "$suite_name: $count 个configLoadcompleted"
         return 0
     fi
 }
 
 # =============================================================================
-# 触发配置重载
+# triggerconfigreload
 # =============================================================================
 trigger_reload() {
-    log_info "触发 Controller 配置重载..."
+    log_info "trigger Controller configreload..."
     
     if curl -sf -X POST "${CONTROLLER_URL}/api/v1/reload" > /dev/null 2>&1; then
-        log_success "配置重载成功"
+        log_success "configreloadsuccess"
         return 0
     else
-        log_warn "无法触发重载 (可能不需要)"
+        log_warn "无法triggerreload (may不need)"
         return 0
     fi
 }
 
 # =============================================================================
-# 验证资源同步
+# verifyresourcesync
 # =============================================================================
 verify_sync() {
-    log_section "验证资源同步"
+    log_section "verifyresourcesync"
     
     if [ ! -f "${PROJECT_ROOT}/target/debug/examples/resource_diff" ]; then
-        log_warn "resource_diff 未编译，跳过验证"
+        log_warn "resource_diff 未Build，Skipverify"
         return 0
     fi
     
@@ -211,12 +211,12 @@ verify_sync() {
 }
 
 # =============================================================================
-# 获取所有可加载的 suite 列表
+# 获取all可Load的 suite 列表
 # =============================================================================
 get_all_suites() {
     local suites="base"
     
-    # HTTPRoute 下的所有子目录
+    # HTTPRoute 下的all子directory
     for subdir in "${CONF_DIR}/HTTPRoute"/*; do
         if [ -d "$subdir" ]; then
             local name=$(basename "$subdir")
@@ -224,7 +224,7 @@ get_all_suites() {
         fi
     done
     
-    # 其他资源类型
+    # 其他resource类型
     for resource in grpc grpc-match tcp udp mtls security real-ip backend-tls plugins; do
         if [ -d "${CONF_DIR}/${resource}" ]; then
             suites="$suites $resource"
@@ -242,7 +242,7 @@ main() {
     local do_verify=false
     local wait_time=2
     
-    # 解析参数
+    # Parseargs
     while [[ $# -gt 0 ]]; do
         case $1 in
             --verify)
@@ -258,7 +258,7 @@ main() {
                 exit 0
                 ;;
             -*)
-                log_error "未知选项: $1"
+                log_error "unknownoptions: $1"
                 show_help
                 exit 1
                 ;;
@@ -272,26 +272,26 @@ main() {
     suites=$(echo "$suites" | xargs)
     
     if [ -z "$suites" ]; then
-        log_error "请指定要加载的配置 suite"
+        log_error "Pleasespecify要Load的config suite"
         show_help
         exit 1
     fi
     
     echo ""
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${BLUE}加载测试配置${NC}"
+    echo -e "${BLUE}LoadTestconfig${NC}"
     echo -e "${BLUE}========================================${NC}"
     echo -e "Controller: ${CONTROLLER_URL}"
     echo -e "Suite:      ${suites}"
     echo ""
     
-    # 检查 edgion-ctl
+    # Check edgion-ctl
     if [ ! -f "$EDGION_CTL" ]; then
-        log_error "edgion-ctl 未编译，请先运行 prepare.sh"
+        log_error "edgion-ctl 未Build，Please先Run prepare.sh"
         exit 1
     fi
     
-    # 检查服务
+    # Checkservice
     if ! check_services; then
         exit 1
     fi
@@ -299,14 +299,14 @@ main() {
     # 处理 "all"
     if [ "$suites" = "all" ]; then
         suites=$(get_all_suites)
-        log_info "加载全部配置: $suites"
+        log_info "Loadallconfig: $suites"
     fi
     
     local failed=false
     
-    # 加载每个 suite
+    # Load每个 suite
     for suite in $suites; do
-        log_section "加载 $suite 配置"
+        log_section "Load $suite config"
         
         local suite_dir="${CONF_DIR}/${suite}"
         
@@ -315,16 +315,16 @@ main() {
         fi
     done
     
-    # 等待配置生效
+    # Waitconfigtake effect
     if [ $wait_time -gt 0 ]; then
-        log_info "等待 ${wait_time}s 让配置生效..."
+        log_info "Wait ${wait_time}s 让configtake effect..."
         sleep $wait_time
     fi
     
-    # 触发重载
+    # triggerreload
     trigger_reload
     
-    # 验证
+    # verify
     if $do_verify; then
         if ! verify_sync; then
             failed=true
@@ -332,13 +332,13 @@ main() {
     fi
     
     # 结果
-    log_section "完成"
+    log_section "completed"
     
     if $failed; then
-        log_error "部分配置加载失败"
+        log_error "partialconfigLoadfailed"
         exit 1
     else
-        log_success "所有配置加载成功"
+        log_success "allconfigLoadsuccess"
         exit 0
     fi
 }

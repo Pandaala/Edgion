@@ -1,5 +1,5 @@
-// Gateway TLS 测试模块
-// 注：mTLS 已移至 EdgionTls 资源模块
+// Gateway TLS test module
+// Note: mTLS moved to EdgionTls module
 
 mod backend_tls;
 

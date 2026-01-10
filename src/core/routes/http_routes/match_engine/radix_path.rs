@@ -199,7 +199,7 @@ mod tests {
     fn test_exact_match_simple_path() {
         let path = RadixPath::new("/api", 0, false);
         assert_eq!(path.radix_key, "/api");
-        assert_eq!(path.is_prefix_match, false);
+        assert!(!path.is_prefix_match);
         assert!(path.match_segments.is_empty());
         assert_eq!(path.match_type_str(), "Exact");
 
@@ -213,7 +213,7 @@ mod tests {
     fn test_prefix_match_simple_path() {
         let path = RadixPath::new("/api", 0, true);
         assert_eq!(path.radix_key, "/api");
-        assert_eq!(path.is_prefix_match, true);
+        assert!(path.is_prefix_match);
         assert!(path.match_segments.is_empty());
         assert_eq!(path.match_type_str(), "Prefix");
 
@@ -230,7 +230,7 @@ mod tests {
     fn test_exact_match_with_param() {
         let path = RadixPath::new("/users/:id", 0, false);
         assert_eq!(path.radix_key, "/users/");
-        assert_eq!(path.is_prefix_match, false);
+        assert!(!path.is_prefix_match);
         assert_eq!(path.match_segments.len(), 1);
         assert_eq!(path.match_type_str(), "Param");
 
@@ -250,7 +250,7 @@ mod tests {
     fn test_prefix_match_with_param() {
         let path = RadixPath::new("/users/:id", 0, true);
         assert_eq!(path.radix_key, "/users/");
-        assert_eq!(path.is_prefix_match, true);
+        assert!(path.is_prefix_match);
         assert_eq!(path.match_type_str(), "ParamPrefix");
 
         assert!(path.matches("/users/123"));
@@ -435,6 +435,6 @@ mod tests {
 
         assert_eq!(path.original, original);
         assert_eq!(path.route_idx, 42);
-        assert_eq!(path.is_prefix_match, true);
+        assert!(path.is_prefix_match);
     }
 }

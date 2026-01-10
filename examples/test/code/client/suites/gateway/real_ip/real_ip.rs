@@ -1,12 +1,12 @@
-// Real IP 提取测试套件
+// Real IP extraction test suite
 //
-// 依赖的配置文件（位于 examples/conf/）：
-// - EndpointSlice_edge_test-http.yaml         # HTTP 后端服务发现
-// - Service_edge_test-http.yaml               # HTTP 服务定义
-// - httproute_default_example-route.yaml      # HTTP 路由规则（Host: test.example.com）
-//   注：该路由包含 trustedProxies 配置用于真实 IP 提取
-// - Gateway_edge_example-gateway.yaml         # Gateway 配置
-// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
+// Required config files (in examples/conf/):
+// - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
+// - Service_edge_test-http.yaml               # HTTP service definition
+// - httproute_default_example-route.yaml      # HTTP routing rules（Host: test.example.com）
+//   Note: route contains trustedProxies config for real IP extraction
+// - Gateway_edge_example-gateway.yaml         # Gateway config
+// - GatewayClass__public-gateway.yaml         # GatewayClass config
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use reqwest::header::HeaderMap;
@@ -19,7 +19,7 @@ impl RealIpTestSuite {
     fn test_xff_extraction() -> TestCase {
         TestCase::new(
             "xff_extraction_with_trusted_proxies",
-            "测试 X-Forwarded-For 提取（包含受信代理）",
+            "Test X-Forwarded-For extraction (with trusted proxy)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -117,7 +117,7 @@ impl RealIpTestSuite {
     fn test_direct_connection() -> TestCase {
         TestCase::new(
             "direct_connection_without_xff",
-            "测试直连（无 X-Forwarded-For）",
+            "Test direct connection (no X-Forwarded-For)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

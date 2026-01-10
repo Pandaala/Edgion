@@ -434,7 +434,7 @@ impl EdgionControllerConfig {
 
         // Use work_dir to resolve the log directory path
         // This ensures relative paths like "logs" are resolved to work_dir/logs
-        let log_dir = work_dir().resolve(&self.log_dir());
+        let log_dir = work_dir().resolve(self.log_dir());
 
         SysLogConfig {
             log_dir,

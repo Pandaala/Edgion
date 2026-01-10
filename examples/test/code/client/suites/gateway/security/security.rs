@@ -1,12 +1,12 @@
-// Security Protection 测试套件
+// Security Protection Test suite
 //
-// 依赖的配置文件（位于 examples/conf/）：
-// - EndpointSlice_edge_test-http.yaml         # HTTP 后端服务发现
-// - Service_edge_test-http.yaml               # HTTP 服务定义
-// - httproute_default_example-route.yaml      # HTTP 路由规则（Host: test.example.com）
-//   注：该路由包含 maxXFFLength 配置用于安全防护
-// - Gateway_edge_example-gateway.yaml         # Gateway 配置
-// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
+// Required config files (in examples/conf/):
+// - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
+// - Service_edge_test-http.yaml               # HTTP service definition
+// - httproute_default_example-route.yaml      # HTTP routing rules（Host: test.example.com）
+//   Note: route contains maxXFFLength config for security
+// - Gateway_edge_example-gateway.yaml         # Gateway config
+// - GatewayClass__public-gateway.yaml         # GatewayClass config
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -17,7 +17,7 @@ impl SecurityTestSuite {
     fn test_normal_xff() -> TestCase {
         TestCase::new(
             "normal_xff_length",
-            "测试正常长度的 X-Forwarded-For（< 200字节）",
+            "Test normal length X-Forwarded-For (< 200 bytes)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -57,7 +57,7 @@ impl SecurityTestSuite {
     fn test_excessive_xff() -> TestCase {
         TestCase::new(
             "excessive_xff_length",
-            "测试超长 X-Forwarded-For（> 200字节）",
+            "Test oversized X-Forwarded-For (> 200 bytes)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -115,7 +115,7 @@ impl SecurityTestSuite {
     fn test_boundary_xff() -> TestCase {
         TestCase::new(
             "boundary_xff_length",
-            "测试临界值 X-Forwarded-For（恰好 200字节）",
+            "Test boundary X-Forwarded-For (exactly 200 bytes)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -169,7 +169,7 @@ impl SecurityTestSuite {
     fn test_no_xff() -> TestCase {
         TestCase::new(
             "no_xff_header",
-            "测试无 X-Forwarded-For header",
+            "Test no X-Forwarded-For header",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

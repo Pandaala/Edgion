@@ -1,5 +1,5 @@
-// HTTP Route Protocol 测试模块
-// 注：HTTPS 已移至 EdgionTls 资源模块
+// HTTP Route Protocol test module
+// Note: HTTPS moved to EdgionTls module
 
 mod websocket;
 

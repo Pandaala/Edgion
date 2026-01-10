@@ -1,36 +1,36 @@
-// HTTP to HTTPS Redirect 测试套件
+// HTTP to HTTPS Redirect Test suite
 //
-// 测试 Gateway annotation `edgion.io/http-to-https-redirect: "true"` 功能
+// Test Gateway annotation edgion.io/http-to-https-redirect feature
 //
-// 依赖的配置文件（位于 examples/conf/）：
-// - Gateway_edge_redirect-gateway.yaml   # 启用重定向的 Gateway (端口 10081)
+// Required config files (in examples/conf/):
+// - Gateway_edge_redirect-gateway.yaml   # Gateway with redirect enabled (port 10081)
 //
-// 测试场景：
-// 1. 简单路径重定向
-// 2. 带查询参数的重定向
-// 3. 验证 301 状态码
-// 4. 验证 Location 头格式
+// Test scenarios:
+// 1. Simple path redirect
+// 2. Redirect with query params
+// 3. Verify 301 status code
+// 4. Verify Location header format
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use reqwest::redirect::Policy;
 use std::time::Instant;
 
-// HTTP redirect 测试端口从 ports.json 加载，使用 ctx.http_port
+// HTTP redirect test port loaded from ports.json，使用 ctx.http_port
 
 pub struct HttpRedirectTestSuite;
 
 impl HttpRedirectTestSuite {
-    /// 测试简单路径重定向
+    /// Test simple path redirect
     fn test_simple_redirect() -> TestCase {
         TestCase::new(
             "http_redirect_simple",
-            "测试简单路径 HTTP->HTTPS 重定向",
+            "Test simple HTTP->HTTPS redirect",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 创建不自动跟随重定向的客户端
+                    // Create client without auto-redirect
                     let client = reqwest::Client::builder()
                         .redirect(Policy::none())
                         .danger_accept_invalid_certs(true)
@@ -43,17 +43,17 @@ impl HttpRedirectTestSuite {
                         Ok(response) => {
                             let status = response.status();
 
-                            // 验证是 301 重定向
+                            // Verify 301 redirect
                             if status.as_u16() != 301 {
                                 return TestResult::failed(start.elapsed(), format!("Expected 301, got {}", status));
                             }
 
-                            // 验证 Location 头
+                            // Verify Location header
                             match response.headers().get("location") {
                                 Some(location) => {
                                     let location_str = location.to_str().unwrap_or("");
                                     
-                                    // 验证重定向 URL 格式正确 (https scheme, 正确的 host 和 path)
+                                    // Verify redirect URL format (https scheme, correct host and path)
                                     if location_str.starts_with("https://test.example.com:") && location_str.ends_with("/health") {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
@@ -76,11 +76,11 @@ impl HttpRedirectTestSuite {
         )
     }
 
-    /// 测试带查询参数的重定向
+    /// Test redirect with query params
     fn test_redirect_with_query() -> TestCase {
         TestCase::new(
             "http_redirect_with_query",
-            "测试带查询参数的重定向",
+            "Test redirect with query params",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -105,7 +105,7 @@ impl HttpRedirectTestSuite {
                                 Some(location) => {
                                     let location_str = location.to_str().unwrap_or("");
 
-                                    // 验证查询参数被保留
+                                    // Verify query params preserved
                                     if location_str.contains("page=1") && location_str.contains("limit=10") {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
@@ -128,11 +128,11 @@ impl HttpRedirectTestSuite {
         )
     }
 
-    /// 测试重定向使用正确的 HTTPS scheme
+    /// Test redirect uses correct HTTPS scheme
     fn test_redirect_https_scheme() -> TestCase {
         TestCase::new(
             "http_redirect_https_scheme",
-            "验证重定向 URL 使用 HTTPS scheme",
+            "Verify redirect URL uses HTTPS scheme",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -180,11 +180,11 @@ impl HttpRedirectTestSuite {
         )
     }
 
-    /// 测试 POST 请求也会被重定向
+    /// Test POST request also redirected
     fn test_redirect_post_request() -> TestCase {
         TestCase::new(
             "http_redirect_post",
-            "测试 POST 请求也返回重定向",
+            "Test POST request returns redirect",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

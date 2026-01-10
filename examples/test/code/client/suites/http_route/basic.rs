@@ -1,11 +1,11 @@
-// HTTP 测试套件
+// HTTP Test suite
 //
-// 依赖的配置文件（位于 examples/conf/）：
-// - EndpointSlice_edge_test-http.yaml         # HTTP 后端服务发现
-// - Service_edge_test-http.yaml               # HTTP 服务定义
-// - httproute_default_example-route.yaml      # HTTP 路由规则（Host: test.example.com）
-// - Gateway_edge_example-gateway.yaml         # Gateway 配置
-// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
+// Required config files (in examples/conf/):
+// - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
+// - Service_edge_test-http.yaml               # HTTP service definition
+// - httproute_default_example-route.yaml      # HTTP routing rules（Host: test.example.com）
+// - Gateway_edge_example-gateway.yaml         # Gateway config
+// - GatewayClass__public-gateway.yaml         # GatewayClass config
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -15,7 +15,7 @@ pub struct HttpTestSuite;
 
 impl HttpTestSuite {
     fn test_health_check() -> TestCase {
-        TestCase::new("health_check", "测试 HTTP 健康检查端点", |ctx: TestContext| {
+        TestCase::new("health_check", "Test HTTP health checkendpoint", |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
 
@@ -39,7 +39,7 @@ impl HttpTestSuite {
     }
 
     fn test_echo_get() -> TestCase {
-        TestCase::new("echo_get", "测试 HTTP GET echo 功能", |ctx: TestContext| {
+        TestCase::new("echo_get", "Test HTTP GET echo", |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
 
@@ -69,7 +69,7 @@ impl HttpTestSuite {
     }
 
     fn test_echo_post() -> TestCase {
-        TestCase::new("echo_post", "测试 HTTP POST echo 功能", |ctx: TestContext| {
+        TestCase::new("echo_post", "Test HTTP POST echo", |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
                 let test_body = "Hello World";
@@ -97,7 +97,7 @@ impl HttpTestSuite {
     }
 
     fn test_status_codes() -> TestCase {
-        TestCase::new("status_codes", "测试自定义状态码返回", |ctx: TestContext| {
+        TestCase::new("status_codes", "Test custom status code return", |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
                 let test_codes = vec![200, 404, 500];
@@ -127,7 +127,7 @@ impl HttpTestSuite {
     }
 
     fn test_delay() -> TestCase {
-        TestCase::new("delay", "测试延迟响应", |ctx: TestContext| {
+        TestCase::new("delay", "测试delay响应", |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
                 let delay_seconds = 1;

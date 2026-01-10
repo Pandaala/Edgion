@@ -1,4 +1,4 @@
-// 测试套件模块
+// Test suite module
 
 pub mod edgion_tls;
 pub mod gateway;
@@ -19,8 +19,8 @@ pub use tcp_route::TcpTestSuite;
 
 pub use udp_route::UdpTestSuite;
 
-// EdgionTls 相关测试
+// EdgionTls tests
 pub use edgion_tls::{GrpcTlsTestSuite, HttpsTestSuite, MtlsTestSuite};
 
-// Gateway 相关测试
+// Gateway tests
 pub use gateway::{BackendTlsTestSuite, PluginLogsTestSuite, RealIpTestSuite, SecurityTestSuite};

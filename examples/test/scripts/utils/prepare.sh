@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# Edgion 测试准备脚本
-# 预编译所有测试所需的组件（debug 模式）
+# Edgion TestPreparescript
+# 预BuildallTest所需的组件（debug 模式）
 # =============================================================================
 
 set -e
@@ -13,12 +13,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 项目根目录
+# project根directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 # =============================================================================
-# 日志函数
+# log函数
 # =============================================================================
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -40,21 +40,21 @@ log_section() {
 }
 
 # =============================================================================
-# 编译函数
+# Build函数
 # =============================================================================
 
-# 编译二进制文件
+# Buildbinaryfile
 build_binary() {
     local name=$1
     local target=$2
     
-    log_info "编译 $name..."
+    log_info "Build $name..."
     
     if cargo build $target 2>&1; then
-        log_success "$name 编译成功"
+        log_success "$name Buildsuccess"
         return 0
     else
-        log_error "$name 编译失败"
+        log_error "$name Buildfailed"
         return 1
     fi
 }
@@ -67,56 +67,56 @@ main() {
     local failed=false
     
     echo ""
-    echo -e "${BLUE}Edgion 测试准备 - 预编译组件${NC}"
+    echo -e "${BLUE}Edgion TestPrepare - 预Build组件${NC}"
     echo -e "Project: ${PROJECT_ROOT}"
     echo -e "Mode: Debug"
     
     cd "$PROJECT_ROOT"
     
-    # 编译 Controller
-    log_section "编译 edgion-controller"
+    # Build Controller
+    log_section "Build edgion-controller"
     if ! build_binary "edgion-controller" "--bin edgion-controller"; then
         failed=true
     fi
     
-    # 编译 Gateway
-    log_section "编译 edgion-gateway"
+    # Build Gateway
+    log_section "Build edgion-gateway"
     if ! build_binary "edgion-gateway" "--bin edgion-gateway"; then
         failed=true
     fi
     
-    # 编译 edgion-ctl
-    log_section "编译 edgion-ctl"
+    # Build edgion-ctl
+    log_section "Build edgion-ctl"
     if ! build_binary "edgion-ctl" "--bin edgion-ctl"; then
         failed=true
     fi
     
-    # 编译 test_server
-    log_section "编译 test_server"
+    # Build test_server
+    log_section "Build test_server"
     if ! build_binary "test_server" "--example test_server"; then
         failed=true
     fi
     
-    # 编译 test_client
-    log_section "编译 test_client"
+    # Build test_client
+    log_section "Build test_client"
     if ! build_binary "test_client" "--example test_client"; then
         failed=true
     fi
     
-    # 编译 test_client_direct
-    log_section "编译 test_client_direct"
+    # Build test_client_direct
+    log_section "Build test_client_direct"
     if ! build_binary "test_client_direct" "--example test_client_direct"; then
         failed=true
     fi
     
-    # 编译 resource_diff
-    log_section "编译 resource_diff"
+    # Build resource_diff
+    log_section "Build resource_diff"
     if ! build_binary "resource_diff" "--example resource_diff"; then
         failed=true
     fi
     
-    # 编译 config_load_validator
-    log_section "编译 config_load_validator"
+    # Build config_load_validator
+    log_section "Build config_load_validator"
     if ! build_binary "config_load_validator" "--example config_load_validator"; then
         failed=true
     fi
@@ -129,10 +129,10 @@ main() {
     echo "Duration: ${duration}s"
     
     if $failed; then
-        log_error "部分组件编译失败!"
+        log_error "partial组件Buildfailed!"
         exit 1
     else
-        log_success "所有组件编译成功!"
+        log_success "all组件Buildsuccess!"
         exit 0
     fi
 }

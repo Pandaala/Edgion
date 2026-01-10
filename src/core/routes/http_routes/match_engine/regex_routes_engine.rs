@@ -177,7 +177,7 @@ mod tests {
             parsed_max_retries: None,
         });
 
-        let regex = Regex::new(regex_pattern).expect(&format!("Invalid regex pattern: {}", regex_pattern));
+        let regex = Regex::new(regex_pattern).unwrap_or_else(|_| panic!("Invalid regex pattern: {}", regex_pattern));
 
         Arc::new(HttpRouteRuleUnit {
             resource_key: format!("{}/{}", namespace, name),

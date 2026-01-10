@@ -1,4 +1,4 @@
-// 测试框架核心
+// Test framework core
 
 use async_trait::async_trait;
 use std::future::Future;
@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-/// 测试上下文 - 包含测试所需的所有配置信息
+/// Test context - contains all configuration information needed for testing
 #[derive(Clone)]
 pub struct TestContext {
     pub target_host: String,
@@ -126,7 +126,7 @@ impl TestContext {
     }
 }
 
-/// 测试结果
+/// Test result
 #[derive(Debug, Clone)]
 pub struct TestResult {
     pub passed: bool,
@@ -164,10 +164,10 @@ impl TestResult {
     }
 }
 
-/// 测试函数类型
+/// Test function type
 pub type TestFn = fn(TestContext) -> Pin<Box<dyn Future<Output = TestResult> + Send>>;
 
-/// 测试用例
+/// Test case
 pub struct TestCase {
     pub name: String,
     #[allow(dead_code)]
@@ -187,7 +187,7 @@ impl TestCase {
     pub async fn run(&self, ctx: &TestContext) -> TestResult {
         let start = Instant::now();
 
-        // 超时控制
+        // Timeout control
         match tokio::time::timeout(Duration::from_secs(30), (self.test_fn)(ctx.clone())).await {
             Ok(result) => result,
             Err(_) => TestResult::failed(start.elapsed(), "Test timed out after 30 seconds".to_string()),
@@ -195,7 +195,7 @@ impl TestCase {
     }
 }
 
-/// 套件结果
+/// Suite result
 pub struct SuiteResult {
     pub name: String,
     pub test_results: Vec<(String, TestResult)>,
@@ -216,7 +216,7 @@ impl SuiteResult {
     }
 }
 
-/// 测试套件特征
+/// Test suite trait
 #[async_trait]
 pub trait TestSuite: Send + Sync {
     fn name(&self) -> &str;
@@ -264,7 +264,7 @@ pub trait TestSuite: Send + Sync {
     }
 }
 
-/// 测试运行器
+/// Test runner
 pub struct TestRunner {
     context: TestContext,
     suites: Vec<Box<dyn TestSuite>>,
@@ -294,7 +294,7 @@ impl TestRunner {
     }
 }
 
-/// 所有测试结果
+/// 所有Test result
 pub struct TestResults {
     pub suite_results: Vec<SuiteResult>,
 }

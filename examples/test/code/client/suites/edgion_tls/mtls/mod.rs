@@ -1,5 +1,6 @@
-// EdgionTls mTLS 测试模块
+// EdgionTls mTLS test module
 
+#[allow(clippy::module_inception)]
 mod mtls;
 
 pub use mtls::MtlsTestSuite;

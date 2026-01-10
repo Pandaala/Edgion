@@ -1,5 +1,8 @@
-// Edgion 统一测试客户端
-// 支持所有协议的测试: HTTP/HTTPS, gRPC, WebSocket, TCP, UDP
+// Edgion Unified Test Client
+// Supports all protocol tests: HTTP/HTTPS, gRPC, WebSocket, TCP, UDP
+
+#![allow(dead_code)]
+#![allow(unused_imports)]
 
 mod framework;
 mod log_analyzer;
@@ -21,15 +24,15 @@ static INIT: Once = Once::new();
 #[command(name = "test-client")]
 #[command(about = "Edgion 统一测试客户端")]
 struct Cli {
-    /// 资源类型 (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLS, Security, Plugins)
+    /// Resource type (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLS, Security, Plugins)
     #[arg(short = 'r', long = "resource")]
     resource: Option<String>,
 
-    /// 子项 (Match, Backend, Filters, Protocol 等)
+    /// sub-item (Match, Backend, Filters, Protocol 等)
     #[arg(short = 'i', long = "item")]
     item: Option<String>,
 
-    /// 使用 Gateway 模式（通过 Gateway 代理测试）
+    /// 使用 Gateway Mode（Passed Gateway 代理测试）
     #[arg(short = 'g', long = "gateway")]
     gateway: bool,
 
@@ -71,7 +74,7 @@ struct Cli {
     legacy_command: Option<String>,
 }
 
-/// 解析资源和子项，返回 suite 名称
+/// 解析资源和sub-item，返回 suite 名称
 fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str>) -> String {
     // 优先使用旧的兼容命令
     if let Some(cmd) = legacy {
@@ -108,7 +111,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
     }
 }
 
-/// 根据 suite 名称获取端口配置 key
+/// 根据 suite 名称获取Port config key
 fn suite_to_port_key(suite: &str) -> &str {
     match suite {
         // HTTPRoute
@@ -140,7 +143,7 @@ fn suite_to_port_key(suite: &str) -> &str {
     }
 }
 
-/// 根据 suite 添加测试套件到 runner
+/// 根据 suite Add test suite到 runner
 fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool) {
     match suite {
         // HTTPRoute 资源
@@ -374,7 +377,7 @@ async fn main() -> Result<()> {
         cli.legacy_command.as_deref(),
     );
 
-    // 获取端口配置 key
+    // 获取Port config key
     let port_key = suite_to_port_key(&suite);
 
     // Determine ports and host based on gateway flag
@@ -437,9 +440,9 @@ async fn main() -> Result<()> {
     println!("\n========================================");
     println!("Edgion 测试客户端");
     println!("========================================");
-    println!("模式: {}", mode_name);
+    println!("Mode: {}", mode_name);
     println!("Suite: {}", suite);
-    println!("目标: {}:{}", cli.target_host, http_port);
+    println!("Target: {}:{}", cli.target_host, http_port);
     println!("========================================\n");
 
     // Get access log path from environment variable
@@ -465,7 +468,7 @@ async fn main() -> Result<()> {
 
     let mut runner = TestRunner::new(context);
 
-    // 添加测试套件
+    // Add test suite
     add_suites_for_suite(&mut runner, &suite, cli.gateway);
 
     let start_time = Instant::now();

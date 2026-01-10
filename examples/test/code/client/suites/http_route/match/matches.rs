@@ -1,12 +1,12 @@
-// HTTP 匹配规则测试套件
+// HTTP match rulesTest suite
 //
-// 依赖的配置文件（位于 examples/conf/）：
-// - HTTPRoute_default_match-test.yaml    # 匹配规则测试路由（包含8个规则）
-// - HTTPRoute_default_section-test.yaml  # SectionName 测试路由
-// - EndpointSlice_edge_test-http.yaml    # HTTP 后端服务发现
-// - Service_edge_test-http.yaml          # HTTP 服务定义
-// - Gateway_edge_example-gateway.yaml    # Gateway 配置
-// - GatewayClass__public-gateway.yaml    # GatewayClass 配置
+// Required config files (in examples/conf/):
+// - HTTPRoute_default_match-test.yaml    # match rules test route（contains 8 rules）
+// - HTTPRoute_default_section-test.yaml  # SectionName test route
+// - EndpointSlice_edge_test-http.yaml    # HTTP backend service discovery
+// - Service_edge_test-http.yaml          # HTTP service definition
+// - Gateway_edge_example-gateway.yaml    # Gateway config
+// - GatewayClass__public-gateway.yaml    # GatewayClass config
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -15,16 +15,16 @@ use std::time::Instant;
 pub struct HttpMatchTestSuite;
 
 impl HttpMatchTestSuite {
-    /// 测试 PathPrefix 路径匹配
+    /// Test PathPrefix path match
     fn test_path_prefix_match() -> TestCase {
         TestCase::new(
             "path_prefix_match",
-            "测试 PathPrefix 路径匹配",
+            "Test PathPrefix path match",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 正面测试：应该匹配 /api/v1 前缀
+                    // Positive test: should match prefix
                     let mut request = ctx.http_client.get(format!("{}/api/v1/users", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
 
@@ -46,16 +46,16 @@ impl HttpMatchTestSuite {
         )
     }
 
-    /// 测试 Exact 精确路径匹配
+    /// Test Exact path match
     fn test_exact_path_match() -> TestCase {
         TestCase::new(
             "exact_path_match",
-            "测试 Exact 精确路径匹配",
+            "Test Exact path match",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 正面测试：精确匹配
+                    // Positive test: exact match
                     let mut request = ctx.http_client.get(format!("{}/exact/path", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
 
@@ -71,7 +71,7 @@ impl HttpMatchTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
 
-                    // 负面测试：路径后面有额外内容，不应该匹配
+                    // Negative test: extra path content should not match
                     let mut request = ctx.http_client.get(format!("{}/exact/path/extra", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
 
@@ -96,16 +96,16 @@ impl HttpMatchTestSuite {
         )
     }
 
-    /// 测试 RegularExpression 正则表达式路径匹配
+    /// Test RegularExpression regex path match
     fn test_regex_path_match() -> TestCase {
         TestCase::new(
             "regex_path_match",
-            "测试 RegularExpression 正则表达式路径匹配",
+            "Test RegularExpression regex path match",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 正面测试：匹配 /users/123 (数字)
+                    // Positive test: match /users/123 (digits)
                     let mut request = ctx.http_client.get(format!("{}/users/123", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
 
@@ -121,7 +121,7 @@ impl HttpMatchTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
 
-                    // 负面测试：/users/abc 不应该匹配（非数字）
+                    // Negative test: should not match（非digits）
                     let mut request = ctx.http_client.get(format!("{}/users/abc", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
 
@@ -146,16 +146,16 @@ impl HttpMatchTestSuite {
         )
     }
 
-    /// 测试 Header Exact 匹配
+    /// Test Header Exact match
     fn test_header_exact_match() -> TestCase {
         TestCase::new(
             "header_exact_match",
-            "测试 Header Exact 精确匹配",
+            "Test Header Exact match",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 正面测试：带正确的 header
+                    // Positive test:with correct header
                     let mut request = ctx.http_client.get(format!("{}/header-test", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
                     request = request.header("X-Custom-Header", "CustomValue");
@@ -172,7 +172,7 @@ impl HttpMatchTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
 
-                    // 负面测试：header 值不匹配
+                    // Negative test:header value mismatch
                     let mut request = ctx.http_client.get(format!("{}/header-test", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
                     request = request.header("X-Custom-Header", "WrongValue");
@@ -199,16 +199,16 @@ impl HttpMatchTestSuite {
         )
     }
 
-    /// 测试 Header RegularExpression 匹配
+    /// Test Header Regex match
     fn test_header_regex_match() -> TestCase {
         TestCase::new(
             "header_regex_match",
-            "测试 Header RegularExpression 正则匹配",
+            "Test Header Regex match",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 正面测试：header 值匹配正则 ^v[0-9]+\.[0-9]+$
+                    // Positive test:header value matches regex ^v[0-9]+\.[0-9]+$
                     let mut request = ctx.http_client.get(format!("{}/header-regex", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
                     request = request.header("X-Version", "v1.2");
@@ -225,7 +225,7 @@ impl HttpMatchTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
 
-                    // 负面测试：header 值不匹配正则
+                    // Negative test:header value mismatchregex
                     let mut request = ctx.http_client.get(format!("{}/header-regex", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
                     request = request.header("X-Version", "invalid");
@@ -251,16 +251,16 @@ impl HttpMatchTestSuite {
         )
     }
 
-    /// 测试 Query Parameter 匹配
+    /// Test Query Parameter match
     fn test_query_param_match() -> TestCase {
         TestCase::new(
             "query_param_match",
-            "测试 Query Parameter 参数匹配",
+            "Test Query Parameter match",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 正面测试：两个查询参数都匹配
+                    // Positive test:both query params match
                     let mut request = ctx
                         .http_client
                         .get(format!("{}/query-test?apikey=secret123&version=10", ctx.http_url()));
@@ -278,7 +278,7 @@ impl HttpMatchTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
 
-                    // 负面测试：version 参数不匹配正则（非数字）
+                    // Negative test:version param mismatches regex（非digits）
                     let mut request = ctx
                         .http_client
                         .get(format!("{}/query-test?apikey=secret123&version=abc", ctx.http_url()));
@@ -306,13 +306,13 @@ impl HttpMatchTestSuite {
         )
     }
 
-    /// 测试 HTTP Method 匹配
+    /// Test HTTP Method match
     fn test_method_match() -> TestCase {
-        TestCase::new("method_match", "测试 HTTP Method 方法匹配", |ctx: TestContext| {
+        TestCase::new("method_match", "Test HTTP Method 方法match", |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
 
-                // 正面测试：POST /echo 应该匹配（test_server 支持 POST /echo）
+                // Positive test:POST /echo should match（test_server supports POST /echo）
                 let mut request = ctx.http_client.post(format!("{}/echo", ctx.http_url()));
                 request = request.header("Host", "match-test.example.com");
                 request = request.body("test"); // Add body for POST request
@@ -329,9 +329,9 @@ impl HttpMatchTestSuite {
                     Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                 }
 
-                // 负面测试：GET /echo 不应该匹配这个规则（因为规则要求 method: POST）
-                // 注意：GET /echo 会匹配其他规则（没有 method 限制的规则）
-                // 所以我们需要测试另一个场景：使用不同的路径
+                // Negative test: should not matchthis rule（because rule requires method: POST）
+                // Note: GET /echo will match other rules（rules without method restriction）
+                // So we need to test another scenario: use different path
                 TestResult::passed_with_message(
                     start.elapsed(),
                     "HTTP method match works correctly (POST /echo matched)".to_string(),
@@ -340,16 +340,16 @@ impl HttpMatchTestSuite {
         })
     }
 
-    /// 测试综合匹配（所有规则组合）
+    /// Test combined match（all rules combined）
     fn test_combined_match() -> TestCase {
         TestCase::new(
             "combined_match",
-            "测试综合匹配（路径+方法+Headers+Query参数）",
+            "Test combined match（path+method+headers+query params）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 正面测试：POST /echo?action=update with specific headers
+                    // Positive test:POST /echo?action=update with specific headers
                     let mut request = ctx.http_client.post(format!("{}/echo?action=update", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
                     request = request.header("Content-Type", "application/json");
@@ -368,7 +368,7 @@ impl HttpMatchTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
 
-                    // 负面测试：缺少 query 参数，应该不匹配这个规则
+                    // Negative test:missing query param，should not match this rule
                     let mut request = ctx.http_client.post(format!("{}/echo", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
                     request = request.header("Content-Type", "application/json");
@@ -377,10 +377,10 @@ impl HttpMatchTestSuite {
 
                     match request.send().await {
                         Ok(response) => {
-                            // 没有 query param，应该不匹配 rule 8
-                            // 但可能匹配 rule 7 (POST /echo without query params)
-                            // 所以我们期望得到 200 (匹配了 rule 7)
-                            // 这验证了规则的优先级和匹配逻辑
+                            // no query param，应该不match rule 8
+                            // 但可能match rule 7 (POST /echo without query params)
+                            // 所以我们期望得到 200 (match了 rule 7)
+                            // This verifies rule priority and match logic
                             if response.status().is_success() {
                                 TestResult::passed_with_message(
                                 start.elapsed(),
@@ -400,17 +400,17 @@ impl HttpMatchTestSuite {
         )
     }
 
-    /// 测试 SectionName 匹配（parent_refs sectionName 绑定）
+    /// Test SectionName match（parent_refs sectionName 绑定）
     fn test_section_name_match() -> TestCase {
         TestCase::new(
             "section_name_match",
-            "测试 SectionName 匹配（绑定到特定 listener）",
+            "Test SectionName match（bound to specific listener）",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // 正面测试：通过 HTTP listener 访问（sectionName: http）
-                    // HTTPRoute 配置了 sectionName: http，所以只绑定到 HTTP listener
+                    // Positive test:via HTTP listener access (sectionName: http）
+                    // HTTPRoute configured sectionName: http，所以只绑定到 HTTP listener
                     let mut request = ctx.http_client.get(format!("{}/health", ctx.http_url()));
                     request = request.header("Host", "section-test.example.com");
 
@@ -426,15 +426,15 @@ impl HttpMatchTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("HTTP request failed: {}", e)),
                     }
 
-                    // 负面测试验证：
-                    // 1. 确认 HTTPS listener 对其他域名正常工作（验证服务运行正常）
-                    // 2. section-test.example.com 配置了 sectionName: http，所以只能通过 HTTP 访问
-                    //    通过 HTTPS 访问会因为 sectionName 不匹配而路由失败
+                    // Negative test validation:
+                    // 1. Confirm HTTPS listener works for other domains（verify service is running）
+                    // 2. section-test.example.com configured sectionName: http，所以只能Passed HTTP 访问
+                    //    via HTTPS 访问会因为 sectionName mismatch causes routing failure
                     //
-                    // 注意：由于 section-test.example.com 没有配置 TLS 证书，
-                    // HTTPS 请求会在 TLS 握手阶段失败，而不是返回 404。
-                    // 这实际上也验证了 sectionName 功能：路由不匹配 HTTPS listener，
-                    // 因此不会为这个域名加载证书。
+                    // Note: Since no TLS cert configured，
+                    // HTTPS request fails at TLS handshake，not returns 404。
+                    // This also verifies sectionName feature：route does not match HTTPS listener，
+                    // so cert not loaded for this domain。
 
                     TestResult::passed_with_message(
                         start.elapsed(),

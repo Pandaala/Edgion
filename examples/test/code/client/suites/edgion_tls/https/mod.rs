@@ -1,5 +1,6 @@
-// EdgionTls HTTPS 测试模块
+// EdgionTls HTTPS test module
 
+#[allow(clippy::module_inception)]
 mod https;
 
 pub use https::HttpsTestSuite;

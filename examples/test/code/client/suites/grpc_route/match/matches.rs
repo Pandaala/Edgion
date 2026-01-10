@@ -1,11 +1,11 @@
-// gRPC 匹配规则测试套件
+// gRPC match rulesTest suite
 //
-// 依赖的配置文件（位于 examples/conf/）：
-// - GRPCRoute_edge_match-test.yaml         # gRPC 匹配规则测试路由
-// - EndpointSlice_edge_test-grpc.yaml      # gRPC 后端服务发现
-// - Service_edge_test-grpc.yaml            # gRPC 服务定义
-// - Gateway_edge_example-gateway.yaml      # Gateway 配置
-// - GatewayClass__public-gateway.yaml      # GatewayClass 配置
+// Required config files (in examples/conf/):
+// - GRPCRoute_edge_match-test.yaml         # gRPC match rules test route
+// - EndpointSlice_edge_test-grpc.yaml      # gRPC backend service discovery
+// - Service_edge_test-grpc.yaml            # gRPC service definition
+// - Gateway_edge_example-gateway.yaml      # Gateway config
+// - GatewayClass__public-gateway.yaml      # GatewayClass config
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -19,11 +19,11 @@ use super::super::test::HelloRequest;
 pub struct GrpcMatchTestSuite;
 
 impl GrpcMatchTestSuite {
-    /// 测试 hostname 正面匹配
+    /// Test hostname positive match
     fn test_hostname_match_positive() -> TestCase {
         TestCase::new(
             "grpc_hostname_match_positive",
-            "测试 gRPC hostname 正面匹配",
+            "Test gRPC hostname positive match",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -31,7 +31,7 @@ impl GrpcMatchTestSuite {
                     let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
                     let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                         Ok(mut ep) => {
-                            // 设置正确的 hostname
+                            // Set correct hostname
                             let origin_uri = match format!("http://grpc-match.example.com:{}", ctx.grpc_port).parse() {
                                 Ok(uri) => uri,
                                 Err(e) => {
@@ -76,11 +76,11 @@ impl GrpcMatchTestSuite {
         )
     }
 
-    /// 测试 hostname 负面匹配（错误的 hostname 应该失败）
+    /// Test hostname negative match（wrong hostname should fail）
     fn test_hostname_match_negative() -> TestCase {
         TestCase::new(
             "grpc_hostname_match_negative",
-            "测试 gRPC hostname 负面匹配",
+            "Test gRPC hostname negative match",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -88,7 +88,7 @@ impl GrpcMatchTestSuite {
                     let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
                     let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                         Ok(mut ep) => {
-                            // 设置错误的 hostname
+                            // Set wrong hostname
                             let origin_uri = match format!("http://wrong-hostname.example.com:{}", ctx.grpc_port)
                                 .parse()
                             {
@@ -122,7 +122,7 @@ impl GrpcMatchTestSuite {
                             "Expected failure but got success (hostname should not match)".to_string(),
                         ),
                         Err(e) => {
-                            // 应该失败（404 或其他错误）
+                            // should fail（404 or other error）
                             // HTTP 404 may be mapped to Internal by tonic client
                             if e.code() == tonic::Code::NotFound
                                 || e.code() == tonic::Code::Unavailable
@@ -142,11 +142,11 @@ impl GrpcMatchTestSuite {
         )
     }
 
-    /// 测试精确匹配 service + method
+    /// Test exact match service + method
     fn test_exact_service_method_match() -> TestCase {
         TestCase::new(
             "grpc_exact_service_method_match",
-            "测试 gRPC 精确 service+method 匹配",
+            "Test gRPC exact service+method match",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -194,18 +194,18 @@ impl GrpcMatchTestSuite {
         )
     }
 
-    /// 测试 sectionName 不匹配（路由配置 sectionName: https，但通过 HTTP listener 访问）
+    /// Test sectionName mismatchmatch（route config sectionName: https，but accessed via HTTP listener）
     fn test_section_name_mismatch() -> TestCase {
         TestCase::new(
             "grpc_section_name_mismatch",
-            "测试 gRPC sectionName 不匹配",
+            "Test gRPC sectionName mismatch",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
                     // 使用 HTTP listener (10080)
-                    // 但是 GRPCRoute 配置的是 sectionName: https
-                    // 所以应该不匹配，返回 404
+                    // 但是 GRPCRoute config的是 sectionName: https
+                    // so should not match，returns 404
                     let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
                     let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                         Ok(mut ep) => {
@@ -243,7 +243,7 @@ impl GrpcMatchTestSuite {
                             "Expected failure for wrong sectionName but got success".to_string(),
                         ),
                         Err(e) => {
-                            // 应该失败（404 或其他错误）
+                            // should fail（404 or other error）
                             // HTTP 404 may be mapped to Internal by tonic client
                             if e.code() == tonic::Code::NotFound
                                 || e.code() == tonic::Code::Unavailable
@@ -266,9 +266,9 @@ impl GrpcMatchTestSuite {
         )
     }
 
-    /// 测试带 header 的精确匹配
+    /// Test exact with headermatch
     fn test_header_match() -> TestCase {
-        TestCase::new("grpc_header_match", "测试 gRPC header 匹配", |ctx: TestContext| {
+        TestCase::new("grpc_header_match", "Test gRPC header match", |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
 
@@ -296,7 +296,7 @@ impl GrpcMatchTestSuite {
                     }
                 };
 
-                // 添加 header
+                // Add header
                 let mut request = tonic::Request::new(HelloRequest {
                     name: "HeaderTest".to_string(),
                 });

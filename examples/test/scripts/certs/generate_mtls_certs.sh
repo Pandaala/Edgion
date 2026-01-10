@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # mTLS Certificate Generation Script for Edgion Gateway Testing
-# 生成双向 TLS 测试所需的证书和 Secret YAML 文件
+# Generate双向 TLS Test所需的certificate和 Secret YAML file
 # =============================================================================
 
 set -e
@@ -53,23 +53,23 @@ CERTS_DIR="$PROJECT_ROOT/examples/test/certs/mtls"
 mkdir -p "$CONF_DIR"
 mkdir -p "$CERTS_DIR"
 
-log_section "生成 mTLS 证书"
-log_info "临时目录: $TEMP_DIR"
-log_info "配置目录: $CONF_DIR"
-log_info "证书目录: $CERTS_DIR"
+log_section "Generate mTLS certificate"
+log_info "临时directory: $TEMP_DIR"
+log_info "configdirectory: $CONF_DIR"
+log_info "certificatedirectory: $CERTS_DIR"
 
 # Check if certificates already exist
 if [ -f "$CERTS_DIR/valid-client.crt" ]; then
-    log_info "mTLS 证书已存在，跳过生成..."
-    log_warning "如需重新生成，请先删除证书目录:"
+    log_info "mTLS certificatealready存在，SkipGenerate..."
+    log_warning "如需重新Generate，Please先删除certificatedirectory:"
     log_warning "  rm -rf $CERTS_DIR"
     exit 0
 fi
 
 # =============================================================================
-# Step 1: Generate Client CA (用于签发客户端证书)
+# Step 1: Generate Client CA (For签发客户端certificate)
 # =============================================================================
-log_section "生成客户端 CA 证书"
+log_section "Generate客户端 CA certificate"
 
 openssl req -x509 -newkey rsa:2048 -nodes \
     -keyout "$TEMP_DIR/client-ca.key" \
@@ -78,12 +78,12 @@ openssl req -x509 -newkey rsa:2048 -nodes \
     -subj "/CN=Edgion Client CA/O=Edgion/OU=Testing" \
     2>/dev/null
 
-log_success "客户端 CA 生成成功"
+log_success "客户端 CA Generatesuccess"
 
 # =============================================================================
-# Step 2: Generate Valid Client Certificate (有效的客户端证书)
+# Step 2: Generate Valid Client Certificate (有效的客户端certificate)
 # =============================================================================
-log_section "生成有效客户端证书"
+log_section "Generate有效客户端certificate"
 
 # Create CSR
 openssl req -newkey rsa:2048 -nodes \
@@ -110,12 +110,12 @@ openssl x509 -req \
     -extfile "$TEMP_DIR/valid-client.ext" \
     2>/dev/null
 
-log_success "有效客户端证书生成成功"
+log_success "有效客户端certificateGeneratesuccess"
 
 # =============================================================================
 # Step 3: Generate Invalid Client Certificate (不受信任的 CA 签发)
 # =============================================================================
-log_section "生成无效客户端证书（不受信任的 CA）"
+log_section "Generateinvalid客户端certificate（不受信任的 CA）"
 
 # Create a separate untrusted CA
 openssl req -x509 -newkey rsa:2048 -nodes \
@@ -142,12 +142,12 @@ openssl x509 -req \
     -days 365 \
     2>/dev/null
 
-log_success "无效客户端证书生成成功"
+log_success "invalid客户端certificateGeneratesuccess"
 
 # =============================================================================
 # Step 4: Generate Non-matching SAN Client Certificate
 # =============================================================================
-log_section "生成 SAN 不匹配的客户端证书"
+log_section "Generate SAN 不匹配的客户端certificate"
 
 # Create CSR
 openssl req -newkey rsa:2048 -nodes \
@@ -173,12 +173,12 @@ openssl x509 -req \
     -extfile "$TEMP_DIR/nonmatching-client.ext" \
     2>/dev/null
 
-log_success "SAN 不匹配的客户端证书生成成功"
+log_success "SAN 不匹配的客户端certificateGeneratesuccess"
 
 # =============================================================================
 # Step 5: Generate Intermediate CA and Chain Client Certificate
 # =============================================================================
-log_section "生成中间 CA 和证书链客户端证书"
+log_section "Generate中间 CA 和certificate链客户端certificate"
 
 # Create Intermediate CA
 openssl req -newkey rsa:2048 -nodes \
@@ -227,12 +227,12 @@ openssl x509 -req \
 # Create chain bundle (client cert + intermediate CA)
 cat "$TEMP_DIR/chain-client.crt" "$TEMP_DIR/intermediate-ca.crt" > "$TEMP_DIR/chain-client-bundle.crt"
 
-log_success "证书链客户端证书生成成功"
+log_success "certificate链客户端certificateGeneratesuccess"
 
 # =============================================================================
 # Step 6: Generate mTLS Server Certificate (for Gateway)
 # =============================================================================
-log_section "生成 mTLS 服务端证书"
+log_section "Generate mTLS service端certificate"
 
 openssl req -x509 -newkey rsa:2048 -nodes \
     -keyout "$TEMP_DIR/mtls-server.key" \
@@ -242,12 +242,12 @@ openssl req -x509 -newkey rsa:2048 -nodes \
     -addext "subjectAltName=DNS:mtls.example.com,DNS:mtls-optional.example.com,DNS:mtls-san.example.com,DNS:mtls-chain.example.com" \
     2>/dev/null
 
-log_success "mTLS 服务端证书生成成功"
+log_success "mTLS service端certificateGeneratesuccess"
 
 # =============================================================================
 # Step 7: Copy certificates to certs directory
 # =============================================================================
-log_section "复制证书到目标目录"
+log_section "copycertificate到目标directory"
 
 cp "$TEMP_DIR/valid-client.crt" "$CERTS_DIR/"
 cp "$TEMP_DIR/valid-client.key" "$CERTS_DIR/"
@@ -262,12 +262,12 @@ cp "$TEMP_DIR/intermediate-ca.crt" "$CERTS_DIR/"
 cp "$TEMP_DIR/mtls-server.crt" "$CERTS_DIR/"
 cp "$TEMP_DIR/mtls-server.key" "$CERTS_DIR/"
 
-log_success "证书复制完成"
+log_success "certificatecopycompleted"
 
 # =============================================================================
 # Step 8: Create Secret YAML files
 # =============================================================================
-log_section "生成 Secret YAML 文件"
+log_section "Generate Secret YAML file"
 
 # Client CA Secret
 CLIENTCA_B64=$(base64 < "$TEMP_DIR/client-ca.crt" | tr -d '\n')
@@ -317,20 +317,20 @@ log_success "创建 Secret_edge_mtls-server.yaml"
 # =============================================================================
 # Summary
 # =============================================================================
-log_section "完成"
-log_success "mTLS 证书生成完成！"
+log_section "completed"
+log_success "mTLS certificateGeneratecompleted！"
 echo ""
-log_info "生成的证书文件 ($CERTS_DIR/):"
-log_info "  - valid-client.crt/key      有效客户端证书"
-log_info "  - invalid-client.crt/key    无效客户端证书（不受信任的 CA）"
-log_info "  - nonmatching-client.crt/key SAN 不匹配的客户端证书"
-log_info "  - chain-client-bundle.crt   带证书链的客户端证书"
-log_info "  - chain-client.key          证书链客户端私钥"
-log_info "  - client-ca.crt             客户端 CA 证书"
-log_info "  - intermediate-ca.crt       中间 CA 证书"
-log_info "  - mtls-server.crt/key       mTLS 服务端证书"
+log_info "Generate的certificatefile ($CERTS_DIR/):"
+log_info "  - valid-client.crt/key      有效客户端certificate"
+log_info "  - invalid-client.crt/key    invalid客户端certificate（不受信任的 CA）"
+log_info "  - nonmatching-client.crt/key SAN 不匹配的客户端certificate"
+log_info "  - chain-client-bundle.crt   带certificate链的客户端certificate"
+log_info "  - chain-client.key          certificate链客户端私钥"
+log_info "  - client-ca.crt             客户端 CA certificate"
+log_info "  - intermediate-ca.crt       中间 CA certificate"
+log_info "  - mtls-server.crt/key       mTLS service端certificate"
 echo ""
-log_info "生成的 Secret YAML 文件 ($CONF_DIR/):"
+log_info "Generate的 Secret YAML file ($CONF_DIR/):"
 log_info "  - Secret_edge_client-ca.yaml    客户端 CA Secret"
-log_info "  - Secret_edge_ca-chain.yaml     CA 证书链 Secret"
-log_info "  - Secret_edge_mtls-server.yaml  mTLS 服务端证书 Secret"
+log_info "  - Secret_edge_ca-chain.yaml     CA certificate链 Secret"
+log_info "  - Secret_edge_mtls-server.yaml  mTLS service端certificate Secret"

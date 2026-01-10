@@ -1,4 +1,4 @@
-// 测试报告生成器
+// Test report generator
 
 use crate::framework::{SuiteResult, TestResults};
 use anyhow::Result;
@@ -57,19 +57,19 @@ impl ConsoleReporter {
 
     fn print_summary(&self, results: &TestResults, total_duration: Duration) {
         println!("{}", style("=".repeat(50)).dim());
-        println!("{}", style("测试总结").bold());
+        println!("{}", style("Test Summary").bold());
         println!("{}", style("=".repeat(50)).dim());
 
-        println!("总测试数: {}", results.total_tests());
-        println!("{}: {}", style("通过").green(), results.total_passed());
-        println!("{}: {}", style("失败").red(), results.total_failed());
-        println!("通过率: {:.1}%", results.pass_rate());
-        println!("总耗时: {:.2}s", total_duration.as_secs_f64());
+        println!("Total tests: {}", results.total_tests());
+        println!("{}: {}", style("Passed").green(), results.total_passed());
+        println!("{}: {}", style("Failed").red(), results.total_failed());
+        println!("Passed率: {:.1}%", results.pass_rate());
+        println!("Total time: {:.2}s", total_duration.as_secs_f64());
 
         if results.has_failures() {
-            println!("\n{}", style("⚠ 部分测试失败").red().bold());
+            println!("\n{}", style("⚠ Some tests failed").red().bold());
         } else {
-            println!("\n{}", style("✓ 所有测试通过").green().bold());
+            println!("\n{}", style("✓ All tests passed").green().bold());
         }
     }
 }

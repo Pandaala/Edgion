@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# Edgion CI 检查脚本
-# 用于运行 fmt、clippy 和单元测试
+# Edgion CI Checkscript
+# ForRun fmt、clippy 和unitTest
 # =============================================================================
 
 set -e
@@ -13,11 +13,11 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 项目根目录
+# project根directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
-# 默认选项
+# defaultoptions
 RUN_FMT=true
 RUN_CLIPPY=true
 RUN_TESTS=true
@@ -25,28 +25,28 @@ FIX_MODE=false
 VERBOSE=false
 
 # =============================================================================
-# 帮助信息
+# helpinfo
 # =============================================================================
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  -f, --fmt-only      只运行 fmt 检查"
-    echo "  -c, --clippy-only   只运行 clippy 检查"
-    echo "  -t, --test-only     只运行单元测试"
-    echo "  --fix               自动修复 fmt 和 clippy 问题"
-    echo "  -v, --verbose       显示详细输出"
-    echo "  -h, --help          显示帮助信息"
+    echo "  -f, --fmt-only      OnlyRun fmt Check"
+    echo "  -c, --clippy-only   OnlyRun clippy Check"
+    echo "  -t, --test-only     OnlyRununitTest"
+    echo "  --fix               autofix fmt 和 clippy issues"
+    echo "  -v, --verbose       Showdetailedoutput"
+    echo "  -h, --help          Showhelpinfo"
     echo ""
     echo "Examples:"
-    echo "  $0                  # 运行所有检查"
-    echo "  $0 --fix            # 运行所有检查并自动修复"
-    echo "  $0 -f               # 只检查格式"
-    echo "  $0 -c -v            # 只运行 clippy，显示详细输出"
+    echo "  $0                  # RunallCheck"
+    echo "  $0 --fix            # RunallCheck并autofix"
+    echo "  $0 -f               # OnlyCheckformat"
+    echo "  $0 -c -v            # OnlyRun clippy，Showdetailedoutput"
 }
 
 # =============================================================================
-# 日志函数
+# log函数
 # =============================================================================
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -72,7 +72,7 @@ log_section() {
 }
 
 # =============================================================================
-# 解析参数
+# Parseargs
 # =============================================================================
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -114,10 +114,10 @@ parse_args() {
 }
 
 # =============================================================================
-# 检查函数
+# Check函数
 # =============================================================================
 
-# 运行 cargo fmt
+# Run cargo fmt
 run_fmt() {
     log_section "Cargo Format Check"
     
@@ -140,13 +140,13 @@ run_fmt() {
     fi
 }
 
-# 运行 cargo clippy
+# Run cargo clippy
 run_clippy() {
     log_section "Cargo Clippy Check"
     
     cd "$PROJECT_ROOT"
     
-    # 注意：不使用 --all-features，因为 TLS 后端（boringssl/openssl/rustls）互斥
+    # Note:不use --all-features，因为 TLS after端（boringssl/openssl/rustls）mutually exclusive
     local clippy_args="--all-targets"
     
     if $FIX_MODE; then
@@ -166,7 +166,7 @@ run_clippy() {
                 return 1
             fi
         else
-            # 捕获输出，只在失败时显示
+            # captureoutput，Only在failed时Show
             if output=$(cargo clippy $clippy_args -- -D warnings 2>&1); then
                 log_success "Clippy check passed"
                 return 0
@@ -179,7 +179,7 @@ run_clippy() {
     fi
 }
 
-# 运行单元测试
+# RununitTest
 run_tests() {
     log_section "Unit Tests"
     
@@ -215,7 +215,7 @@ main() {
     echo -e "Project: ${PROJECT_ROOT}"
     echo -e "Mode: $(if $FIX_MODE; then echo 'Fix'; else echo 'Check'; fi)"
     
-    # 运行各项检查
+    # Run各项Check
     if $RUN_FMT; then
         if ! run_fmt; then
             failed=true

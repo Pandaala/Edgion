@@ -1,14 +1,14 @@
-// gRPC Route 测试套件
-// 注：gRPC TLS 已移至 EdgionTls 资源模块
+// gRPC Route Test suite
+// Note: gRPC TLS moved to EdgionTls module
 
-// Proto 模块（统一声明一次）
+// Proto module (declared once)
 #[path = "../../../proto_gen/test.rs"]
 pub mod test;
 
-// 子模块 - 按功能分类
+// Sub-modules - by function
 mod basic;
 mod r#match;
 
-// 导出测试套件
+// 导出Test suite
 pub use basic::GrpcTestSuite;
 pub use r#match::GrpcMatchTestSuite;

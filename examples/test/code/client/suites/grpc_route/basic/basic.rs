@@ -1,11 +1,11 @@
-// gRPC 测试套件
+// gRPC Test suite
 //
-// 依赖的配置文件（位于 examples/conf/）：
-// - EndpointSlice_edge_test-grpc.yaml         # gRPC 后端服务发现
-// - Service_edge_test-grpc.yaml               # gRPC 服务定义
-// - GRPCRoute_edge_test-grpc.yaml             # gRPC 路由规则（Host: grpc.test.example.com）
-// - Gateway_edge_example-gateway.yaml         # Gateway 配置
-// - GatewayClass__public-gateway.yaml         # GatewayClass 配置
+// Required config files (in examples/conf/):
+// - EndpointSlice_edge_test-grpc.yaml         # gRPC backend service discovery
+// - Service_edge_test-grpc.yaml               # gRPC service definition
+// - GRPCRoute_edge_test-grpc.yaml             # gRPC routing rules（Host: grpc.test.example.com）
+// - Gateway_edge_example-gateway.yaml         # Gateway config
+// - GatewayClass__public-gateway.yaml         # GatewayClass config
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -18,19 +18,19 @@ use super::super::test::HelloRequest;
 pub struct GrpcTestSuite;
 
 impl GrpcTestSuite {
-    /// 测试 gRPC SayHello RPC
+    /// Test gRPC SayHello RPC
     fn test_grpc_say_hello() -> TestCase {
-        TestCase::new("grpc_say_hello", "gRPC SayHello 测试", |ctx: TestContext| {
+        TestCase::new("grpc_say_hello", "gRPC SayHello test", |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
 
-                // 构建连接 URL
+                // Build connection URL
                 let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
 
-                // 创建 gRPC 客户端，通过 origin 设置 :authority
+                // Create gRPC client，Passed origin 设置 :authority
                 let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                     Ok(mut ep) => {
-                        // Gateway 模式：设置 origin 来控制 :authority 伪头部
+                        // Gateway Mode: set origin to control :authority pseudo-header
                         if let Some(ref host) = ctx.grpc_host {
                             let origin_uri = match format!("http://{}:{}", host, ctx.grpc_port).parse() {
                                 Ok(uri) => uri,
@@ -57,7 +57,7 @@ impl GrpcTestSuite {
                     }
                 };
 
-                // 创建请求
+                // Create request
                 let request = tonic::Request::new(HelloRequest {
                     name: "Edgion".to_string(),
                 });

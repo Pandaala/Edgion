@@ -139,7 +139,7 @@ impl AccessLogAnalyzer {
     pub fn generate_report(&self, results: &[LBAnalysisResult]) -> String {
         let mut report = String::new();
         report.push_str("============================================================\n");
-        report.push_str("Backend Resolver LB 策略分析报告\n");
+        report.push_str("Backend Resolver LB Policy Analysis Report\n");
         report.push_str("============================================================\n\n");
 
         for res in results {
@@ -148,10 +148,10 @@ impl AccessLogAnalyzer {
                 res.test_type.replace("-", ""),
                 res.test_type
             ));
-            report.push_str(&format!("   总请求数: {}\n", res.total_requests));
+            report.push_str(&format!("   Total requests: {}\n", res.total_requests));
 
             if !res.lb_policy_counts.is_empty() {
-                report.push_str("   LB 策略分布:\n");
+                report.push_str("   LB policy distribution:\n");
                 for (policy, count) in &res.lb_policy_counts {
                     report.push_str(&format!(
                         "     - {}: {} ({:.1}%)\n",
@@ -161,7 +161,7 @@ impl AccessLogAnalyzer {
                     ));
                 }
             } else {
-                report.push_str("   LB 策略分布: 未记录\n");
+                report.push_str("   LB policy distribution: not recorded\n");
             }
 
             if !res.backend_counts.is_empty() {
@@ -175,7 +175,7 @@ impl AccessLogAnalyzer {
                     ));
                 }
             } else {
-                report.push_str("   后端分布: 未记录\n");
+                report.push_str("   后端分布: not recorded\n");
             }
 
             if res.errors.is_empty() {
@@ -191,7 +191,7 @@ impl AccessLogAnalyzer {
         for res in results {
             if res.errors.is_empty() {
                 report.push_str(&format!(
-                    "  ✅ {} 测试: 通过 - LB 策略被正确识别\n",
+                    "  ✅ {} 测试: Passed - LB 策略被正确识别\n",
                     res.test_type.replace("-", "")
                 ));
             } else {

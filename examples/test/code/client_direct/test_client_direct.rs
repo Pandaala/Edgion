@@ -1,18 +1,20 @@
-// Edgion 直接测试客户端
-// 直接测试 test_server 连通性（不通过 Gateway）
+// Edgion Direct Test Client
+// Direct test of test_server connectivity (without Gateway)
 //
-// 用法:
+// Usage:
 //   cargo run --example test_client_direct [OPTIONS] [COMMAND]
 //
-// 测试:
-//   - http      HTTP 基础测试
-//   - grpc      gRPC 基础测试
-//   - websocket WebSocket 测试
-//   - tcp       TCP 测试
-//   - udp       UDP 测试
-//   - all       运行所有测试
+// Tests:
+//   - http      HTTP basic tests
+//   - grpc      gRPC basic tests
+//   - websocket WebSocket tests
+//   - tcp       TCP tests
+//   - udp       UDP tests
+//   - all       Run all tests
 
-// 复用 client 的模块
+// Reuse client modules
+#![allow(dead_code)]
+#![allow(unused_imports)]
 #[path = "../client/framework.rs"]
 mod framework;
 #[path = "../client/log_analyzer.rs"]
@@ -34,32 +36,32 @@ static INIT: Once = Once::new();
 
 #[derive(Parser, Debug)]
 #[command(name = "test-client-direct")]
-#[command(about = "Edgion 直接测试客户端 - 测试 test_server 连通性")]
+#[command(about = "Edgion Direct Test Client - Test test_server connectivity")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// 目标主机
+    /// Target host
     #[arg(long, default_value = "127.0.0.1")]
     target_host: String,
 
-    /// HTTP 服务器端口
+    /// HTTP server port
     #[arg(long, default_value = "30001")]
     http_port: u16,
 
-    /// gRPC 服务器端口
+    /// gRPC server port
     #[arg(long, default_value = "30021")]
     grpc_port: u16,
 
-    /// WebSocket 服务器端口
+    /// WebSocket server port
     #[arg(long, default_value = "30005")]
     websocket_port: u16,
 
-    /// TCP 服务器端口
+    /// TCP server port
     #[arg(long, default_value = "30010")]
     tcp_port: u16,
 
-    /// UDP 服务器端口
+    /// UDP server port
     #[arg(long, default_value = "30011")]
     udp_port: u16,
 
@@ -70,17 +72,17 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// HTTP 基础测试
+    /// HTTP basic tests
     Http,
-    /// gRPC 基础测试
+    /// gRPC basic tests
     Grpc,
-    /// WebSocket 测试
+    /// WebSocket tests
     Websocket,
-    /// TCP 测试
+    /// TCP tests
     Tcp,
-    /// UDP 测试
+    /// UDP tests
     Udp,
-    /// 运行所有直接测试
+    /// Run all direct tests
     All,
 }
 
@@ -102,10 +104,10 @@ async fn main() -> Result<()> {
     }
 
     println!("\n========================================");
-    println!("Edgion 直接测试客户端");
+    println!("Edgion Direct Test Client");
     println!("========================================");
-    println!("模式: Direct (不通过 Gateway)");
-    println!("目标: {}:{}", cli.target_host, cli.http_port);
+    println!("Mode: Direct (without Gateway)");
+    println!("Target: {}:{}", cli.target_host, cli.http_port);
     println!("========================================\n");
 
     let context = TestContext::new(
