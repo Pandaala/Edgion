@@ -1,11 +1,9 @@
 # Edgion Gateway 开发规则
 
-
 ## 编码与测试
 - 开发时用 debug 模式：`cargo run`（不带 --release）
-- 快速检查用：`cargo check`
-- 如果有重构，需要运行 `cargo test` 进行测试
-- 小改动不需要跑详细测试，有重构或者复杂改动的时候，需要一次运行 check/format/clippy/test/integration_test 验证
+- 快速检查用：`cargo check`， `cargo clippy`， `cargo fmt`
+- 如果有重构，需要运行后面的集成测试验证，小改动不需要跑详细测试
 - 重要变更说明影响范围
 - 避免创建临时脚本/文档
 
@@ -14,6 +12,14 @@
 - 控制面日志用tracing，数据面日志整合到access.log，各种请求测试都考虑好access.log的输出和测试
 - 非单元测试test部分用短 use 导入，不用代码内部长路径
 - 遵循 no-hidden-logic 原则
+
+## 响应风格
+- 日常交流回复用中文，生成plan用中文
+
+## Git 操作限制
+- **禁止执行删除远程分支的操作** (`git push --delete`, `git push origin :branch`)
+- 如果用户要求删除远程分支，提供命令但不要执行，让用户自己操作
+
 
 ## docs文档
 - 文档目前阶段只做中文
@@ -35,9 +41,47 @@
 
 ## 集成测试
 
-## 响应风格
-- 日常交流回复用中文，生成plan用中文
+### 运行集成测试
+```bash
+# 运行全部集成测试
+./examples/test/scripts/integration/run_integration.sh
 
-## Git 操作限制
-- **禁止执行删除远程分支的操作** (`git push --delete`, `git push origin :branch`)
-- 如果用户要求删除远程分支，提供命令但不要执行，让用户自己操作
+### 验证测试结果
+测试完成后，查看 `${WORK_DIR}/report.log` 获取测试报告：
+
+
+报告格式：
+```
+========================================
+Edgion Integration Test Report
+Time: 2026-01-10 09:42:04
+Work Dir: /path/to/work_dir
+========================================
+
+[PASS] http_direct (2s)
+[PASS] grpc_direct (0s)
+[FAIL] some_test (1s)    # 失败的测试
+...
+
+========================================
+Summary
+========================================
+Total:  23
+Passed: 22
+Failed: 1
+Pass Rate: 95%
+========================================
+```
+
+### 测试目录结构
+- `examples/test/code/` - 测试代码（client, server, validator）
+- `examples/test/conf/` - 测试配置文件（按资源类型组织）
+- `examples/test/scripts/` - 测试脚本
+- `examples/test/certs/` - 生成的证书（gitignore）
+- `integration_testing/` - 运行时工作目录（gitignore）
+
+### 测试失败排查
+1. 查看 `report.log` 确定失败的测试
+2. 查看 `${WORK_DIR}/test_logs/${TEST_NAME}.log` 获取详细日志
+3. 查看 `${WORK_DIR}/logs/` 下的 controller/gateway 日志
+
