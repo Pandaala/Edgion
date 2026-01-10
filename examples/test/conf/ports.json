@@ -1,0 +1,64 @@
+{
+  "current_max": 31210,
+  "suites": {
+    "HTTPRoute/Basic": {
+      "http": 31000
+    },
+    "HTTPRoute/Match": {
+      "http": 31020,
+      "https": 31021
+    },
+    "HTTPRoute/Backend/LBPolicy": {
+      "http": 31120
+    },
+    "HTTPRoute/Backend/WeightedBackend": {
+      "http": 31130
+    },
+    "HTTPRoute/Backend/Timeout": {
+      "http": 31140
+    },
+    "HTTPRoute/Filters/Redirect": {
+      "http": 31040
+    },
+    "HTTPRoute/Filters/Security": {
+      "http": 31030
+    },
+    "HTTPRoute/Protocol/WebSocket": {
+      "http": 31080
+    },
+    "GRPCRoute/Basic": {
+      "grpc": 31050
+    },
+    "GRPCRoute/Match": {
+      "grpc": 31060
+    },
+    "TCPRoute/Basic": {
+      "tcp": 31090,
+      "tcp_filtered": 31091
+    },
+    "UDPRoute/Basic": {
+      "udp": 31100
+    },
+    "Gateway/Security": {
+      "http": 31150
+    },
+    "Gateway/RealIP": {
+      "http": 31160
+    },
+    "Gateway/TLS/BackendTLS": {
+      "http": 31170
+    },
+    "Gateway/Plugins": {
+      "http": 31180
+    },
+    "EdgionTls/https": {
+      "https": 31190
+    },
+    "EdgionTls/grpctls": {
+      "grpc_tls": 31200
+    },
+    "EdgionTls/mTLS": {
+      "https": 31110
+    }
+  }
+}

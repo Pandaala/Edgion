@@ -21,22 +21,10 @@ Thumbs.db
 *.a
 *.lib
 logs/
-**/logs_*/  # Legacy integration test log directories
-examples/testing/logs_*/
-examples/testing/testing_tmp/  # Integration test working directory
 
-# Test reports
-test_report.json
-*_report.json
-runtime/
-
-# TLS 测试 Secret（包含证书私钥，自动生成，不要提交）
-examples/conf/Secret_*.yaml
-
-# 测试证书文件（自动生成，不要提交）
-examples/testing/certs/
+# 集成测试工作目录（运行时生成，不要提交）
+integration_testing/
 
 # Cross-compilation config (personal dev workflow)
 Cross.toml
 Dockerfile.cross
-

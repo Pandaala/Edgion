@@ -261,7 +261,7 @@ mod tests {
         // Max 20 entries
         assert!(parsed["log"].as_array().unwrap().len() <= 20);
         // Should be marked as truncated
-        assert_eq!(parsed["log_full"].as_bool().unwrap(), true);
+        assert!(parsed["log_full"].as_bool().unwrap());
     }
 
     #[test]

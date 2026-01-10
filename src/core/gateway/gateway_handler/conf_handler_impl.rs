@@ -1,4 +1,6 @@
 use crate::core::conf_sync::traits::ConfHandler;
+use crate::core::gateway::gateway_store::get_global_gateway_store;
+use crate::core::routes::http_routes::get_global_route_manager;
 use crate::core::tls::rebuild_gateway_tls_matcher;
 use crate::types::prelude_resources::Gateway;
 use kube::ResourceExt;
@@ -50,9 +52,16 @@ impl ConfHandler<Gateway> for GatewayHandler {
             data.len()
         );
 
-        // Update global store
+        // Update legacy store (for backward compatibility)
         let mut store = GATEWAY_STORE.write().unwrap();
         store.clear();
+
+        // Update global GatewayStore (used by HTTPRoute handler)
+        let global_store = get_global_gateway_store();
+        let mut global_store_guard = global_store.write().unwrap();
+        // Clear and rebuild global store
+        *global_store_guard = crate::core::gateway::gateway_store::GatewayStore::new();
+
         for (key, gateway) in data {
             let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
             tracing::info!(
@@ -64,6 +73,17 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 "Gateway stored"
             );
             store.push(gateway.clone());
+
+            // Also add to global store
+            if let Err(e) = global_store_guard.add_gateway(gateway.clone()) {
+                tracing::warn!(key = %key, error = %e, "Failed to add gateway to global store");
+            }
+
+            // Initialize route manager entry for this gateway
+            let route_manager = get_global_route_manager();
+            let namespace = gateway.namespace().unwrap_or_default();
+            let name = gateway.name_any();
+            route_manager.get_or_create_domain_routes(&namespace, &name);
         }
 
         // Rebuild Gateway TLS matcher for dynamic TLS certificate lookup

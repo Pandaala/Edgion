@@ -1,0 +1,121 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: match-test
+  namespace: edgion-default
+  resourceVersion: "1766852000000000000"
+spec:
+  parentRefs:
+    - name: http-match-gateway
+      namespace: edgion-test
+  hostnames:
+    - "match-test.example.com"
+  rules:
+    # Rule 1: PathPrefix 匹配
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 2: Exact 路径匹配
+    - matches:
+        - path:
+            type: Exact
+            value: /exact/path
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 3: RegularExpression 路径匹配
+    - matches:
+        - path:
+            type: RegularExpression
+            value: "^/users/[0-9]+$"
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 4: Header Exact 匹配
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /header-test
+          headers:
+            - type: Exact
+              name: X-Custom-Header
+              value: CustomValue
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 5: Header RegularExpression 匹配
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /header-regex
+          headers:
+            - type: RegularExpression
+              name: X-Version
+              value: "^v[0-9]+\\.[0-9]+$"
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 6: Query Parameter 匹配
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /query-test
+          queryParams:
+            - type: Exact
+              name: apikey
+              value: secret123
+            - type: RegularExpression
+              name: version
+              value: "^[0-9]+$"
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 7: HTTP Method 匹配（使用 /echo 因为支持 POST）
+    - matches:
+        - path:
+            type: Exact
+            value: /echo
+          method: POST
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 8: 综合匹配（使用 /echo，支持 POST）
+    - matches:
+        - path:
+            type: Exact
+            value: /echo
+          method: POST
+          headers:
+            - type: Exact
+              name: Content-Type
+              value: application/json
+            - type: RegularExpression
+              name: X-Request-ID
+              value: "^[a-f0-9-]{36}$"
+          queryParams:
+            - type: Exact
+              name: action
+              value: update
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+

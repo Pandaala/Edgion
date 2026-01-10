@@ -15,6 +15,16 @@ A high-performance Kubernetes Gateway built on [Pingora](https://github.com/clou
 - 📊 **Observability** - Access logs, metrics, distributed tracing ready
 - 🌊 **Protocol Support** - HTTP/1.1, HTTP/2, gRPC, TCP, UDP, WebSocket
 
+## 💡 Why Edgion?
+
+| Advantage | Description |
+|-----------|-------------|
+| **Hot Reload** | All configurations (Routes, Backends, Plugins, TLS Certs) take effect immediately without restart |
+| **Dual Deployment** | Works seamlessly in both Kubernetes and bare-metal environments |
+| **Gateway API Native** | Standard Kubernetes Gateway API - widely compatible, AI-friendly configuration |
+| **Rust-Powered** | Better debugging with clear stack traces compared to Lua-based proxies |
+| **Unified Logging** | Single access log captures all request details, errors, and plugin execution info |
+
 ## 📚 Documentation
 
 - 🇨🇳 [中文文档 (Chinese)](docs/zh-CN/README.md)
@@ -83,14 +93,25 @@ Edgion consists of two main components:
 - **Controller** (`edgion_controller`) - Watches Kubernetes resources and manages configurations
 - **Gateway** (`edgion_gateway`) - High-performance data plane that processes traffic
 
-For architecture details, see [Architecture Overview](docs/zh-CN/developer-doc/architecture-overview.md).
+For architecture details, see [Architecture Overview](docs/zh-CN/dev-guide/architecture-overview.md).
+
+## 🗺️ Roadmap
+
+- [ ] **Cache Plugin** - Response caching and cache-anything support
+- [ ] **Async MQ / Log Gateway** - Asynchronous message queue integration
+- [ ] **Full-Chain Reconcile** - End-to-end configuration reconciliation
+- [ ] **AI Gateway** - AI-specific plugins and policies
+- [ ] **AI Mesh** - AI service mesh capabilities
+- [ ] **MCP Server** - Model Context Protocol server
+- [ ] **AI Workflow Engine** - AI-powered workflow orchestration
+- [ ] **WASM Plugins** - WebAssembly plugin support
 
 ## 🤝 Contributing
 
 Contributions are welcome! Please check out:
 
-- [Developer Documentation](docs/zh-CN/developer-doc/README.md)
-- [Adding New Resources Guide](docs/zh-CN/developer-doc/add-new-resource-guide.md)
+- [Developer Documentation](docs/zh-CN/dev-guide/README.md)
+- [Adding New Resources Guide](docs/zh-CN/dev-guide/add-new-resource-guide.md)
 
 ## 📄 License
 

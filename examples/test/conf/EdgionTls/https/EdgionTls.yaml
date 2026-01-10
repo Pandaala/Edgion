@@ -1,0 +1,16 @@
+# EdgionTls HTTPS 配置
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: edgiontls-https
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: edgiontls-https-gateway
+      namespace: edgion-test
+      sectionName: https
+  hosts:
+    - test.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

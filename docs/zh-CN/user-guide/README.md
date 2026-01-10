@@ -1,69 +1,56 @@
-# Edgion 用户指南
+# 用户指南 (User Guide)
 
-欢迎使用 Edgion！这里提供快速上手和常用功能的使用指南。
+本章节面向应用开发者，介绍如何使用 Gateway API 配置路由规则。
 
-## 📚 指南列表
+## 目录
 
-### 安全认证
+### HTTPRoute
+- [HTTPRoute 总览](./http-route/overview.md)
+- **匹配规则 (Matches)**
+  - [路径匹配](./http-route/matches/path.md)
+  - [请求头匹配](./http-route/matches/headers.md)
+  - [查询参数匹配](./http-route/matches/query-params.md)
+  - [HTTP 方法匹配](./http-route/matches/method.md)
+- **过滤器 (Filters)**
+  - [过滤器总览](./http-route/filters/overview.md)
+  - [插件组合与引用 🔌](./http-route/filters/plugin-composition.md)
+  - Gateway API 标准过滤器
+    - [RequestHeaderModifier](./http-route/filters/gateway-api/request-header-modifier.md)
+    - [ResponseHeaderModifier](./http-route/filters/gateway-api/response-header-modifier.md)
+    - [RequestRedirect](./http-route/filters/gateway-api/request-redirect.md)
+    - [URLRewrite](./http-route/filters/gateway-api/url-rewrite.md)
+  - Edgion 扩展插件 🔌
+    - [BasicAuth](./http-route/filters/edgion-plugins/basic-auth.md)
+    - [CORS](./http-route/filters/edgion-plugins/cors.md)
+    - [CSRF](./http-route/filters/edgion-plugins/csrf.md)
+    - [IP 限制](./http-route/filters/edgion-plugins/ip-restriction.md)
+    - [限流](./http-route/filters/edgion-plugins/rate-limit.md)
+- **后端配置 (Backends)**
+  - [Service 引用](./http-route/backends/service-ref.md)
+  - [权重配置](./http-route/backends/weight.md)
+  - [后端 TLS](./http-route/backends/backend-tls.md)
+- **弹性配置 (Resilience)**
+  - [超时配置](./http-route/resilience/timeouts.md)
+  - [重试策略](./http-route/resilience/retry.md)
+  - [会话保持](./http-route/resilience/session-persistence.md)
+- [负载均衡算法 🔌](./http-route/lb-algorithms.md)
 
-- 🔐 **[Basic Auth 认证](./basic-auth-user-guide.md)** - HTTP 基础认证配置
-- 🛡️ **[CSRF 防护](./csrf-user-guide.md)** - 跨站请求伪造防护
-- 🚫 **[IP 限制](./ip-restriction.md)** - IP 黑白名单配置
+### GRPCRoute
+- [GRPCRoute 总览](./grpc-route/overview.md)
+- [匹配规则](./grpc-route/matches/)
+- [过滤器](./grpc-route/filters/)
+- [后端配置](./grpc-route/backends/)
 
-### 跨域与 TLS
+### TCPRoute
+- [TCPRoute 总览](./tcp-route/overview.md)
+- [后端配置](./tcp-route/backends/)
+- [Stream Plugins 🔌](./tcp-route/stream-plugins.md)
 
-- 🌐 **[CORS 跨域](./cors-user-guide.md)** - 跨域资源共享配置
-- ✈️ **[Preflight 策略](./preflight-policy-guide.md)** - 预检请求处理配置
-- 🔒 **[EdgionTLS](./edgiontls-user-guide.md)** - TLS 证书和 mTLS 配置
+### UDPRoute
+- [UDPRoute 总览](./udp-route/overview.md)
+- [后端配置](./udp-route/backends/)
+- [Stream Plugins](./tcp-route/stream-plugins.md) *(同 TCPRoute)*
 
-### 插件系统
-
-- 🔌 **[Plugin References](./plugin-ref-guide.md)** - EdgionPlugins reference and composition
-
-### 流式处理
-
-- 🌊 **[Stream Plugins](./stream-plugins-guide.md)** - TCP/UDP 流式插件
-  - IP 访问控制
-  - 跨命名空间引用
-  - 常见使用场景
-
-### 监控与日志
-
-- 📊 **[Access Log](./access-log-guide.md)** - 访问日志格式和分析
-  - JSON 日志格式说明
-  - 插件日志解读
-  - 日志分析最佳实践
-
-### 即将推出
-
-- 🚀 性能优化指南
-- 🧩 ExtensionRef 深度控制：`extensionRefMaxDepth` 可配置（默认 5），用于限制插件引用链深度，避免循环。
-
----
-
-## 🔗 其他资源
-
-### 运维指南
-TLS 证书、Gateway 配置等运维相关文档，请参考 [Op Guide](../op-guide/README.md)
-
-### 开发者文档
-详细的架构和开发指南，请参考 [Developer Documentation](../developer-doc/README.md)
-
-### 示例配置
-查看 `examples/conf/` 目录获取完整的配置示例
-
-### 测试
-查看 `examples/testing/` 目录了解如何运行测试
-
----
-
-## 💬 获取帮助
-
-遇到问题？
-- 📖 查看 [Annotations 参考](../developer-doc/annotations-guide.md)
-- 🐛 [提交 Issue](https://github.com/your-org/edgion/issues)
-- 💡 [查看示例](../../examples/conf/)
-
----
-
-**版本**: Edgion v0.1.0
+### 高级特性
+- [灰度发布](./advanced/canary-release.md)
+- [蓝绿部署](./advanced/blue-green.md)
