@@ -98,9 +98,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.verbose {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
+        tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init();
     }
 
     println!("\n========================================");

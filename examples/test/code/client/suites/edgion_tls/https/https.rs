@@ -43,11 +43,10 @@ impl HttpsTestSuite {
                                 Ok(body) => {
                                     // Test server returns request info at /secure/health
                                     // Accept both "healthy" and path info as success indicators
-                                    if status.is_success() && (body.contains("healthy") || body.contains("Path: /secure/health")) {
-                                        TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            format!("Status: {}", status),
-                                        )
+                                    if status.is_success()
+                                        && (body.contains("healthy") || body.contains("Path: /secure/health"))
+                                    {
+                                        TestResult::passed_with_message(start.elapsed(), format!("Status: {}", status))
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
@@ -86,24 +85,17 @@ impl HttpsTestSuite {
                         Ok(response) => {
                             let status = response.status();
                             if status.is_success() {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Status: {}", status),
-                                )
+                                TestResult::passed_with_message(start.elapsed(), format!("Status: {}", status))
                             } else {
                                 match response.text().await {
-                                    Ok(body) => {
-                                        TestResult::failed(
-                                            start.elapsed(),
-                                            format!("Request failed. Status: {}, Body: {}", status, body),
-                                        )
-                                    }
-                                    Err(e) => {
-                                        TestResult::failed(
-                                            start.elapsed(),
-                                            format!("Request failed. Status: {}, Error reading body: {}", status, e),
-                                        )
-                                    }
+                                    Ok(body) => TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Request failed. Status: {}, Body: {}", status, body),
+                                    ),
+                                    Err(e) => TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Request failed. Status: {}, Error reading body: {}", status, e),
+                                    ),
                                 }
                             }
                         }

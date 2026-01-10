@@ -251,7 +251,8 @@ impl PluginLogsTestSuite {
                                             }
                                         }
 
-                                        let stage_names: Vec<&str> = access_log.plugin_logs.iter().map(|s| s.stage.as_str()).collect();
+                                        let stage_names: Vec<&str> =
+                                            access_log.plugin_logs.iter().map(|s| s.stage.as_str()).collect();
                                         TestResult::passed_with_message(
                                             start.elapsed(),
                                             format!("Stages found: {:?}", stage_names),

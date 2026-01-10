@@ -50,7 +50,7 @@ impl TestContext {
         let mut client_builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .danger_accept_invalid_certs(true);
-        
+
         // Add DNS resolution for HTTPS hosts to support proper SNI
         // This maps hostnames to 127.0.0.1 so the client sends correct SNI
         if let Some(ref host) = http_host {
@@ -66,10 +66,8 @@ impl TestContext {
             let addr: std::net::SocketAddr = format!("127.0.0.1:{}", grpc_https_port).parse().unwrap();
             client_builder = client_builder.resolve(host, addr);
         }
-        
-        let http_client = client_builder
-            .build()
-            .expect("Failed to create HTTP client");
+
+        let http_client = client_builder.build().expect("Failed to create HTTP client");
 
         Self {
             target_host,

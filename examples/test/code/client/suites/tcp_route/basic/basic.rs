@@ -70,7 +70,7 @@ impl TcpTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    
+
                     // This test is only meaningful in Gateway mode
                     if !ctx.gateway {
                         return TestResult::passed_with_message(
@@ -78,7 +78,7 @@ impl TcpTestSuite {
                             "Skipped in Direct mode (Gateway only test)".to_string(),
                         );
                     }
-                    
+
                     let test_data = b"Hello TCP Filtered";
 
                     match TcpStream::connect(&ctx.tcp_filtered_addr()).await {

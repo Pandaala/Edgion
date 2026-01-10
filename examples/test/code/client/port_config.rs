@@ -26,18 +26,12 @@ impl PortConfig {
     /// 从 ports.json 加载Port config
     pub fn load() -> Result<Self, String> {
         // 尝试多个可能的路径
-        let possible_paths = [
-            "examples/test/conf/ports.json",
-            "../conf/ports.json",
-            "conf/ports.json",
-        ];
+        let possible_paths = ["examples/test/conf/ports.json", "../conf/ports.json", "conf/ports.json"];
 
         for path in &possible_paths {
             if Path::new(path).exists() {
-                let content = std::fs::read_to_string(path)
-                    .map_err(|e| format!("Failed to read {}: {}", path, e))?;
-                return serde_json::from_str(&content)
-                    .map_err(|e| format!("Failed to parse {}: {}", path, e));
+                let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
+                return serde_json::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", path, e));
             }
         }
 

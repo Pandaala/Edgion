@@ -167,40 +167,33 @@ impl SecurityTestSuite {
     }
 
     fn test_no_xff() -> TestCase {
-        TestCase::new(
-            "no_xff_header",
-            "Test no X-Forwarded-For header",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let client = reqwest::Client::new();
-                    let url = format!("{}/health", ctx.http_url());
+        TestCase::new("no_xff_header", "Test no X-Forwarded-For header", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let client = reqwest::Client::new();
+                let url = format!("{}/health", ctx.http_url());
 
-                    let mut request = client.get(&url);
+                let mut request = client.get(&url);
 
-                    if let Some(host) = &ctx.http_host {
-                        request = request.header("host", host);
-                    }
+                if let Some(host) = &ctx.http_host {
+                    request = request.header("host", host);
+                }
 
-                    match request.send().await {
-                        Ok(response) => {
-                            if response.status().is_success() {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "✓ Request without XFF accepted".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200 OK, got {}", response.status()),
-                                )
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        if response.status().is_success() {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                "✓ Request without XFF accepted".to_string(),
+                            )
+                        } else {
+                            TestResult::failed(start.elapsed(), format!("Expected 200 OK, got {}", response.status()))
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
+            })
+        })
     }
 }
 

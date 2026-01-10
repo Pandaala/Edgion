@@ -55,13 +55,13 @@ impl ConfHandler<Gateway> for GatewayHandler {
         // Update legacy store (for backward compatibility)
         let mut store = GATEWAY_STORE.write().unwrap();
         store.clear();
-        
+
         // Update global GatewayStore (used by HTTPRoute handler)
         let global_store = get_global_gateway_store();
         let mut global_store_guard = global_store.write().unwrap();
         // Clear and rebuild global store
         *global_store_guard = crate::core::gateway::gateway_store::GatewayStore::new();
-        
+
         for (key, gateway) in data {
             let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
             tracing::info!(
@@ -73,12 +73,12 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 "Gateway stored"
             );
             store.push(gateway.clone());
-            
+
             // Also add to global store
             if let Err(e) = global_store_guard.add_gateway(gateway.clone()) {
                 tracing::warn!(key = %key, error = %e, "Failed to add gateway to global store");
             }
-            
+
             // Initialize route manager entry for this gateway
             let route_manager = get_global_route_manager();
             let namespace = gateway.namespace().unwrap_or_default();

@@ -17,83 +17,75 @@ pub struct HttpMatchTestSuite;
 impl HttpMatchTestSuite {
     /// Test PathPrefix path match
     fn test_path_prefix_match() -> TestCase {
-        TestCase::new(
-            "path_prefix_match",
-            "Test PathPrefix path match",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
+        TestCase::new("path_prefix_match", "Test PathPrefix path match", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
 
-                    // Positive test: should match prefix
-                    let mut request = ctx.http_client.get(format!("{}/api/v1/users", ctx.http_url()));
-                    request = request.header("Host", "match-test.example.com");
+                // Positive test: should match prefix
+                let mut request = ctx.http_client.get(format!("{}/api/v1/users", ctx.http_url()));
+                request = request.header("Host", "match-test.example.com");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            if response.status().is_success() {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("PathPrefix match successful: {}", response.status()),
-                                )
-                            } else {
-                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", response.status()))
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        if response.status().is_success() {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("PathPrefix match successful: {}", response.status()),
+                            )
+                        } else {
+                            TestResult::failed(start.elapsed(), format!("Expected 200, got {}", response.status()))
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
+            })
+        })
     }
 
     /// Test Exact path match
     fn test_exact_path_match() -> TestCase {
-        TestCase::new(
-            "exact_path_match",
-            "Test Exact path match",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
+        TestCase::new("exact_path_match", "Test Exact path match", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
 
-                    // Positive test: exact match
-                    let mut request = ctx.http_client.get(format!("{}/exact/path", ctx.http_url()));
-                    request = request.header("Host", "match-test.example.com");
+                // Positive test: exact match
+                let mut request = ctx.http_client.get(format!("{}/exact/path", ctx.http_url()));
+                request = request.header("Host", "match-test.example.com");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            if !response.status().is_success() {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Exact path match failed: {}", response.status()),
-                                );
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Exact path match failed: {}", response.status()),
+                            );
                         }
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
+                    Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
 
-                    // Negative test: extra path content should not match
-                    let mut request = ctx.http_client.get(format!("{}/exact/path/extra", ctx.http_url()));
-                    request = request.header("Host", "match-test.example.com");
+                // Negative test: extra path content should not match
+                let mut request = ctx.http_client.get(format!("{}/exact/path/extra", ctx.http_url()));
+                request = request.header("Host", "match-test.example.com");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            if response.status() == 404 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Exact path match works correctly (positive and negative tests passed)".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 404 for non-exact path, got {}", response.status()),
-                                )
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        if response.status() == 404 {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Exact path match works correctly (positive and negative tests passed)".to_string(),
+                            )
+                        } else {
+                            TestResult::failed(
+                                start.elapsed(),
+                                format!("Expected 404 for non-exact path, got {}", response.status()),
+                            )
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Negative test request failed: {}", e)),
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Negative test request failed: {}", e)),
+                }
+            })
+        })
     }
 
     /// Test RegularExpression regex path match
@@ -148,162 +140,150 @@ impl HttpMatchTestSuite {
 
     /// Test Header Exact match
     fn test_header_exact_match() -> TestCase {
-        TestCase::new(
-            "header_exact_match",
-            "Test Header Exact match",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
+        TestCase::new("header_exact_match", "Test Header Exact match", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
 
-                    // Positive test:with correct header
-                    let mut request = ctx.http_client.get(format!("{}/header-test", ctx.http_url()));
-                    request = request.header("Host", "match-test.example.com");
-                    request = request.header("X-Custom-Header", "CustomValue");
+                // Positive test:with correct header
+                let mut request = ctx.http_client.get(format!("{}/header-test", ctx.http_url()));
+                request = request.header("Host", "match-test.example.com");
+                request = request.header("X-Custom-Header", "CustomValue");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            if !response.status().is_success() {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Header exact match failed: {}", response.status()),
-                                );
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Header exact match failed: {}", response.status()),
+                            );
                         }
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
+                    Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
 
-                    // Negative test:header value mismatch
-                    let mut request = ctx.http_client.get(format!("{}/header-test", ctx.http_url()));
-                    request = request.header("Host", "match-test.example.com");
-                    request = request.header("X-Custom-Header", "WrongValue");
+                // Negative test:header value mismatch
+                let mut request = ctx.http_client.get(format!("{}/header-test", ctx.http_url()));
+                request = request.header("Host", "match-test.example.com");
+                request = request.header("X-Custom-Header", "WrongValue");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            if response.status() == 404 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Header exact match works correctly (matched correct value, rejected wrong value)"
-                                        .to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 404 for wrong header value, got {}", response.status()),
-                                )
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        if response.status() == 404 {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Header exact match works correctly (matched correct value, rejected wrong value)"
+                                    .to_string(),
+                            )
+                        } else {
+                            TestResult::failed(
+                                start.elapsed(),
+                                format!("Expected 404 for wrong header value, got {}", response.status()),
+                            )
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Negative test request failed: {}", e)),
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Negative test request failed: {}", e)),
+                }
+            })
+        })
     }
 
     /// Test Header Regex match
     fn test_header_regex_match() -> TestCase {
-        TestCase::new(
-            "header_regex_match",
-            "Test Header Regex match",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
+        TestCase::new("header_regex_match", "Test Header Regex match", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
 
-                    // Positive test:header value matches regex ^v[0-9]+\.[0-9]+$
-                    let mut request = ctx.http_client.get(format!("{}/header-regex", ctx.http_url()));
-                    request = request.header("Host", "match-test.example.com");
-                    request = request.header("X-Version", "v1.2");
+                // Positive test:header value matches regex ^v[0-9]+\.[0-9]+$
+                let mut request = ctx.http_client.get(format!("{}/header-regex", ctx.http_url()));
+                request = request.header("Host", "match-test.example.com");
+                request = request.header("X-Version", "v1.2");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            if !response.status().is_success() {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Header regex match failed for v1.2: {}", response.status()),
-                                );
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Header regex match failed for v1.2: {}", response.status()),
+                            );
                         }
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
+                    Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
 
-                    // Negative test:header value mismatchregex
-                    let mut request = ctx.http_client.get(format!("{}/header-regex", ctx.http_url()));
-                    request = request.header("Host", "match-test.example.com");
-                    request = request.header("X-Version", "invalid");
+                // Negative test:header value mismatchregex
+                let mut request = ctx.http_client.get(format!("{}/header-regex", ctx.http_url()));
+                request = request.header("Host", "match-test.example.com");
+                request = request.header("X-Version", "invalid");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            if response.status() == 404 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Header regex match works correctly (matched v1.2, rejected invalid)".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 404 for invalid header value, got {}", response.status()),
-                                )
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        if response.status() == 404 {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Header regex match works correctly (matched v1.2, rejected invalid)".to_string(),
+                            )
+                        } else {
+                            TestResult::failed(
+                                start.elapsed(),
+                                format!("Expected 404 for invalid header value, got {}", response.status()),
+                            )
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Negative test request failed: {}", e)),
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Negative test request failed: {}", e)),
+                }
+            })
+        })
     }
 
     /// Test Query Parameter match
     fn test_query_param_match() -> TestCase {
-        TestCase::new(
-            "query_param_match",
-            "Test Query Parameter match",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
+        TestCase::new("query_param_match", "Test Query Parameter match", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
 
-                    // Positive test:both query params match
-                    let mut request = ctx
-                        .http_client
-                        .get(format!("{}/query-test?apikey=secret123&version=10", ctx.http_url()));
-                    request = request.header("Host", "match-test.example.com");
+                // Positive test:both query params match
+                let mut request = ctx
+                    .http_client
+                    .get(format!("{}/query-test?apikey=secret123&version=10", ctx.http_url()));
+                request = request.header("Host", "match-test.example.com");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            if !response.status().is_success() {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Query param match failed: {}", response.status()),
-                                );
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Query param match failed: {}", response.status()),
+                            );
                         }
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
+                    Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
 
-                    // Negative test:version param mismatches regex（非digits）
-                    let mut request = ctx
-                        .http_client
-                        .get(format!("{}/query-test?apikey=secret123&version=abc", ctx.http_url()));
-                    request = request.header("Host", "match-test.example.com");
+                // Negative test:version param mismatches regex（非digits）
+                let mut request = ctx
+                    .http_client
+                    .get(format!("{}/query-test?apikey=secret123&version=abc", ctx.http_url()));
+                request = request.header("Host", "match-test.example.com");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            if response.status() == 404 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Query param match works correctly (matched valid params, rejected invalid)"
-                                        .to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 404 for invalid query param, got {}", response.status()),
-                                )
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        if response.status() == 404 {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Query param match works correctly (matched valid params, rejected invalid)"
+                                    .to_string(),
+                            )
+                        } else {
+                            TestResult::failed(
+                                start.elapsed(),
+                                format!("Expected 404 for invalid query param, got {}", response.status()),
+                            )
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Negative test request failed: {}", e)),
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Negative test request failed: {}", e)),
+                }
+            })
+        })
     }
 
     /// Test HTTP Method match

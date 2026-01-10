@@ -55,7 +55,13 @@ fn create_client_with_sni(hostname: &str, ip: &str, port: u16) -> Result<reqwest
 }
 
 // Helper function to create HTTP client with client certificate
-fn create_mtls_client(cert_path: &str, key_path: &str, hostname: &str, ip: &str, port: u16) -> Result<reqwest::Client, String> {
+fn create_mtls_client(
+    cert_path: &str,
+    key_path: &str,
+    hostname: &str,
+    ip: &str,
+    port: u16,
+) -> Result<reqwest::Client, String> {
     let identity = load_client_identity(cert_path, key_path)?;
 
     reqwest::Client::builder()
@@ -81,12 +87,16 @@ impl MtlsTestSuite {
                     let key_path = "examples/test/certs/mtls/valid-client.key";
                     let hostname = "mtls.example.com";
 
-                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return TestResult::failed(start.elapsed(), format!("Failed to create mTLS client: {}", e))
-                        }
-                    };
+                    let client =
+                        match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Failed to create mTLS client: {}", e),
+                                )
+                            }
+                        };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
                     let request = client.get(&url).header("Host", hostname);
@@ -171,16 +181,17 @@ impl MtlsTestSuite {
                     let hostname = "mtls.example.com";
 
                     // If client creation fails due to invalid cert, that's also a valid rejection
-                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            // Client builder rejection of invalid cert is acceptable
-                            return TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("Invalid cert rejected during client build: {}", e),
-                            )
-                        }
-                    };
+                    let client =
+                        match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                // Client builder rejection of invalid cert is acceptable
+                                return TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Invalid cert rejected during client build: {}", e),
+                                );
+                            }
+                        };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
                     let request = client.get(&url).header("Host", hostname);
@@ -219,12 +230,13 @@ impl MtlsTestSuite {
                     let key_path = "examples/test/certs/mtls/valid-client.key";
                     let hostname = "mtls-optional.example.com";
 
-                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
-                        }
-                    };
+                    let client =
+                        match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
+                            }
+                        };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
                     let request = client.get(&url).header("Host", hostname);
@@ -308,12 +320,13 @@ impl MtlsTestSuite {
                     let key_path = "examples/test/certs/mtls/valid-client.key";
                     let hostname = "mtls-san.example.com";
 
-                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
-                        }
-                    };
+                    let client =
+                        match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
+                            }
+                        };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
                     let request = client.get(&url).header("Host", hostname);
@@ -351,12 +364,13 @@ impl MtlsTestSuite {
                     let key_path = "examples/test/certs/mtls/nonmatching-client.key";
                     let hostname = "mtls-san.example.com";
 
-                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
-                        }
-                    };
+                    let client =
+                        match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
+                            }
+                        };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
                     let request = client.get(&url).header("Host", hostname);
@@ -396,12 +410,13 @@ impl MtlsTestSuite {
                     let key_path = "examples/test/certs/mtls/chain-client.key";
                     let hostname = "mtls-chain.example.com";
 
-                    let client = match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
-                        }
-                    };
+                    let client =
+                        match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
+                            }
+                        };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
                     let request = client.get(&url).header("Host", hostname);

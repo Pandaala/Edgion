@@ -52,9 +52,11 @@ impl HttpRedirectTestSuite {
                             match response.headers().get("location") {
                                 Some(location) => {
                                     let location_str = location.to_str().unwrap_or("");
-                                    
+
                                     // Verify redirect URL format (https scheme, correct host and path)
-                                    if location_str.starts_with("https://test.example.com:") && location_str.ends_with("/health") {
+                                    if location_str.starts_with("https://test.example.com:")
+                                        && location_str.ends_with("/health")
+                                    {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
                                             format!("301 Redirect to: {}", location_str),

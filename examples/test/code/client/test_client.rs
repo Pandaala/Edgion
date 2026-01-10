@@ -413,7 +413,14 @@ async fn main() -> Result<()> {
             Err(e) => {
                 eprintln!("Warning: Failed to load ports.json: {}. Using default ports.", e);
                 (
-                    31000, 31000, 31090, 31091, 31100, 31000, 31001, 31070,
+                    31000,
+                    31000,
+                    31090,
+                    31091,
+                    31100,
+                    31000,
+                    31001,
+                    31070,
                     Some("test.example.com".to_string()),
                     Some("grpc.example.com".to_string()),
                 )
