@@ -39,6 +39,7 @@ TEST_SERVER_HTTP_PORT=30001
 CONTROLLER_ADMIN_PORT=5800
 # Gateway portuse http Testsuite的port（31000）
 GATEWAY_HTTP_PORT=31000
+GATEWAY_ADMIN_PORT=5900
 
 # 要Load的Testsuite（default为空，表示Loadall）
 SUITES=""
@@ -506,15 +507,29 @@ verify_sync() {
     
     log_info "Run resource_diff verify Controller 和 Gateway resourcesync..."
     
-    if "$resource_diff" \
-        --controller-url "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" \
-        --gateway-url "http://127.0.0.1:${GATEWAY_HTTP_PORT}" \
-        > "${LOG_DIR}/resource_diff.log" 2>&1; then
-        log_success "resourcesyncverifypassed"
-    else
-        log_warning "resourcesyncverifyfailed，viewlog: ${LOG_DIR}/resource_diff.log"
-        tail -10 "${LOG_DIR}/resource_diff.log" 2>/dev/null || true
-    fi
+    # Retry logic: wait for gateway HTTP service to be fully ready
+    local max_retries=5
+    local retry_delay=2
+    local attempt=1
+    
+    while [ $attempt -le $max_retries ]; do
+        if "$resource_diff" \
+            --controller-url "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" \
+            --gateway-url "http://127.0.0.1:${GATEWAY_ADMIN_PORT}" \
+            > "${LOG_DIR}/resource_diff.log" 2>&1; then
+            log_success "resourcesyncverifypassed"
+            return 0
+        fi
+        
+        if [ $attempt -lt $max_retries ]; then
+            log_info "verify attempt $attempt failed, retrying in ${retry_delay}s..."
+            sleep $retry_delay
+        fi
+        ((attempt++))
+    done
+    
+    log_warning "resourcesyncverifyfailed after $max_retries attempts，viewlog: ${LOG_DIR}/resource_diff.log"
+    tail -10 "${LOG_DIR}/resource_diff.log" 2>/dev/null || true
 }
 
 # =============================================================================
