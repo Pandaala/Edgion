@@ -9,7 +9,7 @@
 
 use std::sync::LazyLock;
 
-use crate::types::resource_defs::{registry_resource_names, ALL_RESOURCE_INFOS};
+use super::{registry_resource_names, ALL_RESOURCE_INFOS};
 
 /// Metadata for a resource type
 /// 
@@ -76,7 +76,7 @@ pub fn all_resource_type_names() -> Vec<&'static str> {
 /// 
 /// This function now delegates to `resource_defs::base_conf_kind_names()`.
 pub fn base_conf_resource_names() -> Vec<&'static str> {
-    crate::types::resource_defs::base_conf_kind_names()
+    super::base_conf_kind_names()
 }
 
 /// Get metadata for a specific resource type by name

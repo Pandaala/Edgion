@@ -195,7 +195,7 @@ define_resources! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ResourceKind;
+    use crate::types::resource::kind::ResourceKind;
 
     #[test]
     fn test_all_resource_infos_count() {

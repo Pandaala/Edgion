@@ -3,7 +3,7 @@
 use kube::core::ObjectMeta;
 use serde::de::DeserializeOwned;
 
-use crate::types::resource_kind::ResourceKind;
+use crate::types::resource::kind::ResourceKind;
 
 /// Trait for Kubernetes resources with metadata and type information
 ///
@@ -84,7 +84,7 @@ macro_rules! impl_resource_meta {
     ($type:ty, $kind:ident, $kind_name:literal) => {
         impl $crate::types::ResourceMeta for $type {
             fn get_version(&self) -> u64 {
-                $crate::types::resource_meta_traits::extract_version(&self.metadata)
+                $crate::types::resource::meta::extract_version(&self.metadata)
             }
 
             fn resource_kind() -> $crate::types::ResourceKind {
@@ -96,7 +96,7 @@ macro_rules! impl_resource_meta {
             }
 
             fn key_name(&self) -> String {
-                $crate::types::resource_meta_traits::key_name_from_metadata(&self.metadata)
+                $crate::types::resource::meta::key_name_from_metadata(&self.metadata)
             }
         }
     };
@@ -105,7 +105,7 @@ macro_rules! impl_resource_meta {
     ($type:ty, $kind:ident, $kind_name:literal, cluster_scoped) => {
         impl $crate::types::ResourceMeta for $type {
             fn get_version(&self) -> u64 {
-                $crate::types::resource_meta_traits::extract_version(&self.metadata)
+                $crate::types::resource::meta::extract_version(&self.metadata)
             }
 
             fn resource_kind() -> $crate::types::ResourceKind {
@@ -127,7 +127,7 @@ macro_rules! impl_resource_meta {
     ($type:ty, $kind:ident, $kind_name:literal, |$self:ident| $pre_parse:block) => {
         impl $crate::types::ResourceMeta for $type {
             fn get_version(&self) -> u64 {
-                $crate::types::resource_meta_traits::extract_version(&self.metadata)
+                $crate::types::resource::meta::extract_version(&self.metadata)
             }
 
             fn resource_kind() -> $crate::types::ResourceKind {
@@ -139,7 +139,7 @@ macro_rules! impl_resource_meta {
             }
 
             fn key_name(&self) -> String {
-                $crate::types::resource_meta_traits::key_name_from_metadata(&self.metadata)
+                $crate::types::resource::meta::key_name_from_metadata(&self.metadata)
             }
 
             fn pre_parse(&mut $self) $pre_parse
@@ -150,7 +150,7 @@ macro_rules! impl_resource_meta {
     ($type:ty, $kind:ident, $kind_name:literal, cluster_scoped, |$self:ident| $pre_parse:block) => {
         impl $crate::types::ResourceMeta for $type {
             fn get_version(&self) -> u64 {
-                $crate::types::resource_meta_traits::extract_version(&self.metadata)
+                $crate::types::resource::meta::extract_version(&self.metadata)
             }
 
             fn resource_kind() -> $crate::types::ResourceKind {
