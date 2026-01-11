@@ -1,13 +1,11 @@
 use crate::core::conf_sync::ConfigClient;
-use crate::types::prelude_resources::*;
+use crate::types::ResourceKind;
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     response::Json,
     routing::get,
     Router,
 };
-use k8s_openapi::api::core::v1::{Endpoints, Service};
-use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::ResourceExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -49,43 +47,20 @@ impl<T> ApiResponse<T> {
 
 /// List response format
 #[derive(Serialize)]
-struct ListResponse<T> {
+struct ListResponse {
     success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<Vec<T>>,
+    data: Vec<serde_json::Value>,
     count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
 }
 
-impl<T> ListResponse<T> {
-    fn success(data: Vec<T>) -> Self {
+impl ListResponse {
+    fn success(data: Vec<serde_json::Value>) -> Self {
         let count = data.len();
         Self {
             success: true,
-            data: Some(data),
+            data,
             count,
-            error: None,
         }
-    }
-
-    #[allow(dead_code)]
-    fn error(message: String) -> Self {
-        Self {
-            success: false,
-            data: None,
-            count: 0,
-            error: Some(message),
-        }
-    }
-}
-
-/// Helper function to build resource key from namespace and name
-fn build_key(namespace: Option<&String>, name: Option<&String>) -> Result<String, String> {
-    match (namespace, name) {
-        (Some(ns), Some(n)) => Ok(format!("{}/{}", ns, n)),
-        (None, Some(n)) => Ok(n.clone()),
-        _ => Err("Missing required parameter: name".to_string()),
     }
 }
 
@@ -94,539 +69,141 @@ async fn health_check() -> Json<ApiResponse<String>> {
     Json(ApiResponse::success("OK".to_string()))
 }
 
-/// Get HTTPRoute by namespace and name
-async fn get_httproute(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<HTTPRoute>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
+/// Helper macro to list all resources from ConfigClient
+macro_rules! list_client_resources {
+    ($client:expr, $kind:expr) => {{
+        match $kind {
+            ResourceKind::HTTPRoute => to_json_vec($client.routes().list().data),
+            ResourceKind::GRPCRoute => to_json_vec($client.grpc_routes().list().data),
+            ResourceKind::TCPRoute => to_json_vec($client.tcp_routes().list().data),
+            ResourceKind::UDPRoute => to_json_vec($client.udp_routes().list().data),
+            ResourceKind::TLSRoute => to_json_vec($client.tls_routes().list().data),
+            ResourceKind::Service => to_json_vec($client.services().list().data),
+            ResourceKind::EndpointSlice => to_json_vec($client.endpoint_slices().list().data),
+            ResourceKind::Endpoint => to_json_vec($client.endpoints().list().data),
+            ResourceKind::EdgionTls => to_json_vec($client.edgion_tls().list().data),
+            ResourceKind::EdgionPlugins => to_json_vec($client.edgion_plugins().list().data),
+            ResourceKind::EdgionStreamPlugins => to_json_vec($client.edgion_stream_plugins().list().data),
+            ResourceKind::ReferenceGrant => to_json_vec($client.reference_grants().list().data),
+            ResourceKind::BackendTLSPolicy => to_json_vec($client.backend_tls_policies().list().data),
+            ResourceKind::PluginMetaData => to_json_vec($client.plugin_metadata().list().data),
+            ResourceKind::LinkSys => to_json_vec($client.link_sys().list().data),
+            ResourceKind::GatewayClass => to_json_vec($client.gateway_classes().list().data),
+            ResourceKind::Gateway => to_json_vec($client.gateways().list().data),
+            ResourceKind::EdgionGatewayConfig => to_json_vec($client.edgion_gateway_configs().list().data),
+            _ => vec![],
+        }
+    }};
+}
 
-    let list_data = client.routes().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
+/// Helper macro to get a single resource from ConfigClient
+macro_rules! get_client_resource {
+    ($client:expr, $kind:expr, $ns:expr, $name:expr) => {{
+        let ns_opt = $ns.as_deref();
+        let name_str = $name.as_str();
+        match $kind {
+            ResourceKind::HTTPRoute => find_resource($client.routes().list().data, ns_opt, name_str),
+            ResourceKind::GRPCRoute => find_resource($client.grpc_routes().list().data, ns_opt, name_str),
+            ResourceKind::TCPRoute => find_resource($client.tcp_routes().list().data, ns_opt, name_str),
+            ResourceKind::UDPRoute => find_resource($client.udp_routes().list().data, ns_opt, name_str),
+            ResourceKind::TLSRoute => find_resource($client.tls_routes().list().data, ns_opt, name_str),
+            ResourceKind::Service => find_resource($client.services().list().data, ns_opt, name_str),
+            ResourceKind::EndpointSlice => find_resource($client.endpoint_slices().list().data, ns_opt, name_str),
+            ResourceKind::Endpoint => find_resource($client.endpoints().list().data, ns_opt, name_str),
+            ResourceKind::EdgionTls => find_resource($client.edgion_tls().list().data, ns_opt, name_str),
+            ResourceKind::EdgionPlugins => find_resource_alt($client.edgion_plugins().list().data, ns_opt, name_str),
+            ResourceKind::EdgionStreamPlugins => find_resource_alt($client.edgion_stream_plugins().list().data, ns_opt, name_str),
+            ResourceKind::ReferenceGrant => find_resource_alt($client.reference_grants().list().data, ns_opt, name_str),
+            ResourceKind::BackendTLSPolicy => find_resource_alt($client.backend_tls_policies().list().data, ns_opt, name_str),
+            ResourceKind::PluginMetaData => find_resource($client.plugin_metadata().list().data, ns_opt, name_str),
+            ResourceKind::LinkSys => find_resource($client.link_sys().list().data, ns_opt, name_str),
+            ResourceKind::GatewayClass => find_cluster_resource($client.gateway_classes().list().data, name_str),
+            ResourceKind::Gateway => find_resource($client.gateways().list().data, ns_opt, name_str),
+            ResourceKind::EdgionGatewayConfig => find_cluster_resource($client.edgion_gateway_configs().list().data, name_str),
+            _ => None,
+        }
+    }};
+}
 
-    match list_data
-        .data
+/// Convert a list of resources to JSON values
+fn to_json_vec<T: serde::Serialize>(items: Vec<T>) -> Vec<serde_json::Value> {
+    items
+        .into_iter()
+        .filter_map(|item| serde_json::to_value(item).ok())
+        .collect()
+}
+
+/// Find a namespaced resource by namespace and name (returns Option<&str> for namespace)
+fn find_resource<T: ResourceExt + serde::Serialize>(
+    items: Vec<T>,
+    namespace: Option<&str>,
+    name: &str,
+) -> Option<serde_json::Value> {
+    items
         .into_iter()
         .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-    {
-        Some(route) => Json(ApiResponse::success(route)),
-        None => Json(ApiResponse::error(format!("HTTPRoute not found: {}", key))),
-    }
+        .and_then(|r| serde_json::to_value(r).ok())
 }
 
-/// List all HTTPRoute resources
-async fn list_httproute(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<HTTPRoute>> {
-    let list_data = client.routes().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get GRPCRoute by namespace and name
-async fn get_grpcroute(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<GRPCRoute>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.grpc_routes().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
+/// Find a namespaced resource (alternative namespace() return type - returns Option<String>)
+fn find_resource_alt<T: ResourceExt + serde::Serialize>(
+    items: Vec<T>,
+    namespace: Option<&str>,
+    name: &str,
+) -> Option<serde_json::Value> {
+    items
         .into_iter()
         .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-    {
-        Some(route) => Json(ApiResponse::success(route)),
-        None => Json(ApiResponse::error(format!("GRPCRoute not found: {}", key))),
-    }
+        .and_then(|r| serde_json::to_value(r).ok())
 }
 
-/// List all GRPCRoute resources
-async fn list_grpcroute(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<GRPCRoute>> {
-    let list_data = client.grpc_routes().list();
-    Json(ListResponse::success(list_data.data))
+/// Find a cluster-scoped resource by name only
+fn find_cluster_resource<T: ResourceExt + serde::Serialize>(
+    items: Vec<T>,
+    name: &str,
+) -> Option<serde_json::Value> {
+    items
+        .into_iter()
+        .find(|r| r.name_any() == name)
+        .and_then(|r| serde_json::to_value(r).ok())
 }
 
-/// Get TCPRoute by namespace and name
-async fn get_tcproute(
+/// Dynamic list endpoint - list all resources of a kind
+async fn list_resources(
     State(client): State<Arc<ConfigClient>>,
+    Path(kind_str): Path<String>,
+) -> Json<ListResponse> {
+    let kind = ResourceKind::from_kind_name(&kind_str).unwrap_or(ResourceKind::Unspecified);
+    let data = list_client_resources!(&client, kind);
+    Json(ListResponse::success(data))
+}
+
+/// Dynamic get endpoint - get a single resource by namespace and name
+async fn get_resource(
+    State(client): State<Arc<ConfigClient>>,
+    Path(kind_str): Path<String>,
     Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<TCPRoute>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
+) -> Json<ApiResponse<serde_json::Value>> {
+    let Some(name) = query.name else {
+        return Json(ApiResponse::error("Missing required parameter: name".to_string()));
     };
 
-    let list_data = client.tcp_routes().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
+    let kind = ResourceKind::from_kind_name(&kind_str).unwrap_or(ResourceKind::Unspecified);
+    let resource = get_client_resource!(&client, kind, query.namespace, name);
 
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-    {
-        Some(route) => Json(ApiResponse::success(route)),
-        None => Json(ApiResponse::error(format!("TCPRoute not found: {}", key))),
+    match resource {
+        Some(r) => Json(ApiResponse::success(r)),
+        None => Json(ApiResponse::error(format!("{} not found", kind_str))),
     }
 }
 
-/// List all TCPRoute resources
-async fn list_tcproute(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<TCPRoute>> {
-    let list_data = client.tcp_routes().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get UDPRoute by namespace and name
-async fn get_udproute(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<UDPRoute>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.udp_routes().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-    {
-        Some(route) => Json(ApiResponse::success(route)),
-        None => Json(ApiResponse::error(format!("UDPRoute not found: {}", key))),
-    }
-}
-
-/// List all UDPRoute resources
-async fn list_udproute(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<UDPRoute>> {
-    let list_data = client.udp_routes().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get TLSRoute by namespace and name
-async fn get_tlsroute(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<TLSRoute>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.tls_routes().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-    {
-        Some(route) => Json(ApiResponse::success(route)),
-        None => Json(ApiResponse::error(format!("TLSRoute not found: {}", key))),
-    }
-}
-
-/// List all TLSRoute resources
-async fn list_tlsroute(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<TLSRoute>> {
-    let list_data = client.tls_routes().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get Service by namespace and name
-async fn get_service(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<Service>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.services().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-    {
-        Some(service) => Json(ApiResponse::success(service)),
-        None => Json(ApiResponse::error(format!("Service not found: {}", key))),
-    }
-}
-
-/// List all Service resources
-async fn list_service(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<Service>> {
-    let list_data = client.services().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get EndpointSlice by namespace and name
-async fn get_endpointslice(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<EndpointSlice>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.endpoint_slices().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-    {
-        Some(ep) => Json(ApiResponse::success(ep)),
-        None => Json(ApiResponse::error(format!("EndpointSlice not found: {}", key))),
-    }
-}
-
-/// List all EndpointSlice resources
-async fn list_endpointslice(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<EndpointSlice>> {
-    let list_data = client.endpoint_slices().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get Endpoints by namespace and name
-async fn get_endpoints(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<Endpoints>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.endpoints().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-    {
-        Some(endpoint) => Json(ApiResponse::success(endpoint)),
-        None => Json(ApiResponse::error(format!("Endpoints not found: {}", key))),
-    }
-}
-
-/// List all Endpoints resources
-async fn list_endpoints(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<Endpoints>> {
-    let list_data = client.endpoints().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get EdgionTls by namespace and name
-async fn get_edgiontls(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<EdgionTls>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.edgion_tls().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-    {
-        Some(tls) => Json(ApiResponse::success(tls)),
-        None => Json(ApiResponse::error(format!("EdgionTls not found: {}", key))),
-    }
-}
-
-/// List all EdgionTls resources
-async fn list_edgiontls(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<EdgionTls>> {
-    let list_data = client.edgion_tls().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get EdgionPlugins by namespace and name
-async fn get_edgionplugins(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<EdgionPlugins>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.edgion_plugins().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace() == namespace)
-    {
-        Some(plugins) => Json(ApiResponse::success(plugins)),
-        None => Json(ApiResponse::error(format!("EdgionPlugins not found: {}", key))),
-    }
-}
-
-/// List all EdgionPlugins resources
-async fn list_edgionplugins(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<EdgionPlugins>> {
-    let list_data = client.edgion_plugins().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get EdgionStreamPlugins by namespace and name
-async fn get_edgionstreamplugins(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<EdgionStreamPlugins>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.edgion_stream_plugins().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace() == namespace)
-    {
-        Some(resource) => Json(ApiResponse::success(resource)),
-        None => Json(ApiResponse::error(format!("EdgionStreamPlugins not found: {}", key))),
-    }
-}
-
-/// List all EdgionStreamPlugins resources
-async fn list_edgionstreamplugins(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<EdgionStreamPlugins>> {
-    let list_data = client.edgion_stream_plugins().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get ReferenceGrant by namespace and name
-async fn get_referencegrants(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<ReferenceGrant>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.reference_grants().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace() == namespace)
-    {
-        Some(resource) => Json(ApiResponse::success(resource)),
-        None => Json(ApiResponse::error(format!("ReferenceGrant not found: {}", key))),
-    }
-}
-
-/// List all ReferenceGrant resources
-async fn list_referencegrants(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<ReferenceGrant>> {
-    let list_data = client.reference_grants().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get BackendTLSPolicy by namespace and name
-async fn get_backendtlspolicies(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<BackendTLSPolicy>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.backend_tls_policies().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace() == namespace)
-    {
-        Some(resource) => Json(ApiResponse::success(resource)),
-        None => Json(ApiResponse::error(format!("BackendTLSPolicy not found: {}", key))),
-    }
-}
-
-/// List all BackendTLSPolicy resources
-async fn list_backendtlspolicies(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<BackendTLSPolicy>> {
-    let list_data = client.backend_tls_policies().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get PluginMetaData by namespace and name
-async fn get_pluginmetadata(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<PluginMetaData>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.plugin_metadata().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-    {
-        Some(metadata) => Json(ApiResponse::success(metadata)),
-        None => Json(ApiResponse::error(format!("PluginMetaData not found: {}", key))),
-    }
-}
-
-/// List all PluginMetaData resources
-async fn list_pluginmetadata(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<PluginMetaData>> {
-    let list_data = client.plugin_metadata().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-/// Get LinkSys by namespace and name
-async fn get_linksys(
-    State(client): State<Arc<ConfigClient>>,
-    Query(query): Query<ResourceQuery>,
-) -> Json<ApiResponse<LinkSys>> {
-    let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-        Ok(k) => k,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
-
-    let list_data = client.link_sys().list();
-    let name = query.name.as_ref().unwrap().as_str();
-    let namespace = query.namespace.as_deref();
-
-    match list_data
-        .data
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-    {
-        Some(linksys) => Json(ApiResponse::success(linksys)),
-        None => Json(ApiResponse::error(format!("LinkSys not found: {}", key))),
-    }
-}
-
-/// List all LinkSys resources
-async fn list_linksys(State(client): State<Arc<ConfigClient>>) -> Json<ListResponse<LinkSys>> {
-    let list_data = client.link_sys().list();
-    Json(ListResponse::success(list_data.data))
-}
-
-// Get Secret by namespace and name
-// async fn get_secret(
-//     State(client): State<Arc<ConfigClient>>,
-//     Query(query): Query<ResourceQuery>,
-// ) -> Json<ApiResponse<Secret>> {
-//     let key = match build_key(query.namespace.as_ref(), query.name.as_ref()) {
-//         Ok(k) => k,
-//         Err(e) => return Json(ApiResponse::error(e)),
-//     };
-
-//     let list_data = client.secrets().list();
-//     let name = query.name.as_ref().unwrap().as_str();
-//     let namespace = query.namespace.as_ref().map(|s| s.as_str());
-
-//     match list_data.data.into_iter().find(|r| {
-//         r.name_any() == name && r.namespace().as_deref() == namespace
-//     }) {
-//         Some(secret) => Json(ApiResponse::success(secret)),
-//         None => Json(ApiResponse::error(format!("Secret not found: {}", key))),
-//     }
-// }
-
-// /// List all Secret resources
-// async fn list_secret(
-//     State(client): State<Arc<ConfigClient>>,
-// ) -> Json<ListResponse<Secret>> {
-//     let list_data = client.secrets().list();
-//     Json(ListResponse::success(list_data.data))
-// }
-
-/// Create the admin API router with all endpoints
+/// Create the admin API router with dynamic endpoints
 pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
     Router::new()
-        // Health check
         .route("/health", get(health_check))
-        // HTTPRoute
-        .route("/configclient/httproute", get(get_httproute))
-        .route("/configclient/httproute/list", get(list_httproute))
-        // GRPCRoute
-        .route("/configclient/grpcroute", get(get_grpcroute))
-        .route("/configclient/grpcroute/list", get(list_grpcroute))
-        // TCPRoute
-        .route("/configclient/tcproute", get(get_tcproute))
-        .route("/configclient/tcproute/list", get(list_tcproute))
-        // UDPRoute
-        .route("/configclient/udproute", get(get_udproute))
-        .route("/configclient/udproute/list", get(list_udproute))
-        // TLSRoute
-        .route("/configclient/tlsroute", get(get_tlsroute))
-        .route("/configclient/tlsroute/list", get(list_tlsroute))
-        // Service
-        .route("/configclient/service", get(get_service))
-        .route("/configclient/service/list", get(list_service))
-        // EndpointSlice
-        .route("/configclient/endpointslice", get(get_endpointslice))
-        .route("/configclient/endpointslice/list", get(list_endpointslice))
-        // Endpoints
-        .route("/configclient/endpoints", get(get_endpoints))
-        .route("/configclient/endpoints/list", get(list_endpoints))
-        // EdgionTls
-        .route("/configclient/edgiontls", get(get_edgiontls))
-        .route("/configclient/edgiontls/list", get(list_edgiontls))
-        // EdgionPlugins
-        .route("/configclient/edgionplugins", get(get_edgionplugins))
-        .route("/configclient/edgionplugins/list", get(list_edgionplugins))
-        // EdgionStreamPlugins
-        .route("/configclient/edgionstreamplugins", get(get_edgionstreamplugins))
-        .route("/configclient/edgionstreamplugins/list", get(list_edgionstreamplugins))
-        // ReferenceGrant
-        .route("/configclient/referencegrants", get(get_referencegrants))
-        .route("/configclient/referencegrants/list", get(list_referencegrants))
-        // BackendTLSPolicy
-        .route("/configclient/backendtlspolicies", get(get_backendtlspolicies))
-        .route("/configclient/backendtlspolicies/list", get(list_backendtlspolicies))
-        // PluginMetaData
-        .route("/configclient/pluginmetadata", get(get_pluginmetadata))
-        .route("/configclient/pluginmetadata/list", get(list_pluginmetadata))
-        // LinkSys
-        .route("/configclient/linksys", get(get_linksys))
-        .route("/configclient/linksys/list", get(list_linksys))
-        // // Secret
-        // .route("/configclient/secret", get(get_secret))
-        // .route("/configclient/secret/list", get(list_secret))
+        // Dynamic endpoints for all resource types
+        .route("/configclient/{kind}", get(get_resource))
+        .route("/configclient/{kind}/list", get(list_resources))
         .with_state(config_client)
 }
 
