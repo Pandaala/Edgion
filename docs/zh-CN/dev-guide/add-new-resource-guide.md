@@ -1,13 +1,18 @@
 # Edgion 添加新资源类型完整指南
 
-本文档记录如何在 Edgion 中添加一个新的 Kubernetes 资源类型。以 `EdgionStreamPlugins` 的实现为例，详细说明每个步骤。
+本文档记录如何在 Edgion 中添加一个新的 Kubernetes 资源类型。利用统一的宏系统，添加新资源变得更加简单。
 
 ## 概述
 
-在 Edgion 中添加新资源需要修改多个模块，包括类型定义、配置管理、业务逻辑等。本指南提供完整的清单和详细步骤。
+Edgion 采用**单一数据源 + 宏生成**的架构：
+
+- `resource_defs.rs` - 所有资源类型的元数据定义（单一数据源）
+- `impl_resource_meta!` 宏 - 自动生成 ResourceMeta trait 实现
+- 辅助函数 - 统一处理资源的加载、列表、查询等操作
 
 ### CRD 版本与兼容策略（务必遵循）
-- 始终以“最新/最稳定版本”为存储版（storageVersion）。旧版只作为输入格式，统一向新版本/内部模型转换，禁止“降级”写回旧版。
+
+- 始终以"最新/最稳定版本"为存储版（storageVersion）。旧版只作为输入格式，统一向新版本/内部模型转换，禁止"降级"写回旧版。
 - Gateway API 已 GA 的资源（Gateway/GatewayClass/HTTPRoute/GRPCRoute 等）保持 `v1`，除非上游发布新主版本并提供明确迁移路径。
 - 处于 Alpha/Beta 的资源（如 BackendTLSPolicy 当前 `v1alpha3`，需兼容历史 `v1alpha2`）推荐：
   - CRD 多版本：storage = 最新，旧版标记为 served。
@@ -15,72 +20,41 @@
   - 新增字段在旧版转换时要有安全默认值；重命名/类型变化需显式映射并记录日志。
 - 升级流程：先更新 CRD（新增新版本并设为 storage），再上线具备转换能力的控制器；保持旧版 served 一段时间，确认无旧对象后再考虑移除。
 
+---
 
-## 完整清单
+## 快速清单
 
-### 1. 类型定义层（`src/types/`）
+添加新资源类型只需修改以下几个核心位置：
 
-- [ ] **`src/types/resources/your_resource/`** - 创建资源定义目录
-  - [ ] `mod.rs` - 使用 `kube::CustomResource` 宏定义 CRD
-  - [ ] 相关子模块（如配置、插件定义等）
-  
-- [ ] **`src/types/resource_kind.rs`** - 添加资源类型枚举
-  - [ ] 在 `ResourceKind` enum 中添加新变体
-  - [ ] 在 `from_kind_name()` 方法中添加映射
+### 必须修改
 
-- [ ] **`src/types/resource_meta_traits/your_resource.rs`** - 实现 ResourceMeta trait
-  - [ ] 实现 `get_version()`、`resource_kind()`、`kind_name()`、`key_name()`
-  - [ ] 实现 `pre_parse()` 用于资源预处理
+1. **`src/types/resources/your_resource/mod.rs`** - 定义资源结构体（CustomResource）
+2. **`src/types/resources/mod.rs`** - 导出新模块
+3. **`src/types/resource_defs.rs`** - 在 `define_resources!` 宏中添加资源定义
+4. **`src/types/resource_meta_traits/impls.rs`** - 使用 `impl_resource_meta!` 宏实现 trait
+5. **`src/core/conf_sync/conf_server/config_server.rs`** - 添加 `ServerCache<T>` 字段
+6. **`src/core/conf_sync/conf_client/config_client.rs`** - 添加 `ClientCache<T>` 字段
+7. **`src/core/cli/config/mod.rs`** - 添加容量配置字段和 `get_capacity()` 分支
 
-- [ ] **`src/types/resources/mod.rs`** - 导出新模块
-- [ ] **`src/types/resource_meta_traits/mod.rs`** - 导出 trait 实现
+### 按需修改
 
-### 2. 配置管理层（`src/core/conf_mgr/`、`conf_sync/`）
-
-- [ ] **`src/core/conf_sync/conf_server/config_server.rs`**
-  - [ ] 在 `ResourceItem` enum 中添加新变体
-  - [ ] 在 `ConfigServer` struct 中添加 `ServerCache<YourResource>` 字段
-  - [ ] 在 `new()` 方法中初始化缓存
-
-- [ ] **`src/core/conf_mgr/conf_store/init_loader.rs`**
-  - [ ] 在 `load_all_resources_from_store()` 中添加加载逻辑
-  - [ ] 添加 `ResourceKind::YourResource` 分支
-  - [ ] 反序列化并调用 `apply_change()`
-
-- [ ] **`src/core/cli/config/mod.rs`**
-  - [ ] 在 `ConfSyncConfig` 中添加容量配置字段
-  - [ ] 设置默认值
-
-### 3. 业务逻辑层（`src/core/`）
-
-根据资源类型实现具体的业务逻辑：
-- 路由资源：在 `src/core/routes/` 中实现路由匹配和处理
-- 插件资源：在 `src/core/plugins/` 中实现插件系统
-- 配置资源：在相应模块中实现配置应用逻辑
-
-### 4. 配置文件
-
-- [ ] **`config/crd/edgion-crd/your_resource_crd.yaml`** - Kubernetes CRD 定义
-- [ ] **`config/edgion-controller.toml`** - 添加容量配置
-- [ ] **`examples/conf/`** - 添加示例配置文件
-
-### 5. 文档和测试
-
-- [ ] **`docs/`** - 用户指南和使用文档
-- [ ] **`examples/testing/`** - 集成测试用例
+8. **`src/core/conf_mgr/conf_store/init_loader.rs`** - 添加加载分支
+9. **`src/core/api/controller/common.rs`** - 更新辅助宏（如 `list_all_resources!`）
+10. **`src/core/api/gateway/mod.rs`** - 更新 Gateway Admin API 宏
+11. **配置文件** - CRD 定义、示例配置
 
 ---
 
-## 详细步骤（以 EdgionStreamPlugins 为例）
+## 详细步骤
 
 ### 步骤 1: 定义资源类型
 
-#### 1.1 创建资源定义
+#### 1.1 创建资源结构体
 
-在 `src/types/resources/` 下创建新目录：
+在 `src/types/resources/` 下创建新目录和模块：
 
 ```rust
-// src/types/resources/edgion_stream_plugins/mod.rs
+// src/types/resources/your_resource/mod.rs
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -89,134 +63,122 @@ use serde::{Deserialize, Serialize};
 #[kube(
     group = "edgion.io",
     version = "v1",
-    kind = "EdgionStreamPlugins",
-    plural = "edgionstreamplugins",
-    shortname = "esplugins",
-    namespaced,
-    status = "EdgionStreamPluginsStatus"
+    kind = "YourResource",
+    plural = "yourresources",
+    shortname = "yr",
+    namespaced,  // 如果是 cluster-scoped 资源，移除此行
+    status = "YourResourceStatus"
 )]
 #[serde(rename_all = "camelCase")]
-pub struct EdgionStreamPluginsSpec {
-    pub plugins: Option<Vec<StreamPluginEntry>>,
-    
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
+pub struct YourResourceSpec {
+    pub some_field: String,
+    // ... 其他字段
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, Default)]
+pub struct YourResourceStatus {
+    // 状态字段
 }
 ```
 
-#### 1.2 注册资源类型
+#### 1.2 导出模块
 
 ```rust
-// src/types/resource_kind.rs
-pub enum ResourceKind {
-    // ... 现有类型 ...
-    EdgionStreamPlugins = 16,  // 使用下一个可用的数字
-}
-
-impl ResourceKind {
-    pub fn from_kind_name(kind_str: &str) -> Option<Self> {
-        match kind_str.to_lowercase().as_str() {
-            // ... 现有映射 ...
-            "edgionstreamplugins" => Some(ResourceKind::EdgionStreamPlugins),
-            _ => None,
-        }
-    }
-}
+// src/types/resources/mod.rs
+pub mod your_resource;
+pub use your_resource::*;
 ```
 
-#### 1.3 实现 ResourceMeta trait
+### 步骤 2: 注册到统一资源系统
+
+#### 2.1 在 `resource_defs.rs` 中添加定义
+
+这是**最关键的一步**，所有资源元数据都集中在这里：
 
 ```rust
-// src/types/resource_meta_traits/edgion_stream_plugins.rs
-use crate::types::resource_kind::ResourceKind;
-use crate::types::resources::EdgionStreamPlugins;
-use super::traits::{extract_version, ResourceMeta};
-
-impl ResourceMeta for EdgionStreamPlugins {
-    fn get_version(&self) -> u64 {
-        extract_version(&self.metadata)
-    }
+// src/types/resource_defs.rs
+define_resources! {
+    // ... 现有资源 ...
     
-    fn resource_kind() -> ResourceKind {
-        ResourceKind::EdgionStreamPlugins
-    }
-    
-    fn kind_name() -> &'static str {
-        "EdgionStreamPlugins"
-    }
-    
-    fn key_name(&self) -> String {
-        if let Some(namespace) = &self.metadata.namespace {
-            format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
-        } else {
-            self.metadata.name.as_deref().unwrap_or("").to_string()
-        }
-    }
-
-    fn pre_parse(&mut self) {
-        // 在这里进行资源预处理
-        self.init_stream_plugin_runtime();
+    // 添加新资源（按类别分组）
+    YourResource {
+        kind_id: 20,                      // 使用下一个可用 ID
+        kind_name: "YourResource",
+        api_group: "edgion.io",
+        api_version: "v1",
+        plural: "yourresources",
+        is_namespaced: true,              // 或 false（cluster-scoped）
+        is_k8s_native: false,             // 是否为 k8s 原生资源
     }
 }
 ```
 
-### 步骤 2: 配置管理层集成
+#### 2.2 使用宏实现 ResourceMeta trait
 
-#### 2.1 更新 ConfigServer
+```rust
+// src/types/resource_meta_traits/impls.rs
+use crate::types::resources::YourResource;
+
+// 标准实现（适用于大多数资源）
+impl_resource_meta!(YourResource);
+
+// 如果需要自定义 pre_parse，使用带闭包的版本：
+impl_resource_meta!(YourResource, |resource| {
+    // 自定义预处理逻辑
+    resource.init_runtime();
+});
+```
+
+### 步骤 3: 配置同步层集成
+
+#### 3.1 更新 ConfigServer
 
 ```rust
 // src/core/conf_sync/conf_server/config_server.rs
 
-// 1. 添加到 ResourceItem enum
-pub enum ResourceItem {
-    // ... 现有类型 ...
-    EdgionStreamPlugins(EdgionStreamPlugins),
-}
-
-// 2. 在 ConfigServer 中添加缓存
 pub struct ConfigServer {
     // ... 现有字段 ...
-    pub edgion_stream_plugins: ServerCache<EdgionStreamPlugins>,
+    pub your_resources: ServerCache<YourResource>,
 }
 
-// 3. 在 new() 中初始化
 impl ConfigServer {
     pub fn new(base_conf: GatewayBaseConf, conf_sync_config: &ConfSyncConfig) -> Self {
         Self {
             // ... 现有初始化 ...
-            edgion_stream_plugins: ServerCache::new(
-                conf_sync_config.edgion_stream_plugins_capacity
+            your_resources: ServerCache::new(
+                conf_sync_config.get_capacity(ResourceKind::YourResource) as usize
             ),
         }
     }
+    
+    // 添加 list/watch 方法
+    pub fn list_your_resources(&self) -> ListData<YourResource> {
+        self.your_resources.list()
+    }
+    
+    pub fn watch_your_resources(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponse<YourResource>> {
+        self.your_resources.watch(client_id, client_name, from_version)
+    }
 }
 ```
 
-#### 2.2 添加加载逻辑
+#### 3.2 更新 ConfigClient
 
 ```rust
-// src/core/conf_mgr/conf_store/init_loader.rs
+// src/core/conf_sync/conf_client/config_client.rs
 
-match kind {
-    // ... 现有分支 ...
-    Some(ResourceKind::EdgionStreamPlugins) => {
-        match serde_yaml::from_str::<EdgionStreamPlugins>(&resource.content) {
-            Ok(stream_plugins) => {
-                config_server.edgion_stream_plugins.apply_change(
-                    ResourceChange::InitAdd, 
-                    stream_plugins
-                );
-                Ok::<(), anyhow::Error>(())
-            }
-            Err(e) => Err(e.into()),
-        }
-    }
-    // ...
+pub struct ConfigClient {
+    // ... 现有字段 ...
+    pub your_resources: ClientCache<YourResource>,
 }
 ```
 
-#### 2.3 添加配置项
+#### 3.3 添加容量配置
 
 ```rust
 // src/core/cli/config/mod.rs
@@ -226,66 +188,96 @@ pub struct ConfSyncConfig {
     
     #[arg(skip)]
     #[serde(default = "default_capacity")]
-    pub edgion_stream_plugins_capacity: u32,
+    pub your_resources_capacity: u32,
 }
 
-impl Default for ConfSyncConfig {
-    fn default() -> Self {
-        Self {
-            // ... 现有字段 ...
-            edgion_stream_plugins_capacity: default_capacity(),
+impl ConfSyncConfig {
+    pub fn get_capacity(&self, kind: ResourceKind) -> u32 {
+        match kind {
+            // ... 现有分支 ...
+            ResourceKind::YourResource => self.your_resources_capacity,
         }
     }
 }
 ```
 
-### 步骤 3: 业务逻辑实现
-
-根据资源类型实现相应的业务逻辑。对于 EdgionStreamPlugins：
+### 步骤 4: 添加加载逻辑
 
 ```rust
-// src/core/plugins/edgion_stream_plugins/mod.rs
+// src/core/conf_mgr/conf_store/init_loader.rs
 
-// 1. 定义插件 trait
-#[async_trait]
-pub trait StreamPlugin: Send + Sync {
-    fn name(&self) -> &str;
-    async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult;
+// 对于简单资源，使用 load_simple 函数：
+Some(ResourceKind::YourResource) => {
+    load_simple::<YourResource>(
+        content, name, "YourResource", 
+        &config_server.your_resources, &mut stats
+    );
 }
 
-// 2. 实现插件运行时
-pub struct StreamPluginRuntime {
-    plugins: Vec<Arc<dyn StreamPlugin>>,
-}
-
-impl StreamPluginRuntime {
-    pub fn from_stream_plugins(entries: &[StreamPluginEntry]) -> Self {
-        // 根据配置创建插件实例
-    }
-    
-    pub async fn run(&self, ctx: &StreamContext) -> StreamPluginResult {
-        // 按顺序执行所有插件
-    }
+// 对于需要验证的路由类资源，使用 load_route_with_validation：
+Some(ResourceKind::YourRoute) => {
+    load_route_with_validation::<YourRoute, _>(
+        content, name, "YourRoute", 
+        &config_server.your_routes, &mut stats,
+        |r| validate_your_route_if_enabled(r),
+    );
 }
 ```
 
-### 步骤 4: 创建 CRD 和示例
+### 步骤 5: 更新 Admin API 宏
 
-#### 4.1 Kubernetes CRD 定义
+#### 5.1 Controller Admin API
+
+```rust
+// src/core/api/controller/common.rs
+
+#[macro_export]
+macro_rules! list_all_resources {
+    ($server:expr, $kind:expr) => {{
+        match $kind {
+            // ... 现有分支 ...
+            ResourceKind::YourResource => list_to_json!($server.your_resources.list().data),
+        }
+    }};
+}
+
+// 同样更新其他宏：list_namespaced_resources!, get_namespaced_resource!, resource_exists_namespaced!
+```
+
+#### 5.2 Gateway Admin API
+
+```rust
+// src/core/api/gateway/mod.rs
+
+macro_rules! list_client_resources {
+    ($client:expr, $kind:expr) => {{
+        match $kind {
+            // ... 现有分支 ...
+            ResourceKind::YourResource => to_json_vec($client.your_resources.list()),
+        }
+    }};
+}
+
+// 同样更新 get_client_resource! 宏
+```
+
+### 步骤 6: 配置文件
+
+#### 6.1 Kubernetes CRD
 
 ```yaml
-# config/crd/edgion-crd/edgion_stream_plugins_crd.yaml
+# config/crd/edgion-crd/your_resource_crd.yaml
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: edgionstreamplugins.edgion.io
+  name: yourresources.edgion.io
 spec:
   group: edgion.io
   names:
-    kind: EdgionStreamPlugins
-    plural: edgionstreamplugins
+    kind: YourResource
+    plural: yourresources
     shortNames:
-    - esplugins
+    - yr
   scope: Namespaced
   versions:
   - name: v1
@@ -297,135 +289,144 @@ spec:
         properties:
           spec:
             type: object
-            # ... 详细的 schema 定义
+            # ... schema 定义
 ```
 
-#### 4.2 示例配置
+#### 6.2 示例配置
 
 ```yaml
-# examples/conf/EdgionStreamPlugins_default_example-stream-ip.yaml
+# examples/conf/YourResource_default_example.yaml
 apiVersion: edgion.io/v1
-kind: EdgionStreamPlugins
+kind: YourResource
 metadata:
-  name: example-stream-ip
+  name: example
   namespace: default
 spec:
-  plugins:
-    - enable: true
-      type: IpRestriction
-      config:
-        ipSource: remoteAddr
-        allow:
-          - "192.168.1.0/24"
-        deny:
-          - "192.168.1.100"
-        defaultAction: deny
+  someField: "value"
 ```
 
-#### 4.3 更新配置文件
+#### 6.3 控制器配置
 
 ```toml
 # config/edgion-controller.toml
 [conf_sync]
-# ... 现有配置 ...
-edgion_stream_plugins_capacity = 200
+your_resources_capacity = 200
 ```
 
 ---
 
-## 资源流转路径
+## 架构说明
+
+### 资源元数据流转
 
 ```mermaid
 graph TD
-    K8sAPI[Kubernetes API] -->|Watch| Controller[Edgion Controller]
-    Controller -->|Store| ConfStore[Configuration Store]
-    ConfStore -->|Load| InitLoader[Init Loader]
-    InitLoader -->|Deserialize| Resource[Resource Object]
-    Resource -->|pre_parse| ResourceMeta[ResourceMeta::pre_parse]
-    ResourceMeta -->|Initialize| Runtime[Runtime Objects]
-    Runtime -->|Cache| ConfigServer[Config Server]
-    ConfigServer -->|Sync| Gateway[Edgion Gateway]
-    Gateway -->|Use| BusinessLogic[Business Logic]
+    subgraph SingleSource[单一数据源]
+        RD[resource_defs.rs<br/>define_resources!]
+    end
+    
+    RD --> RK[ResourceKind enum]
+    RD --> REG[ResourceRegistry]
+    RD --> META[ResourceTypeMetadata]
+    
+    subgraph TraitImpl[Trait 实现]
+        IMPLS[impls.rs<br/>impl_resource_meta!]
+    end
+    
+    IMPLS --> RM[ResourceMeta trait]
+    
+    subgraph Runtime[运行时使用]
+        CS[ConfigServer]
+        CC[ConfigClient]
+        API[Admin API]
+        LOADER[InitLoader]
+    end
+    
+    RK --> CS
+    RK --> CC
+    RK --> API
+    RK --> LOADER
+    RM --> CS
+    RM --> CC
 ```
 
-## 关键设计原则
+### 关键宏和函数
 
-### 1. 分离关注点
+| 名称 | 位置 | 作用 |
+|------|------|------|
+| `define_resources!` | `resource_defs.rs` | 定义所有资源元数据 |
+| `impl_resource_meta!` | `resource_meta_traits/impls.rs` | 自动实现 ResourceMeta trait |
+| `load_simple()` | `init_loader.rs` | 加载简单资源 |
+| `load_route_with_validation()` | `init_loader.rs` | 加载需验证的路由资源 |
+| `list_all_resources!` | `api/controller/common.rs` | 列出所有资源 |
+| `list_client_resources!` | `api/gateway/mod.rs` | 从 ConfigClient 列出资源 |
 
-- **类型定义层**：只关注数据结构和序列化
-- **配置管理层**：负责资源的存储、加载和分发
-- **业务逻辑层**：实现具体的功能逻辑
+---
 
-### 2. 运行时字段
+## 编译时保护
 
-使用 `#[serde(skip)]` 和 `#[schemars(skip)]` 标记运行时字段：
+添加新资源后，如果遗漏了某些 `match` 分支，编译器会报错：
 
-```rust
-#[serde(skip)]
-#[schemars(skip)]
-pub runtime_field: Arc<SomeRuntime>,
+```
+error[E0004]: non-exhaustive patterns: `ResourceKind::YourResource` not covered
 ```
 
-这些字段在反序列化后通过 `pre_parse()` 初始化。
-
-### 3. 预处理机制
-
-`ResourceMeta::pre_parse()` 在资源加载后立即调用，用于：
-- 初始化运行时对象
-- 验证配置
-- 构建索引或缓存
-
-### 4. 容量配置
-
-所有资源缓存都应该有可配置的容量：
-- 在 `ConfSyncConfig` 中定义
-- 在 `edgion-controller.toml` 中配置
-- 使用合理的默认值
+这确保了新资源类型在所有需要处理的地方都被正确处理。
 
 ---
 
 ## 常见问题
 
-### Q: 何时需要实现 pre_parse()？
+### Q: ResourceKind 的 kind_id 如何分配？
 
-A: 当资源需要在加载后进行预处理时，例如：
+A: 查看 `resource_defs.rs` 中现有资源的最大 ID，使用下一个数字。ID 用于序列化和枚举值。
+
+### Q: 何时需要自定义 pre_parse()？
+
+A: 当资源需要在加载后进行预处理时：
 - 初始化运行时对象（如插件运行时）
 - 构建查找表或索引
 - 验证配置的一致性
 
-### Q: ResourceKind 的数字如何分配？
+使用带闭包的 `impl_resource_meta!` 宏版本：
 
-A: 按顺序递增，避免与现有类型冲突。查看 `resource_kind.rs` 中最大的数字，使用下一个。
+```rust
+impl_resource_meta!(YourResource, |resource| {
+    resource.init_something();
+});
+```
 
-### Q: 如何处理资源之间的引用？
+### Q: 如何区分 namespaced 和 cluster-scoped 资源？
 
-A: 使用 `extensionRef` 或类似机制：
-1. 在资源定义中使用 `LocalObjectReference`
-2. 在 pre_parse 或运行时查找引用的资源
-3. 缓存引用以提高性能
+A: 在 `resource_defs.rs` 中设置 `is_namespaced`:
+- `true` - 资源属于特定 namespace
+- `false` - 资源是集群级别的（如 GatewayClass）
 
-### Q: 如何测试新资源？
+### Q: 忘记修改某个文件会怎样？
 
-A: 
-1. 创建示例 YAML 文件
-2. 使用 `edgion-ctl` 工具加载配置
-3. 编写集成测试验证功能
-4. 检查日志确认资源正确加载
+A: Rust 编译器会在大多数情况下报错：
+- 忘记 `resource_defs.rs` → `ResourceKind` 缺少变体
+- 忘记 `impls.rs` → ResourceMeta trait 未实现
+- 忘记 `match` 分支 → 非穷尽模式匹配错误
 
 ---
 
 ## 检查清单
 
-在提交代码前，确保：
+提交前确认：
 
-- [ ] 所有文件都已创建和修改
-- [ ] 代码编译通过（`cargo build`）
-- [ ] 运行 `cargo clippy` 无警告
-- [ ] 运行 `cargo fmt` 格式化代码
-- [ ] CRD 定义语法正确
-- [ ] 示例配置可以正常加载
-- [ ] 添加了必要的文档
-- [ ] 更新了相关的 README 或用户指南
+- [ ] `src/types/resources/your_resource/mod.rs` - 资源定义
+- [ ] `src/types/resources/mod.rs` - 模块导出
+- [ ] `src/types/resource_defs.rs` - `define_resources!` 宏
+- [ ] `src/types/resource_meta_traits/impls.rs` - `impl_resource_meta!` 宏
+- [ ] `src/core/conf_sync/conf_server/config_server.rs` - ServerCache 字段
+- [ ] `src/core/conf_sync/conf_client/config_client.rs` - ClientCache 字段
+- [ ] `src/core/cli/config/mod.rs` - 容量配置和 `get_capacity()`
+- [ ] `src/core/conf_mgr/conf_store/init_loader.rs` - 加载分支
+- [ ] Admin API 宏更新（如需要）
+- [ ] `cargo build` 编译通过
+- [ ] `cargo test` 测试通过
+- [ ] 集成测试通过
 
 ---
 
@@ -437,6 +438,5 @@ A:
 
 ---
 
-**最后更新**: 2025-12-25  
-**示例版本**: EdgionStreamPlugins v1
-
+**最后更新**: 2026-01-11  
+**文档版本**: v2.0（统一宏系统）
