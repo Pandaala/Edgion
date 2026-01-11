@@ -121,123 +121,26 @@ impl ConfigServer {
 
     pub fn list(&self, kind: &ResourceKind) -> Result<ListDataSimple, String> {
         let (data_json, resource_version) = match kind {
-            ResourceKind::Unspecified => {
-                return Err("Resource kind unspecified".to_string());
-            }
-            ResourceKind::GatewayClass => {
-                let list_data = self.list_gateway_classes();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize GatewayClass data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::EdgionGatewayConfig => {
-                let list_data = self.list_edgion_gateway_configs();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize EdgionGatewayConfig data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::Gateway => {
-                let list_data = self.list_gateways();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize Gateway data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::HTTPRoute => {
-                let list_data = self.list_routes();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize HTTPRoute data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::GRPCRoute => {
-                let list_data = self.list_grpc_routes();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize GRPCRoute data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::TCPRoute => {
-                let list_data = self.list_tcp_routes();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize TCPRoute data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::UDPRoute => {
-                let list_data = self.list_udp_routes();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize UDPRoute data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::TLSRoute => {
-                let list_data = self.list_tls_routes();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize TLSRoute data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::LinkSys => {
-                let list_data = self.list_link_sys();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize LinkSys data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::PluginMetaData => {
-                let list_data = self.list_plugin_metadata();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize PluginMetaData data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::Service => {
-                let list_data = self.list_services();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize Service data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::EndpointSlice => {
-                let list_data = self.list_endpoint_slices();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize EndpointSlice data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::Endpoint => {
-                let list_data = self.list_endpoints();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize Endpoints data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::EdgionTls => {
-                let list_data = self.list_edgion_tls();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize EdgionTls data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::EdgionPlugins => {
-                let list_data = self.list_edgion_plugins();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize EdgionPlugins data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::EdgionStreamPlugins => {
-                let list_data = self.list_edgion_stream_plugins();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize EdgionStreamPlugins data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::ReferenceGrant => {
-                let list_data = self.list_reference_grants();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize ReferenceGrant data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::BackendTLSPolicy => {
-                let list_data = self.list_backend_tls_policies();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize BackendTLSPolicy data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            ResourceKind::Secret => {
-                let list_data = self.list_secrets();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize Secret data: {}", e))?;
-                (json, list_data.resource_version)
-            }
+            ResourceKind::Unspecified => return Err("Resource kind unspecified".to_string()),
+            ResourceKind::GatewayClass => self.list_gateway_classes().to_json("GatewayClass")?,
+            ResourceKind::EdgionGatewayConfig => self.list_edgion_gateway_configs().to_json("EdgionGatewayConfig")?,
+            ResourceKind::Gateway => self.list_gateways().to_json("Gateway")?,
+            ResourceKind::HTTPRoute => self.list_routes().to_json("HTTPRoute")?,
+            ResourceKind::GRPCRoute => self.list_grpc_routes().to_json("GRPCRoute")?,
+            ResourceKind::TCPRoute => self.list_tcp_routes().to_json("TCPRoute")?,
+            ResourceKind::UDPRoute => self.list_udp_routes().to_json("UDPRoute")?,
+            ResourceKind::TLSRoute => self.list_tls_routes().to_json("TLSRoute")?,
+            ResourceKind::LinkSys => self.list_link_sys().to_json("LinkSys")?,
+            ResourceKind::PluginMetaData => self.list_plugin_metadata().to_json("PluginMetaData")?,
+            ResourceKind::Service => self.list_services().to_json("Service")?,
+            ResourceKind::EndpointSlice => self.list_endpoint_slices().to_json("EndpointSlice")?,
+            ResourceKind::Endpoint => self.list_endpoints().to_json("Endpoints")?,
+            ResourceKind::EdgionTls => self.list_edgion_tls().to_json("EdgionTls")?,
+            ResourceKind::EdgionPlugins => self.list_edgion_plugins().to_json("EdgionPlugins")?,
+            ResourceKind::EdgionStreamPlugins => self.list_edgion_stream_plugins().to_json("EdgionStreamPlugins")?,
+            ResourceKind::ReferenceGrant => self.list_reference_grants().to_json("ReferenceGrant")?,
+            ResourceKind::BackendTLSPolicy => self.list_backend_tls_policies().to_json("BackendTLSPolicy")?,
+            ResourceKind::Secret => self.list_secrets().to_json("Secret")?,
         };
 
         Ok(ListDataSimple {

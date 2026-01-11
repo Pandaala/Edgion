@@ -15,6 +15,16 @@ impl<T> ListData<T> {
     }
 }
 
+impl<T: serde::Serialize> ListData<T> {
+    /// Serialize the list data to JSON and return (json, resource_version)
+    /// Helper to reduce repetitive code in list() methods
+    pub fn to_json(&self, type_name: &str) -> Result<(String, u64), String> {
+        serde_json::to_string(&self.data)
+            .map(|json| (json, self.resource_version))
+            .map_err(|e| format!("Failed to serialize {} data: {}", type_name, e))
+    }
+}
+
 /// Event type enumeration
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
