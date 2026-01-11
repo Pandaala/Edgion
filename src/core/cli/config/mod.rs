@@ -234,6 +234,35 @@ pub struct ConfSyncConfig {
     pub secrets_capacity: u32,
 }
 
+impl ConfSyncConfig {
+    /// Get the capacity for a specific resource kind
+    pub fn get_capacity(&self, kind: crate::types::ResourceKind) -> u32 {
+        use crate::types::ResourceKind;
+        match kind {
+            ResourceKind::Unspecified => 0,
+            ResourceKind::GatewayClass => self.gateway_classes_capacity,
+            ResourceKind::EdgionGatewayConfig => self.edgion_gateway_configs_capacity,
+            ResourceKind::Gateway => self.gateways_capacity,
+            ResourceKind::HTTPRoute => self.routes_capacity,
+            ResourceKind::GRPCRoute => self.grpc_routes_capacity,
+            ResourceKind::TCPRoute => self.tcp_routes_capacity,
+            ResourceKind::UDPRoute => self.udp_routes_capacity,
+            ResourceKind::TLSRoute => self.tls_routes_capacity,
+            ResourceKind::LinkSys => self.link_sys_capacity,
+            ResourceKind::PluginMetaData => self.plugin_metadata_capacity,
+            ResourceKind::Service => self.services_capacity,
+            ResourceKind::EndpointSlice => self.endpoint_slices_capacity,
+            ResourceKind::Endpoint => self.endpoints_capacity,
+            ResourceKind::EdgionTls => self.edgion_tls_capacity,
+            ResourceKind::EdgionPlugins => self.edgion_plugins_capacity,
+            ResourceKind::EdgionStreamPlugins => self.edgion_stream_plugins_capacity,
+            ResourceKind::ReferenceGrant => self.reference_grants_capacity,
+            ResourceKind::BackendTLSPolicy => self.backend_tls_policies_capacity,
+            ResourceKind::Secret => self.secrets_capacity,
+        }
+    }
+}
+
 // Default values
 fn default_grpc_listen() -> String {
     "0.0.0.0:50051".to_string()

@@ -644,6 +644,16 @@ impl ConfigClientEventDispatcher for ConfigClient {
             );
         };
 
+        // Helper macro to reduce repetitive parse-and-apply code
+        macro_rules! apply_change {
+            ($type:ty, $field:ident, $name:literal) => {
+                match serde_yaml::from_str::<$type>(&data) {
+                    Ok(resource) => Self::apply_change_to_cache(&self.$field, change, resource),
+                    Err(e) => log_error($name, &e),
+                }
+            };
+        }
+
         match resource_type {
             ResourceKind::Unspecified => {
                 eprintln!(
@@ -652,123 +662,25 @@ impl ConfigClientEventDispatcher for ConfigClient {
                     &data[..data.len().min(200)]
                 );
             }
-            ResourceKind::HTTPRoute => match serde_yaml::from_str::<HTTPRoute>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.routes, change, resource);
-                }
-                Err(e) => log_error("HTTPRoute", &e),
-            },
-            ResourceKind::GRPCRoute => match serde_yaml::from_str::<GRPCRoute>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.grpc_routes, change, resource);
-                }
-                Err(e) => log_error("GRPCRoute", &e),
-            },
-            ResourceKind::TCPRoute => match serde_yaml::from_str::<TCPRoute>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.tcp_routes, change, resource);
-                }
-                Err(e) => log_error("TCPRoute", &e),
-            },
-            ResourceKind::UDPRoute => match serde_yaml::from_str::<UDPRoute>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.udp_routes, change, resource);
-                }
-                Err(e) => log_error("UDPRoute", &e),
-            },
-            ResourceKind::TLSRoute => match serde_yaml::from_str::<TLSRoute>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.tls_routes, change, resource);
-                }
-                Err(e) => log_error("TLSRoute", &e),
-            },
-            ResourceKind::LinkSys => match serde_yaml::from_str::<LinkSys>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.link_sys, change, resource);
-                }
-                Err(e) => log_error("LinkSys", &e),
-            },
-            ResourceKind::Service => match serde_yaml::from_str::<Service>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.services, change, resource);
-                }
-                Err(e) => log_error("Service", &e),
-            },
-            ResourceKind::EndpointSlice => match serde_yaml::from_str::<EndpointSlice>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.endpoint_slices, change, resource);
-                }
-                Err(e) => log_error("EndpointSlice", &e),
-            },
-            ResourceKind::Endpoint => match serde_yaml::from_str::<Endpoints>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.endpoints, change, resource);
-                }
-                Err(e) => log_error("Endpoints", &e),
-            },
-            ResourceKind::EdgionTls => match serde_yaml::from_str::<EdgionTls>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.edgion_tls, change, resource);
-                }
-                Err(e) => log_error("EdgionTls", &e),
-            },
-            ResourceKind::EdgionPlugins => match serde_yaml::from_str::<EdgionPlugins>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.edgion_plugins, change, resource);
-                }
-                Err(e) => log_error("EdgionPlugins", &e),
-            },
-            ResourceKind::EdgionStreamPlugins => match serde_yaml::from_str::<EdgionStreamPlugins>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.edgion_stream_plugins, change, resource);
-                }
-                Err(e) => log_error("EdgionStreamPlugins", &e),
-            },
-            ResourceKind::ReferenceGrant => match serde_yaml::from_str::<ReferenceGrant>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.reference_grants, change, resource);
-                }
-                Err(e) => log_error("ReferenceGrant", &e),
-            },
-            ResourceKind::BackendTLSPolicy => match serde_yaml::from_str::<BackendTLSPolicy>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.backend_tls_policies, change, resource);
-                }
-                Err(e) => log_error("BackendTLSPolicy", &e),
-            },
-            ResourceKind::PluginMetaData => match serde_yaml::from_str::<PluginMetaData>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.plugin_metadata, change, resource);
-                }
-                Err(e) => log_error("PluginMetaData", &e),
-            },
-            // ResourceKind::Secret => match serde_yaml::from_str::<Secret>(&data) {
-            //     Ok(resource) => {
-            //         Self::apply_change_to_cache(&self.secrets, change, resource);
-            //     }
-            //     Err(e) => log_error("Secret", &e),
-            // },
-            ResourceKind::Secret => {
-                tracing::warn!("skip resource change {:?} for Secret", change);
-            }
-            ResourceKind::GatewayClass => match serde_yaml::from_str::<GatewayClass>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.gateway_classes, change, resource);
-                }
-                Err(e) => log_error("GatewayClass", &e),
-            },
-            ResourceKind::Gateway => match serde_yaml::from_str::<Gateway>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.gateways, change, resource);
-                }
-                Err(e) => log_error("Gateway", &e),
-            },
-            ResourceKind::EdgionGatewayConfig => match serde_yaml::from_str::<EdgionGatewayConfig>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.edgion_gateway_configs, change, resource);
-                }
-                Err(e) => log_error("EdgionGatewayConfig", &e),
-            },
+            ResourceKind::GatewayClass => apply_change!(GatewayClass, gateway_classes, "GatewayClass"),
+            ResourceKind::EdgionGatewayConfig => apply_change!(EdgionGatewayConfig, edgion_gateway_configs, "EdgionGatewayConfig"),
+            ResourceKind::Gateway => apply_change!(Gateway, gateways, "Gateway"),
+            ResourceKind::HTTPRoute => apply_change!(HTTPRoute, routes, "HTTPRoute"),
+            ResourceKind::GRPCRoute => apply_change!(GRPCRoute, grpc_routes, "GRPCRoute"),
+            ResourceKind::TCPRoute => apply_change!(TCPRoute, tcp_routes, "TCPRoute"),
+            ResourceKind::UDPRoute => apply_change!(UDPRoute, udp_routes, "UDPRoute"),
+            ResourceKind::TLSRoute => apply_change!(TLSRoute, tls_routes, "TLSRoute"),
+            ResourceKind::LinkSys => apply_change!(LinkSys, link_sys, "LinkSys"),
+            ResourceKind::PluginMetaData => apply_change!(PluginMetaData, plugin_metadata, "PluginMetaData"),
+            ResourceKind::Service => apply_change!(Service, services, "Service"),
+            ResourceKind::EndpointSlice => apply_change!(EndpointSlice, endpoint_slices, "EndpointSlice"),
+            ResourceKind::Endpoint => apply_change!(Endpoints, endpoints, "Endpoints"),
+            ResourceKind::EdgionTls => apply_change!(EdgionTls, edgion_tls, "EdgionTls"),
+            ResourceKind::EdgionPlugins => apply_change!(EdgionPlugins, edgion_plugins, "EdgionPlugins"),
+            ResourceKind::EdgionStreamPlugins => apply_change!(EdgionStreamPlugins, edgion_stream_plugins, "EdgionStreamPlugins"),
+            ResourceKind::ReferenceGrant => apply_change!(ReferenceGrant, reference_grants, "ReferenceGrant"),
+            ResourceKind::BackendTLSPolicy => apply_change!(BackendTLSPolicy, backend_tls_policies, "BackendTLSPolicy"),
+            ResourceKind::Secret => tracing::warn!("skip resource change {:?} for Secret", change),
         }
     }
 }

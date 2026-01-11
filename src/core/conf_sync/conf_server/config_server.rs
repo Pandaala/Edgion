@@ -11,6 +11,35 @@ use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
 use anyhow::Result;
 
+/// Helper function to spawn a watch forwarder task that converts WatchResponse<T> to EventDataSimple
+fn spawn_watch_forwarder<T: serde::Serialize + Send + 'static>(
+    mut receiver: mpsc::Receiver<WatchResponse<T>>,
+    tx: mpsc::Sender<EventDataSimple>,
+    type_name: &'static str,
+) {
+    tokio::spawn(async move {
+        while let Some(response) = receiver.recv().await {
+            let WatchResponse { events, resource_version, err } = response;
+
+            let events_json = match serde_json::to_string(&events) {
+                Ok(json) => json,
+                Err(e) => {
+                    eprintln!("Failed to serialize {} events: {}", type_name, e);
+                    continue;
+                }
+            };
+            let event_data = EventDataSimple {
+                data: events_json,
+                resource_version,
+                err,
+            };
+            if tx.send(event_data).await.is_err() {
+                break;
+            }
+        }
+    });
+}
+
 // internal key
 pub type NsNameKey = String;
 
@@ -164,540 +193,63 @@ impl ConfigServer {
         );
 
         match kind {
-            ResourceKind::Unspecified => {
-                return Err("Resource kind unspecified".to_string());
-            }
+            ResourceKind::Unspecified => return Err("Resource kind unspecified".to_string()),
             ResourceKind::GatewayClass => {
-                let mut receiver = self.watch_gateway_classes(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize GatewayClass events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_gateway_classes(client_id, client_name, from_version), tx, "GatewayClass");
             }
             ResourceKind::EdgionGatewayConfig => {
-                let mut receiver = self.watch_edgion_gateway_configs(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize EdgionGatewayConfig events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_edgion_gateway_configs(client_id, client_name, from_version), tx, "EdgionGatewayConfig");
             }
             ResourceKind::Gateway => {
-                let mut receiver = self.watch_gateways(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize Gateway events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
-            ResourceKind::GRPCRoute => {
-                let mut receiver = self.watch_grpc_routes(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize GRPCRoute events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
-            ResourceKind::TCPRoute => {
-                let mut receiver = self.watch_tcp_routes(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize TCPRoute events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
-            ResourceKind::UDPRoute => {
-                let mut receiver = self.watch_udp_routes(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize UDPRoute events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
-            ResourceKind::TLSRoute => {
-                let mut receiver = self.watch_tls_routes(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize TLSRoute events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
-            ResourceKind::LinkSys => {
-                let mut receiver = self.watch_link_sys(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize LinkSys events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
-            ResourceKind::PluginMetaData => {
-                let mut receiver = self.watch_plugin_metadata(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize PluginMetaData events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_gateways(client_id, client_name, from_version), tx, "Gateway");
             }
             ResourceKind::HTTPRoute => {
-                let mut receiver = self.watch_routes(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize HTTPRoute events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_routes(client_id, client_name, from_version), tx, "HTTPRoute");
+            }
+            ResourceKind::GRPCRoute => {
+                spawn_watch_forwarder(self.watch_grpc_routes(client_id, client_name, from_version), tx, "GRPCRoute");
+            }
+            ResourceKind::TCPRoute => {
+                spawn_watch_forwarder(self.watch_tcp_routes(client_id, client_name, from_version), tx, "TCPRoute");
+            }
+            ResourceKind::UDPRoute => {
+                spawn_watch_forwarder(self.watch_udp_routes(client_id, client_name, from_version), tx, "UDPRoute");
+            }
+            ResourceKind::TLSRoute => {
+                spawn_watch_forwarder(self.watch_tls_routes(client_id, client_name, from_version), tx, "TLSRoute");
+            }
+            ResourceKind::LinkSys => {
+                spawn_watch_forwarder(self.watch_link_sys(client_id, client_name, from_version), tx, "LinkSys");
+            }
+            ResourceKind::PluginMetaData => {
+                spawn_watch_forwarder(self.watch_plugin_metadata(client_id, client_name, from_version), tx, "PluginMetaData");
             }
             ResourceKind::Service => {
-                let mut receiver = self.watch_services(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize Service events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_services(client_id, client_name, from_version), tx, "Service");
             }
             ResourceKind::EndpointSlice => {
-                let mut receiver = self.watch_endpoint_slices(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize EndpointSlice events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_endpoint_slices(client_id, client_name, from_version), tx, "EndpointSlice");
             }
             ResourceKind::Endpoint => {
-                let mut receiver = self.watch_endpoints(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize Endpoints events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_endpoints(client_id, client_name, from_version), tx, "Endpoints");
             }
             ResourceKind::EdgionTls => {
-                let mut receiver = self.watch_edgion_tls(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize EdgionTls events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_edgion_tls(client_id, client_name, from_version), tx, "EdgionTls");
             }
             ResourceKind::EdgionPlugins => {
-                let mut receiver = self.watch_edgion_plugins(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize EdgionPlugins events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_edgion_plugins(client_id, client_name, from_version), tx, "EdgionPlugins");
             }
             ResourceKind::EdgionStreamPlugins => {
-                let mut receiver = self.watch_edgion_stream_plugins(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize EdgionStreamPlugins events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_edgion_stream_plugins(client_id, client_name, from_version), tx, "EdgionStreamPlugins");
             }
             ResourceKind::ReferenceGrant => {
-                let mut receiver = self.watch_reference_grants(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize ReferenceGrant events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_reference_grants(client_id, client_name, from_version), tx, "ReferenceGrant");
             }
             ResourceKind::BackendTLSPolicy => {
-                let mut receiver = self.watch_backend_tls_policies(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize BackendTLSPolicy events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_backend_tls_policies(client_id, client_name, from_version), tx, "BackendTLSPolicy");
             }
             ResourceKind::Secret => {
-                let mut receiver = self.watch_secrets(client_id, client_name, from_version);
-                tokio::spawn(async move {
-                    while let Some(response) = receiver.recv().await {
-                        let WatchResponse {
-                            events,
-                            resource_version,
-                            err,
-                        } = response;
-
-                        let events_json = match serde_json::to_string(&events) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize Secret events: {}", e);
-                                continue;
-                            }
-                        };
-                        let event_data = EventDataSimple {
-                            data: events_json,
-                            resource_version,
-                            err,
-                        };
-                        if tx.send(event_data).await.is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_watch_forwarder(self.watch_secrets(client_id, client_name, from_version), tx, "Secret");
             }
         }
 
