@@ -13,6 +13,11 @@ pub mod resources;
 pub mod schema;
 pub mod work_dir;
 
+// New unified resource definition system (Phase 1 of macro refactoring)
+#[macro_use]
+pub mod resource_macros;
+pub mod resource_defs;
+
 pub use self::ctx::{BackendContext, BackendTlsInfo, EdgionHttpContext, MatchInfo, RequestInfo, UpstreamInfo};
 pub use self::edgion_status::EdgionStatus;
 pub use self::err::{EdError, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};

@@ -147,4 +147,47 @@ impl PluginMetaData {
             None
         }
     }
+
+    /// Validate and pre-parse the metadata (called during pre_parse)
+    pub fn validate_pre_parse(&self) {
+        let key_name = self.key_name_str();
+
+        // Validate that only one data type is set
+        if let Err(e) = self.validate() {
+            tracing::warn!("PluginMetaData validation failed for {}: {}", key_name, e);
+        }
+
+        // Optional: Validate CIDR formats in IpList
+        if let Some(ip_list) = &self.spec.ip_list {
+            for cidr in &ip_list.items {
+                // Basic validation - could be enhanced with ipnetwork crate
+                if !cidr.contains('/') && !cidr.contains(':') && !cidr.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                    tracing::warn!("PluginMetaData {}: Invalid IP/CIDR format: {}", key_name, cidr);
+                }
+            }
+        }
+
+        // Optional: Validate regex patterns in RegexList
+        if let Some(regex_list) = &self.spec.regex_list {
+            for item in &regex_list.items {
+                if let Err(e) = regex::Regex::new(&item.key) {
+                    tracing::warn!(
+                        "PluginMetaData {}: Invalid regex pattern '{}': {}",
+                        key_name,
+                        item.key,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    /// Get key name string (namespace/name format)
+    fn key_name_str(&self) -> String {
+        if let Some(namespace) = &self.metadata.namespace {
+            format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
+        } else {
+            self.metadata.name.as_deref().unwrap_or("").to_string()
+        }
+    }
 }

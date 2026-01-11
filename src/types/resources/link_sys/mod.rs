@@ -104,3 +104,63 @@ pub enum SystemType {
     Elasticsearch,
     Kafka,
 }
+
+impl LinkSys {
+    /// Validate configuration based on system type (called during pre_parse)
+    pub fn validate_config(&self) {
+        let key_name = self.key_name_str();
+        match &self.spec.config {
+            SystemConfig::Redis(redis_config) => {
+                // Validate endpoints
+                if redis_config.endpoints.is_empty() {
+                    tracing::warn!("LinkSys {}: Redis configuration has no endpoints", key_name);
+                }
+
+                // Validate topology consistency
+                if let Some(topology) = &redis_config.topology {
+                    match topology.mode {
+                        redis::RedisTopologyMode::Sentinel => {
+                            if topology.sentinel.is_none() {
+                                tracing::warn!(
+                                    "LinkSys {}: Sentinel mode specified but sentinel config is missing",
+                                    key_name
+                                );
+                            }
+                        }
+                        redis::RedisTopologyMode::Cluster => {
+                            if topology.cluster.is_none() {
+                                tracing::warn!(
+                                    "LinkSys {}: Cluster mode specified but cluster config is missing",
+                                    key_name
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            SystemConfig::Etcd(etcd_config) => {
+                // Validate endpoints
+                if etcd_config.endpoints.is_empty() {
+                    tracing::warn!("LinkSys {}: Etcd configuration has no endpoints", key_name);
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    "LinkSys {}: System type {:?} is not yet fully implemented",
+                    key_name,
+                    self.spec.config.system_type()
+                );
+            }
+        }
+    }
+
+    /// Get key name string (namespace/name format)
+    fn key_name_str(&self) -> String {
+        if let Some(namespace) = &self.metadata.namespace {
+            format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
+        } else {
+            self.metadata.name.as_deref().unwrap_or("").to_string()
+        }
+    }
+}

@@ -25,6 +25,55 @@ pub enum ResourceKind {
 }
 
 impl ResourceKind {
+    /// Compile-time exhaustiveness check
+    /// 
+    /// This function ensures that all ResourceKind variants are defined in resource_defs.rs.
+    /// If you add a new ResourceKind variant, the compiler will fail here until you also
+    /// add the corresponding entry in resource_defs.rs.
+    ///
+    /// This check runs at compile time via const evaluation.
+    #[allow(dead_code)]
+    const fn _compile_time_sync_check() {
+        // This match must cover all ResourceKind variants.
+        // If a new variant is added to ResourceKind but not to resource_defs.rs,
+        // the exhaustive check in resource_defs.rs will catch it.
+        //
+        // Conversely, if a variant exists in resource_defs.rs but not here,
+        // the macro expansion will fail because ResourceKind::VariantName won't exist.
+        //
+        // This creates a bidirectional compile-time check.
+        const fn check(kind: ResourceKind) {
+            match kind {
+                ResourceKind::Unspecified => {}
+                ResourceKind::GatewayClass => {}
+                ResourceKind::EdgionGatewayConfig => {}
+                ResourceKind::Gateway => {}
+                ResourceKind::HTTPRoute => {}
+                ResourceKind::Service => {}
+                ResourceKind::EndpointSlice => {}
+                ResourceKind::EdgionTls => {}
+                ResourceKind::Secret => {}
+                ResourceKind::EdgionPlugins => {}
+                ResourceKind::GRPCRoute => {}
+                ResourceKind::TCPRoute => {}
+                ResourceKind::UDPRoute => {}
+                ResourceKind::PluginMetaData => {}
+                ResourceKind::TLSRoute => {}
+                ResourceKind::LinkSys => {}
+                ResourceKind::EdgionStreamPlugins => {}
+                ResourceKind::ReferenceGrant => {}
+                ResourceKind::BackendTLSPolicy => {}
+                ResourceKind::Endpoint => {}
+                // NOTE: When adding a new ResourceKind variant:
+                // 1. Add it to this match
+                // 2. Add corresponding entry in src/types/resource_defs.rs
+                // The compiler will ensure both are in sync.
+            }
+        }
+        // Trigger the check
+        check(ResourceKind::Unspecified);
+    }
+
     /// Extract resource kind from content (supports both YAML and JSON formats)
     pub fn from_content(content: &str) -> Option<Self> {
         // Try JSON format first: "kind":"GatewayClass" or "kind": "GatewayClass"

@@ -204,12 +204,12 @@ impl SchemaValidator {
                     let mut error_messages = Vec::new();
 
                     for error in error_iter {
-                        let msg = format!("Path: {}, Error: {}", error.instance_path, error);
+                        let msg = format!("Path: {}, Error: {}", error.instance_path(), error);
                         error_messages.push(msg);
                         tracing::debug!(
                             component = "schema_validator",
                             kind = ?kind,
-                            path = %error.instance_path,
+                            path = %error.instance_path(),
                             error = %error,
                             "Schema validation error"
                         );

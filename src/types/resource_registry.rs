@@ -1,11 +1,20 @@
 //! Global Resource Type Registry
 //!
 //! This module provides a centralized registry for all resource types in the system.
-//! It defines metadata for each resource type and provides utilities to access this information.
+//! It delegates to the unified resource definitions in `resource_defs.rs`.
+//!
+//! # Migration Note
+//! This module now delegates to `resource_defs` for resource metadata.
+//! The `ResourceTypeMetadata` struct and `RESOURCE_TYPES` are kept for backward compatibility.
 
 use std::sync::LazyLock;
 
+use crate::types::resource_defs::{registry_resource_names, ALL_RESOURCE_INFOS};
+
 /// Metadata for a resource type
+/// 
+/// This struct is kept for backward compatibility.
+/// New code should use `ResourceKindInfo` from `resource_defs` module.
 #[derive(Debug, Clone)]
 pub struct ResourceTypeMetadata {
     /// The name of the resource type (used for display and logging)
@@ -37,56 +46,37 @@ impl ResourceTypeMetadata {
 }
 
 /// Global registry of all resource types
-/// This list defines all resources that are tracked by the system
+/// 
+/// This list is generated from `resource_defs.rs` for consistency.
+/// Only resources with `in_registry: true` are included (excludes Secret).
 pub static RESOURCE_TYPES: LazyLock<Vec<ResourceTypeMetadata>> = LazyLock::new(|| {
-    vec![
-        // Base configuration resources
-        ResourceTypeMetadata::new("gateway_classes")
-            .with_description("GatewayClass resources")
-            .base_conf(),
-        ResourceTypeMetadata::new("gateways")
-            .with_description("Gateway resources")
-            .base_conf(),
-        ResourceTypeMetadata::new("edgion_gateway_configs")
-            .with_description("EdgionGatewayConfig resources")
-            .base_conf(),
-        // Route resources
-        ResourceTypeMetadata::new("routes").with_description("HTTPRoute resources"),
-        ResourceTypeMetadata::new("grpc_routes").with_description("GRPCRoute resources"),
-        ResourceTypeMetadata::new("tcp_routes").with_description("TCPRoute resources"),
-        ResourceTypeMetadata::new("udp_routes").with_description("UDPRoute resources"),
-        ResourceTypeMetadata::new("tls_routes").with_description("TLSRoute resources"),
-        // Backend resources
-        ResourceTypeMetadata::new("services").with_description("Kubernetes Service resources"),
-        ResourceTypeMetadata::new("endpoint_slices").with_description("Kubernetes EndpointSlice resources"),
-        ResourceTypeMetadata::new("endpoints").with_description("Kubernetes Endpoints resources"),
-        // Security and policy resources
-        ResourceTypeMetadata::new("edgion_tls").with_description("EdgionTls resources for TLS configuration"),
-        ResourceTypeMetadata::new("reference_grants")
-            .with_description("ReferenceGrant resources for cross-namespace access"),
-        ResourceTypeMetadata::new("backend_tls_policies").with_description("BackendTLSPolicy resources"),
-        // Plugin and extension resources
-        ResourceTypeMetadata::new("edgion_plugins").with_description("EdgionPlugins resources"),
-        ResourceTypeMetadata::new("edgion_stream_plugins").with_description("EdgionStreamPlugins resources"),
-        ResourceTypeMetadata::new("plugin_metadata").with_description("PluginMetaData resources"),
-        // Infrastructure resources
-        ResourceTypeMetadata::new("link_sys").with_description("LinkSys resources for external system integration"),
-        // Note: Secrets are not included as they follow related resources
-    ]
+    ALL_RESOURCE_INFOS
+        .iter()
+        .filter(|info| info.in_registry)
+        .map(|info| {
+            let mut metadata = ResourceTypeMetadata::new(info.cache_field_name);
+            if info.is_base_conf {
+                metadata = metadata.base_conf();
+            }
+            // Description is derived from kind_name for simplicity
+            metadata = metadata.with_description(info.kind_name);
+            metadata
+        })
+        .collect()
 });
 
 /// Get the list of all resource type names
+/// 
+/// This function now delegates to `resource_defs::registry_resource_names()`.
 pub fn all_resource_type_names() -> Vec<&'static str> {
-    RESOURCE_TYPES.iter().map(|r| r.name).collect()
+    registry_resource_names()
 }
 
 /// Get the list of base configuration resource names
+/// 
+/// This function now delegates to `resource_defs::base_conf_kind_names()`.
 pub fn base_conf_resource_names() -> Vec<&'static str> {
-    RESOURCE_TYPES
-        .iter()
-        .filter(|r| r.is_base_conf)
-        .map(|r| r.name)
-        .collect()
+    crate::types::resource_defs::base_conf_kind_names()
 }
 
 /// Get metadata for a specific resource type by name
