@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 use super::{registry_resource_names, ALL_RESOURCE_INFOS};
 
 /// Metadata for a resource type
-/// 
+///
 /// This struct is kept for backward compatibility.
 /// New code should use `ResourceKindInfo` from `resource_defs` module.
 #[derive(Debug, Clone)]
@@ -46,7 +46,7 @@ impl ResourceTypeMetadata {
 }
 
 /// Global registry of all resource types
-/// 
+///
 /// This list is generated from `resource_defs.rs` for consistency.
 /// Only resources with `in_registry: true` are included (excludes Secret).
 pub static RESOURCE_TYPES: LazyLock<Vec<ResourceTypeMetadata>> = LazyLock::new(|| {
@@ -66,14 +66,14 @@ pub static RESOURCE_TYPES: LazyLock<Vec<ResourceTypeMetadata>> = LazyLock::new(|
 });
 
 /// Get the list of all resource type names
-/// 
+///
 /// This function now delegates to `resource_defs::registry_resource_names()`.
 pub fn all_resource_type_names() -> Vec<&'static str> {
     registry_resource_names()
 }
 
 /// Get the list of base configuration resource names
-/// 
+///
 /// This function now delegates to `resource_defs::base_conf_kind_names()`.
 pub fn base_conf_resource_names() -> Vec<&'static str> {
     super::base_conf_kind_names()

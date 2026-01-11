@@ -60,12 +60,12 @@ pub fn key_name_from_metadata(metadata: &ObjectMeta) -> String {
 }
 
 /// Macro to simplify ResourceMeta trait implementation
-/// 
+///
 /// # Basic usage (namespaced resource, no pre_parse):
 /// ```ignore
 /// impl_resource_meta!(Gateway, Gateway, "Gateway");
 /// ```
-/// 
+///
 /// # With pre_parse:
 /// ```ignore
 /// impl_resource_meta!(HTTPRoute, HTTPRoute, "HTTPRoute", |r| {
@@ -73,7 +73,7 @@ pub fn key_name_from_metadata(metadata: &ObjectMeta) -> String {
 ///     r.parse_timeouts();
 /// });
 /// ```
-/// 
+///
 /// # Cluster-scoped resource (no namespace in key_name):
 /// ```ignore
 /// impl_resource_meta!(GatewayClass, GatewayClass, "GatewayClass", cluster_scoped);

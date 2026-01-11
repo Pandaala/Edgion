@@ -26,7 +26,7 @@ pub enum ResourceKind {
 
 impl ResourceKind {
     /// Compile-time exhaustiveness check
-    /// 
+    ///
     /// This function ensures that all ResourceKind variants are defined in resource_defs.rs.
     /// If you add a new ResourceKind variant, the compiler will fail here until you also
     /// add the corresponding entry in resource_defs.rs.
@@ -63,11 +63,10 @@ impl ResourceKind {
                 ResourceKind::EdgionStreamPlugins => {}
                 ResourceKind::ReferenceGrant => {}
                 ResourceKind::BackendTLSPolicy => {}
-                ResourceKind::Endpoint => {}
-                // NOTE: When adding a new ResourceKind variant:
-                // 1. Add it to this match
-                // 2. Add corresponding entry in src/types/resource_defs.rs
-                // The compiler will ensure both are in sync.
+                ResourceKind::Endpoint => {} // NOTE: When adding a new ResourceKind variant:
+                                             // 1. Add it to this match
+                                             // 2. Add corresponding entry in src/types/resource_defs.rs
+                                             // The compiler will ensure both are in sync.
             }
         }
         // Trigger the check

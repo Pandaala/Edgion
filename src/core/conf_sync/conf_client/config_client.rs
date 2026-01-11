@@ -663,7 +663,9 @@ impl ConfigClientEventDispatcher for ConfigClient {
                 );
             }
             ResourceKind::GatewayClass => apply_change!(GatewayClass, gateway_classes, "GatewayClass"),
-            ResourceKind::EdgionGatewayConfig => apply_change!(EdgionGatewayConfig, edgion_gateway_configs, "EdgionGatewayConfig"),
+            ResourceKind::EdgionGatewayConfig => {
+                apply_change!(EdgionGatewayConfig, edgion_gateway_configs, "EdgionGatewayConfig")
+            }
             ResourceKind::Gateway => apply_change!(Gateway, gateways, "Gateway"),
             ResourceKind::HTTPRoute => apply_change!(HTTPRoute, routes, "HTTPRoute"),
             ResourceKind::GRPCRoute => apply_change!(GRPCRoute, grpc_routes, "GRPCRoute"),
@@ -677,7 +679,9 @@ impl ConfigClientEventDispatcher for ConfigClient {
             ResourceKind::Endpoint => apply_change!(Endpoints, endpoints, "Endpoints"),
             ResourceKind::EdgionTls => apply_change!(EdgionTls, edgion_tls, "EdgionTls"),
             ResourceKind::EdgionPlugins => apply_change!(EdgionPlugins, edgion_plugins, "EdgionPlugins"),
-            ResourceKind::EdgionStreamPlugins => apply_change!(EdgionStreamPlugins, edgion_stream_plugins, "EdgionStreamPlugins"),
+            ResourceKind::EdgionStreamPlugins => {
+                apply_change!(EdgionStreamPlugins, edgion_stream_plugins, "EdgionStreamPlugins")
+            }
             ResourceKind::ReferenceGrant => apply_change!(ReferenceGrant, reference_grants, "ReferenceGrant"),
             ResourceKind::BackendTLSPolicy => apply_change!(BackendTLSPolicy, backend_tls_policies, "BackendTLSPolicy"),
             ResourceKind::Secret => tracing::warn!("skip resource change {:?} for Secret", change),

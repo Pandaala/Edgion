@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use super::common::*;
 use super::types::*;
-use crate::{list_all_resources, list_namespaced_resources, get_namespaced_resource, resource_exists_namespaced, list_to_json};
+use crate::{
+    get_namespaced_resource, list_all_resources, list_namespaced_resources, list_to_json, resource_exists_namespaced,
+};
 
 /// List all resources of a kind across all namespaces
 pub async fn list_all_namespaces(

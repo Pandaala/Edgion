@@ -19,7 +19,11 @@ fn spawn_watch_forwarder<T: serde::Serialize + Send + 'static>(
 ) {
     tokio::spawn(async move {
         while let Some(response) = receiver.recv().await {
-            let WatchResponse { events, resource_version, err } = response;
+            let WatchResponse {
+                events,
+                resource_version,
+                err,
+            } = response;
 
             let events_json = match serde_json::to_string(&events) {
                 Ok(json) => json,
@@ -195,10 +199,18 @@ impl ConfigServer {
         match kind {
             ResourceKind::Unspecified => return Err("Resource kind unspecified".to_string()),
             ResourceKind::GatewayClass => {
-                spawn_watch_forwarder(self.watch_gateway_classes(client_id, client_name, from_version), tx, "GatewayClass");
+                spawn_watch_forwarder(
+                    self.watch_gateway_classes(client_id, client_name, from_version),
+                    tx,
+                    "GatewayClass",
+                );
             }
             ResourceKind::EdgionGatewayConfig => {
-                spawn_watch_forwarder(self.watch_edgion_gateway_configs(client_id, client_name, from_version), tx, "EdgionGatewayConfig");
+                spawn_watch_forwarder(
+                    self.watch_edgion_gateway_configs(client_id, client_name, from_version),
+                    tx,
+                    "EdgionGatewayConfig",
+                );
             }
             ResourceKind::Gateway => {
                 spawn_watch_forwarder(self.watch_gateways(client_id, client_name, from_version), tx, "Gateway");
@@ -207,46 +219,94 @@ impl ConfigServer {
                 spawn_watch_forwarder(self.watch_routes(client_id, client_name, from_version), tx, "HTTPRoute");
             }
             ResourceKind::GRPCRoute => {
-                spawn_watch_forwarder(self.watch_grpc_routes(client_id, client_name, from_version), tx, "GRPCRoute");
+                spawn_watch_forwarder(
+                    self.watch_grpc_routes(client_id, client_name, from_version),
+                    tx,
+                    "GRPCRoute",
+                );
             }
             ResourceKind::TCPRoute => {
-                spawn_watch_forwarder(self.watch_tcp_routes(client_id, client_name, from_version), tx, "TCPRoute");
+                spawn_watch_forwarder(
+                    self.watch_tcp_routes(client_id, client_name, from_version),
+                    tx,
+                    "TCPRoute",
+                );
             }
             ResourceKind::UDPRoute => {
-                spawn_watch_forwarder(self.watch_udp_routes(client_id, client_name, from_version), tx, "UDPRoute");
+                spawn_watch_forwarder(
+                    self.watch_udp_routes(client_id, client_name, from_version),
+                    tx,
+                    "UDPRoute",
+                );
             }
             ResourceKind::TLSRoute => {
-                spawn_watch_forwarder(self.watch_tls_routes(client_id, client_name, from_version), tx, "TLSRoute");
+                spawn_watch_forwarder(
+                    self.watch_tls_routes(client_id, client_name, from_version),
+                    tx,
+                    "TLSRoute",
+                );
             }
             ResourceKind::LinkSys => {
                 spawn_watch_forwarder(self.watch_link_sys(client_id, client_name, from_version), tx, "LinkSys");
             }
             ResourceKind::PluginMetaData => {
-                spawn_watch_forwarder(self.watch_plugin_metadata(client_id, client_name, from_version), tx, "PluginMetaData");
+                spawn_watch_forwarder(
+                    self.watch_plugin_metadata(client_id, client_name, from_version),
+                    tx,
+                    "PluginMetaData",
+                );
             }
             ResourceKind::Service => {
                 spawn_watch_forwarder(self.watch_services(client_id, client_name, from_version), tx, "Service");
             }
             ResourceKind::EndpointSlice => {
-                spawn_watch_forwarder(self.watch_endpoint_slices(client_id, client_name, from_version), tx, "EndpointSlice");
+                spawn_watch_forwarder(
+                    self.watch_endpoint_slices(client_id, client_name, from_version),
+                    tx,
+                    "EndpointSlice",
+                );
             }
             ResourceKind::Endpoint => {
-                spawn_watch_forwarder(self.watch_endpoints(client_id, client_name, from_version), tx, "Endpoints");
+                spawn_watch_forwarder(
+                    self.watch_endpoints(client_id, client_name, from_version),
+                    tx,
+                    "Endpoints",
+                );
             }
             ResourceKind::EdgionTls => {
-                spawn_watch_forwarder(self.watch_edgion_tls(client_id, client_name, from_version), tx, "EdgionTls");
+                spawn_watch_forwarder(
+                    self.watch_edgion_tls(client_id, client_name, from_version),
+                    tx,
+                    "EdgionTls",
+                );
             }
             ResourceKind::EdgionPlugins => {
-                spawn_watch_forwarder(self.watch_edgion_plugins(client_id, client_name, from_version), tx, "EdgionPlugins");
+                spawn_watch_forwarder(
+                    self.watch_edgion_plugins(client_id, client_name, from_version),
+                    tx,
+                    "EdgionPlugins",
+                );
             }
             ResourceKind::EdgionStreamPlugins => {
-                spawn_watch_forwarder(self.watch_edgion_stream_plugins(client_id, client_name, from_version), tx, "EdgionStreamPlugins");
+                spawn_watch_forwarder(
+                    self.watch_edgion_stream_plugins(client_id, client_name, from_version),
+                    tx,
+                    "EdgionStreamPlugins",
+                );
             }
             ResourceKind::ReferenceGrant => {
-                spawn_watch_forwarder(self.watch_reference_grants(client_id, client_name, from_version), tx, "ReferenceGrant");
+                spawn_watch_forwarder(
+                    self.watch_reference_grants(client_id, client_name, from_version),
+                    tx,
+                    "ReferenceGrant",
+                );
             }
             ResourceKind::BackendTLSPolicy => {
-                spawn_watch_forwarder(self.watch_backend_tls_policies(client_id, client_name, from_version), tx, "BackendTLSPolicy");
+                spawn_watch_forwarder(
+                    self.watch_backend_tls_policies(client_id, client_name, from_version),
+                    tx,
+                    "BackendTLSPolicy",
+                );
             }
             ResourceKind::Secret => {
                 spawn_watch_forwarder(self.watch_secrets(client_id, client_name, from_version), tx, "Secret");

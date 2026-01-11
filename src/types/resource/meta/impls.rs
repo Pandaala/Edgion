@@ -23,8 +23,7 @@ impl_resource_meta!(EndpointSlice, EndpointSlice, "EndpointSlice");
 // =============================================================================
 
 use crate::types::resources::{
-    BackendTLSPolicy, Gateway, GatewayClass, GRPCRoute, HTTPRoute, ReferenceGrant, TCPRoute,
-    TLSRoute, UDPRoute,
+    BackendTLSPolicy, GRPCRoute, Gateway, GatewayClass, HTTPRoute, ReferenceGrant, TCPRoute, TLSRoute, UDPRoute,
 };
 
 // Cluster-scoped
@@ -60,7 +59,12 @@ use crate::types::resources::{
 };
 
 // Cluster-scoped
-impl_resource_meta!(EdgionGatewayConfig, EdgionGatewayConfig, "EdgionGatewayConfig", cluster_scoped);
+impl_resource_meta!(
+    EdgionGatewayConfig,
+    EdgionGatewayConfig,
+    "EdgionGatewayConfig",
+    cluster_scoped
+);
 
 // Namespaced
 impl_resource_meta!(EdgionTls, EdgionTls, "EdgionTls");
@@ -70,9 +74,14 @@ impl_resource_meta!(EdgionPlugins, EdgionPlugins, "EdgionPlugins", |self| {
     self.init_plugin_runtime();
 });
 
-impl_resource_meta!(EdgionStreamPlugins, EdgionStreamPlugins, "EdgionStreamPlugins", |self| {
-    self.init_stream_plugin_runtime();
-});
+impl_resource_meta!(
+    EdgionStreamPlugins,
+    EdgionStreamPlugins,
+    "EdgionStreamPlugins",
+    |self| {
+        self.init_stream_plugin_runtime();
+    }
+);
 
 impl_resource_meta!(LinkSys, LinkSys, "LinkSys", |self| {
     self.validate_config();

@@ -35,13 +35,8 @@ impl LoadStats {
 }
 
 /// Load a simple resource (parse + apply, no validation)
-fn load_simple<T>(
-    content: &str,
-    resource_name: &str,
-    kind_name: &str,
-    cache: &ServerCache<T>,
-    stats: &mut LoadStats,
-) where
+fn load_simple<T>(content: &str, resource_name: &str, kind_name: &str, cache: &ServerCache<T>, stats: &mut LoadStats)
+where
     T: DeserializeOwned + Clone + Send + Sync + 'static + ResourceMeta + Resource,
 {
     match serde_yaml::from_str::<T>(content) {
@@ -126,44 +121,76 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
         match kind {
             // === Base Configuration Resources ===
             Some(ResourceKind::GatewayClass) => {
-                load_simple::<GatewayClass>(content, name, "GatewayClass", &config_server.gateway_classes, &mut stats);
+                load_simple::<GatewayClass>(
+                    content,
+                    name,
+                    "GatewayClass",
+                    &config_server.gateway_classes,
+                    &mut stats,
+                );
             }
             Some(ResourceKind::Gateway) => {
                 load_simple::<Gateway>(content, name, "Gateway", &config_server.gateways, &mut stats);
             }
             Some(ResourceKind::EdgionGatewayConfig) => {
-                load_simple::<EdgionGatewayConfig>(content, name, "EdgionGatewayConfig", &config_server.edgion_gateway_configs, &mut stats);
+                load_simple::<EdgionGatewayConfig>(
+                    content,
+                    name,
+                    "EdgionGatewayConfig",
+                    &config_server.edgion_gateway_configs,
+                    &mut stats,
+                );
             }
 
             // === Route Resources (with validation) ===
             Some(ResourceKind::HTTPRoute) => {
                 load_route_with_validation::<HTTPRoute, _>(
-                    content, name, "HTTPRoute", &config_server.routes, &mut stats,
-                    |r| crate::core::ref_grant::validate_http_route_if_enabled(r),
+                    content,
+                    name,
+                    "HTTPRoute",
+                    &config_server.routes,
+                    &mut stats,
+                    crate::core::ref_grant::validate_http_route_if_enabled,
                 );
             }
             Some(ResourceKind::GRPCRoute) => {
                 load_route_with_validation::<GRPCRoute, _>(
-                    content, name, "GRPCRoute", &config_server.grpc_routes, &mut stats,
-                    |r| crate::core::ref_grant::validate_grpc_route_if_enabled(r),
+                    content,
+                    name,
+                    "GRPCRoute",
+                    &config_server.grpc_routes,
+                    &mut stats,
+                    crate::core::ref_grant::validate_grpc_route_if_enabled,
                 );
             }
             Some(ResourceKind::TCPRoute) => {
                 load_route_with_validation::<TCPRoute, _>(
-                    content, name, "TCPRoute", &config_server.tcp_routes, &mut stats,
-                    |r| crate::core::ref_grant::validate_tcp_route_if_enabled(r),
+                    content,
+                    name,
+                    "TCPRoute",
+                    &config_server.tcp_routes,
+                    &mut stats,
+                    crate::core::ref_grant::validate_tcp_route_if_enabled,
                 );
             }
             Some(ResourceKind::UDPRoute) => {
                 load_route_with_validation::<UDPRoute, _>(
-                    content, name, "UDPRoute", &config_server.udp_routes, &mut stats,
-                    |r| crate::core::ref_grant::validate_udp_route_if_enabled(r),
+                    content,
+                    name,
+                    "UDPRoute",
+                    &config_server.udp_routes,
+                    &mut stats,
+                    crate::core::ref_grant::validate_udp_route_if_enabled,
                 );
             }
             Some(ResourceKind::TLSRoute) => {
                 load_route_with_validation::<TLSRoute, _>(
-                    content, name, "TLSRoute", &config_server.tls_routes, &mut stats,
-                    |r| crate::core::ref_grant::validate_tls_route_if_enabled(r),
+                    content,
+                    name,
+                    "TLSRoute",
+                    &config_server.tls_routes,
+                    &mut stats,
+                    crate::core::ref_grant::validate_tls_route_if_enabled,
                 );
             }
 
@@ -175,15 +202,33 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
                 load_simple::<Endpoints>(content, name, "Endpoints", &config_server.endpoints, &mut stats);
             }
             Some(ResourceKind::EndpointSlice) => {
-                load_simple::<EndpointSlice>(content, name, "EndpointSlice", &config_server.endpoint_slices, &mut stats);
+                load_simple::<EndpointSlice>(
+                    content,
+                    name,
+                    "EndpointSlice",
+                    &config_server.endpoint_slices,
+                    &mut stats,
+                );
             }
 
             // === Security and Policy Resources ===
             Some(ResourceKind::ReferenceGrant) => {
-                load_simple::<ReferenceGrant>(content, name, "ReferenceGrant", &config_server.reference_grants, &mut stats);
+                load_simple::<ReferenceGrant>(
+                    content,
+                    name,
+                    "ReferenceGrant",
+                    &config_server.reference_grants,
+                    &mut stats,
+                );
             }
             Some(ResourceKind::BackendTLSPolicy) => {
-                load_simple::<BackendTLSPolicy>(content, name, "BackendTLSPolicy", &config_server.backend_tls_policies, &mut stats);
+                load_simple::<BackendTLSPolicy>(
+                    content,
+                    name,
+                    "BackendTLSPolicy",
+                    &config_server.backend_tls_policies,
+                    &mut stats,
+                );
             }
             Some(ResourceKind::EdgionTls) => {
                 // EdgionTls has special handling for secret refs
@@ -214,13 +259,31 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
 
             // === Plugin and Extension Resources ===
             Some(ResourceKind::EdgionPlugins) => {
-                load_simple::<EdgionPlugins>(content, name, "EdgionPlugins", &config_server.edgion_plugins, &mut stats);
+                load_simple::<EdgionPlugins>(
+                    content,
+                    name,
+                    "EdgionPlugins",
+                    &config_server.edgion_plugins,
+                    &mut stats,
+                );
             }
             Some(ResourceKind::EdgionStreamPlugins) => {
-                load_simple::<EdgionStreamPlugins>(content, name, "EdgionStreamPlugins", &config_server.edgion_stream_plugins, &mut stats);
+                load_simple::<EdgionStreamPlugins>(
+                    content,
+                    name,
+                    "EdgionStreamPlugins",
+                    &config_server.edgion_stream_plugins,
+                    &mut stats,
+                );
             }
             Some(ResourceKind::PluginMetaData) => {
-                load_simple::<PluginMetaData>(content, name, "PluginMetaData", &config_server.plugin_metadata, &mut stats);
+                load_simple::<PluginMetaData>(
+                    content,
+                    name,
+                    "PluginMetaData",
+                    &config_server.plugin_metadata,
+                    &mut stats,
+                );
             }
 
             // === Infrastructure Resources ===

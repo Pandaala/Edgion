@@ -103,7 +103,7 @@ macro_rules! list_to_json {
 #[macro_export]
 macro_rules! list_all_resources {
     ($server:expr, $kind:expr) => {{
-        use crate::types::ResourceKind;
+        use $crate::types::ResourceKind;
         match $kind {
             ResourceKind::HTTPRoute => list_to_json!($server.routes.list().data),
             ResourceKind::GRPCRoute => list_to_json!($server.grpc_routes.list().data),
@@ -133,88 +133,168 @@ macro_rules! list_all_resources {
 #[macro_export]
 macro_rules! list_namespaced_resources {
     ($server:expr, $kind:expr, $ns:expr) => {{
-        use crate::types::ResourceKind;
+        use $crate::types::ResourceKind;
         use kube::ResourceExt;
         let ns_str = $ns.as_str();
         match $kind {
             ResourceKind::HTTPRoute => {
-                let filtered: Vec<_> = $server.routes.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .routes
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::GRPCRoute => {
-                let filtered: Vec<_> = $server.grpc_routes.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .grpc_routes
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::TCPRoute => {
-                let filtered: Vec<_> = $server.tcp_routes.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .tcp_routes
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::UDPRoute => {
-                let filtered: Vec<_> = $server.udp_routes.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .udp_routes
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::TLSRoute => {
-                let filtered: Vec<_> = $server.tls_routes.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .tls_routes
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::Service => {
-                let filtered: Vec<_> = $server.services.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .services
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::EndpointSlice => {
-                let filtered: Vec<_> = $server.endpoint_slices.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .endpoint_slices
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::Endpoint => {
-                let filtered: Vec<_> = $server.endpoints.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .endpoints
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::EdgionTls => {
-                let filtered: Vec<_> = $server.edgion_tls.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .edgion_tls
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::EdgionPlugins => {
-                let filtered: Vec<_> = $server.edgion_plugins.list().data.into_iter()
-                    .filter(|r| r.namespace() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .edgion_plugins
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::EdgionStreamPlugins => {
-                let filtered: Vec<_> = $server.edgion_stream_plugins.list().data.into_iter()
-                    .filter(|r| r.namespace() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .edgion_stream_plugins
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::ReferenceGrant => {
-                let filtered: Vec<_> = $server.reference_grants.list().data.into_iter()
-                    .filter(|r| r.namespace() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .reference_grants
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::BackendTLSPolicy => {
-                let filtered: Vec<_> = $server.backend_tls_policies.list().data.into_iter()
-                    .filter(|r| r.namespace() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .backend_tls_policies
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::PluginMetaData => {
-                let filtered: Vec<_> = $server.plugin_metadata.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .plugin_metadata
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::LinkSys => {
-                let filtered: Vec<_> = $server.link_sys.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .link_sys
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             ResourceKind::Secret => {
-                let filtered: Vec<_> = $server.secrets.list().data.into_iter()
-                    .filter(|r| r.namespace().as_deref() == Some(ns_str)).collect();
+                let filtered: Vec<_> = $server
+                    .secrets
+                    .list()
+                    .data
+                    .into_iter()
+                    .filter(|r| r.namespace().as_deref() == Some(ns_str))
+                    .collect();
                 list_to_json!(filtered)
             }
             _ => vec![],
@@ -226,57 +306,121 @@ macro_rules! list_namespaced_resources {
 #[macro_export]
 macro_rules! get_namespaced_resource {
     ($server:expr, $kind:expr, $ns:expr, $name:expr) => {{
-        use crate::types::ResourceKind;
+        use $crate::types::ResourceKind;
         use kube::ResourceExt;
         let ns_str = $ns.as_str();
         let name_str = $name.as_str();
         match $kind {
-            ResourceKind::HTTPRoute => $server.routes.list().data.into_iter()
+            ResourceKind::HTTPRoute => $server
+                .routes
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::GRPCRoute => $server.grpc_routes.list().data.into_iter()
+            ResourceKind::GRPCRoute => $server
+                .grpc_routes
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::TCPRoute => $server.tcp_routes.list().data.into_iter()
+            ResourceKind::TCPRoute => $server
+                .tcp_routes
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::UDPRoute => $server.udp_routes.list().data.into_iter()
+            ResourceKind::UDPRoute => $server
+                .udp_routes
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::TLSRoute => $server.tls_routes.list().data.into_iter()
+            ResourceKind::TLSRoute => $server
+                .tls_routes
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::Service => $server.services.list().data.into_iter()
+            ResourceKind::Service => $server
+                .services
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::EndpointSlice => $server.endpoint_slices.list().data.into_iter()
+            ResourceKind::EndpointSlice => $server
+                .endpoint_slices
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::Endpoint => $server.endpoints.list().data.into_iter()
+            ResourceKind::Endpoint => $server
+                .endpoints
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::EdgionTls => $server.edgion_tls.list().data.into_iter()
+            ResourceKind::EdgionTls => $server
+                .edgion_tls
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::EdgionPlugins => $server.edgion_plugins.list().data.into_iter()
+            ResourceKind::EdgionPlugins => $server
+                .edgion_plugins
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::EdgionStreamPlugins => $server.edgion_stream_plugins.list().data.into_iter()
+            ResourceKind::EdgionStreamPlugins => $server
+                .edgion_stream_plugins
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::ReferenceGrant => $server.reference_grants.list().data.into_iter()
+            ResourceKind::ReferenceGrant => $server
+                .reference_grants
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::BackendTLSPolicy => $server.backend_tls_policies.list().data.into_iter()
+            ResourceKind::BackendTLSPolicy => $server
+                .backend_tls_policies
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::PluginMetaData => $server.plugin_metadata.list().data.into_iter()
+            ResourceKind::PluginMetaData => $server
+                .plugin_metadata
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::LinkSys => $server.link_sys.list().data.into_iter()
+            ResourceKind::LinkSys => $server
+                .link_sys
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
-            ResourceKind::Secret => $server.secrets.list().data.into_iter()
+            ResourceKind::Secret => $server
+                .secrets
+                .list()
+                .data
+                .into_iter()
                 .find(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str))
                 .and_then(|r| serde_json::to_value(r).ok()),
             _ => None,
@@ -288,42 +432,106 @@ macro_rules! get_namespaced_resource {
 #[macro_export]
 macro_rules! resource_exists_namespaced {
     ($server:expr, $kind:expr, $ns:expr, $name:expr) => {{
-        use crate::types::ResourceKind;
+        use $crate::types::ResourceKind;
         use kube::ResourceExt;
         let ns_str = $ns.as_str();
         let name_str = $name.as_str();
         match $kind {
-            ResourceKind::HTTPRoute => $server.routes.list().data.iter()
+            ResourceKind::HTTPRoute => $server
+                .routes
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
-            ResourceKind::GRPCRoute => $server.grpc_routes.list().data.iter()
+            ResourceKind::GRPCRoute => $server
+                .grpc_routes
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
-            ResourceKind::TCPRoute => $server.tcp_routes.list().data.iter()
+            ResourceKind::TCPRoute => $server
+                .tcp_routes
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
-            ResourceKind::UDPRoute => $server.udp_routes.list().data.iter()
+            ResourceKind::UDPRoute => $server
+                .udp_routes
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
-            ResourceKind::TLSRoute => $server.tls_routes.list().data.iter()
+            ResourceKind::TLSRoute => $server
+                .tls_routes
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
-            ResourceKind::Service => $server.services.list().data.iter()
+            ResourceKind::Service => $server
+                .services
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
-            ResourceKind::EndpointSlice => $server.endpoint_slices.list().data.iter()
+            ResourceKind::EndpointSlice => $server
+                .endpoint_slices
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
-            ResourceKind::Endpoint => $server.endpoints.list().data.iter()
+            ResourceKind::Endpoint => $server
+                .endpoints
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
-            ResourceKind::EdgionTls => $server.edgion_tls.list().data.iter()
+            ResourceKind::EdgionTls => $server
+                .edgion_tls
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
-            ResourceKind::EdgionPlugins => $server.edgion_plugins.list().data.iter()
+            ResourceKind::EdgionPlugins => $server
+                .edgion_plugins
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace() == Some(ns_str)),
-            ResourceKind::EdgionStreamPlugins => $server.edgion_stream_plugins.list().data.iter()
+            ResourceKind::EdgionStreamPlugins => $server
+                .edgion_stream_plugins
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace() == Some(ns_str)),
-            ResourceKind::ReferenceGrant => $server.reference_grants.list().data.iter()
+            ResourceKind::ReferenceGrant => $server
+                .reference_grants
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace() == Some(ns_str)),
-            ResourceKind::BackendTLSPolicy => $server.backend_tls_policies.list().data.iter()
+            ResourceKind::BackendTLSPolicy => $server
+                .backend_tls_policies
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace() == Some(ns_str)),
-            ResourceKind::PluginMetaData => $server.plugin_metadata.list().data.iter()
+            ResourceKind::PluginMetaData => $server
+                .plugin_metadata
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
-            ResourceKind::LinkSys => $server.link_sys.list().data.iter()
+            ResourceKind::LinkSys => $server
+                .link_sys
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
-            ResourceKind::Secret => $server.secrets.list().data.iter()
+            ResourceKind::Secret => $server
+                .secrets
+                .list()
+                .data
+                .iter()
                 .any(|r| r.name_any() == name_str && r.namespace().as_deref() == Some(ns_str)),
             _ => false,
         }

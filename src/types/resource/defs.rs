@@ -282,13 +282,13 @@ mod tests {
         let test_cases = [
             "gatewayclass",
             "edgiongatewayconfig",
-            "edgiongwconfig",  // alias
+            "edgiongwconfig", // alias
             "gateway",
             "httproute",
             "service",
             "endpointslice",
             "edgiontls",
-            "ztracetls",  // alias
+            "ztracetls", // alias
             "secret",
             "edgionplugins",
             "grpcroute",
@@ -301,8 +301,8 @@ mod tests {
             "referencegrant",
             "backendtlspolicy",
             "endpoint",
-            "endpoints",  // alias
-            "unknown",  // should return None
+            "endpoints", // alias
+            "unknown",   // should return None
         ];
 
         for name in test_cases {
