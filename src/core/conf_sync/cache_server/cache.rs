@@ -114,8 +114,20 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
                         }
                         _ => {
                             if current_version > from_version {
-                                from_version = current_version;
-                                continue;
+                                // Version jumped but no events = events lost (likely due to server restart)
+                                // Send error to trigger client relist
+                                tracing::warn!(
+                                    client_id = %watcher.client_id,
+                                    from_version = from_version,
+                                    current_version = current_version,
+                                    "Events lost detected: version jumped without events, triggering client relist"
+                                );
+                                let response = WatchResponse::from_error(
+                                    crate::types::WATCH_ERR_EVENTS_LOST.to_string(),
+                                    current_version,
+                                );
+                                let _ = sender.send(response).await;
+                                break;
                             } else {
                                 notify.notified().await;
                             }

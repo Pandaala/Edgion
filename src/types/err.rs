@@ -3,6 +3,7 @@ use pingora_core::Error as PingoraError;
 /// Watch error constants
 pub const WATCH_ERR_VERSION_UNEXPECTED: &str = "VersionUnexpect";
 pub const WATCH_ERR_TOO_OLD_VERSION: &str = "TooOldVersion";
+pub const WATCH_ERR_EVENTS_LOST: &str = "EventsLost";
 
 #[derive(Debug, thiserror::Error)]
 pub enum EdError {

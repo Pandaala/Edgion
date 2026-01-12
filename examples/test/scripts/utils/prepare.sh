@@ -64,7 +64,6 @@ build_binary() {
 # =============================================================================
 main() {
     local start_time=$(date +%s)
-    local failed=false
     
     echo ""
     echo -e "${BLUE}Edgion TestPrepare - 预Build组件${NC}"
@@ -73,52 +72,60 @@ main() {
     
     cd "$PROJECT_ROOT"
     
-    # Build Controller
+    # Build Controller (exit immediately on failure)
     log_section "Build edgion-controller"
     if ! build_binary "edgion-controller" "--bin edgion-controller"; then
-        failed=true
+        log_error "Build failed! Exiting..."
+        exit 1
     fi
     
     # Build Gateway
     log_section "Build edgion-gateway"
     if ! build_binary "edgion-gateway" "--bin edgion-gateway"; then
-        failed=true
+        log_error "Build failed! Exiting..."
+        exit 1
     fi
     
     # Build edgion-ctl
     log_section "Build edgion-ctl"
     if ! build_binary "edgion-ctl" "--bin edgion-ctl"; then
-        failed=true
+        log_error "Build failed! Exiting..."
+        exit 1
     fi
     
     # Build test_server
     log_section "Build test_server"
     if ! build_binary "test_server" "--example test_server"; then
-        failed=true
+        log_error "Build failed! Exiting..."
+        exit 1
     fi
     
     # Build test_client
     log_section "Build test_client"
     if ! build_binary "test_client" "--example test_client"; then
-        failed=true
+        log_error "Build failed! Exiting..."
+        exit 1
     fi
     
     # Build test_client_direct
     log_section "Build test_client_direct"
     if ! build_binary "test_client_direct" "--example test_client_direct"; then
-        failed=true
+        log_error "Build failed! Exiting..."
+        exit 1
     fi
     
     # Build resource_diff
     log_section "Build resource_diff"
     if ! build_binary "resource_diff" "--example resource_diff"; then
-        failed=true
+        log_error "Build failed! Exiting..."
+        exit 1
     fi
     
     # Build config_load_validator
     log_section "Build config_load_validator"
     if ! build_binary "config_load_validator" "--example config_load_validator"; then
-        failed=true
+        log_error "Build failed! Exiting..."
+        exit 1
     fi
     
     # 总结
@@ -127,14 +134,8 @@ main() {
     
     log_section "Summary"
     echo "Duration: ${duration}s"
-    
-    if $failed; then
-        log_error "partial组件Buildfailed!"
-        exit 1
-    else
-        log_success "all组件Buildsuccess!"
-        exit 0
-    fi
+    log_success "all组件Buildsuccess!"
+    exit 0
 }
 
 main "$@"
