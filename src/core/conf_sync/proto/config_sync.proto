@@ -40,6 +40,7 @@ message ListRequest {
 message ListResponse {
     string data = 1;
     uint64 resource_version = 2;
+    string server_id = 3;  // Server instance ID for detecting server restarts
 }
 
 // Watch request
@@ -56,5 +57,6 @@ message WatchResponse {
     string data = 1;
     uint64 resource_version = 2;
     string err = 3;
+    string server_id = 4;  // Server instance ID for detecting server restarts
 }
 

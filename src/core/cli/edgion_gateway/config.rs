@@ -73,6 +73,13 @@ pub struct GatewayConfig {
     #[arg(long = "admin-listen", value_name = "ADDR")]
     #[serde(default)]
     pub admin_listen: Option<String>,
+
+    /// Trigger relist when server instance changes (default: false)
+    /// When enabled, client will relist all resources if server_id changes
+    /// (indicating server restart or failover)
+    #[arg(long = "relist-on-server-change")]
+    #[serde(default)]
+    pub relist_on_server_change: Option<bool>,
 }
 
 // Default log configurations
@@ -218,6 +225,9 @@ impl EdgionGatewayConfig {
         }
         if cli.gateway.admin_listen.is_some() {
             base.gateway.admin_listen = cli.gateway.admin_listen.clone();
+        }
+        if cli.gateway.relist_on_server_change.is_some() {
+            base.gateway.relist_on_server_change = cli.gateway.relist_on_server_change;
         }
 
         // Logging config

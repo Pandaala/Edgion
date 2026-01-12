@@ -23,8 +23,28 @@ impl ConfigSyncClient {
         client_name: String,
         timeout: Duration,
     ) -> Result<Self, tonic::transport::Error> {
+        Self::with_options(grpc_server_addr, client_name, timeout, false).await
+    }
+
+    /// Create a new ConfigSync conf_client with custom options
+    /// 
+    /// # Arguments
+    /// * `grpc_server_addr` - Address of the gRPC server
+    /// * `client_name` - Human-readable name for this client
+    /// * `timeout` - Connection and request timeout
+    /// * `relist_on_server_change` - Whether to trigger relist when server instance changes
+    pub async fn with_options(
+        grpc_server_addr: &str,
+        client_name: String,
+        timeout: Duration,
+        relist_on_server_change: bool,
+    ) -> Result<Self, tonic::transport::Error> {
         let client_id = Uuid::new_v4().to_string();
-        let config_client = Arc::new(ConfigClient::new(client_id.clone(), client_name.clone()));
+        let config_client = Arc::new(ConfigClient::with_options(
+            client_id.clone(),
+            client_name.clone(),
+            relist_on_server_change,
+        ));
 
         // TODO: Currently this allows cold start (gateway starts without controller).
         // However, without local cache persistence, the gateway will have no configuration
