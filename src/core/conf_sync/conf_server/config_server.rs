@@ -41,6 +41,9 @@ pub enum ResourceItem {
 // 2. No internal subdivision; actual permissions are controlled by RBAC, which determines what can be accessed and synced to the gateway. (If all services/secrets are visible, then they are visible to the gateway)
 // 3. Only processes routes where parentRefs match; otherwise, they are ignored
 pub struct ConfigServer {
+    /// Server instance ID, generated at startup (millisecond timestamp)
+    /// Used by clients to detect server restarts/failovers
+    pub server_id: String,
     // Base conf resources now use dedicated ServerCache (same as other resources)
     pub gateway_classes: ServerCache<GatewayClass>,
     pub gateways: ServerCache<Gateway>,
@@ -67,17 +70,35 @@ pub struct ConfigServer {
 pub struct ListDataSimple {
     pub data: String,
     pub resource_version: u64,
+    pub server_id: String,
 }
 
 pub struct EventDataSimple {
     pub data: String,
     pub resource_version: u64,
     pub err: Option<String>,
+    pub server_id: String,
 }
 
 impl ConfigServer {
     pub fn new(conf_sync_config: &crate::core::cli::config::ConfSyncConfig) -> Self {
+        // Generate server_id using millisecond timestamp
+        let server_id = format!(
+            "{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
+
+        tracing::info!(
+            component = "config_server",
+            server_id = %server_id,
+            "ConfigServer initialized with server_id"
+        );
+
         Self {
+            server_id,
             gateway_classes: ServerCache::new(conf_sync_config.gateway_classes_capacity),
             gateways: ServerCache::new(conf_sync_config.gateways_capacity),
             edgion_gateway_configs: ServerCache::new(conf_sync_config.edgion_gateway_configs_capacity),
@@ -243,6 +264,7 @@ impl ConfigServer {
         Ok(ListDataSimple {
             data: data_json,
             resource_version,
+            server_id: self.server_id.clone(),
         })
     }
 
@@ -254,6 +276,7 @@ impl ConfigServer {
         from_version: u64,
     ) -> Result<mpsc::Receiver<EventDataSimple>, String> {
         let (tx, rx) = mpsc::channel(100);
+        let server_id = self.server_id.clone();
 
         println!(
             "[ConfigCenter::watch] kind={:?} client_id={} client_name={} from_version={}",
@@ -266,6 +289,7 @@ impl ConfigServer {
             }
             ResourceKind::GatewayClass => {
                 let mut receiver = self.watch_gateway_classes(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -285,6 +309,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -294,6 +319,7 @@ impl ConfigServer {
             }
             ResourceKind::EdgionGatewayConfig => {
                 let mut receiver = self.watch_edgion_gateway_configs(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -313,6 +339,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -322,6 +349,7 @@ impl ConfigServer {
             }
             ResourceKind::Gateway => {
                 let mut receiver = self.watch_gateways(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -341,6 +369,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -350,6 +379,7 @@ impl ConfigServer {
             }
             ResourceKind::GRPCRoute => {
                 let mut receiver = self.watch_grpc_routes(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -369,6 +399,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -378,6 +409,7 @@ impl ConfigServer {
             }
             ResourceKind::TCPRoute => {
                 let mut receiver = self.watch_tcp_routes(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -397,6 +429,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -406,6 +439,7 @@ impl ConfigServer {
             }
             ResourceKind::UDPRoute => {
                 let mut receiver = self.watch_udp_routes(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -425,6 +459,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -434,6 +469,7 @@ impl ConfigServer {
             }
             ResourceKind::TLSRoute => {
                 let mut receiver = self.watch_tls_routes(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -453,6 +489,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -462,6 +499,7 @@ impl ConfigServer {
             }
             ResourceKind::LinkSys => {
                 let mut receiver = self.watch_link_sys(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -481,6 +519,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -490,6 +529,7 @@ impl ConfigServer {
             }
             ResourceKind::PluginMetaData => {
                 let mut receiver = self.watch_plugin_metadata(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -509,6 +549,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -518,6 +559,7 @@ impl ConfigServer {
             }
             ResourceKind::HTTPRoute => {
                 let mut receiver = self.watch_routes(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -537,6 +579,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -546,6 +589,7 @@ impl ConfigServer {
             }
             ResourceKind::Service => {
                 let mut receiver = self.watch_services(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -565,6 +609,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -574,6 +619,7 @@ impl ConfigServer {
             }
             ResourceKind::EndpointSlice => {
                 let mut receiver = self.watch_endpoint_slices(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -593,6 +639,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -602,6 +649,7 @@ impl ConfigServer {
             }
             ResourceKind::Endpoint => {
                 let mut receiver = self.watch_endpoints(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -621,6 +669,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -630,6 +679,7 @@ impl ConfigServer {
             }
             ResourceKind::EdgionTls => {
                 let mut receiver = self.watch_edgion_tls(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -649,6 +699,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -658,6 +709,7 @@ impl ConfigServer {
             }
             ResourceKind::EdgionPlugins => {
                 let mut receiver = self.watch_edgion_plugins(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -677,6 +729,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -686,6 +739,7 @@ impl ConfigServer {
             }
             ResourceKind::EdgionStreamPlugins => {
                 let mut receiver = self.watch_edgion_stream_plugins(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -705,6 +759,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -714,6 +769,7 @@ impl ConfigServer {
             }
             ResourceKind::ReferenceGrant => {
                 let mut receiver = self.watch_reference_grants(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -733,6 +789,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -742,6 +799,7 @@ impl ConfigServer {
             }
             ResourceKind::BackendTLSPolicy => {
                 let mut receiver = self.watch_backend_tls_policies(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -761,6 +819,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;
@@ -770,6 +829,7 @@ impl ConfigServer {
             }
             ResourceKind::Secret => {
                 let mut receiver = self.watch_secrets(client_id, client_name, from_version);
+                let server_id = server_id.clone();
                 tokio::spawn(async move {
                     while let Some(response) = receiver.recv().await {
                         let WatchResponse {
@@ -789,6 +849,7 @@ impl ConfigServer {
                             data: events_json,
                             resource_version,
                             err,
+                            server_id: server_id.clone(),
                         };
                         if tx.send(event_data).await.is_err() {
                             break;

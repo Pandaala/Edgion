@@ -20,6 +20,9 @@ where
     // conf_client identification
     pub(crate) client_id: Arc<String>,
     pub(crate) client_name: Arc<String>,
+
+    // Trigger relist when server instance changes (detected via server_id)
+    pub(crate) relist_on_server_change: bool,
 }
 
 impl<T: kube::Resource> Clone for ClientCache<T> {
@@ -29,17 +32,23 @@ impl<T: kube::Resource> Clone for ClientCache<T> {
             grpc_client: self.grpc_client.clone(),
             client_id: self.client_id.clone(),
             client_name: self.client_name.clone(),
+            relist_on_server_change: self.relist_on_server_change,
         }
     }
 }
 
 impl<T: ResourceMeta + Resource> ClientCache<T> {
     pub fn new(client_id: String, client_name: String) -> Self {
+        Self::with_options(client_id, client_name, false)
+    }
+
+    pub fn with_options(client_id: String, client_name: String, relist_on_server_change: bool) -> Self {
         Self {
             cache_data: Arc::new(RwLock::new(CacheData::new())),
             grpc_client: Arc::new(AsyncRwLock::new(None)),
             client_id: Arc::new(client_id),
             client_name: Arc::new(client_name),
+            relist_on_server_change,
         }
     }
 

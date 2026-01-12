@@ -9,6 +9,12 @@ use tonic::transport::Channel;
 
 use super::cache::ClientCache;
 
+/// Result of list_and_reset operation
+struct ListResult {
+    resource_version: u64,
+    server_id: String,
+}
+
 impl<T: ResourceMeta + Resource + Clone + Send + 'static> CacheEventDispatch<T> for ClientCache<T> {
     fn apply_change(&self, change: ResourceChange, resource: T)
     where
@@ -47,13 +53,13 @@ where
     T: ResourceMeta + Resource + Clone + Send + 'static,
 {
     /// Internal helper function to perform list and reset cache
-    /// Returns the resource version on success
+    /// Returns the resource version and server_id on success
     async fn list_and_reset(
         client: &mut ConfigSyncClientService<Channel>,
         gateway_class_key: &str,
         cache_data: &Arc<RwLock<CacheData<T>>>,
         log_context: &str,
-    ) -> Result<u64, tonic::Status> {
+    ) -> Result<ListResult, tonic::Status> {
         let list_request = tonic::Request::new(crate::core::conf_sync::proto::ListRequest {
             key: gateway_class_key.to_string(),
             kind: T::resource_kind() as i32,
@@ -66,6 +72,7 @@ where
             kind = T::kind_name(),
             bytes = list_data.data.len(),
             version = list_data.resource_version,
+            server_id = %list_data.server_id,
             context = log_context,
             "Listing resources"
         );
@@ -98,7 +105,10 @@ where
             cache.reset(resources, list_data.resource_version);
         }
 
-        Ok(list_data.resource_version)
+        Ok(ListResult {
+            resource_version: list_data.resource_version,
+            server_id: list_data.server_id,
+        })
     }
 
     /// Start watching resources from gRPC conf_server
@@ -107,6 +117,7 @@ where
         let cache_data = self.cache_data.clone();
         let client_id = self.client_id.clone();
         let client_name = self.client_name.clone();
+        let relist_on_server_change = self.relist_on_server_change;
 
         tokio::spawn(async move {
             let mut is_ready = false;
@@ -126,9 +137,9 @@ where
                     }
                 };
 
-                // Perform list_and_reset to get latest resource version
-                let from_version = match Self::list_and_reset(client, "", &cache_data, "watch relist").await {
-                    Ok(resource_version) => {
+                // Perform list_and_reset to get latest resource version and server_id
+                let (from_version, mut current_server_id) = match Self::list_and_reset(client, "", &cache_data, "watch relist").await {
+                    Ok(list_result) => {
                         let count = {
                             let cache = cache_data.read().unwrap();
                             cache.len()
@@ -136,7 +147,8 @@ where
                         tracing::info!(
                             kind = T::kind_name(),
                             count = count,
-                            version = resource_version,
+                            version = list_result.resource_version,
+                            server_id = %list_result.server_id,
                             "List completed, starting watch"
                         );
 
@@ -148,7 +160,7 @@ where
                             tracing::info!(kind = T::kind_name(), "Cache is ready");
                         }
 
-                        resource_version
+                        (list_result.resource_version, list_result.server_id)
                     }
                     Err(e) => {
                         tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
@@ -208,6 +220,32 @@ where
                                         "Received error signal from server, re-listing"
                                     );
                                     break 'watch_block;
+                                }
+
+                                // Check for server_id change (server restart/failover detection)
+                                if !watch_response.server_id.is_empty() && watch_response.server_id != current_server_id {
+                                    tracing::warn!(
+                                        kind = T::kind_name(),
+                                        last_server_id = %current_server_id,
+                                        new_server_id = %watch_response.server_id,
+                                        "Server instance changed detected"
+                                    );
+
+                                    if relist_on_server_change {
+                                        tracing::info!(
+                                            kind = T::kind_name(),
+                                            "Triggering relist due to server change (relist_on_server_change=true)"
+                                        );
+                                        break 'watch_block; // Return to outer loop to re-list
+                                    } else {
+                                        tracing::info!(
+                                            kind = T::kind_name(),
+                                            "Server changed but relist_on_server_change=false, continuing watch"
+                                        );
+                                        // Update current_server_id to avoid repeated warnings
+                                        // The EventsLost mechanism will handle data consistency
+                                        current_server_id = watch_response.server_id.clone();
+                                    }
                                 }
 
                                 let _ = watch_response.resource_version; // Track version from response
