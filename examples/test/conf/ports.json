@@ -59,6 +59,9 @@
     },
     "EdgionTls/mTLS": {
       "https": 31110
+    },
+    "EdgionTls/cipher": {
+      "https": 31195
     }
   }
 }

@@ -1,0 +1,30 @@
+
+========================================
+Edgion 测试客户端
+========================================
+Mode: Gateway
+Suite: EdgionTls/cipher
+Target: 127.0.0.1:31000
+========================================
+
+
+▶ TLS Cipher Tests
+  ✓ cipher_tls12_legacy (0.01s)
+    Connected with cipher: 0000 (Protocol: TLSv1.2)
+  ✓ cipher_tls12_modern (0.01s)
+    Connected with cipher: 0000 (Protocol: TLSv1.2)
+  ✓ cipher_legacy_accepted (0.00s)
+    Legacy cipher AES128-SHA accepted, negotiated: 0000
+  ✓ cipher_modern_accepted (0.00s)
+    Modern cipher ECDHE-RSA-AES256-GCM-SHA384 accepted, negotiated: 0000
+
+==================================================
+Test Summary
+==================================================
+Total tests: 4
+Passed: 4
+Failed: 0
+Passed率: 100.0%
+Total time: 0.02s
+
+✓ All tests passed

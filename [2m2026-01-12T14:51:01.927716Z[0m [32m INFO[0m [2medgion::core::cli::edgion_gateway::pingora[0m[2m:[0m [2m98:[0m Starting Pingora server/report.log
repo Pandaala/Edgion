@@ -1,0 +1,17 @@
+========================================
+Edgion Integration Test Report
+Time: 2026-01-12 22:51:30
+Work Dir: [2m2026-01-12T14:51:01.927716Z[0m [32m INFO[0m [2medgion::core::cli::edgion_gateway::pingora[0m[2m:[0m [2m98:[0m Starting Pingora server
+Full Test: false
+========================================
+
+[PASS] EdgionTls_cipher (1s)
+
+========================================
+Summary
+========================================
+Total:  1
+Passed: 1
+Failed: 0
+Pass Rate: 100%
+========================================

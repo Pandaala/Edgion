@@ -139,6 +139,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionTls" | "EdgionTls/https" => "EdgionTls/https",
         "EdgionTls/grpctls" => "EdgionTls/grpctls",
         "EdgionTls/mTLS" => "EdgionTls/mTLS",
+        "EdgionTls/cipher" => "EdgionTls/cipher",
         _ => suite,
     }
 }
@@ -325,6 +326,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool) {
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::MtlsTestSuite));
+        }
+        "EdgionTls/cipher" => {
+            if !gateway {
+                eprintln!("Error: EdgionTls/cipher tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CipherTestSuite));
         }
         // 运行所有测试
         "all" => {

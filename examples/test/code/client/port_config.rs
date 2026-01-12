@@ -59,6 +59,7 @@ pub fn command_to_suite(command: &str) -> &str {
         "tcp" => "tcp",
         "udp" => "udp",
         "mtls" => "mtls",
+        "cipher" => "cipher",
         "lb-policy" | "lbpolicy" => "lb-policy",
         "weighted-backend" | "weightedbackend" => "weighted-backend",
         "timeout" => "timeout",
