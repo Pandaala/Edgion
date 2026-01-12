@@ -473,21 +473,17 @@ load_configs() {
     
     for suite in $suites_to_load; do
         log_info "Load $suite config..."
-        if bash "$load_script" "$suite" > /dev/null 2>&1; then
+        # 使用 --wait 0 跳过每个 suite 的等待，最后统一等待一次
+        if bash "$load_script" --wait 0 "$suite" > /dev/null 2>&1; then
             log_success "$suite configLoadcompleted"
         else
             log_warning "$suite configLoadfailed或为空"
         fi
     done
     
-    # Waitconfigtake effect
-    log_info "Waitconfigtake effect (3s)..."
-    sleep 3
-    
-    # trigger Controller configreload确保allresource都处理完毕
-    log_info "triggerconfigreload..."
-    curl -sf "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/reload" > /dev/null 2>&1 || true
-    sleep 2
+    # 所有配置加载完成后，等待一次即可（Controller 会自动监听目录变化）
+    log_info "Waitconfigtake effect (1s)..."
+    sleep 1
     
     log_success "allconfigLoadcompleted"
 }
@@ -508,8 +504,8 @@ verify_sync() {
     log_info "Run resource_diff verify Controller 和 Gateway resourcesync..."
     
     # Retry logic: wait for gateway HTTP service to be fully ready
-    local max_retries=5
-    local retry_delay=2
+    local max_retries=2
+    local retry_delay=1
     local attempt=1
     
     while [ $attempt -le $max_retries ]; do

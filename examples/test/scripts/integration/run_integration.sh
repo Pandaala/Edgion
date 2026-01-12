@@ -21,6 +21,9 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 # Whether to cleanup at end
 DO_CLEANUP=true
 
+# Whether to run full tests including slow tests (default: false for faster iteration)
+FULL_TEST=false
+
 # Report file path (will be set after WORK_DIR is determined)
 REPORT_FILE=""
 
@@ -52,6 +55,32 @@ log_section() {
 }
 
 # =============================================================================
+# Slow test management
+# =============================================================================
+# Slow tests list (skipped by default, run with --full-test)
+SLOW_TESTS=(
+    "HTTPRoute_Backend_Timeout"
+)
+
+is_slow_test() {
+    local test_name=$1
+    for slow in "${SLOW_TESTS[@]}"; do
+        if [[ "$test_name" == "$slow" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+should_skip_test() {
+    local test_name=$1
+    if ! $FULL_TEST && is_slow_test "$test_name"; then
+        return 0  # Should skip
+    fi
+    return 1  # Don't skip
+}
+
+# =============================================================================
 # Report functions
 # =============================================================================
 init_report() {
@@ -60,6 +89,7 @@ init_report() {
     echo "Edgion Integration Test Report" >> "$REPORT_FILE"
     echo "Time: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "Work Dir: ${WORK_DIR}" >> "$REPORT_FILE"
+    echo "Full Test: ${FULL_TEST}" >> "$REPORT_FILE"
     echo "========================================" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 }
@@ -122,6 +152,7 @@ show_help() {
     echo "  --no-prepare           Skip build step"
     echo "  --no-start             Skip start step"
     echo "  --keep-alive           Keep services running after end (default will stop)"
+    echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  -h, --help             Show help"
     echo ""
@@ -167,6 +198,10 @@ main() {
                 DO_CLEANUP=false
                 shift
                 ;;
+            --full-test)
+                FULL_TEST=true
+                shift
+                ;;
             --suites)
                 suites="$2"
                 shift 2
@@ -196,6 +231,11 @@ main() {
         if [ -n "$item" ]; then
             echo -e "Item: ${item}"
         fi
+    fi
+    if $FULL_TEST; then
+        echo -e "Mode: ${GREEN}Full Test${NC} (including slow tests)"
+    else
+        echo -e "Mode: ${YELLOW}Fast Test${NC} (slow tests skipped, use --full-test to include)"
     fi
     echo ""
     
@@ -367,7 +407,11 @@ main() {
         run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-match" || test_failed=true
         run_test "HTTPRoute_Backend_LBPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-policy" || test_failed=true
         run_test "HTTPRoute_Backend_WeightedBackend" "${PROJECT_ROOT}/target/debug/examples/test_client -g weighted-backend" || test_failed=true
-        run_test "HTTPRoute_Backend_Timeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g timeout" || test_failed=true
+        if ! should_skip_test "HTTPRoute_Backend_Timeout"; then
+            run_test "HTTPRoute_Backend_Timeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g timeout" || test_failed=true
+        else
+            log_info "Skipping slow test: HTTPRoute_Backend_Timeout (use --full-test to run)"
+        fi
         run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-redirect" || test_failed=true
         run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-security" || test_failed=true
         run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g websocket" || test_failed=true
