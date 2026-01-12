@@ -70,6 +70,7 @@ impl ConfigSync for ConfigSyncServer {
         Ok(Response::new(ListResponse {
             data: list_data.data,
             resource_version: list_data.resource_version,
+            server_id: list_data.server_id,
         }))
     }
 
@@ -122,6 +123,7 @@ impl ConfigSync for ConfigSyncServer {
                     data: event_data.data,
                     resource_version: event_data.resource_version,
                     err: event_data.err.unwrap_or_default(),
+                    server_id: event_data.server_id,
                 };
 
                 if tx.send(Ok(response)).await.is_err() {

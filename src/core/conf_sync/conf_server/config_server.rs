@@ -12,10 +12,12 @@ use crate::types::prelude_resources::*;
 use anyhow::Result;
 
 /// Helper function to spawn a watch forwarder task that converts WatchResponse<T> to EventDataSimple
+/// Includes server_id in the response for server instance change detection
 fn spawn_watch_forwarder<T: serde::Serialize + Send + 'static>(
     mut receiver: mpsc::Receiver<WatchResponse<T>>,
     tx: mpsc::Sender<EventDataSimple>,
     type_name: &'static str,
+    server_id: String,
 ) {
     tokio::spawn(async move {
         while let Some(response) = receiver.recv().await {
@@ -36,6 +38,7 @@ fn spawn_watch_forwarder<T: serde::Serialize + Send + 'static>(
                 data: events_json,
                 resource_version,
                 err,
+                server_id: server_id.clone(),
             };
             if tx.send(event_data).await.is_err() {
                 break;
@@ -74,6 +77,9 @@ pub enum ResourceItem {
 // 2. No internal subdivision; actual permissions are controlled by RBAC, which determines what can be accessed and synced to the gateway. (If all services/secrets are visible, then they are visible to the gateway)
 // 3. Only processes routes where parentRefs match; otherwise, they are ignored
 pub struct ConfigServer {
+    /// Server instance ID, generated at startup (millisecond timestamp)
+    /// Used by clients to detect server restarts/failovers
+    pub server_id: String,
     // Base conf resources now use dedicated ServerCache (same as other resources)
     pub gateway_classes: ServerCache<GatewayClass>,
     pub gateways: ServerCache<Gateway>,
@@ -100,17 +106,35 @@ pub struct ConfigServer {
 pub struct ListDataSimple {
     pub data: String,
     pub resource_version: u64,
+    pub server_id: String,
 }
 
 pub struct EventDataSimple {
     pub data: String,
     pub resource_version: u64,
     pub err: Option<String>,
+    pub server_id: String,
 }
 
 impl ConfigServer {
     pub fn new(conf_sync_config: &crate::core::cli::config::ConfSyncConfig) -> Self {
+        // Generate server_id using millisecond timestamp
+        let server_id = format!(
+            "{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
+
+        tracing::info!(
+            component = "config_server",
+            server_id = %server_id,
+            "ConfigServer initialized with server_id"
+        );
+
         Self {
+            server_id,
             gateway_classes: ServerCache::new(conf_sync_config.gateway_classes_capacity),
             gateways: ServerCache::new(conf_sync_config.gateways_capacity),
             edgion_gateway_configs: ServerCache::new(conf_sync_config.edgion_gateway_configs_capacity),
@@ -179,6 +203,7 @@ impl ConfigServer {
         Ok(ListDataSimple {
             data: data_json,
             resource_version,
+            server_id: self.server_id.clone(),
         })
     }
 
@@ -190,6 +215,7 @@ impl ConfigServer {
         from_version: u64,
     ) -> Result<mpsc::Receiver<EventDataSimple>, String> {
         let (tx, rx) = mpsc::channel(100);
+        let server_id = self.server_id.clone();
 
         println!(
             "[ConfigCenter::watch] kind={:?} client_id={} client_name={} from_version={}",
@@ -203,6 +229,7 @@ impl ConfigServer {
                     self.watch_gateway_classes(client_id, client_name, from_version),
                     tx,
                     "GatewayClass",
+                    server_id,
                 );
             }
             ResourceKind::EdgionGatewayConfig => {
@@ -210,19 +237,31 @@ impl ConfigServer {
                     self.watch_edgion_gateway_configs(client_id, client_name, from_version),
                     tx,
                     "EdgionGatewayConfig",
+                    server_id,
                 );
             }
             ResourceKind::Gateway => {
-                spawn_watch_forwarder(self.watch_gateways(client_id, client_name, from_version), tx, "Gateway");
+                spawn_watch_forwarder(
+                    self.watch_gateways(client_id, client_name, from_version),
+                    tx,
+                    "Gateway",
+                    server_id,
+                );
             }
             ResourceKind::HTTPRoute => {
-                spawn_watch_forwarder(self.watch_routes(client_id, client_name, from_version), tx, "HTTPRoute");
+                spawn_watch_forwarder(
+                    self.watch_routes(client_id, client_name, from_version),
+                    tx,
+                    "HTTPRoute",
+                    server_id,
+                );
             }
             ResourceKind::GRPCRoute => {
                 spawn_watch_forwarder(
                     self.watch_grpc_routes(client_id, client_name, from_version),
                     tx,
                     "GRPCRoute",
+                    server_id,
                 );
             }
             ResourceKind::TCPRoute => {
@@ -230,6 +269,7 @@ impl ConfigServer {
                     self.watch_tcp_routes(client_id, client_name, from_version),
                     tx,
                     "TCPRoute",
+                    server_id,
                 );
             }
             ResourceKind::UDPRoute => {
@@ -237,6 +277,7 @@ impl ConfigServer {
                     self.watch_udp_routes(client_id, client_name, from_version),
                     tx,
                     "UDPRoute",
+                    server_id,
                 );
             }
             ResourceKind::TLSRoute => {
@@ -244,26 +285,39 @@ impl ConfigServer {
                     self.watch_tls_routes(client_id, client_name, from_version),
                     tx,
                     "TLSRoute",
+                    server_id,
                 );
             }
             ResourceKind::LinkSys => {
-                spawn_watch_forwarder(self.watch_link_sys(client_id, client_name, from_version), tx, "LinkSys");
+                spawn_watch_forwarder(
+                    self.watch_link_sys(client_id, client_name, from_version),
+                    tx,
+                    "LinkSys",
+                    server_id,
+                );
             }
             ResourceKind::PluginMetaData => {
                 spawn_watch_forwarder(
                     self.watch_plugin_metadata(client_id, client_name, from_version),
                     tx,
                     "PluginMetaData",
+                    server_id,
                 );
             }
             ResourceKind::Service => {
-                spawn_watch_forwarder(self.watch_services(client_id, client_name, from_version), tx, "Service");
+                spawn_watch_forwarder(
+                    self.watch_services(client_id, client_name, from_version),
+                    tx,
+                    "Service",
+                    server_id,
+                );
             }
             ResourceKind::EndpointSlice => {
                 spawn_watch_forwarder(
                     self.watch_endpoint_slices(client_id, client_name, from_version),
                     tx,
                     "EndpointSlice",
+                    server_id,
                 );
             }
             ResourceKind::Endpoint => {
@@ -271,6 +325,7 @@ impl ConfigServer {
                     self.watch_endpoints(client_id, client_name, from_version),
                     tx,
                     "Endpoints",
+                    server_id,
                 );
             }
             ResourceKind::EdgionTls => {
@@ -278,6 +333,7 @@ impl ConfigServer {
                     self.watch_edgion_tls(client_id, client_name, from_version),
                     tx,
                     "EdgionTls",
+                    server_id,
                 );
             }
             ResourceKind::EdgionPlugins => {
@@ -285,6 +341,7 @@ impl ConfigServer {
                     self.watch_edgion_plugins(client_id, client_name, from_version),
                     tx,
                     "EdgionPlugins",
+                    server_id,
                 );
             }
             ResourceKind::EdgionStreamPlugins => {
@@ -292,6 +349,7 @@ impl ConfigServer {
                     self.watch_edgion_stream_plugins(client_id, client_name, from_version),
                     tx,
                     "EdgionStreamPlugins",
+                    server_id,
                 );
             }
             ResourceKind::ReferenceGrant => {
@@ -299,6 +357,7 @@ impl ConfigServer {
                     self.watch_reference_grants(client_id, client_name, from_version),
                     tx,
                     "ReferenceGrant",
+                    server_id,
                 );
             }
             ResourceKind::BackendTLSPolicy => {
@@ -306,10 +365,16 @@ impl ConfigServer {
                     self.watch_backend_tls_policies(client_id, client_name, from_version),
                     tx,
                     "BackendTLSPolicy",
+                    server_id,
                 );
             }
             ResourceKind::Secret => {
-                spawn_watch_forwarder(self.watch_secrets(client_id, client_name, from_version), tx, "Secret");
+                spawn_watch_forwarder(
+                    self.watch_secrets(client_id, client_name, from_version),
+                    tx,
+                    "Secret",
+                    server_id,
+                );
             }
         }
 
