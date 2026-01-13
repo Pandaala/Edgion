@@ -127,6 +127,45 @@ cd examples/test
 
 注意：避免与现有测试端口冲突（如 EdgionTls 使用 31200）。
 
+### 7. 动态配置测试 (`DynamicTest/`)
+
+测试 Gateway 资源的动态更新能力（运行时配置变更）：
+
+#### 测试场景
+
+1. **Gateway Hostname 约束动态移除**
+   - 初始：hostname 限制生效，非匹配 hostname 被拒绝（404）
+   - 更新：移除 hostname 限制
+   - 验证：之前被拒绝的 hostname 现在可以访问（200）
+
+2. **AllowedRoutes 动态变更** (Same → All)
+   - 初始：仅允许同 namespace，跨 namespace 被拒绝（404）
+   - 更新：改为允许所有 namespace
+   - 验证：跨 namespace 路由现在可以访问（200）
+
+3. **HTTPRoute 动态添加**
+   - 初始：新路由不存在（404）
+   - 更新：添加新 HTTPRoute
+   - 验证：新路由立即可访问（200）
+
+4. **HTTPRoute Match 规则动态修改**
+   - 初始：仅匹配 GET，POST 被拒绝（404）
+   - 更新：改为匹配 POST
+   - 验证：POST 请求现在可以访问（200）
+
+5. **HTTPRoute 动态删除**
+   - 初始：路由存在（200）
+   - 更新：删除 HTTPRoute
+   - 验证：路由不可访问（404）
+
+**端口**: 31250-31252  
+**测试入口**: `./test_client -g -r Gateway -i Dynamic --phase initial|update`  
+**完整流程**: `./run_integration.sh -r Gateway --dynamic-test`
+
+详见: [DynamicTest/TEST_SUMMARY.md](DynamicTest/TEST_SUMMARY.md)
+
+---
+
 ## 测试覆盖总结
 
 | 功能 | 测试场景 | 状态 |
@@ -142,6 +181,9 @@ cd examples/test
 | 组合场景 - sectionName + Hostname | ✅ 正面测试 + ❌ 负面测试 | ✅ |
 | 边界场景 - parentRef 默认 namespace | ✅ 隐含覆盖 | ✅ |
 | 边界场景 - Route 无 hostnames | ✅ 隐含覆盖 | ✅ |
+| **动态配置 - Gateway Hostname 移除** | ✅ 404→200 状态转换 | ✅ |
+| **动态配置 - AllowedRoutes 变更** | ✅ 404→200 状态转换 | ✅ |
+| **动态配置 - HTTPRoute 增删改** | ✅ 3个场景（添加/修改/删除） | ✅ |
 
 ## 参考资料
 

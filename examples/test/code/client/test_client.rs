@@ -69,6 +69,10 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Test phase for dynamic tests (initial or update)
+    #[arg(long)]
+    phase: Option<String>,
+
     /// 兼容旧命令：直接指定测试类型
     #[arg(value_name = "COMMAND")]
     legacy_command: Option<String>,
@@ -146,7 +150,7 @@ fn suite_to_port_key(suite: &str) -> &str {
 }
 
 /// 根据 suite Add test suite到 runner
-fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool) {
+fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, phase: Option<&str>) {
     match suite {
         // HTTPRoute 资源
         "HTTPRoute/Basic" | "HTTPRoute" => {
@@ -338,6 +342,29 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool) {
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::CombinedScenariosTestSuite));
+        }
+        "Gateway/Dynamic" => {
+            if !gateway {
+                eprintln!("Error: Gateway/Dynamic tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::InitialPhaseTestSuite));
+                }
+                Some("update") => {
+                    runner.add_suite(Box::new(suites::UpdatePhaseTestSuite));
+                }
+                None => {
+                    // 默认运行两个阶段
+                    runner.add_suite(Box::new(suites::InitialPhaseTestSuite));
+                    runner.add_suite(Box::new(suites::UpdatePhaseTestSuite));
+                }
+                _ => {
+                    eprintln!("Error: Invalid phase '{}'. Use 'initial' or 'update'", phase.unwrap());
+                    std::process::exit(1);
+                }
+            }
         }
         // EdgionTls 资源
         "EdgionTls" => {
@@ -532,7 +559,7 @@ async fn main() -> Result<()> {
     let mut runner = TestRunner::new(context);
 
     // Add test suite
-    add_suites_for_suite(&mut runner, &suite, cli.gateway);
+    add_suites_for_suite(&mut runner, &suite, cli.gateway, cli.phase.as_deref());
 
     let start_time = Instant::now();
     let results = runner.run().await;

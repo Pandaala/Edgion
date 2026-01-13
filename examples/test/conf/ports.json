@@ -1,5 +1,5 @@
 {
-  "current_max": 31220,
+  "current_max": 31252,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -65,6 +65,9 @@
     },
     "Gateway/TLS/GatewayTLS": {
       "https": 31220
+    },
+    "Gateway/Dynamic": {
+      "http": 31250
     }
   }
 }

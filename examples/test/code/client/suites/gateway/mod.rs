@@ -4,6 +4,7 @@
 // Sub-modules - by function
 mod allowed_routes;
 mod combined;
+mod dynamic;
 mod listener_hostname;
 mod plugins;
 mod real_ip;
@@ -15,6 +16,8 @@ pub use allowed_routes::AllowedRoutesAllNamespacesTestSuite;
 pub use allowed_routes::AllowedRoutesKindsTestSuite;
 pub use allowed_routes::AllowedRoutesSameNamespaceTestSuite;
 pub use combined::CombinedScenariosTestSuite;
+pub use dynamic::InitialPhaseTestSuite;
+pub use dynamic::UpdatePhaseTestSuite;
 pub use listener_hostname::ListenerHostnameTestSuite;
 pub use plugins::PluginLogsTestSuite;
 pub use real_ip::RealIpTestSuite;

@@ -129,6 +129,84 @@ finalize_report() {
 }
 
 # =============================================================================
+# Dynamic Test function
+# =============================================================================
+run_dynamic_tests() {
+    local stage=${1:-0}  # 0=完整，1=仅初始，2=仅更新后
+    local edgion_ctl="${PROJECT_ROOT}/target/debug/edgion-ctl"
+    local conf_dir="${PROJECT_ROOT}/examples/test/conf"
+    local controller_url="http://127.0.0.1:5800"
+    local gateway_url="http://127.0.0.1:5900"
+    
+    log_section "🔄 Gateway 动态性测试"
+    
+    if [ $stage -eq 0 ] || [ $stage -eq 1 ]; then
+        log_info ">>> 阶段 1/2: 初始配置验证"
+        
+        # 运行初始阶段测试（验证约束生效）
+        run_test "Dynamic_Initial_Phase" \
+            "${PROJECT_ROOT}/target/debug/examples/test_client \
+             -g -r Gateway -i Dynamic --phase initial" || test_failed=true
+        
+        log_success "初始阶段测试完成"
+    fi
+    
+    if [ $stage -eq 0 ]; then
+        log_section "📦 加载动态更新配置"
+        
+        # 1. 加载更新配置
+        log_info "Applying updates from DynamicTest/updates/..."
+        "${edgion_ctl}" --server "${controller_url}" \
+            apply -f "${conf_dir}/Gateway/DynamicTest/updates/" || {
+            log_error "Failed to apply dynamic updates"
+            return 1
+        }
+        
+        # 2. 处理删除操作
+        if [ -f "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt" ]; then
+            log_info "Deleting resources..."
+            while IFS= read -r resource; do
+                [ -z "$resource" ] || [[ "$resource" =~ ^# ]] && continue
+                # 解析格式: Kind/Namespace/Name
+                IFS='/' read -r kind namespace name <<< "$resource"
+                if [ -n "$kind" ] && [ -n "$namespace" ] && [ -n "$name" ]; then
+                    log_info "Deleting: $kind/$namespace/$name"
+                    "${edgion_ctl}" --server "${controller_url}" delete "$kind" "$name" -n "$namespace" || true
+                fi
+            done < "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt"
+        fi
+        
+        # 3. 验证资源同步（不阻止阶段2执行）
+        log_info "Verifying resource synchronization..."
+        run_test "Resource_Diff_After_Dynamic_Update" \
+            "${PROJECT_ROOT}/target/debug/examples/resource_diff \
+             --controller-url ${controller_url} \
+             --gateway-url ${gateway_url}" || {
+            log_info "Resource sync has some issues (non-blocking, continuing...)"
+        }
+        
+        # 4. 等待配置生效
+        log_info "Waiting 3s for configuration to take effect..."
+        sleep 3
+        
+        log_success "动态配置加载完成"
+    fi
+    
+    if [ $stage -eq 0 ] || [ $stage -eq 2 ]; then
+        log_info ">>> 阶段 2/2: 动态更新后验证"
+        
+        # 运行更新后测试（验证约束变更生效）
+        run_test "Dynamic_After_Update_Phase" \
+            "${PROJECT_ROOT}/target/debug/examples/test_client \
+             -g -r Gateway -i Dynamic --phase update" || test_failed=true
+        
+        log_success "更新阶段测试完成"
+    fi
+    
+    log_section "✅ 动态性测试完成"
+}
+
+# =============================================================================
 # Cleanup function
 # =============================================================================
 cleanup() {
@@ -153,6 +231,8 @@ show_help() {
     echo "  --no-start             Skip start step"
     echo "  --keep-alive           Keep services running after end (default will stop)"
     echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
+    echo "  --dynamic-test         Run Gateway dynamic configuration tests"
+    echo "  --dynamic-stage <NUM>  Dynamic test stage: 1=initial, 2=update, 0=both (default: 0)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  -h, --help             Show help"
     echo ""
@@ -173,6 +253,8 @@ main() {
     local suites=""
     local resource=""
     local item=""
+    local dynamic_test=false
+    local dynamic_stage=0
     
     # Parse args
     while [[ $# -gt 0 ]]; do
@@ -201,6 +283,14 @@ main() {
             --full-test)
                 FULL_TEST=true
                 shift
+                ;;
+            --dynamic-test)
+                dynamic_test=true
+                shift
+                ;;
+            --dynamic-stage)
+                dynamic_stage=$2
+                shift 2
                 ;;
             --suites)
                 suites="$2"
@@ -451,6 +541,16 @@ main() {
         run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
         run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
         run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
+        
+        # Gateway Dynamic Tests (if enabled)
+        if $dynamic_test; then
+            run_dynamic_tests $dynamic_stage
+        fi
+    fi
+    
+    # Run dynamic tests for Gateway resource (if specified and enabled)
+    if [ -n "$resource" ] && [ "$resource" = "Gateway" ] && $dynamic_test; then
+        run_dynamic_tests $dynamic_stage
     fi
     
     # Finalize report

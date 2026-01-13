@@ -121,16 +121,31 @@ copy_file_to_config() {
 apply_file() {
     local file=$1
     local filename=$(basename "$file")
+    local copied=false
+    local api_loaded=false
     
-    # 优先usefilecopy方式（Gateway Start前）
+    # 尝试复制文件到 config 目录（为 Gateway 启动准备）
     if copy_file_to_config "$file"; then
-        log_success "$filename copycompleted"
-        return 0
+        copied=true
     fi
     
-    log_info "Load $filename..."
+    # 检查 Controller 是否在运行
+    if curl -s -f "$CONTROLLER_URL/api/v1/health" >/dev/null 2>&1; then
+        # Controller 已运行，使用 API 加载
+        log_info "Load $filename via API..."
+        if "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$file" 2>&1; then
+            api_loaded=true
+        fi
+    fi
     
-    if "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$file" 2>&1; then
+    # 判断结果
+    if [ "$copied" = true ] && [ "$api_loaded" = true ]; then
+        log_success "$filename copy & API loaded"
+        return 0
+    elif [ "$copied" = true ]; then
+        log_success "$filename copycompleted"
+        return 0
+    elif [ "$api_loaded" = true ]; then
         log_success "$filename Loadsuccess"
         return 0
     else
@@ -153,8 +168,16 @@ load_directory_recursive() {
         return 1
     fi
     
-    # 递归获取all yaml file
-    local files=$(find "$dir" -type f \( -name "*.yaml" -o -name "*.yml" \) | sort)
+    # 排除动态测试的 updates 和 delete 目录（仅加载 initial）
+    if [[ "$dir" =~ /DynamicTest/updates ]] || [[ "$dir" =~ /DynamicTest/delete ]]; then
+        log_info "Skipping dynamic update dir: $dir"
+        return 0
+    fi
+    
+    # 递归获取all yaml file，但排除 updates 和 delete 子目录
+    local files=$(find "$dir" -type f \( -name "*.yaml" -o -name "*.yml" \) \
+        -not -path "*/DynamicTest/updates/*" \
+        -not -path "*/DynamicTest/delete/*" | sort)
     
     if [ -z "$files" ]; then
         log_warn "$suite_name: 无configfile"

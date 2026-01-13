@@ -427,8 +427,13 @@ get_suites_to_load() {
                         local has_deep_subdir=false
                         for deepdir in "$subdir"/*; do
                             if [ -d "$deepdir" ]; then
+                                local deepdir_name=$(basename "$deepdir")
+                                # Skip DynamicTest/updates and DynamicTest/delete
+                                if [[ "$subdir_name" == "DynamicTest" && ("$deepdir_name" == "updates" || "$deepdir_name" == "delete") ]]; then
+                                    continue
+                                fi
                                 has_deep_subdir=true
-                                suites="$suites ${resource_name}/${subdir_name}/$(basename "$deepdir")"
+                                suites="$suites ${resource_name}/${subdir_name}/${deepdir_name}"
                             fi
                         done
                         

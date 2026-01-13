@@ -25,6 +25,6 @@ pub use edgion_tls::{CipherTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTest
 // Gateway tests
 pub use gateway::{
     AllowedRoutesAllNamespacesTestSuite, AllowedRoutesKindsTestSuite, AllowedRoutesSameNamespaceTestSuite,
-    BackendTlsTestSuite, CombinedScenariosTestSuite, GatewayTlsTestSuite, ListenerHostnameTestSuite,
-    PluginLogsTestSuite, RealIpTestSuite, SecurityTestSuite,
+    BackendTlsTestSuite, CombinedScenariosTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite,
+    ListenerHostnameTestSuite, PluginLogsTestSuite, RealIpTestSuite, SecurityTestSuite, UpdatePhaseTestSuite,
 };
