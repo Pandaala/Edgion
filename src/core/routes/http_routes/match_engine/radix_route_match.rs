@@ -2,6 +2,7 @@ use super::radix_path::RadixPath;
 use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::matcher::radix_tree::{RadixTree, RadixTreeBuilder, RouterError};
 use crate::core::routes::http_routes::HttpRouteRuleUnit;
+use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use crate::types::err::EdError::RouteNotFound;
 use pingora_proxy::Session;
@@ -58,10 +59,11 @@ impl RadixRouteMatchEngine {
         &self,
         route_idx: usize,
         session: &Session,
+        ctx: &EdgionHttpContext,
         gateway_info: &GatewayInfo,
     ) -> Result<Option<Arc<HttpRouteRuleUnit>>, EdError> {
         if let Some(route) = self.routes.get(route_idx) {
-            match route.deep_match(session, gateway_info) {
+            match route.deep_match(session, ctx, gateway_info) {
                 Ok(true) => {
                     tracing::trace!("Route matched after deep_match: route_idx={}", route_idx);
                     return Ok(Some(route.clone()));
@@ -84,6 +86,7 @@ impl RadixRouteMatchEngine {
     pub fn exact_match(
         &self,
         session: &mut Session,
+        ctx: &EdgionHttpContext,
         gateway_info: &GatewayInfo,
     ) -> Result<Option<Arc<HttpRouteRuleUnit>>, EdError> {
         let path = session.req_header().uri.path();
@@ -114,7 +117,7 @@ impl RadixRouteMatchEngine {
                             }
                             tracing::trace!("Pattern matched, trying deep match...");
                             if let Some(runtime) =
-                                self.try_route_deep_match(radix_path.route_idx, session, gateway_info)?
+                                self.try_route_deep_match(radix_path.route_idx, session, ctx, gateway_info)?
                             {
                                 tracing::debug!("Exact match succeeded");
                                 return Ok(Some(runtime));
@@ -134,6 +137,7 @@ impl RadixRouteMatchEngine {
     pub fn prefix_match(
         &self,
         session: &mut Session,
+        ctx: &EdgionHttpContext,
         gateway_info: &GatewayInfo,
     ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
         let path = session.req_header().uri.path();
@@ -193,7 +197,7 @@ impl RadixRouteMatchEngine {
                 radix_path.priority_weight,
                 radix_path.route_idx
             );
-            if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session, gateway_info)? {
+            if let Some(runtime) = self.try_route_deep_match(radix_path.route_idx, session, ctx, gateway_info)? {
                 tracing::debug!(
                     "Prefix match succeeded,original='{}', priority={}, route_idx={}",
                     radix_path.original,
@@ -214,11 +218,12 @@ impl RadixRouteMatchEngine {
     pub fn match_route(
         &self,
         session: &mut Session,
+        ctx: &EdgionHttpContext,
         gateway_info: &GatewayInfo,
     ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
         // prefix_match already handles exact match with higher priority
         // (exact routes have odd priority_weight, prefix routes have even priority_weight)
-        self.prefix_match(session, gateway_info)
+        self.prefix_match(session, ctx, gateway_info)
     }
 
     fn initialize_internal(&mut self, route_runtimes: Vec<Arc<HttpRouteRuleUnit>>) -> Result<(), EdError> {

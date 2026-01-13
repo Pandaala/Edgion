@@ -8,7 +8,7 @@
 //! without requiring server restart.
 
 use crate::core::matcher::HashHost;
-use crate::types::resources::gateway::{AllowedRoutes, GatewayTLSConfig};
+use crate::types::resources::gateway::AllowedRoutes;
 use crate::types::Gateway;
 use arc_swap::ArcSwap;
 use kube::ResourceExt;
@@ -22,13 +22,16 @@ use std::sync::{Arc, LazyLock};
 ///
 /// This struct should be created once when EdgionHttp is constructed,
 /// not per-request, to avoid allocation overhead.
+///
+/// Note: Listener configuration (hostname, allowedRoutes) is queried dynamically
+/// from GatewayConfigStore to support hot-reload of Gateway configuration.
 #[derive(Clone, Debug)]
 pub struct GatewayInfo {
     /// Gateway namespace (None for cluster-scoped or default namespace)
     pub namespace: Option<String>,
     /// Gateway name
     pub name: String,
-    /// Current listener name (None for hostname-based lookup)
+    /// Current listener name (required for listener-specific config lookup)
     pub listener_name: Option<String>,
 }
 
@@ -62,14 +65,8 @@ impl GatewayInfo {
 pub struct ListenerConfig {
     /// Listener name
     pub name: String,
-    /// Listening port
-    pub port: i32,
-    /// Protocol (HTTP, HTTPS, TCP, etc.)
-    pub protocol: String,
     /// Hostname for SNI matching (optional)
     pub hostname: Option<String>,
-    /// TLS configuration
-    pub tls: Option<GatewayTLSConfig>,
     /// Allowed routes configuration
     pub allowed_routes: Option<AllowedRoutes>,
 }
@@ -144,6 +141,7 @@ impl GatewayListenerConfig {
     /// - No host restrictions configured (both maps are None) -> allow all
     /// - Hostname matches exactly in host_map
     /// - Hostname matches a wildcard in wildcard_host_map
+    #[cfg(test)]
     #[inline]
     pub fn has_host(&self, hostname: &str) -> bool {
         // If no host restrictions configured, allow all hostnames
@@ -167,29 +165,12 @@ impl GatewayListenerConfig {
     }
 
     /// Get listener config by name
+    /// Get listener config by name
     #[inline]
     pub fn get_listener(&self, listener_name: &str) -> Option<Arc<ListenerConfig>> {
         self.listener_map
             .as_ref()
             .and_then(|m| m.get(listener_name).cloned())
-    }
-
-    /// Get listener config by hostname (exact or wildcard)
-    #[inline]
-    pub fn get_by_host(&self, hostname: &str) -> Option<Arc<ListenerConfig>> {
-        // Try exact match first (O(1))
-        if let Some(ref host_map) = self.host_map {
-            if let Some(config) = host_map.get(hostname) {
-                return Some(config.clone());
-            }
-        }
-        // Try wildcard match
-        if let Some(ref wildcard_map) = self.wildcard_host_map {
-            if let Some(config) = wildcard_map.get(hostname) {
-                return Some(config.clone());
-            }
-        }
-        None
     }
 
     /// Add a listener config
@@ -233,39 +214,6 @@ impl GatewayConfigStore {
         }
     }
 
-    /// Check if store is empty
-    pub fn is_empty(&self) -> bool {
-        self.gateways.load().is_empty()
-    }
-
-    /// Lookup listener config with two-layer strategy
-    ///
-    /// - If section_name is Some: lookup from listener_map
-    /// - If section_name is None: lookup from host_map by hostname
-    pub fn lookup(
-        &self,
-        namespace: &str,
-        gateway_name: &str,
-        section_name: Option<&str>,
-        hostname: &str,
-    ) -> Option<Arc<ListenerConfig>> {
-        let gateway_key = if namespace.is_empty() {
-            gateway_name.to_string()
-        } else {
-            format!("{}/{}", namespace, gateway_name)
-        };
-
-        let gateways = self.gateways.load();
-        let gateway_config = gateways.get(&gateway_key)?;
-
-        match section_name {
-            // Has sectionName: direct lookup from listener_map
-            Some(listener_name) => gateway_config.get_listener(listener_name),
-            // No sectionName: lookup from host_map by hostname
-            None => gateway_config.get_by_host(hostname),
-        }
-    }
-
     /// Check if a listener exists for a gateway
     pub fn has_listener(&self, namespace: &str, gateway_name: &str, listener_name: &str) -> bool {
         let gateway_key = if namespace.is_empty() {
@@ -281,19 +229,16 @@ impl GatewayConfigStore {
             .unwrap_or(false)
     }
 
-    /// Check if a hostname exists for a gateway
-    pub fn has_host(&self, namespace: &str, gateway_name: &str, hostname: &str) -> bool {
-        let gateway_key = if namespace.is_empty() {
-            gateway_name.to_string()
-        } else {
-            format!("{}/{}", namespace, gateway_name)
-        };
-
+    /// Get listener configuration by GatewayInfo
+    ///
+    /// This method enables dynamic lookup of listener config, supporting
+    /// hot-reload of Gateway configuration changes.
+    pub fn get_listener_config(&self, gateway_info: &GatewayInfo) -> Option<Arc<ListenerConfig>> {
+        let listener_name = gateway_info.listener_name.as_deref()?;
+        let gateway_key = gateway_info.gateway_key();
         let gateways = self.gateways.load();
-        gateways
-            .get(&gateway_key)
-            .map(|config| config.has_host(hostname))
-            .unwrap_or(false)
+        let gateway_config = gateways.get(&gateway_key)?;
+        gateway_config.get_listener(listener_name)
     }
 
     /// Full set of all Gateway configurations
@@ -382,10 +327,7 @@ fn parse_gateway_to_config(gateway: &Gateway) -> GatewayListenerConfig {
         for listener in listeners {
             let listener_config = Arc::new(ListenerConfig {
                 name: listener.name.clone(),
-                port: listener.port,
-                protocol: listener.protocol.clone(),
                 hostname: listener.hostname.clone(),
-                tls: listener.tls.clone(),
                 allowed_routes: listener.allowed_routes.clone(),
             });
 
@@ -447,10 +389,12 @@ mod tests {
         );
         assert_eq!(info.gateway_key(), "default/my-gateway");
         assert_eq!(info.namespace_str(), "default");
+        assert_eq!(info.listener_name, Some("https".to_string()));
 
         let info_no_ns = GatewayInfo::new(None, "my-gateway".to_string(), None);
         assert_eq!(info_no_ns.gateway_key(), "my-gateway");
         assert_eq!(info_no_ns.namespace_str(), "");
+        assert_eq!(info_no_ns.listener_name, None);
     }
 
     #[test]
@@ -476,37 +420,6 @@ mod tests {
         // Check wildcard
         assert!(config.has_host("api.example.com"));
         assert!(config.has_host("www.example.com"));
-    }
-
-    #[test]
-    fn test_store_full_set() {
-        let store = GatewayConfigStore::new();
-
-        let gw1 = create_test_gateway(
-            "gw1",
-            "ns1",
-            vec![create_test_listener("https", 443, Some("api.example.com"))],
-        );
-        let gw2 = create_test_gateway(
-            "gw2",
-            "ns2",
-            vec![create_test_listener("https", 443, Some("www.example.com"))],
-        );
-
-        store.full_set(&[gw1, gw2]);
-
-        // Check lookup with sectionName
-        let result = store.lookup("ns1", "gw1", Some("https"), "");
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().hostname, Some("api.example.com".to_string()));
-
-        // Check lookup without sectionName (by hostname)
-        let result = store.lookup("ns2", "gw2", None, "www.example.com");
-        assert!(result.is_some());
-
-        // Check non-existent
-        let result = store.lookup("ns1", "gw1", Some("unknown"), "");
-        assert!(result.is_none());
     }
 
     #[test]

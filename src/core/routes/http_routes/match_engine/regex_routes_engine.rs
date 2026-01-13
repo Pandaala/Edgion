@@ -1,5 +1,6 @@
 use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::routes::http_routes::match_unit::HttpRouteRuleUnit;
+use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use pingora_proxy::Session;
 use regex::RegexSet;
@@ -83,10 +84,12 @@ impl RegexRoutesEngine {
     ///
     /// # Parameters
     /// - `session`: The HTTP session
+    /// - `ctx`: Request context containing hostname and other request info
     /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
     pub fn match_route(
         &self,
         session: &mut Session,
+        ctx: &EdgionHttpContext,
         gateway_info: &GatewayInfo,
     ) -> Result<Option<Arc<HttpRouteRuleUnit>>, EdError> {
         let path = session.req_header().uri.path();
@@ -107,7 +110,7 @@ impl RegexRoutesEngine {
 
                 // Path already matched by RegexSet, now check deep match
                 // (headers, query params, method, Gateway/sectionName)
-                if regex_route.deep_match(session, gateway_info)? {
+                if regex_route.deep_match(session, ctx, gateway_info)? {
                     tracing::debug!(
                         path = %path,
                         regex = %regex_route.path_regex.as_ref().map(|r| r.as_str()).unwrap_or(""),
@@ -121,7 +124,7 @@ impl RegexRoutesEngine {
             for regex_route in &self.routes {
                 if regex_route.matches_path(path) {
                     // Path matches, check deep match (headers, query params, method, Gateway/sectionName)
-                    if regex_route.deep_match(session, gateway_info)? {
+                    if regex_route.deep_match(session, ctx, gateway_info)? {
                         tracing::debug!(
                             path = %path,
                             regex = %regex_route.path_regex.as_ref().map(|r| r.as_str()).unwrap_or(""),

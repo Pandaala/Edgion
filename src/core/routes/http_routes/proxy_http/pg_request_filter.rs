@@ -38,7 +38,7 @@ pub async fn request_filter(
     if !ctx.is_grpc_route_matched {
         match edgion_http
             .domain_routes
-            .match_route(&ctx.request_info.hostname, session, &edgion_http.gateway_info)
+            .match_route(session, ctx, &edgion_http.gateway_info)
         {
             Ok(route_unit) => {
                 ctx.route_unit = Some(route_unit.clone());

@@ -153,6 +153,8 @@ pub fn add_http_listener(
         crate::core::gateway::PreflightHandler::new(context.edgion_gateway_config.spec.preflight_policy.clone());
 
     // Pre-build GatewayInfo for route matching (avoids per-request allocation)
+    // Note: Listener config (hostname, allowedRoutes) is queried dynamically
+    // from GatewayConfigStore to support hot-reload of Gateway configuration
     let gateway_info = GatewayInfo::new(
         context.gateway_namespace.clone(),
         context.gateway_name.clone(),
@@ -242,7 +244,6 @@ pub fn add_http_listener(
 }
 
 /// Add a TCP listener to the Pingora server
-#[allow(dead_code)]
 pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Result<()> {
     let listener_name = context.listener.name.clone();
     // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
@@ -285,7 +286,6 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
 /// Add a UDP listener to the Pingora server
 ///
 /// UDP listeners don't use Pingora's Service abstraction - they run as independent tokio tasks
-#[allow(dead_code)]
 pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Result<()> {
     let listener_name = context.listener.name.clone();
     // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0

@@ -4,6 +4,7 @@ use crate::core::matcher::host_match::radix_match::RadixHostMatchEngine;
 use crate::core::routes::http_routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::routes::http_routes::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::core::routes::http_routes::HttpRouteRuleUnit;
+use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use crate::types::HTTPRoute;
 use crate::types::{HTTPBackendRef, HTTPRouteRule};
@@ -83,15 +84,17 @@ impl RouteRules {
     ///
     /// # Parameters
     /// - `session`: The HTTP session
+    /// - `ctx`: Request context containing hostname and other request info
     /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
+        ctx: &EdgionHttpContext,
         gateway_info: &GatewayInfo,
     ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
         // Step 1: Try regex match first (highest priority)
         if let Some(ref regex_engine) = self.regex_routes_engine {
-            if let Some(route_unit) = regex_engine.match_route(session, gateway_info)? {
+            if let Some(route_unit) = regex_engine.match_route(session, ctx, gateway_info)? {
                 tracing::debug!(path=%session.req_header().uri.path(),"regex match ok");
                 return Ok(route_unit);
             }
@@ -99,7 +102,7 @@ impl RouteRules {
 
         // Step 2: Fall back to radix tree match (exact + prefix)
         if let Some(ref match_engine) = self.match_engine {
-            let route_unit = match_engine.match_route(session, gateway_info)?;
+            let route_unit = match_engine.match_route(session, ctx, gateway_info)?;
             tracing::debug!(path=%session.req_header().uri.path(),"radix match ok");
             return Ok(route_unit);
         }
@@ -130,20 +133,23 @@ impl DomainRouteRules {
     /// 2. Wildcard domain match (RadixHostMatchEngine - O(log n))
     ///
     /// # Parameters
-    /// - `hostname`: Request hostname for domain-based routing
     /// - `session`: The HTTP session
+    /// - `ctx`: Request context containing hostname and other request info
     /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
     pub fn match_route(
         &self,
-        hostname: &str,
         session: &mut pingora_proxy::Session,
+        ctx: &EdgionHttpContext,
         gateway_info: &GatewayInfo,
     ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
+        // Get hostname from ctx (already extracted in pg_request_filter)
+        let hostname = &ctx.request_info.hostname;
+
         // Step 1: Try exact domain match first (highest priority, O(1))
         // DNS hostnames are case-insensitive per RFC 952/1123
         let exact_map = self.exact_domain_map.load();
         if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {
-            return route_rules.match_route(session, gateway_info);
+            return route_rules.match_route(session, ctx, gateway_info);
         }
 
         // Step 2: Try wildcard domain match (fallback, O(log n))
@@ -151,7 +157,7 @@ impl DomainRouteRules {
         let wildcard_engine = self.wildcard_engine.load();
         if let Some(ref engine) = wildcard_engine.as_ref() {
             if let Some(route_rules) = engine.match_host(hostname) {
-                return route_rules.match_route(session, gateway_info);
+                return route_rules.match_route(session, ctx, gateway_info);
             }
         }
 
