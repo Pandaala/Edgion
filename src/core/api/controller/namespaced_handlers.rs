@@ -273,6 +273,19 @@ pub async fn create_namespaced(
                 .config_server
                 .apply_secret_change(ResourceChange::EventAdd, secret);
         }
+        crate::types::ResourceKind::Gateway => {
+            let gateway: Gateway = parse_resource_and_update_version(&content, state.resource_mgr.is_some())?;
+            validate_resource(&state.schema_validator, kind, &gateway)?;
+            let json_content = serde_json::to_string(&gateway).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr
+                .set_one(&kind_str, Some(&ns), &name, json_content)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state
+                .config_server
+                .gateways
+                .apply_change(ResourceChange::EventAdd, gateway);
+        }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
     }
 
@@ -467,6 +480,19 @@ pub async fn update_namespaced(
             state
                 .config_server
                 .apply_secret_change(ResourceChange::EventUpdate, secret);
+        }
+        crate::types::ResourceKind::Gateway => {
+            let gateway: Gateway = parse_resource_and_update_version(&content, state.resource_mgr.is_some())?;
+            validate_resource(&state.schema_validator, kind, &gateway)?;
+            let json_content = serde_json::to_string(&gateway).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            resource_mgr
+                .set_one(&kind_str, Some(&ns), &name, json_content)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            state
+                .config_server
+                .gateways
+                .apply_change(ResourceChange::EventUpdate, gateway);
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
     }
@@ -672,6 +698,20 @@ pub async fn delete_namespaced(
             state
                 .config_server
                 .apply_secret_change(ResourceChange::EventDelete, secret);
+        }
+        crate::types::ResourceKind::Gateway => {
+            let list_data = state.config_server.gateways.list();
+            let mut gateway = list_data
+                .data
+                .into_iter()
+                .find(|r| r.name_any() == name && r.namespace().as_deref() == Some(ns.as_str()))
+                .ok_or(StatusCode::NOT_FOUND)?;
+            let _ = resource_mgr.delete_one(&kind_str, Some(&ns), &name).await;
+            update_resource_version(&mut gateway);
+            state
+                .config_server
+                .gateways
+                .apply_change(ResourceChange::EventDelete, gateway);
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
     }
