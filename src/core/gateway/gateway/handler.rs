@@ -1,4 +1,5 @@
 use crate::core::conf_sync::traits::ConfHandler;
+use crate::core::gateway::gateway::config_store::get_global_gateway_config_store;
 use crate::core::gateway::gateway::get_global_gateway_store;
 use crate::core::gateway::gateway::tls_matcher::rebuild_gateway_tls_matcher;
 use crate::core::routes::http_routes::get_global_route_manager;
@@ -8,6 +9,11 @@ use std::collections::{HashMap, HashSet};
 
 /// ConfHandler implementation for Gateway
 /// Stores Gateway resources in cache for dynamic lookup during bootstrap
+///
+/// This handler manages three stores:
+/// 1. GatewayStore: Raw Gateway resources
+/// 2. GatewayConfigStore: Two-layer structure (host_map + listener_map) for dynamic lookup
+/// 3. GatewayTlsMatcher: Port-based TLS certificate matching
 pub struct GatewayHandler;
 
 impl GatewayHandler {
@@ -50,14 +56,21 @@ impl ConfHandler<Gateway> for GatewayHandler {
             route_manager.get_or_create_domain_routes(&namespace, &name);
         }
 
-        // Rebuild Gateway TLS matcher for dynamic TLS certificate lookup
+        // Get all gateways for rebuilding
         let gateways = store.list_gateways();
+
+        // Rebuild GatewayConfigStore (two-layer structure for dynamic lookup)
+        let config_store = get_global_gateway_config_store();
+        config_store.full_set(&gateways);
+
+        // Rebuild Gateway TLS matcher (port-based certificate lookup)
         rebuild_gateway_tls_matcher(&gateways);
     }
 
     fn partial_update(&self, add: HashMap<String, Gateway>, update: HashMap<String, Gateway>, remove: HashSet<String>) {
         let global_store = get_global_gateway_store();
         let mut store = global_store.write().unwrap();
+        let config_store = get_global_gateway_config_store();
 
         if !add.is_empty() {
             tracing::info!(
@@ -75,6 +88,10 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     listeners = listener_count,
                     "Gateway added"
                 );
+
+                // Update GatewayConfigStore for dynamic lookup
+                config_store.update_gateway(&gateway);
+
                 if let Err(e) = store.add_gateway(gateway) {
                     tracing::warn!(key = %key, error = %e, "Failed to add gateway");
                 }
@@ -95,13 +112,13 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     name = %gateway.name_any(),
                     gateway_class = %gateway.spec.gateway_class_name,
                     listeners = listener_count,
-                    "Gateway updated (dynamic listener/TLS update not yet implemented)"
+                    "Gateway updated (dynamic listener/TLS config updated)"
                 );
-                store.update_gateway(gateway);
 
-                // TODO: Detect listener changes
-                // TODO: Detect TLS certificateRefs changes and update GatewayTlsCertMatcher
-                // TODO: Detect hostname changes and update route matching
+                // Update GatewayConfigStore for dynamic lookup
+                config_store.update_gateway(&gateway);
+
+                store.update_gateway(gateway);
             }
         }
 
@@ -114,17 +131,29 @@ impl ConfHandler<Gateway> for GatewayHandler {
             for key in &remove {
                 tracing::info!(
                     key = %key,
-                    "Gateway removed (dynamic listener removal not yet implemented)"
+                    "Gateway removed"
                 );
+
+                // Parse key to get namespace and name
+                let parts: Vec<&str> = key.split('/').collect();
+                let (namespace, name) = if parts.len() == 2 {
+                    (parts[0], parts[1])
+                } else {
+                    ("", key.as_str())
+                };
+
+                // Remove from GatewayConfigStore
+                config_store.remove_gateway(namespace, name);
+
                 if let Err(e) = store.remove_gateway(key) {
                     tracing::warn!(key = %key, error = %e, "Failed to remove gateway");
                 }
             }
 
-            // TODO: Clean up listeners (requires Pingora support or hot reload)
+            // Note: Physical listener cleanup requires Pingora restart
         }
 
-        // Rebuild Gateway TLS matcher after any changes
+        // Rebuild Gateway TLS matcher (port-based certificate lookup)
         let gateways = store.list_gateways();
         rebuild_gateway_tls_matcher(&gateways);
     }

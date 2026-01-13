@@ -23,6 +23,6 @@ pub fn init_downstream_modules(edgion_http: &EdgionHttp, modules: &mut HttpModul
     // gRPC-Web requires HTTP/2 support
     if edgion_http.enable_http2 {
         modules.add_module(Box::new(GrpcWeb));
-        tracing::info!(gateway=%edgion_http.gateway_name, listener=%edgion_http.listener.name, "GrpcWeb module enabled");
+        tracing::info!(gateway=%edgion_http.gateway_info.name, listener=%edgion_http.listener.name, "GrpcWeb module enabled");
     }
 }

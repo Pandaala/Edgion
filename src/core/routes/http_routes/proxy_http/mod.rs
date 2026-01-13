@@ -8,6 +8,7 @@ use pingora_proxy::{FailToProxy, ProxyHttp, Session};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::gateway::server_header::ServerHeaderOpts;
 use crate::core::observe::AccessLogger;
 use crate::core::routes::{grpc_routes::DomainGrpcRouteRules, DomainRouteRules};
@@ -37,10 +38,12 @@ pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeout
 /// EdgionHttp proxy structure
 pub struct EdgionHttp {
     pub gateway_class_name: Option<String>,
-    pub gateway_namespace: Option<String>,
-    pub gateway_name: String,
 
     pub listener: Listener,
+
+    /// Pre-built GatewayInfo for route matching (avoids per-request allocation)
+    /// Contains: namespace, gateway_name, listener_name
+    pub gateway_info: GatewayInfo,
 
     pub server_start_time: SystemTime,
 

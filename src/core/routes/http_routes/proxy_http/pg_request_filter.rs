@@ -21,6 +21,7 @@ pub async fn request_filter(
     }
 
     // Step 1: Route matching - try gRPC first if applicable, then HTTP
+    // Use pre-built gateway_info from EdgionHttp (avoids per-request allocation)
     if ctx.request_info.is_grpc_request {
         // Only pure gRPC requires HTTP/2, gRPC-Web can work on HTTP/1.1
         if ctx.request_info.discover_protocol.as_deref() == Some("grpc") && !edgion_http.enable_http2 {
@@ -30,14 +31,14 @@ pub async fn request_filter(
         }
 
         // Try to match gRPC route (sets ctx.is_grpc_route_matched internally if matched)
-        let _ = try_match_grpc_route(&edgion_http.grpc_routes, session, ctx, &edgion_http.listener.name).await;
+        let _ = try_match_grpc_route(&edgion_http.grpc_routes, session, ctx, &edgion_http.gateway_info).await;
     }
 
     // HTTP route Match, if grpc route already matched, skip here
     if !ctx.is_grpc_route_matched {
         match edgion_http
             .domain_routes
-            .match_route(&ctx.request_info.hostname, session, &edgion_http.listener.name)
+            .match_route(&ctx.request_info.hostname, session, &edgion_http.gateway_info)
         {
             Ok(route_unit) => {
                 ctx.route_unit = Some(route_unit.clone());

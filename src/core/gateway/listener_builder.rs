@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::net::UdpSocket;
 
+use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::observe::AccessLogger;
 use crate::core::routes::get_global_route_manager;
 use crate::core::routes::http_routes::{EdgionHttp, EdgionHttpRedirect};
@@ -151,12 +152,18 @@ pub fn add_http_listener(
     let preflight_handler =
         crate::core::gateway::PreflightHandler::new(context.edgion_gateway_config.spec.preflight_policy.clone());
 
+    // Pre-build GatewayInfo for route matching (avoids per-request allocation)
+    let gateway_info = GatewayInfo::new(
+        context.gateway_namespace.clone(),
+        context.gateway_name.clone(),
+        Some(context.listener.name.clone()),
+    );
+
     // Create EdgionHttp proxy handler
     let edgion_http = EdgionHttp {
         gateway_class_name: context.gateway_class_name.clone(),
-        gateway_namespace: context.gateway_namespace.clone(),
-        gateway_name: context.gateway_name.clone(),
         listener: context.listener.clone(),
+        gateway_info,
         server_start_time: SystemTime::now(),
         server_header_opts: Default::default(),
         domain_routes,
@@ -190,8 +197,9 @@ pub fn add_http_listener(
     if enable_tls {
         #[cfg(any(feature = "boringssl", feature = "openssl"))]
         {
+            let port = context.listener.port as u16;
             let mut tls_settings =
-                TlsCallback::new_tls_settings_with_callback(context.edgion_gateway_config.clone(), true)?;
+                TlsCallback::new_tls_settings_with_callback(port, context.edgion_gateway_config.clone(), true)?;
             // Enable HTTP/2 for HTTPS if enable_http2 is true
             if enable_http2 {
                 tls_settings.enable_h2();
@@ -349,8 +357,8 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
         connector: TransportConnector::new(None),
     };
 
-    // Create TLS settings with callback for certificate loading
-    let tls_settings = TlsCallback::new_tls_settings_with_callback(context.edgion_gateway_config.clone(), false)?;
+    // Create TLS settings with callback for certificate loading (with port for SNI lookup)
+    let tls_settings = TlsCallback::new_tls_settings_with_callback(port, context.edgion_gateway_config.clone(), false)?;
 
     // Create TLS service with Listeners
     let mut tls_service =

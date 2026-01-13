@@ -3,6 +3,7 @@
 //! This module provides clean integration interfaces for http_routes to call,
 //! encapsulating all gRPC-specific logic within grpc_routes module.
 
+use crate::core::gateway::gateway::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
 use crate::types::EdgionHttpContext;
@@ -32,12 +33,18 @@ pub fn is_grpc_protocol(ctx: &EdgionHttpContext) -> bool {
 /// Returns: Ok(true) - matched successfully and handled
 ///          Ok(false) - not matched, should fallback to HTTP routes
 ///          Err - error occurred
+///
+/// # Parameters
+/// - `grpc_routes`: Domain gRPC route rules
+/// - `session`: The HTTP session
+/// - `ctx`: Request context
+/// - `gateway_info`: Gateway context for two-layer lookup
 #[inline]
 pub async fn try_match_grpc_route(
     grpc_routes: &Arc<crate::core::routes::grpc_routes::DomainGrpcRouteRules>,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
-    listener_name: &str,
+    gateway_info: &GatewayInfo,
 ) -> Result<bool, EdError> {
     // 1. Parse gRPC service/method from path
     if let Ok((service, method)) = super::match_engine::parse_grpc_path(&ctx.request_info.path) {
@@ -45,8 +52,8 @@ pub async fn try_match_grpc_route(
         ctx.request_info.grpc_method = Some(method);
     }
 
-    // 2. Try to match route (based on service/method, section_name, and hostname)
-    match grpc_routes.match_route(session, listener_name, &ctx.request_info.hostname) {
+    // 2. Try to match route (based on service/method, Gateway/section_name, and hostname)
+    match grpc_routes.match_route(session, gateway_info, &ctx.request_info.hostname) {
         Ok(grpc_route_unit) => {
             ctx.grpc_route_unit = Some(grpc_route_unit);
             ctx.is_grpc_route_matched = true;

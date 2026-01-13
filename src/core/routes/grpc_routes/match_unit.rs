@@ -1,3 +1,5 @@
+use crate::core::gateway::gateway::config_store::get_global_gateway_config_store;
+use crate::core::gateway::gateway::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::resources::common::ParentReference;
 use crate::types::{GRPCRouteMatch, GRPCRouteRule};
@@ -87,8 +89,18 @@ pub struct GrpcRouteRuleUnit {
 }
 
 impl GrpcRouteRuleUnit {
-    /// Deep match: check hostname, section_name, and headers
-    pub fn deep_match(&self, session: &Session, listener_name: &str, hostname: &str) -> Result<bool, EdError> {
+    /// Deep match: check hostname, Gateway/sectionName, and headers
+    ///
+    /// # Parameters
+    /// - `session`: The HTTP session
+    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    /// - `hostname`: Request hostname for route-level hostname matching
+    pub fn deep_match(
+        &self,
+        session: &Session,
+        gateway_info: &GatewayInfo,
+        hostname: &str,
+    ) -> Result<bool, EdError> {
         let req_header = session.req_header();
 
         // Check Hostname (if route specifies hostnames)
@@ -98,12 +110,33 @@ impl GrpcRouteRuleUnit {
             }
         }
 
-        // Check SectionName (if parent_refs specify section_name)
+        // Check Gateway and SectionName using two-layer strategy
         if let Some(ref parent_refs) = self.route_info.parent_refs {
-            // At least one parent_ref must match: section_name is None or equals listener_name
-            let matches = parent_refs
-                .iter()
-                .any(|pr| pr.section_name.as_ref().is_none_or(|name| name == listener_name));
+            let config_store = get_global_gateway_config_store();
+            let gateway_ns = gateway_info.namespace_str();
+
+            let matches = parent_refs.iter().any(|pr| {
+                // Get parent gateway namespace
+                let parent_ns = pr.namespace.as_deref().unwrap_or(gateway_ns);
+
+                // Check if parent reference matches current gateway
+                if parent_ns != gateway_ns || pr.name != gateway_info.name {
+                    return false;
+                }
+
+                // Two-layer lookup based on sectionName presence
+                match (&pr.section_name, &gateway_info.listener_name) {
+                    // Route specifies sectionName - must match listener exactly
+                    (Some(section_name), Some(listener_name)) => section_name == listener_name,
+                    // Route specifies sectionName but we don't have listener context
+                    (Some(section_name), None) => {
+                        config_store.has_listener(parent_ns, &pr.name, section_name)
+                    }
+                    // Route doesn't specify sectionName - can attach to any listener
+                    // Let GRPCRoute's own hostnames config handle hostname filtering
+                    (None, _) => true,
+                }
+            });
 
             if !matches {
                 return Ok(false);

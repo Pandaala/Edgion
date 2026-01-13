@@ -1,3 +1,5 @@
+use crate::core::gateway::gateway::config_store::get_global_gateway_config_store;
+use crate::core::gateway::gateway::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::resources::common::ParentReference;
 use crate::types::{HTTPRouteMatch, HTTPRouteRule, MatchInfo};
@@ -34,16 +36,20 @@ impl HttpRouteRuleUnit {
         }
     }
 
-    /// Perform deep match (headers, query params, method, sectionName)
+    /// Perform deep match (headers, query params, method, sectionName/Gateway)
     /// For use with regex routes or when called directly
-    pub fn deep_match(&self, session: &Session, listener_name: &str) -> Result<bool, EdError> {
+    ///
+    /// # Parameters
+    /// - `session`: The HTTP session
+    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    pub fn deep_match(&self, session: &Session, gateway_info: &GatewayInfo) -> Result<bool, EdError> {
         let req_header = session.req_header();
         Self::deep_match_common(
             &self.matched_info.m,
             req_header,
             &self.identifier(),
             &self.parent_refs,
-            listener_name,
+            gateway_info,
         )
     }
 
@@ -164,25 +170,64 @@ impl HttpRouteRuleUnit {
         }
     }
 
-    /// Common deep match logic for checking method, headers, query parameters, and sectionName
+    /// Common deep match logic for checking method, headers, query parameters, and Gateway/sectionName
+    ///
+    /// This function supports two-layer lookup strategy:
+    /// - If route has sectionName: match against listener_map
+    /// - If route has no sectionName: match against host_map (by request hostname)
+    ///
     /// This function is shared between HttpRouteRuleUnit and HttpRouteRuleRegexUnit
     pub(crate) fn deep_match_common(
         match_item: &HTTPRouteMatch,
         req_header: &pingora_http::RequestHeader,
         identifier: &str,
         parent_refs: &Option<Vec<ParentReference>>,
-        listener_name: &str,
+        gateway_info: &GatewayInfo,
     ) -> Result<bool, EdError> {
         let method = req_header.method.as_str();
 
         // Parse query parameters from URI (if present)
         let query_params = req_header.uri.query().map(Self::parse_query_string).unwrap_or_default();
 
-        // 0. Check SectionName (if parent_refs specify section_name)
+        // 0. Check Gateway and SectionName matching using two-layer strategy
         if let Some(ref parent_refs) = parent_refs {
-            let matches = parent_refs
-                .iter()
-                .any(|pr| pr.section_name.as_ref().is_none_or(|name| name == listener_name));
+            let config_store = get_global_gateway_config_store();
+            let gateway_ns = gateway_info.namespace_str();
+
+            let matches = parent_refs.iter().any(|pr| {
+                // Get parent gateway namespace (fallback to gateway_info's namespace)
+                let parent_ns = pr.namespace.as_deref().unwrap_or(gateway_ns);
+
+                // Check if parent reference matches current gateway
+                // This should not happen - routes should only be matched against their parent gateway
+                if parent_ns != gateway_ns || pr.name != gateway_info.name {
+                    tracing::error!(
+                        parent_ns = %parent_ns,
+                        parent_name = %pr.name,
+                        gateway_ns = %gateway_ns,
+                        gateway_name = %gateway_info.name,
+                        "Route parent reference does not match current gateway - this should not happen"
+                    );
+                    return false;
+                }
+
+                // Two-layer lookup based on sectionName presence
+                match (&pr.section_name, &gateway_info.listener_name) {
+                    // Route specifies sectionName - must match listener_map exactly
+                    (Some(section_name), Some(listener_name)) => {
+                        // Direct comparison: route's sectionName must match current listener
+                        section_name == listener_name
+                    }
+                    // Route specifies sectionName but we don't have listener context
+                    // (shouldn't normally happen in EdgionHttp, but verify listener exists)
+                    (Some(section_name), None) => {
+                        config_store.has_listener(parent_ns, &pr.name, section_name)
+                    }
+                    // Route doesn't specify sectionName - can attach to any listener
+                    // Let HTTPRoute's own hostnames config handle hostname filtering
+                    (None, _) => true,
+                }
+            });
 
             if !matches {
                 return Ok(false);
