@@ -492,13 +492,13 @@ dependencies = [
 
 [[package]]
 name = "bcrypt"
-version = "0.15.1"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e65938ed058ef47d92cf8b346cc76ef48984572ade631927e9937b5ffc7662c7"
+checksum = "9a0f5948f30df5f43ac29d310b7476793be97c50787e6ef4a63d960a0d0be827"
 dependencies = [
  "base64 0.22.1",
  "blowfish 0.9.1",
- "getrandom 0.2.16",
+ "getrandom 0.3.4",
  "subtle",
  "zeroize",
 ]
@@ -1268,7 +1268,7 @@ dependencies = [
  "axum 0.8.8",
  "axum-server",
  "base64 0.22.1",
- "bcrypt 0.15.1",
+ "bcrypt 0.18.0",
  "boring-sys",
  "bytes",
  "chrono",
