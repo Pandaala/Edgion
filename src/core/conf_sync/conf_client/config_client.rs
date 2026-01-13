@@ -37,93 +37,87 @@ pub struct ConfigClient {
 }
 
 impl ConfigClient {
-    /// Create a new ConfigClient with default options (relist_on_server_change = false)
-    pub fn new(client_id: String, client_name: String) -> Self {
-        Self::with_options(client_id, client_name, false)
-    }
-
-    /// Create a new ConfigClient with custom options
+    /// Create a new ConfigClient
     /// 
     /// # Arguments
     /// * `client_id` - Unique identifier for this client
     /// * `client_name` - Human-readable name for this client
-    /// * `relist_on_server_change` - Whether to trigger relist when server instance changes
-    pub fn with_options(client_id: String, client_name: String, relist_on_server_change: bool) -> Self {
+    pub fn new(client_id: String, client_name: String) -> Self {
         // Register RouteManager as the handler for HTTPRoute resources
-        let routes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let route_handler = create_route_manager_handler();
         routes_cache.set_conf_processor(route_handler);
 
         // Register ServiceStore as the handler for Service resources
-        let services_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let services_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let service_handler = create_service_handler();
         services_cache.set_conf_processor(service_handler);
 
         // Register EpSliceHandler as the handler for EndpointSlice resources
-        let endpoint_slices_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let endpoint_slices_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let ep_slice_handler = create_ep_slice_handler();
         endpoint_slices_cache.set_conf_processor(ep_slice_handler);
 
         // Register EndpointHandler as the handler for Endpoints resources
-        let endpoints_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let endpoints_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let endpoint_handler = create_endpoint_handler();
         endpoints_cache.set_conf_processor(endpoint_handler);
 
         // Register PluginStore as the handler for EdgionPlugins resources
-        let plugins_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let plugin_handler = crate::core::plugins::edgion_plugins::create_plugin_handler();
         plugins_cache.set_conf_processor(plugin_handler);
 
         // Register TcpRouteManager as the handler for TCPRoute resources
-        let tcp_routes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let tcp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tcp_route_handler = crate::core::routes::tcp_routes::create_tcp_route_handler();
         tcp_routes_cache.set_conf_processor(tcp_route_handler);
 
         // Register UdpRouteManager as the handler for UDPRoute resources
-        let udp_routes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let udp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let udp_route_handler = crate::core::routes::udp_routes::create_udp_route_handler();
         udp_routes_cache.set_conf_processor(udp_route_handler);
 
         // Register GrpcRouteManager as the handler for GRPCRoute resources
-        let grpc_routes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let grpc_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let grpc_route_handler = crate::core::routes::grpc_routes::create_grpc_route_handler();
         grpc_routes_cache.set_conf_processor(grpc_route_handler);
 
         // Register TlsRouteManager as the handler for TLSRoute resources
-        let tls_routes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let tls_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_route_handler = crate::core::routes::tls_routes::create_tls_route_handler();
         tls_routes_cache.set_conf_processor(tls_route_handler);
 
         // Register TlsStore as the handler for EdgionTls resources
-        let edgion_tls_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let edgion_tls_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_handler = crate::core::tls::create_tls_handler();
         edgion_tls_cache.set_conf_processor(tls_handler);
 
         // Register StreamPluginStore as the handler for EdgionStreamPlugins resources
-        let stream_plugins_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let stream_plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let stream_plugin_handler = crate::core::plugins::edgion_stream_plugins::create_stream_plugin_handler();
         stream_plugins_cache.set_conf_processor(stream_plugin_handler);
 
         // Register ReferenceGrantStore as the handler for ReferenceGrant resources
-        let reference_grants_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let reference_grants_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let reference_grant_handler = crate::core::ref_grant::create_reference_grant_handler();
         reference_grants_cache.set_conf_processor(reference_grant_handler);
 
         // Register BackendTLSPolicyStore as the handler for BackendTLSPolicy resources
-        let backend_tls_policies_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let backend_tls_policies_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let backend_tls_policy_handler = crate::core::backends::create_backend_tls_policy_handler();
         backend_tls_policies_cache.set_conf_processor(backend_tls_policy_handler);
 
         // Register handlers for base conf resources
-        let gateway_classes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let gateway_classes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let gateway_class_handler = crate::core::gateway::gateway_class::create_gateway_class_handler();
         gateway_classes_cache.set_conf_processor(gateway_class_handler);
 
-        let gateways_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let gateways_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let gateway_handler = crate::core::gateway::gateway::create_gateway_handler();
         gateways_cache.set_conf_processor(gateway_handler);
 
-        let edgion_gateway_configs_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let edgion_gateway_configs_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let edgion_gateway_config_handler =
             crate::core::gateway::edgion_gateway_config::create_edgion_gateway_config_handler();
         edgion_gateway_configs_cache.set_conf_processor(edgion_gateway_config_handler);
@@ -139,7 +133,7 @@ impl ConfigClient {
             tcp_routes: tcp_routes_cache,
             udp_routes: udp_routes_cache,
             tls_routes: tls_routes_cache,
-            link_sys: ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change),
+            link_sys: ClientCache::new(client_id.clone(), client_name.clone()),
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,
             endpoints: endpoints_cache,
@@ -148,8 +142,7 @@ impl ConfigClient {
             edgion_stream_plugins: stream_plugins_cache,
             reference_grants: reference_grants_cache,
             backend_tls_policies: backend_tls_policies_cache,
-            plugin_metadata: ClientCache::with_options(client_id, client_name, relist_on_server_change),
-            // secrets: ClientCache::with_options(client_id, client_name, relist_on_server_change),
+            plugin_metadata: ClientCache::new(client_id, client_name),
         }
     }
 

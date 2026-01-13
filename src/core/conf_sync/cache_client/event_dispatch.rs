@@ -117,7 +117,6 @@ where
         let cache_data = self.cache_data.clone();
         let client_id = self.client_id.clone();
         let client_name = self.client_name.clone();
-        let relist_on_server_change = self.relist_on_server_change;
 
         tokio::spawn(async move {
             let mut is_ready = false;
@@ -223,29 +222,15 @@ where
                                 }
 
                                 // Check for server_id change (server restart/failover detection)
+                                // Always trigger relist when server instance changes
                                 if !watch_response.server_id.is_empty() && watch_response.server_id != current_server_id {
                                     tracing::warn!(
                                         kind = T::kind_name(),
                                         last_server_id = %current_server_id,
                                         new_server_id = %watch_response.server_id,
-                                        "Server instance changed detected"
+                                        "Server instance changed, triggering relist"
                                     );
-
-                                    if relist_on_server_change {
-                                        tracing::info!(
-                                            kind = T::kind_name(),
-                                            "Triggering relist due to server change (relist_on_server_change=true)"
-                                        );
-                                        break 'watch_block; // Return to outer loop to re-list
-                                    } else {
-                                        tracing::info!(
-                                            kind = T::kind_name(),
-                                            "Server changed but relist_on_server_change=false, continuing watch"
-                                        );
-                                        // Update current_server_id to avoid repeated warnings
-                                        // The EventsLost mechanism will handle data consistency
-                                        current_server_id = watch_response.server_id.clone();
-                                    }
+                                    break 'watch_block; // Return to outer loop to re-list
                                 }
 
                                 let _ = watch_response.sync_version; // Track version from response
