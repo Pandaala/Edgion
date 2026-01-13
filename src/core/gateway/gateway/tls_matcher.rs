@@ -239,6 +239,7 @@ mod tests {
                 kind: None,
             }]),
             options: None,
+            secrets: None,
         };
 
         let listener = create_test_listener("https", Some("example.com"), Some(tls_config));
@@ -283,6 +284,7 @@ mod tests {
                 kind: None,
             }]),
             options: None,
+            secrets: None,
         };
 
         let listener = create_test_listener("https", None, Some(tls_config));
@@ -308,6 +310,7 @@ mod tests {
                 kind: None,
             }]),
             options: None,
+            secrets: None,
         };
 
         // Gateway with wildcard hostname
@@ -346,6 +349,7 @@ mod tests {
                 kind: None,
             }]),
             options: None,
+            secrets: None,
         };
         let listener1 = create_test_listener("api-https", Some("api.example.com"), Some(tls_config1));
         let gateway1 = create_test_gateway("api-gateway", "prod", vec![listener1]);
@@ -360,6 +364,7 @@ mod tests {
                 kind: None,
             }]),
             options: None,
+            secrets: None,
         };
         let tls_config3 = GatewayTLSConfig {
             mode: Some("Terminate".to_string()),
@@ -370,6 +375,7 @@ mod tests {
                 kind: None,
             }]),
             options: None,
+            secrets: None,
         };
         let listener2 = create_test_listener("www-https", Some("www.example.com"), Some(tls_config2));
         let listener3 = create_test_listener("admin-https", Some("admin.example.com"), Some(tls_config3));
@@ -417,6 +423,7 @@ mod tests {
                 kind: None,
             }]),
             options: None,
+            secrets: None,
         };
 
         let listener = create_test_listener("https", Some("global.example.com"), Some(tls_config));
@@ -447,6 +454,7 @@ mod tests {
                 kind: None,
             }]),
             options: None,
+            secrets: None,
         };
 
         let listener = create_test_listener("https", Some("test.example.com"), Some(tls_config));
@@ -508,6 +516,7 @@ mod tests {
                 kind: None,
             }]),
             options: None,
+            secrets: None,
         };
         let listener = create_test_listener("https", Some("example.com"), Some(tls_config));
         let gateway = create_test_gateway("test-gw", "default", vec![listener]);

@@ -1,5 +1,6 @@
 pub mod edgion_gateway_config;
 mod err_resp;
+#[allow(clippy::module_inception)]
 pub mod gateway;
 pub mod gateway_base;
 pub mod gateway_class;
