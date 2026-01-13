@@ -44,24 +44,13 @@ impl EdgionGatewayCli {
             .as_deref()
             .ok_or_else(|| anyhow!("server_addr is required, please provide --server-addr or set in config file"))?;
 
-        // Get relist_on_server_change config (default: false)
-        let relist_on_server_change = config.gateway.relist_on_server_change.unwrap_or(false);
-
-        let sync_client = ConfigSyncClient::with_options(
+        let sync_client = ConfigSyncClient::new(
             server_addr,
             "edgion-gateway".to_string(),
             Duration::from_secs(10),
-            relist_on_server_change,
         )
         .await
         .map_err(|e| anyhow!("Failed to create ConfigSyncClient: {}", e))?;
-
-        if relist_on_server_change {
-            tracing::info!(
-                component = "config_sync",
-                "relist_on_server_change is enabled, will relist when server instance changes"
-            );
-        }
 
         Ok(sync_client)
     }

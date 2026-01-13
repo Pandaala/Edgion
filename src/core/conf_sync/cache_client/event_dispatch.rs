@@ -120,8 +120,27 @@ where
 
         tokio::spawn(async move {
             let mut is_ready = false;
+            
+            // Exponential backoff: 2s -> 4s -> 8s -> 16s -> 32s (max)
+            const BACKOFF_INIT_SECS: u64 = 2;
+            const BACKOFF_MAX_SECS: u64 = 32;
+            let mut backoff_secs = BACKOFF_INIT_SECS;
+            
             // Outer loop: perform list operation
             loop {
+                // === Backoff before list ===
+                // Add jitter (0-3s) to spread requests and prevent relist storms
+                let jitter_ms = rand::thread_rng().gen_range(0..3000);
+                let wait_duration = std::time::Duration::from_secs(backoff_secs) 
+                    + std::time::Duration::from_millis(jitter_ms);
+                tracing::info!(
+                    kind = T::kind_name(),
+                    backoff_secs = backoff_secs,
+                    jitter_ms = jitter_ms,
+                    "Waiting before list"
+                );
+                tokio::time::sleep(wait_duration).await;
+                
                 // Get gRPC conf_client
                 let mut client_guard = grpc_client.write().await;
                 let client = match client_guard.as_mut() {
@@ -129,16 +148,18 @@ where
                     None => {
                         tracing::error!(kind = T::kind_name(), "gRPC conf_client not initialized");
                         drop(client_guard);
-                        // Add Jitter: 0 ~ 1000ms
-                        let jitter_ms = rand::thread_rng().gen_range(0..1000);
-                        tokio::time::sleep(std::time::Duration::from_millis(2000 + jitter_ms)).await;
+                        // Increase backoff on failure
+                        backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
                         continue;
                     }
                 };
 
                 // Perform list_and_reset to get latest sync version and server_id
-                let (from_version, mut current_server_id) = match Self::list_and_reset(client, "", &cache_data, "watch relist").await {
+                let (from_version, current_server_id) = match Self::list_and_reset(client, "", &cache_data, "watch relist").await {
                     Ok(list_result) => {
+                        // Reset backoff on success
+                        backoff_secs = BACKOFF_INIT_SECS;
+                        
                         let count = {
                             let cache = cache_data.read().unwrap();
                             cache.len()
@@ -164,9 +185,8 @@ where
                     Err(e) => {
                         tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
                         drop(client_guard);
-                        // Add Jitter: 0 ~ 1000ms
-                        let jitter_ms = rand::thread_rng().gen_range(0..1000);
-                        tokio::time::sleep(std::time::Duration::from_millis(2000 + jitter_ms)).await;
+                        // Increase backoff on failure
+                        backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
                         continue;
                     }
                 };
