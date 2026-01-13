@@ -115,7 +115,7 @@ futures = "0.3.31"
 axum = { version = "0.8.4", features = ["macros", "ws"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 tower-http = { version = "0.6", features = ["fs"] }  # Only for static files
-rust-embed = { version = "8.5" }  # For embedding frontend
+rust-embed = { version = "8.10" }  # For embedding frontend
 mime_guess = "2.0"
 
 # Utilities
