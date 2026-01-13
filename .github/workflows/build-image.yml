@@ -56,7 +56,7 @@ jobs:
         run: cargo build --release --bin edgion-${{ matrix.binary }} --bin edgion-ctl --target ${{ matrix.target }}
 
       - name: Upload binary artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: edgion-${{ matrix.binary }}-${{ matrix.arch }}
           path: |
