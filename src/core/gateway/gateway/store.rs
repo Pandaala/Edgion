@@ -15,6 +15,12 @@ impl GatewayStore {
         }
     }
 
+    /// Clear all gateways from the store
+    pub fn clear(&mut self) {
+        self.gateways.clear();
+    }
+
+    /// Add a new gateway to the store
     pub fn add_gateway(&mut self, gateway: Gateway) -> Result<()> {
         let key = gateway.key_name();
         if self.gateways.contains_key(&key) {
@@ -24,19 +30,31 @@ impl GatewayStore {
         Ok(())
     }
 
+    /// Get a gateway by key
     pub fn get_gateway(&self, key: &str) -> Result<&Gateway> {
         self.gateways
             .get(key)
             .ok_or_else(|| anyhow!("Gateway with key '{}' not found in store", key))
     }
 
-    #[allow(dead_code)]
+    /// Update an existing gateway or insert if not exists
+    pub fn update_gateway(&mut self, gateway: Gateway) {
+        let key = gateway.key_name();
+        self.gateways.insert(key, gateway);
+    }
+
+    /// Remove a gateway by key
     pub fn remove_gateway(&mut self, key: &str) -> Result<()> {
         if !self.gateways.contains_key(key) {
             return Err(anyhow!("Gateway with key '{}' not found in store", key));
         }
         self.gateways.remove(key);
         Ok(())
+    }
+
+    /// List all gateways
+    pub fn list_gateways(&self) -> Vec<Gateway> {
+        self.gateways.values().cloned().collect()
     }
 }
 

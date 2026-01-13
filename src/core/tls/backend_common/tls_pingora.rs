@@ -1,6 +1,6 @@
 use crate::core::conf_sync::conf_server::get_secret_by_name;
+use crate::core::gateway::gateway::{match_gateway_tls, GatewayTlsEntry};
 use crate::core::observe::ssl_log::{log_ssl, SslLogEntry};
-use crate::core::tls::gateway_tls_matcher::{match_gateway_tls, GatewayTlsEntry};
 use crate::core::tls::tls_cert_matcher::match_sni;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
@@ -179,27 +179,58 @@ impl TlsCallback {
         // Gateway TLS doesn't support mTLS by default
         entry.mtls(false);
 
+        // Priority 1: Use embedded Secret from GatewayTlsEntry (filled by Controller)
+        let secret = if let Some(secrets) = &gateway_tls.secrets {
+            if let Some(s) = secrets.first() {
+                s.clone()
+            } else {
+                // Fall back to SecretStore lookup
+                self.get_secret_from_store_or_error(gateway_tls, entry)
+            }
+        } else {
+            // Fall back to SecretStore lookup
+            self.get_secret_from_store_or_error(gateway_tls, entry)
+        };
+
+        // Extract and apply certificate from Secret
+        self.apply_secret_to_ssl(ssl, &secret, entry);
+    }
+
+    /// Helper: Get Secret from global SecretStore (fallback for legacy behavior)
+    fn get_secret_from_store_or_error(
+        &self,
+        gateway_tls: &GatewayTlsEntry,
+        entry: &mut SslLogEntry,
+    ) -> k8s_openapi::api::core::v1::Secret {
         // Get the first certificate ref (typically there's only one)
         let cert_ref = match gateway_tls.certificate_refs.first() {
             Some(r) => r,
             None => {
                 entry.error("No certificate refs in Gateway TLS config");
-                return;
+                return k8s_openapi::api::core::v1::Secret::default();
             }
         };
 
         // Resolve Secret namespace (use Gateway namespace if not specified)
         let secret_namespace = cert_ref.namespace.as_deref().unwrap_or(&gateway_tls.gateway_namespace);
 
-        // Load Secret
-        let secret = match get_secret_by_name(Some(secret_namespace), &cert_ref.name) {
+        // Load Secret from global store
+        match get_secret_by_name(Some(secret_namespace), &cert_ref.name) {
             Some(s) => s,
             None => {
                 entry.error(format!("Secret not found: {}/{}", secret_namespace, cert_ref.name));
-                return;
+                k8s_openapi::api::core::v1::Secret::default()
             }
-        };
+        }
+    }
 
+    /// Helper: Extract cert/key from Secret and apply to SSL
+    fn apply_secret_to_ssl(
+        &self,
+        ssl: &mut SslRef,
+        secret: &k8s_openapi::api::core::v1::Secret,
+        entry: &mut SslLogEntry,
+    ) {
         // Extract tls.crt and tls.key from Secret
         let data = match &secret.data {
             Some(d) => d,
@@ -263,12 +294,13 @@ impl TlsCallback {
             return;
         }
 
-        tracing::debug!(
-            gateway = %gateway_tls.gateway_name,
-            listener = %gateway_tls.listener_name,
-            secret = format!("{}/{}", secret_namespace, cert_ref.name),
-            "Applied certificate from Gateway TLS config"
-        );
+        // Log success - secret name from metadata
+        if let Some(name) = &secret.metadata.name {
+            tracing::debug!(
+                secret_name = %name,
+                "Applied certificate from Secret"
+            );
+        }
     }
 
     /// Configure mTLS (mutual TLS) client certificate verification

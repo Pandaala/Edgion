@@ -134,6 +134,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/Security" | "Gateway" => "Gateway/Security",
         "Gateway/RealIP" => "Gateway/RealIP",
         "Gateway/TLS/BackendTLS" => "Gateway/TLS/BackendTLS",
+        "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
         "Gateway/Plugins" => "Gateway/Plugins",
         // EdgionTls
         "EdgionTls" | "EdgionTls/https" => "EdgionTls/https",
@@ -289,6 +290,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool) {
             }
             runner.add_suite(Box::new(suites::BackendTlsTestSuite));
         }
+        "Gateway/TLS/GatewayTLS" => {
+            if !gateway {
+                eprintln!("Error: Gateway/TLS/GatewayTLS tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GatewayTlsTestSuite));
+        }
         "Gateway/Plugins" => {
             if !gateway {
                 eprintln!("Error: Gateway/Plugins tests require --gateway flag");
@@ -405,6 +413,11 @@ async fn main() -> Result<()> {
         match port_config::PortConfig::load() {
             Ok(config) => {
                 let ports = config.get_ports(port_key);
+                // Select http_host based on suite
+                let http_host = match suite.as_str() {
+                    "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
+                    _ => "test.example.com",
+                };
                 (
                     ports.http.unwrap_or(31000),
                     ports.grpc.unwrap_or(ports.http.unwrap_or(31000)),
@@ -414,7 +427,7 @@ async fn main() -> Result<()> {
                     ports.http.unwrap_or(31000),
                     ports.https.unwrap_or(ports.http.map(|p| p + 1).unwrap_or(31001)),
                     ports.grpc_tls.unwrap_or(31070),
-                    Some("test.example.com".to_string()),
+                    Some(http_host.to_string()),
                     Some("grpc.example.com".to_string()),
                 )
             }

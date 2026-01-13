@@ -130,7 +130,17 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
                 );
             }
             Some(ResourceKind::Gateway) => {
-                load_simple::<Gateway>(content, name, "Gateway", &config_server.gateways, &mut stats);
+                // Gateway has special handling for TLS secret refs (similar to EdgionTls)
+                match serde_yaml::from_str::<Gateway>(content) {
+                    Ok(gateway) => {
+                        config_server.apply_gateway_change(ResourceChange::InitAdd, gateway);
+                        stats.success();
+                    }
+                    Err(e) => {
+                        stats.error();
+                        tracing::error!(component = "conf_store", kind = "Gateway", name = %name, error = %e, "Failed to parse resource");
+                    }
+                }
             }
             Some(ResourceKind::EdgionGatewayConfig) => {
                 load_simple::<EdgionGatewayConfig>(

@@ -1,6 +1,5 @@
 pub mod cert_validator;
 mod conf_handler_impl;
-pub mod gateway_tls_matcher;
 pub mod mtls_validator;
 pub mod tls_cert_matcher;
 pub mod tls_store;
@@ -19,7 +18,8 @@ pub mod backend_common;
 pub use cert_validator::{validate_cert, CertValidationError, CertValidationResult};
 
 pub use conf_handler_impl::create_tls_handler;
-pub use gateway_tls_matcher::{
+// Re-export from gateway module for backward compatibility
+pub use crate::core::gateway::gateway::{
     get_gateway_tls_matcher, match_gateway_tls, rebuild_gateway_tls_matcher, GatewayTlsEntry, GatewayTlsMatcher,
 };
 pub use tls_store::get_global_tls_store;

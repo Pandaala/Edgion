@@ -23,4 +23,4 @@ pub use udp_route::UdpTestSuite;
 pub use edgion_tls::{CipherTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTestSuite};
 
 // Gateway tests
-pub use gateway::{BackendTlsTestSuite, PluginLogsTestSuite, RealIpTestSuite, SecurityTestSuite};
+pub use gateway::{BackendTlsTestSuite, GatewayTlsTestSuite, PluginLogsTestSuite, RealIpTestSuite, SecurityTestSuite};

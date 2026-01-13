@@ -1,38 +1,10 @@
 use crate::core::conf_sync::traits::ConfHandler;
-use crate::core::gateway::gateway_store::get_global_gateway_store;
+use crate::core::gateway::gateway::get_global_gateway_store;
+use crate::core::gateway::gateway::tls_matcher::rebuild_gateway_tls_matcher;
 use crate::core::routes::http_routes::get_global_route_manager;
-use crate::core::tls::rebuild_gateway_tls_matcher;
 use crate::types::prelude_resources::Gateway;
 use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
-
-/// Global store for Gateway resources
-static GATEWAY_STORE: std::sync::LazyLock<Arc<RwLock<Vec<Gateway>>>> =
-    std::sync::LazyLock::new(|| Arc::new(RwLock::new(Vec::new())));
-
-/// Get a reference to the global Gateway store
-#[allow(dead_code)]
-pub fn get_gateway_store() -> Arc<RwLock<Vec<Gateway>>> {
-    GATEWAY_STORE.clone()
-}
-
-/// Query Gateway by namespace and name
-#[allow(dead_code)]
-pub fn get_gateway_by_name(namespace: Option<&str>, name: &str) -> Option<Gateway> {
-    let store = GATEWAY_STORE.read().unwrap();
-    store
-        .iter()
-        .find(|gw| gw.name_any() == name && gw.namespace().as_deref() == namespace)
-        .cloned()
-}
-
-/// List all Gateway resources
-#[allow(dead_code)]
-pub fn list_gateways() -> Vec<Gateway> {
-    let store = GATEWAY_STORE.read().unwrap();
-    store.clone()
-}
 
 /// ConfHandler implementation for Gateway
 /// Stores Gateway resources in cache for dynamic lookup during bootstrap
@@ -52,15 +24,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
             data.len()
         );
 
-        // Update legacy store (for backward compatibility)
-        let mut store = GATEWAY_STORE.write().unwrap();
-        store.clear();
-
-        // Update global GatewayStore (used by HTTPRoute handler)
         let global_store = get_global_gateway_store();
-        let mut global_store_guard = global_store.write().unwrap();
-        // Clear and rebuild global store
-        *global_store_guard = crate::core::gateway::gateway_store::GatewayStore::new();
+        let mut store = global_store.write().unwrap();
+        store.clear();
 
         for (key, gateway) in data {
             let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
@@ -72,11 +38,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 listeners = listener_count,
                 "Gateway stored"
             );
-            store.push(gateway.clone());
 
-            // Also add to global store
-            if let Err(e) = global_store_guard.add_gateway(gateway.clone()) {
-                tracing::warn!(key = %key, error = %e, "Failed to add gateway to global store");
+            if let Err(e) = store.add_gateway(gateway.clone()) {
+                tracing::warn!(key = %key, error = %e, "Failed to add gateway to store");
             }
 
             // Initialize route manager entry for this gateway
@@ -87,11 +51,13 @@ impl ConfHandler<Gateway> for GatewayHandler {
         }
 
         // Rebuild Gateway TLS matcher for dynamic TLS certificate lookup
-        rebuild_gateway_tls_matcher(&store);
+        let gateways = store.list_gateways();
+        rebuild_gateway_tls_matcher(&gateways);
     }
 
     fn partial_update(&self, add: HashMap<String, Gateway>, update: HashMap<String, Gateway>, remove: HashSet<String>) {
-        let mut store = GATEWAY_STORE.write().unwrap();
+        let global_store = get_global_gateway_store();
+        let mut store = global_store.write().unwrap();
 
         if !add.is_empty() {
             tracing::info!(
@@ -109,7 +75,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     listeners = listener_count,
                     "Gateway added"
                 );
-                store.push(gateway);
+                if let Err(e) = store.add_gateway(gateway) {
+                    tracing::warn!(key = %key, error = %e, "Failed to add gateway");
+                }
             }
         }
 
@@ -129,14 +97,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     listeners = listener_count,
                     "Gateway updated (dynamic listener/TLS update not yet implemented)"
                 );
-
-                // Find and update existing gateway
-                if let Some(existing) = store
-                    .iter_mut()
-                    .find(|gw| gw.name_any() == gateway.name_any() && gw.namespace() == gateway.namespace())
-                {
-                    *existing = gateway;
-                }
+                store.update_gateway(gateway);
 
                 // TODO: Detect listener changes
                 // TODO: Detect TLS certificateRefs changes and update GatewayTlsCertMatcher
@@ -155,19 +116,17 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     key = %key,
                     "Gateway removed (dynamic listener removal not yet implemented)"
                 );
+                if let Err(e) = store.remove_gateway(key) {
+                    tracing::warn!(key = %key, error = %e, "Failed to remove gateway");
+                }
             }
-
-            // Remove gateways whose key is in the remove set
-            store.retain(|gw| {
-                let gw_key = format!("{}/{}", gw.namespace().unwrap_or_default(), gw.name_any());
-                !remove.contains(&gw_key) && !remove.contains(&gw.name_any())
-            });
 
             // TODO: Clean up listeners (requires Pingora support or hot reload)
         }
 
         // Rebuild Gateway TLS matcher after any changes
-        rebuild_gateway_tls_matcher(&store);
+        let gateways = store.list_gateways();
+        rebuild_gateway_tls_matcher(&gateways);
     }
 }
 

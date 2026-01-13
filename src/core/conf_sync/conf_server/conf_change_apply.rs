@@ -440,6 +440,117 @@ impl ConfigServer {
         execute_change_on_cache(change, &self.edgion_tls, resource);
     }
 
+    /// Apply Gateway change with TLS secret reference handling
+    ///
+    /// Similar to EdgionTls, Gateway can reference Secrets via `certificateRefs` in TLS config.
+    /// This function:
+    /// 1. Registers Secret references with SecretRefManager
+    /// 2. Resolves and fills in Secret data to `tls.secrets` field
+    /// 3. Enables cascading updates when referenced Secrets change
+    pub fn apply_gateway_change(&self, change: ResourceChange, mut resource: Gateway) {
+        use super::secret_ref::ResourceRef;
+        use crate::types::ResourceKind as RK;
+
+        // Create Gateway resource reference
+        let resource_ref = ResourceRef::new(
+            RK::Gateway,
+            resource.metadata.namespace.clone(),
+            resource.metadata.name.clone().unwrap_or_default(),
+        );
+
+        // Handle delete: clear all Secret references
+        if matches!(change, ResourceChange::EventDelete) {
+            self.secret_ref_manager.clear_resource_refs(&resource_ref);
+            tracing::info!(
+                component = "config_server",
+                kind = "Gateway",
+                gateway = %resource_ref.key(),
+                "Applying Gateway delete, cleared secret references"
+            );
+            execute_change_on_cache(change, &self.gateways, resource);
+            return;
+        }
+
+        // Clear old references for update scenario
+        if matches!(change, ResourceChange::EventUpdate) {
+            self.secret_ref_manager.clear_resource_refs(&resource_ref);
+        }
+
+        // Process all Listeners and resolve TLS certificates
+        let mut has_tls_config = false;
+        if let Some(ref mut listeners) = resource.spec.listeners {
+            let secret_list = self.secrets.list_owned();
+
+            for listener in listeners.iter_mut() {
+                let tls_config = match &mut listener.tls {
+                    Some(tls) => tls,
+                    None => continue,
+                };
+
+                if let Some(cert_refs) = &tls_config.certificate_refs {
+                    if cert_refs.is_empty() {
+                        continue;
+                    }
+
+                    has_tls_config = true;
+                    let mut resolved_secrets = Vec::new();
+
+                    for cert_ref in cert_refs {
+                        let secret_ns = cert_ref
+                            .namespace
+                            .as_ref()
+                            .or(resource.metadata.namespace.as_ref());
+
+                        // Build secret key and register reference
+                        let secret_key = if let Some(ns) = secret_ns {
+                            format!("{}/{}", ns, cert_ref.name)
+                        } else {
+                            cert_ref.name.clone()
+                        };
+
+                        // Register to SecretRefManager (even if Secret doesn't exist yet)
+                        self.secret_ref_manager
+                            .add_ref(secret_key.clone(), resource_ref.clone());
+
+                        // Try to find and resolve Secret
+                        if let Some(secret) = secret_list.data.iter().find(|s| {
+                            s.metadata.namespace.as_deref() == secret_ns.map(|s| s.as_str())
+                                && s.metadata.name.as_deref() == Some(cert_ref.name.as_str())
+                        }) {
+                            resolved_secrets.push(secret.clone());
+                            tracing::debug!(
+                                gateway = %resource_ref.key(),
+                                listener = %listener.name,
+                                secret_key = %secret_key,
+                                "Secret resolved and filled into Gateway TLS config"
+                            );
+                        } else {
+                            tracing::warn!(
+                                gateway = %resource_ref.key(),
+                                listener = %listener.name,
+                                secret_key = %secret_key,
+                                "Secret not found, Gateway TLS will be updated when Secret is added"
+                            );
+                        }
+                    }
+
+                    if !resolved_secrets.is_empty() {
+                        tls_config.secrets = Some(resolved_secrets);
+                    }
+                }
+            }
+        }
+
+        tracing::info!(
+            component = "config_server",
+            kind = "Gateway",
+            gateway = %resource_ref.key(),
+            has_tls = has_tls_config,
+            "Applying Gateway resource change"
+        );
+        execute_change_on_cache(change, &self.gateways, resource);
+    }
+
     /// Apply Service change
     pub fn apply_service_change(&self, change: ResourceChange, resource: Service) {
         tracing::info!(
@@ -617,6 +728,96 @@ impl ConfigServer {
 
                                 // Trigger update event
                                 execute_change_on_cache(ResourceChange::EventUpdate, &self.edgion_tls, edgion_tls);
+                            }
+                        }
+                        RK::Gateway => {
+                            // Reload Gateway from cache and update TLS secrets
+                            let gateway_list = self.gateways.list_owned();
+
+                            if let Some(mut gateway) = gateway_list.data.into_iter().find(|gw| {
+                                gw.metadata.namespace.as_deref() == resource_ref.namespace.as_deref()
+                                    && gw.metadata.name.as_deref() == Some(resource_ref.name.as_str())
+                            }) {
+                                let mut updated = false;
+
+                                // Iterate all Listeners and update matching TLS secrets
+                                if let Some(ref mut listeners) = gateway.spec.listeners {
+                                    for listener in listeners.iter_mut() {
+                                        if let Some(ref mut tls_config) = listener.tls {
+                                            if let Some(cert_refs) = &tls_config.certificate_refs {
+                                                // Check if any certificateRef matches this Secret
+                                                let matching_refs: Vec<_> = cert_refs
+                                                    .iter()
+                                                    .filter(|cert_ref| {
+                                                        let ref_ns = cert_ref
+                                                            .namespace
+                                                            .as_ref()
+                                                            .or(gateway.metadata.namespace.as_ref());
+                                                        ref_ns.map(|s| s.as_str()) == secret_namespace.map(|s| s.as_str())
+                                                            && cert_ref.name == secret_name
+                                                    })
+                                                    .collect();
+
+                                                if !matching_refs.is_empty() {
+                                                    // Rebuild secrets list for this listener
+                                                    let mut resolved_secrets = Vec::new();
+                                                    let all_secrets = self.secrets.list_owned();
+
+                                                    for cert_ref in cert_refs {
+                                                        let ref_ns = cert_ref
+                                                            .namespace
+                                                            .as_ref()
+                                                            .or(gateway.metadata.namespace.as_ref());
+
+                                                        // If this is the updated secret, use it
+                                                        if ref_ns.map(|s| s.as_str()) == secret_namespace.map(|s| s.as_str())
+                                                            && cert_ref.name == secret_name
+                                                        {
+                                                            resolved_secrets.push(resource.clone());
+                                                        } else {
+                                                            // Find other secrets from cache
+                                                            if let Some(other_secret) = all_secrets.data.iter().find(|s| {
+                                                                s.metadata.namespace.as_deref()
+                                                                    == ref_ns.map(|s| s.as_str())
+                                                                    && s.metadata.name.as_deref()
+                                                                        == Some(cert_ref.name.as_str())
+                                                            }) {
+                                                                resolved_secrets.push(other_secret.clone());
+                                                            }
+                                                        }
+                                                    }
+
+                                                    tls_config.secrets = Some(resolved_secrets);
+                                                    updated = true;
+
+                                                    tracing::debug!(
+                                                        gateway = %resource_ref.key(),
+                                                        listener = %listener.name,
+                                                        secret_key = %secret_key,
+                                                        "Updated Gateway TLS config with resolved Secret"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if updated {
+                                    // Update resource version for cascading update
+                                    use crate::core::utils;
+                                    let new_version = utils::next_resource_version();
+                                    gateway.metadata.resource_version = Some(new_version.to_string());
+
+                                    tracing::info!(
+                                        gateway = %resource_ref.key(),
+                                        secret_key = %secret_key,
+                                        new_version = new_version,
+                                        "Updating Gateway with resolved TLS Secret (cascading update)"
+                                    );
+
+                                    // Trigger update event
+                                    execute_change_on_cache(ResourceChange::EventUpdate, &self.gateways, gateway);
+                                }
                             }
                         }
                         _ => {

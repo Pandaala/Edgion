@@ -39,6 +39,7 @@ impl ResourceRef {
 
         let kind = match parts[0] {
             "EdgionTls" => ResourceKind::EdgionTls,
+            "Gateway" => ResourceKind::Gateway,
             _ => return None,
         };
 

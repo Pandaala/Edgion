@@ -1,5 +1,5 @@
 use crate::core::conf_sync::conf_client::ConfigClient;
-use crate::core::gateway::gateway_store::get_global_gateway_store;
+use crate::core::gateway::gateway::get_global_gateway_store;
 use crate::core::gateway::listener_builder;
 use crate::core::observe::access_log::get_access_logger_unchecked;
 use crate::core::observe::AccessLogger;

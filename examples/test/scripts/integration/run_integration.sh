@@ -365,8 +365,11 @@ main() {
                     run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
                     run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
                     run_test "Gateway_Plugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Plugins" || test_failed=true
+                    run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
                 else
-                    run_test "Gateway_${item}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ${item}" || test_failed=true
+                    # Replace / with _ in item name for log file
+                    local item_safe=$(echo "$item" | tr '/' '_')
+                    run_test "Gateway_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ${item}" || test_failed=true
                 fi
                 ;;
             EdgionTls)
@@ -431,6 +434,7 @@ main() {
         run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
         run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
         run_test "Gateway_Plugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Plugins" || test_failed=true
+        run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
         
         # EdgionTls Tests
         run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i https" || test_failed=true

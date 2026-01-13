@@ -1,5 +1,5 @@
 use crate::core::conf_sync::traits::ConfHandler;
-use crate::core::gateway::gateway_store::get_global_gateway_store;
+use crate::core::gateway::gateway::get_global_gateway_store;
 use crate::core::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
 use crate::core::routes::http_routes::lb_policy_sync::{cleanup_lb_policies_for_routes, sync_lb_policies_for_routes};
 use crate::core::routes::http_routes::match_engine::radix_route_match::RadixRouteMatchEngine;

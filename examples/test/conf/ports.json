@@ -1,5 +1,5 @@
 {
-  "current_max": 31210,
+  "current_max": 31220,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -62,6 +62,9 @@
     },
     "EdgionTls/cipher": {
       "https": 31195
+    },
+    "Gateway/TLS/GatewayTLS": {
+      "https": 31220
     }
   }
 }

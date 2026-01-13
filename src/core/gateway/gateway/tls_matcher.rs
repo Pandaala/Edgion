@@ -14,11 +14,12 @@ use crate::types::err::EdError;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::gateway::SecretObjectReference;
 use arc_swap::ArcSwap;
+use k8s_openapi::api::core::v1::Secret;
 use kube::ResourceExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 
-/// Gateway TLS entry containing certificate references
+/// Gateway TLS entry containing certificate references and resolved secrets
 #[derive(Debug, Clone)]
 pub struct GatewayTlsEntry {
     /// Gateway namespace
@@ -31,6 +32,8 @@ pub struct GatewayTlsEntry {
     pub hostname: String,
     /// References to Secrets containing certificates
     pub certificate_refs: Vec<SecretObjectReference>,
+    /// Resolved Secret data (filled by Controller)
+    pub secrets: Option<Vec<Secret>>,
 }
 
 /// Gateway TLS Matcher for hostname-based certificate lookup
@@ -138,6 +141,7 @@ impl GatewayTlsMatcher {
                     listener_name: listener.name.clone(),
                     hostname: hostname.clone(),
                     certificate_refs: cert_refs,
+                    secrets: tls_config.secrets.clone(),
                 };
 
                 // Add entry to hash_host

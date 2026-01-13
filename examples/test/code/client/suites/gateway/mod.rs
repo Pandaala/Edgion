@@ -12,3 +12,4 @@ pub use plugins::PluginLogsTestSuite;
 pub use real_ip::RealIpTestSuite;
 pub use security::SecurityTestSuite;
 pub use tls::BackendTlsTestSuite;
+pub use tls::GatewayTlsTestSuite;
