@@ -3,7 +3,7 @@ use crate::types::{WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 use kube::{Resource, ResourceExt};
 use std::collections::HashMap;
 
-/// Result type for get_events_from_resource_version: (current_version, optional_events)
+/// Result type for get_events_from_sync_version: (current_version, optional_events)
 type EventsResult<T> = Result<(u64, Option<Vec<WatcherEvent<T>>>), String>;
 
 /// Event storage - circular queue
@@ -12,34 +12,34 @@ pub struct EventStore<T> {
     cache: Vec<Option<WatcherEvent<T>>>,
     start_index: usize,
     end_index: usize,
-    resource_version: u64,
-    expire_version: u64,
+    sync_version: u64,
+    expire_sync_version: u64,
     data: HashMap<String, T>, // Key: namespace/name or name (for cluster-scoped resources)
 }
 
 impl<T> EventStore<T> {
-    /// Set current resource version
-    pub fn set_current_version(&mut self, version: u64) {
-        self.resource_version = version;
+    /// Set current sync version
+    pub fn set_current_sync_version(&mut self, version: u64) {
+        self.sync_version = version;
     }
 
     // init add do not apply any events
-    pub fn init_add(&mut self, version: u64, resource: T)
+    pub fn init_add(&mut self, sync_version: u64, resource: T)
     where
         T: Resource,
     {
         let key = Self::resource_key(&resource);
         self.data.insert(key, resource);
-        if version > self.resource_version {
-            self.resource_version = version;
+        if sync_version > self.sync_version {
+            self.sync_version = sync_version;
         }
     }
 
-    pub fn get_last_resource_version(&self) -> u64 {
-        self.resource_version
+    pub fn get_last_sync_version(&self) -> u64 {
+        self.sync_version
     }
 
-    pub fn apply_event(&mut self, event_type: EventType, resource: T, version: u64)
+    pub fn apply_event(&mut self, event_type: EventType, resource: T, sync_version: u64)
     where
         T: Clone + Resource,
     {
@@ -56,13 +56,13 @@ impl<T> EventStore<T> {
             }
         }
 
-        if version > self.resource_version {
-            self.resource_version = version;
+        if sync_version > self.sync_version {
+            self.sync_version = sync_version;
         }
 
         let event = WatcherEvent {
             event_type,
-            resource_version: version,
+            sync_version,
             data: resource,
         };
 
@@ -89,7 +89,7 @@ impl<T> EventStore<T> {
         T: Clone,
     {
         let data = self.data.values().cloned().collect();
-        (data, self.resource_version)
+        (data, self.sync_version)
     }
 }
 
@@ -106,8 +106,8 @@ impl<T: Clone> EventStore<T> {
             cache: vec![None; capacity],
             start_index: 0,
             end_index: 0,
-            resource_version: 0,
-            expire_version: 0,
+            sync_version: 0,
+            expire_sync_version: 0,
             data: HashMap::new(),
         }
     }
@@ -118,7 +118,7 @@ impl<T: Clone> EventStore<T> {
 
         if self.end_index - self.start_index >= self.capacity {
             if let Some(last_event) = self.cache[index].as_ref() {
-                self.expire_version = last_event.resource_version;
+                self.expire_sync_version = last_event.sync_version;
             }
             self.start_index += 1;
         }
@@ -128,19 +128,19 @@ impl<T: Clone> EventStore<T> {
     }
 
     /// Get events starting from specified version
-    pub fn get_events_from_resource_version(&self, from_version: u64) -> EventsResult<T> {
-        if from_version > self.resource_version {
+    pub fn get_events_from_sync_version(&self, from_version: u64) -> EventsResult<T> {
+        if from_version > self.sync_version {
             return Err(WATCH_ERR_VERSION_UNEXPECTED.to_owned());
-        } else if from_version == self.resource_version {
-            return Ok((self.resource_version, None));
+        } else if from_version == self.sync_version {
+            return Ok((self.sync_version, None));
         }
 
-        if from_version != 0 && from_version < self.expire_version {
+        if from_version != 0 && from_version < self.expire_sync_version {
             return Err(WATCH_ERR_TOO_OLD_VERSION.to_owned());
         }
 
         if self.capacity == 0 || self.end_index == self.start_index {
-            return Ok((self.resource_version, None));
+            return Ok((self.sync_version, None));
         }
 
         // Walk backward to find the earliest index whose version is > from_version.
@@ -148,7 +148,7 @@ impl<T: Clone> EventStore<T> {
         while start_scan > self.start_index {
             let idx = (start_scan - 1) % self.capacity;
             match self.cache[idx].as_ref() {
-                Some(ev) if ev.resource_version > from_version => {
+                Some(ev) if ev.sync_version > from_version => {
                     start_scan -= 1;
                 }
                 _ => break,
@@ -160,14 +160,14 @@ impl<T: Clone> EventStore<T> {
         while loop_index < self.end_index {
             let idx = loop_index % self.capacity;
             if let Some(ev) = self.cache[idx].as_ref() {
-                if ev.resource_version > from_version {
+                if ev.sync_version > from_version {
                     events.push(ev.clone());
                 }
             }
             loop_index += 1;
         }
 
-        Ok((self.resource_version, Some(events)))
+        Ok((self.sync_version, Some(events)))
     }
 }
 
@@ -264,7 +264,7 @@ mod tests {
     fn empty_store_returns_no_events() {
         let store = make_store();
 
-        let (current_version, events) = store.get_events_from_resource_version(0).unwrap();
+        let (current_version, events) = store.get_events_from_sync_version(0).unwrap();
 
         assert_eq!(current_version, 0);
         assert!(events.is_none());
@@ -282,11 +282,11 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot.contains(&resource));
 
-        let (current_version, events_opt) = store.get_events_from_resource_version(0).unwrap();
+        let (current_version, events_opt) = store.get_events_from_sync_version(0).unwrap();
         let events = events_opt.expect("expected events");
         assert_eq!(current_version, 1);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].resource_version, 1);
+        assert_eq!(events[0].sync_version, 1);
         assert_eq!(events[0].data, resource);
         assert!(matches!(events[0].event_type, EventType::Add));
     }
@@ -300,14 +300,14 @@ mod tests {
         store.apply_event(EventType::Add, alpha, 1);
         store.apply_event(EventType::Update, beta.clone(), 2);
 
-        let (_, events_opt) = store.get_events_from_resource_version(1).unwrap();
+        let (_, events_opt) = store.get_events_from_sync_version(1).unwrap();
         let events = events_opt.expect("expected events for version > 1");
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].resource_version, 2);
+        assert_eq!(events[0].sync_version, 2);
         assert_eq!(events[0].data, beta);
         assert!(matches!(events[0].event_type, EventType::Update));
 
-        let (_, events_opt) = store.get_events_from_resource_version(2).unwrap();
+        let (_, events_opt) = store.get_events_from_sync_version(2).unwrap();
         assert!(
             events_opt.is_none(),
             "no events expected when requesting current version"
@@ -324,14 +324,14 @@ mod tests {
         }
 
         let err = store
-            .get_events_from_resource_version(5)
+            .get_events_from_sync_version(5)
             .expect_err("expected stale version error");
         assert_eq!(err, "TooOldVersion");
 
-        let (current_version, events_opt) = store.get_events_from_resource_version(55).unwrap();
+        let (current_version, events_opt) = store.get_events_from_sync_version(55).unwrap();
         let events = events_opt.expect("expected events after catching up");
         assert_eq!(current_version, 60);
-        let versions: Vec<u64> = events.iter().map(|ev| ev.resource_version).collect();
+        let versions: Vec<u64> = events.iter().map(|ev| ev.sync_version).collect();
         assert_eq!(versions, vec![56, 57, 58, 59, 60]);
     }
 
@@ -344,10 +344,10 @@ mod tests {
             store.apply_event(EventType::Add, resource, version);
         }
 
-        let (current_version, events_opt) = store.get_events_from_resource_version(110).unwrap();
+        let (current_version, events_opt) = store.get_events_from_sync_version(110).unwrap();
         let events = events_opt.expect("expected events after wrap");
         assert_eq!(current_version, 120);
-        let versions: Vec<u64> = events.iter().map(|ev| ev.resource_version).collect();
+        let versions: Vec<u64> = events.iter().map(|ev| ev.sync_version).collect();
         assert_eq!(versions, (111..=120).collect::<Vec<_>>());
 
         for (offset, event) in events.iter().enumerate() {
@@ -355,8 +355,8 @@ mod tests {
         }
 
         let err = store
-            .get_events_from_resource_version(10)
-            .expect_err("versions older than expire_version should error");
+            .get_events_from_sync_version(10)
+            .expect_err("versions older than expire_sync_version should error");
         assert_eq!(err, "TooOldVersion");
     }
 
@@ -368,7 +368,7 @@ mod tests {
         store.apply_event(EventType::Add, resource, 1);
 
         let err = store
-            .get_events_from_resource_version(99)
+            .get_events_from_sync_version(99)
             .expect_err("requesting future version should error");
         assert_eq!(err, "VersionUnexpect");
     }

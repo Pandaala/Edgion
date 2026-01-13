@@ -8,7 +8,7 @@ use tokio::time::{interval, Duration};
 pub struct CacheData<T> {
     ready: bool,
     data: HashMap<String, T>,
-    resource_version: u64,
+    sync_version: u64,
 
     // Register handlers to CacheData for processing specific configurations
     handler: Option<ConfHandlerData<T>>,
@@ -19,20 +19,20 @@ impl<T: ResourceMeta> CacheData<T> {
         Self {
             ready: false,
             data: HashMap::new(),
-            resource_version: 0,
+            sync_version: 0,
             handler: None,
         }
     }
 
     /// Reset cache with a complete set of resources
     /// Uses resource.key_name() (namespace/name) as the key for each resource
-    pub(crate) fn reset(&mut self, resources: Vec<T>, resource_version: u64) {
+    pub(crate) fn reset(&mut self, resources: Vec<T>, sync_version: u64) {
         // Build new HashMap directly from resources
         self.data = resources
             .into_iter()
             .map(|resource| (resource.key_name(), resource))
             .collect();
-        self.resource_version = resource_version;
+        self.sync_version = sync_version;
         if let Some(ref handler) = self.handler {
             // Pass reference to full_set, no need to clone or move data
             handler.processor.full_set(&self.data);
@@ -80,13 +80,13 @@ impl<T: ResourceMeta> CacheData<T> {
         self.data.len()
     }
 
-    // Resource version methods
-    pub(crate) fn resource_version(&self) -> u64 {
-        self.resource_version
+    // Sync version methods
+    pub(crate) fn sync_version(&self) -> u64 {
+        self.sync_version
     }
 
-    pub(crate) fn set_resource_version(&mut self, version: u64) {
-        self.resource_version = version;
+    pub(crate) fn set_sync_version(&mut self, version: u64) {
+        self.sync_version = version;
     }
 
     // Configuration handler methods

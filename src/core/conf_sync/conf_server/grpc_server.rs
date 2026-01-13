@@ -69,7 +69,7 @@ impl ConfigSync for ConfigSyncServer {
 
         Ok(Response::new(ListResponse {
             data: list_data.data,
-            resource_version: list_data.resource_version,
+            sync_version: list_data.sync_version,
             server_id: list_data.server_id,
         }))
     }
@@ -121,7 +121,7 @@ impl ConfigSync for ConfigSyncServer {
             while let Some(event_data) = receiver.recv().await {
                 let response = WatchResponse {
                     data: event_data.data,
-                    resource_version: event_data.resource_version,
+                    sync_version: event_data.sync_version,
                     err: event_data.err.unwrap_or_default(),
                     server_id: event_data.server_id,
                 };

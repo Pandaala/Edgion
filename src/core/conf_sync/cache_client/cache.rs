@@ -73,30 +73,30 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         cache.set_conf_processor(processor, self.cache_data.clone());
     }
 
-    /// Get current resource version
-    pub fn get_resource_version(&self) -> u64 {
+    /// Get current sync version
+    pub fn get_sync_version(&self) -> u64 {
         let cache = self.cache_data.read().unwrap();
-        cache.resource_version()
+        cache.sync_version()
     }
 
-    /// Set current resource version
-    pub fn set_resource_version(&self, version: u64) {
+    /// Set current sync version
+    pub fn set_sync_version(&self, version: u64) {
         let mut cache = self.cache_data.write().unwrap();
-        cache.set_resource_version(version);
+        cache.set_sync_version(version);
     }
 
     /// Reset cache with a complete set of resources
     /// This clears existing cache and rebuilds it with the provided resources
     /// Uses resource.key_name() (namespace/name) as the key for each resource
-    pub fn reset(&self, resources: Vec<T>, resource_version: u64)
+    pub fn reset(&self, resources: Vec<T>, sync_version: u64)
     where
         T: ResourceMeta,
     {
         let mut cache = self.cache_data.write().unwrap();
-        cache.reset(resources, resource_version);
+        cache.reset(resources, sync_version);
     }
 
-    /// List all data - returns all resources in the cache with resource version
+    /// List all data - returns all resources in the cache with sync version
     pub fn list(&self) -> ListData<T>
     where
         T: Clone,
@@ -111,8 +111,8 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
     {
         let cache = self.cache_data.read().unwrap();
         let data = cache.values().cloned().collect();
-        let resource_version = cache.resource_version();
-        ListData::new(data, resource_version)
+        let sync_version = cache.sync_version();
+        ListData::new(data, sync_version)
     }
 
     /// Get a resource by key

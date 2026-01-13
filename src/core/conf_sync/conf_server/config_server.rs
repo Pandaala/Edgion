@@ -23,7 +23,7 @@ fn spawn_watch_forwarder<T: serde::Serialize + Send + 'static>(
         while let Some(response) = receiver.recv().await {
             let WatchResponse {
                 events,
-                resource_version,
+                sync_version,
                 err,
             } = response;
 
@@ -36,7 +36,7 @@ fn spawn_watch_forwarder<T: serde::Serialize + Send + 'static>(
             };
             let event_data = EventDataSimple {
                 data: events_json,
-                resource_version,
+                sync_version,
                 err,
                 server_id: server_id.clone(),
             };
@@ -105,13 +105,13 @@ pub struct ConfigServer {
 
 pub struct ListDataSimple {
     pub data: String,
-    pub resource_version: u64,
+    pub sync_version: u64,
     pub server_id: String,
 }
 
 pub struct EventDataSimple {
     pub data: String,
-    pub resource_version: u64,
+    pub sync_version: u64,
     pub err: Option<String>,
     pub server_id: String,
 }
@@ -177,7 +177,7 @@ impl ConfigServer {
     }
 
     pub fn list(&self, kind: &ResourceKind) -> Result<ListDataSimple, String> {
-        let (data_json, resource_version) = match kind {
+        let (data_json, sync_version) = match kind {
             ResourceKind::Unspecified => return Err("Resource kind unspecified".to_string()),
             ResourceKind::GatewayClass => self.list_gateway_classes().to_json("GatewayClass")?,
             ResourceKind::EdgionGatewayConfig => self.list_edgion_gateway_configs().to_json("EdgionGatewayConfig")?,
@@ -202,7 +202,7 @@ impl ConfigServer {
 
         Ok(ListDataSimple {
             data: data_json,
-            resource_version,
+            sync_version,
             server_id: self.server_id.clone(),
         })
     }
@@ -622,7 +622,7 @@ impl ConfigServer {
         println!(
             "GatewayClass (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, gc) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(gc));
@@ -632,7 +632,7 @@ impl ConfigServer {
         println!(
             "EdgionGatewayConfig (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, egwc) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(egwc));
@@ -642,7 +642,7 @@ impl ConfigServer {
         println!(
             "Gateway (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, gw) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(gw));
@@ -666,7 +666,7 @@ impl ConfigServer {
         println!(
             "HTTPRoutes (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, route) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(route));
@@ -677,7 +677,7 @@ impl ConfigServer {
         println!(
             "GRPCRoutes (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, route) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(route));
@@ -688,7 +688,7 @@ impl ConfigServer {
         println!(
             "TCPRoutes (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, route) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(route));
@@ -699,7 +699,7 @@ impl ConfigServer {
         println!(
             "UDPRoutes (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, route) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(route));
@@ -710,7 +710,7 @@ impl ConfigServer {
         println!(
             "TLSRoutes (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, route) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(route));
@@ -721,7 +721,7 @@ impl ConfigServer {
         println!(
             "LinkSys (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, link_sys) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(link_sys));
@@ -732,7 +732,7 @@ impl ConfigServer {
         println!(
             "Services (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, svc) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(svc));
@@ -743,7 +743,7 @@ impl ConfigServer {
         println!(
             "EndpointSlices (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, es) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(es));
@@ -754,7 +754,7 @@ impl ConfigServer {
         println!(
             "EdgionTls (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, tls) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(tls));
@@ -765,7 +765,7 @@ impl ConfigServer {
         println!(
             "EdgionPlugins (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, plugin) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(plugin));
@@ -776,7 +776,7 @@ impl ConfigServer {
         println!(
             "PluginMetaData (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, metadata) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(metadata));
@@ -787,29 +787,13 @@ impl ConfigServer {
         println!(
             "Secrets (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, secret) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(secret));
         }
 
         println!("==========================\n");
-    }
-
-    /// Enable version fix mode for all caches
-    pub fn enable_version_fix_mode(&self) {
-        self.routes.enable_version_fix_mode();
-        self.grpc_routes.enable_version_fix_mode();
-        self.tcp_routes.enable_version_fix_mode();
-        self.udp_routes.enable_version_fix_mode();
-        self.tls_routes.enable_version_fix_mode();
-        self.link_sys.enable_version_fix_mode();
-        self.services.enable_version_fix_mode();
-        self.endpoint_slices.enable_version_fix_mode();
-        self.edgion_tls.enable_version_fix_mode();
-        self.edgion_plugins.enable_version_fix_mode();
-        self.plugin_metadata.enable_version_fix_mode();
-        self.secrets.enable_version_fix_mode();
     }
 
     /// Set all caches to ready state

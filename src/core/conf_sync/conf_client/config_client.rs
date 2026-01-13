@@ -309,7 +309,7 @@ impl ConfigClient {
     }
 
     pub fn list(&self, _key: &String, kind: &ResourceKind) -> Result<ListDataSimple, String> {
-        let (data_json, resource_version) = match kind {
+        let (data_json, sync_version) = match kind {
             ResourceKind::Unspecified => return Err("Resource kind unspecified".to_string()),
             ResourceKind::GatewayClass => self.gateway_classes.list().to_json("GatewayClass")?,
             ResourceKind::EdgionGatewayConfig => self.edgion_gateway_configs.list().to_json("EdgionGatewayConfig")?,
@@ -334,7 +334,7 @@ impl ConfigClient {
 
         Ok(ListDataSimple {
             data: data_json,
-            resource_version,
+            sync_version,
         })
     }
 
@@ -447,7 +447,7 @@ impl ConfigClient {
             println!(
                 "GatewayClasses (count: {}, version: {}):",
                 gateway_classes.data.len(),
-                gateway_classes.resource_version
+                gateway_classes.sync_version
             );
             for (idx, gc) in gateway_classes.data.iter().enumerate() {
                 println!("  [{}] {}", idx, format_resource_info(gc));
@@ -462,7 +462,7 @@ impl ConfigClient {
             println!(
                 "EdgionGatewayConfigs (count: {}, version: {}):",
                 edgion_gateway_configs.data.len(),
-                edgion_gateway_configs.resource_version
+                edgion_gateway_configs.sync_version
             );
             for (idx, egwc) in edgion_gateway_configs.data.iter().enumerate() {
                 println!("  [{}] {}", idx, format_resource_info(egwc));
@@ -477,7 +477,7 @@ impl ConfigClient {
             println!(
                 "Gateways (count: {}, version: {}):",
                 gateways.data.len(),
-                gateways.resource_version
+                gateways.sync_version
             );
             for (idx, gw) in gateways.data.iter().enumerate() {
                 println!("  [{}] {}", idx, format_resource_info(gw));
@@ -491,7 +491,7 @@ impl ConfigClient {
         println!(
             "HTTPRoutes (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, route) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(route));
@@ -502,7 +502,7 @@ impl ConfigClient {
         println!(
             "GRPCRoutes (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, route) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(route));
@@ -513,7 +513,7 @@ impl ConfigClient {
         println!(
             "TCPRoutes (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, route) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(route));
@@ -524,7 +524,7 @@ impl ConfigClient {
         println!(
             "UDPRoutes (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, route) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(route));
@@ -535,7 +535,7 @@ impl ConfigClient {
         println!(
             "TLSRoutes (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, route) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(route));
@@ -546,7 +546,7 @@ impl ConfigClient {
         println!(
             "Services (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, svc) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(svc));
@@ -557,7 +557,7 @@ impl ConfigClient {
         println!(
             "EndpointSlices (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, es) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(es));
@@ -568,7 +568,7 @@ impl ConfigClient {
         println!(
             "EdgionTls (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, tls) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(tls));
@@ -579,7 +579,7 @@ impl ConfigClient {
         println!(
             "EdgionPlugins (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, plugin) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(plugin));
@@ -590,7 +590,7 @@ impl ConfigClient {
         println!(
             "PluginMetaData (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, metadata) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(metadata));
@@ -601,7 +601,7 @@ impl ConfigClient {
         println!(
             "LinkSys (count: {}, version: {}):",
             list_data.data.len(),
-            list_data.resource_version
+            list_data.sync_version
         );
         for (idx, link_sys) in list_data.data.iter().enumerate() {
             println!("  [{}] {}", idx, format_resource_info(link_sys));
@@ -612,7 +612,7 @@ impl ConfigClient {
         // println!(
         //     "Secrets (count: {}, version: {}):",
         //     list_data.data.len(),
-        //     list_data.resource_version
+        //     list_data.sync_version
         // );
         // for (idx, secret) in list_data.data.iter().enumerate() {
         //     println!("  [{}] {}", idx, format_resource_info(secret));
@@ -624,7 +624,7 @@ impl ConfigClient {
 
 pub struct ListDataSimple {
     pub data: String,
-    pub resource_version: u64,
+    pub sync_version: u64,
 }
 
 impl ConfigClientEventDispatcher for ConfigClient {

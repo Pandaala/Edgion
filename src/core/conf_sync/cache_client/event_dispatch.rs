@@ -11,7 +11,7 @@ use super::cache::ClientCache;
 
 /// Result of list_and_reset operation
 struct ListResult {
-    resource_version: u64,
+    sync_version: u64,
     server_id: String,
 }
 
@@ -71,7 +71,7 @@ where
         tracing::info!(
             kind = T::kind_name(),
             bytes = list_data.data.len(),
-            version = list_data.resource_version,
+            sync_version = list_data.sync_version,
             server_id = %list_data.server_id,
             context = log_context,
             "Listing resources"
@@ -90,11 +90,11 @@ where
 
         tracing::info!(kind = T::kind_name(), count = resources.len(), "Parsed resources");
 
-        // Debug: print all resource keys and resource_version
+        // Debug: print all resource keys and sync_version
         let resource_keys: Vec<String> = resources.iter().map(|r| r.key_name()).collect();
         tracing::debug!(
             kind = T::kind_name(),
-            resource_version = list_data.resource_version,
+            sync_version = list_data.sync_version,
             resources = ?resource_keys,
             "Resetting cache with resources"
         );
@@ -102,11 +102,11 @@ where
         // Use reset method to rebuild cache with fresh data
         {
             let mut cache = cache_data.write().unwrap();
-            cache.reset(resources, list_data.resource_version);
+            cache.reset(resources, list_data.sync_version);
         }
 
         Ok(ListResult {
-            resource_version: list_data.resource_version,
+            sync_version: list_data.sync_version,
             server_id: list_data.server_id,
         })
     }
@@ -137,7 +137,7 @@ where
                     }
                 };
 
-                // Perform list_and_reset to get latest resource version and server_id
+                // Perform list_and_reset to get latest sync version and server_id
                 let (from_version, mut current_server_id) = match Self::list_and_reset(client, "", &cache_data, "watch relist").await {
                     Ok(list_result) => {
                         let count = {
@@ -147,7 +147,7 @@ where
                         tracing::info!(
                             kind = T::kind_name(),
                             count = count,
-                            version = list_result.resource_version,
+                            sync_version = list_result.sync_version,
                             server_id = %list_result.server_id,
                             "List completed, starting watch"
                         );
@@ -160,7 +160,7 @@ where
                             tracing::info!(kind = T::kind_name(), "Cache is ready");
                         }
 
-                        (list_result.resource_version, list_result.server_id)
+                        (list_result.sync_version, list_result.server_id)
                     }
                     Err(e) => {
                         tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
@@ -248,7 +248,7 @@ where
                                     }
                                 }
 
-                                let _ = watch_response.resource_version; // Track version from response
+                                let _ = watch_response.sync_version; // Track version from response
 
                                 let events: Vec<serde_json::Value> = match serde_json::from_str(&watch_response.data) {
                                     Ok(events) => events,
