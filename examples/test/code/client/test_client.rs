@@ -304,6 +304,41 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool) {
             }
             runner.add_suite(Box::new(suites::PluginLogsTestSuite));
         }
+        "Gateway/ListenerHostname" => {
+            if !gateway {
+                eprintln!("Error: Gateway/ListenerHostname tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ListenerHostnameTestSuite));
+        }
+        "Gateway/AllowedRoutes/Same" => {
+            if !gateway {
+                eprintln!("Error: Gateway/AllowedRoutes/Same tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::AllowedRoutesSameNamespaceTestSuite));
+        }
+        "Gateway/AllowedRoutes/All" => {
+            if !gateway {
+                eprintln!("Error: Gateway/AllowedRoutes/All tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::AllowedRoutesAllNamespacesTestSuite));
+        }
+        "Gateway/AllowedRoutes/Kinds" => {
+            if !gateway {
+                eprintln!("Error: Gateway/AllowedRoutes/Kinds tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::AllowedRoutesKindsTestSuite));
+        }
+        "Gateway/Combined" => {
+            if !gateway {
+                eprintln!("Error: Gateway/Combined tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CombinedScenariosTestSuite));
+        }
         // EdgionTls 资源
         "EdgionTls" => {
             if !gateway {

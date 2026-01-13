@@ -482,8 +482,8 @@ load_configs() {
     done
     
     # 所有配置加载完成后，等待一次即可（Controller 会自动监听目录变化）
-    log_info "Waitconfigtake effect (1s)..."
-    sleep 1
+    log_info "Waitconfigtake effect (2s)..."
+    sleep 2
     
     log_success "allconfigLoadcompleted"
 }

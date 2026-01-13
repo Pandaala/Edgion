@@ -1,0 +1,26 @@
+# Listener Hostname 测试套件 Gateway
+# 测试 Gateway Listener 的 hostname 约束功能
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: hostname-test-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # Listener 1: 精确 hostname - api.example.com
+    - name: http-exact
+      protocol: HTTP
+      port: 31240
+      hostname: "api.example.com"
+    
+    # Listener 2: 通配符 hostname - *.wildcard.example.com
+    - name: http-wildcard
+      protocol: HTTP
+      port: 31241
+      hostname: "*.wildcard.example.com"
+    
+    # Listener 3: 无 hostname 限制（应允许所有）
+    - name: http-no-restriction
+      protocol: HTTP
+      port: 31242
