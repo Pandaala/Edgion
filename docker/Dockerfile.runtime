@@ -1,17 +1,23 @@
 # Edgion CI Dockerfile - For prebuilt binaries
 # Used by GitHub Actions for multi-arch builds with cross-compiled binaries
+# Also used for local fast builds (--local-build option)
 #
 # Build arguments:
-#   BINARY: Target binary name (e.g., gateway or controller)
+#   BINARY: Target binary name (e.g., gateway, controller, test_server)
+#   BUILD_TYPE: Build type - bin or example (default: bin)
 #   BINARY_PATH: Path to prebuilt binaries directory
 #
 # Usage:
-#   docker build -f docker/Dockerfile.runtime --build-arg BINARY=gateway --build-arg BINARY_PATH=target/x86_64-unknown-linux-gnu/release -t edgion/edgion-gateway:0.1.0 .
+#   # For bin type
+#   docker build -f docker/Dockerfile.runtime --build-arg BINARY=gateway --build-arg BUILD_TYPE=bin --build-arg BINARY_PATH=target/release -t edgion/edgion-gateway:0.1.0 .
+#   # For example type
+#   docker build -f docker/Dockerfile.runtime --build-arg BINARY=test_server --build-arg BUILD_TYPE=example --build-arg BINARY_PATH=target/release -t edgion/edgion-test-server:0.1.0 .
 
 FROM debian:bookworm-slim
 
 # Build arguments
 ARG BINARY=gateway
+ARG BUILD_TYPE=bin
 ARG BINARY_PATH
 
 # Install runtime dependencies
@@ -31,13 +37,22 @@ RUN mkdir -p /usr/local/edgion/{config,logs,runtime} && \
 # Set working directory
 WORKDIR /usr/local/edgion
 
-# Copy prebuilt binaries
-COPY ${BINARY_PATH}/edgion-${BINARY} /usr/local/bin/edgion-${BINARY}
-COPY ${BINARY_PATH}/edgion-ctl /usr/local/bin/edgion-ctl
-RUN chmod +x /usr/local/bin/edgion-${BINARY} /usr/local/bin/edgion-ctl
+# Copy prebuilt binaries based on BUILD_TYPE
+# For bin: copy from release/, for example: copy from release/examples/
+RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
+    if [ "$BUILD_TYPE" = "example" ]; then \
+      cp /tmp/binaries/examples/${BINARY} /usr/local/bin/${BINARY} && \
+      chmod +x /usr/local/bin/${BINARY}; \
+    else \
+      cp /tmp/binaries/edgion-${BINARY} /usr/local/bin/edgion-${BINARY} && \
+      cp /tmp/binaries/edgion-ctl /usr/local/bin/edgion-ctl && \
+      chmod +x /usr/local/bin/edgion-${BINARY} /usr/local/bin/edgion-ctl; \
+    fi
 
-# Copy default config files
-COPY --chown=edgion:edgion config/*.toml ./config/
+# Copy default config files (if exist)
+RUN --mount=type=bind,source=config,target=/tmp/config \
+    cp -r /tmp/config/*.toml ./config/ 2>/dev/null || true && \
+    chown -R edgion:edgion ./config/
 
 # Switch to non-root user
 USER edgion

@@ -79,12 +79,19 @@ Targets:
     all             Build all images (including test)
 
 Options:
+    --rebuild                Force rebuild local binaries
     --platforms <platforms>  Comma-separated list of platforms (default: linux/amd64)
+                             Multi-platform builds will use Docker buildx
     --push                   Push image to registry
-    --no-cache               Build without cache
+    --no-cache               Build without cache (Docker build only)
     --test                   Run tests after build
     --report <file>          Generate build report
     -h, --help               Show this help message
+
+Build Mode (automatic):
+    Local Build (default)    Fast! Compiles once, uses Dockerfile.runtime
+                             Requires: cargo installed
+    Docker Build (fallback)  Used when: multi-platform or no cargo available
 
 Environment Variables:
     IMAGE_REGISTRY          Docker registry (default: docker.io)
@@ -94,10 +101,15 @@ Environment Variables:
     FEATURES                Cargo features (default: default)
 
 Examples:
-    $0 gateway
-    $0 controller --push
+    # Local development (auto local build - FAST!)
+    $0 gateway                        # Build single image
+    $0 all --push                     # Build & push all images
+    $0 all --rebuild --push           # Force recompile & build all
+    
+    # Multi-platform build (auto Docker buildx)
     $0 all --platforms linux/amd64,linux/arm64 --push
-    $0 test-server --push
+    
+    # Testing
     $0 gateway --test --report build-report.txt
 
 EOF
@@ -118,13 +130,128 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Check Dockerfile
+    # Check Dockerfiles
     if [[ ! -f "${PROJECT_DIR}/docker/Dockerfile" ]]; then
         log_error "Dockerfile not found in ${PROJECT_DIR}/docker"
         exit 1
     fi
     
+    if [[ ! -f "${PROJECT_DIR}/docker/Dockerfile.runtime" ]]; then
+        log_error "Dockerfile.runtime not found in ${PROJECT_DIR}/docker"
+        exit 1
+    fi
+    
     log_success "Prerequisites check passed"
+}
+
+determine_build_mode() {
+    local platforms=$1
+    
+    # Check if multi-platform build
+    if [[ "${platforms}" == *","* ]]; then
+        log_info "Multi-platform build detected, using Docker buildx"
+        echo "docker"
+        return
+    fi
+    
+    # Check if cargo is available
+    if ! command -v cargo &> /dev/null; then
+        log_warning "Cargo not found, falling back to Docker build"
+        log_warning "For faster builds, install Rust: https://rustup.rs/"
+        echo "docker"
+        return
+    fi
+    
+    # Use local build (fastest)
+    log_info "Using local build mode (fast!)"
+    echo "local"
+}
+
+compile_local_binaries() {
+    local force_rebuild=${1:-false}
+    
+    log_info "Checking local binaries..."
+    
+    # Check if binaries exist
+    local bins_exist=true
+    if [[ ! -f "${PROJECT_DIR}/target/release/edgion-gateway" ]] || \
+       [[ ! -f "${PROJECT_DIR}/target/release/edgion-controller" ]] || \
+       [[ ! -f "${PROJECT_DIR}/target/release/edgion-ctl" ]] || \
+       [[ ! -f "${PROJECT_DIR}/target/release/examples/test_server" ]] || \
+       [[ ! -f "${PROJECT_DIR}/target/release/examples/test_client" ]]; then
+        bins_exist=false
+    fi
+    
+    if [[ "${bins_exist}" == "false" ]] || [[ "${force_rebuild}" == "true" ]]; then
+        log_info "Compiling all binaries locally..."
+        log_info "This may take a few minutes on first build..."
+        
+        cd "${PROJECT_DIR}"
+        cargo build --release \
+            --bin edgion-gateway \
+            --bin edgion-controller \
+            --bin edgion-ctl \
+            --example test_server \
+            --example test_client \
+            --features "${FEATURES}"
+        
+        if [[ $? -ne 0 ]]; then
+            log_error "Local compilation failed"
+            exit 1
+        fi
+        
+        log_success "Local binaries compiled successfully"
+    else
+        log_success "Local binaries already exist (use --rebuild to recompile)"
+    fi
+}
+
+build_image_local() {
+    local binary=$1
+    local push=$2
+    local build_type=$3
+    
+    local image_name="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${binary}"
+    local image_tag="${image_name}:${VERSION}"
+    local image_latest="${image_name}:latest"
+    
+    log_info "Building ${binary} image (local mode, type: ${build_type})..."
+    log_info "  Image: ${image_tag}"
+    log_info "  Using: Dockerfile.runtime"
+    
+    # Determine binary name for BUILD_TYPE
+    local binary_arg
+    if [[ "${build_type}" == "example" ]]; then
+        binary_arg="${binary//-/_}"  # test-server -> test_server
+    else
+        binary_arg="${binary}"
+    fi
+    
+    docker build \
+        -f "${PROJECT_DIR}/docker/Dockerfile.runtime" \
+        --build-arg "BINARY=${binary_arg}" \
+        --build-arg "BUILD_TYPE=${build_type}" \
+        --build-arg "BINARY_PATH=target/release" \
+        -t "${image_tag}" \
+        -t "${image_latest}" \
+        "${PROJECT_DIR}"
+    
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to build ${binary} image"
+        return 1
+    fi
+    
+    log_success "${binary} image built successfully"
+    
+    if [[ "${push}" == "true" ]]; then
+        log_info "Pushing ${binary} image..."
+        docker push "${image_tag}"
+        docker push "${image_latest}"
+        log_success "${binary} image pushed"
+    fi
+    
+    # Store build info for report
+    BUILD_INFO+=("${binary}|${image_tag}|local")
 }
 
 build_image() {
@@ -284,10 +411,15 @@ main() {
     local no_cache=false
     local run_tests=false
     local report_file=""
+    local force_rebuild=false
     
     # Parse options
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --rebuild)
+                force_rebuild=true
+                shift
+                ;;
             --platforms)
                 platforms=$2
                 shift 2
@@ -318,52 +450,109 @@ main() {
     
     check_prerequisites
     
+    # Determine build mode automatically
+    local build_mode=$(determine_build_mode "${platforms}")
+    
+    # If local build mode, compile binaries first
+    if [[ "${build_mode}" == "local" ]]; then
+        compile_local_binaries "${force_rebuild}"
+    fi
+    
     # Build info array for report
     BUILD_INFO=()
     
-    # Build images
-    case ${target} in
-        gateway)
-            build_image "gateway" "${platforms}" "${push}" "${no_cache}" "bin"
-            [[ "${run_tests}" == "true" ]] && test_image "gateway"
-            ;;
-        controller)
-            build_image "controller" "${platforms}" "${push}" "${no_cache}" "bin"
-            [[ "${run_tests}" == "true" ]] && test_image "controller"
-            ;;
-        ctl)
-            build_image "ctl" "${platforms}" "${push}" "${no_cache}" "bin"
-            [[ "${run_tests}" == "true" ]] && test_image "ctl"
-            ;;
-        test-server)
-            build_image "test-server" "${platforms}" "${push}" "${no_cache}" "example"
-            [[ "${run_tests}" == "true" ]] && test_image "test-server"
-            ;;
-        test-client)
-            build_image "test-client" "${platforms}" "${push}" "${no_cache}" "example"
-            [[ "${run_tests}" == "true" ]] && test_image "test-client"
-            ;;
-        all)
-            build_image "gateway" "${platforms}" "${push}" "${no_cache}" "bin"
-            build_image "controller" "${platforms}" "${push}" "${no_cache}" "bin"
-            build_image "ctl" "${platforms}" "${push}" "${no_cache}" "bin"
-            build_image "test-server" "${platforms}" "${push}" "${no_cache}" "example"
-            build_image "test-client" "${platforms}" "${push}" "${no_cache}" "example"
-            
-            if [[ "${run_tests}" == "true" ]]; then
-                test_image "gateway"
-                test_image "controller"
-                test_image "ctl"
-                test_image "test-server"
-                test_image "test-client"
-            fi
-            ;;
-        *)
-            log_error "Unknown target: ${target}"
-            show_usage
-            exit 1
-            ;;
-    esac
+    # Build images - use local or docker build based on auto-detected mode
+    if [[ "${build_mode}" == "local" ]]; then
+        # Local build mode: use Dockerfile.runtime (fast!)
+        log_info "Build mode: Local (Dockerfile.runtime)"
+        case ${target} in
+            gateway)
+                build_image_local "gateway" "${push}" "bin"
+                [[ "${run_tests}" == "true" ]] && test_image "gateway"
+                ;;
+            controller)
+                build_image_local "controller" "${push}" "bin"
+                [[ "${run_tests}" == "true" ]] && test_image "controller"
+                ;;
+            ctl)
+                build_image_local "ctl" "${push}" "bin"
+                [[ "${run_tests}" == "true" ]] && test_image "ctl"
+                ;;
+            test-server)
+                build_image_local "test-server" "${push}" "example"
+                [[ "${run_tests}" == "true" ]] && test_image "test-server"
+                ;;
+            test-client)
+                build_image_local "test-client" "${push}" "example"
+                [[ "${run_tests}" == "true" ]] && test_image "test-client"
+                ;;
+            all)
+                build_image_local "gateway" "${push}" "bin"
+                build_image_local "controller" "${push}" "bin"
+                build_image_local "ctl" "${push}" "bin"
+                build_image_local "test-server" "${push}" "example"
+                build_image_local "test-client" "${push}" "example"
+                
+                if [[ "${run_tests}" == "true" ]]; then
+                    test_image "gateway"
+                    test_image "controller"
+                    test_image "ctl"
+                    test_image "test-server"
+                    test_image "test-client"
+                fi
+                ;;
+            *)
+                log_error "Unknown target: ${target}"
+                show_usage
+                exit 1
+                ;;
+        esac
+    else
+        # Docker build mode: use full Dockerfile
+        log_info "Build mode: Docker (Dockerfile)"
+        case ${target} in
+            gateway)
+                build_image "gateway" "${platforms}" "${push}" "${no_cache}" "bin"
+                [[ "${run_tests}" == "true" ]] && test_image "gateway"
+                ;;
+            controller)
+                build_image "controller" "${platforms}" "${push}" "${no_cache}" "bin"
+                [[ "${run_tests}" == "true" ]] && test_image "controller"
+                ;;
+            ctl)
+                build_image "ctl" "${platforms}" "${push}" "${no_cache}" "bin"
+                [[ "${run_tests}" == "true" ]] && test_image "ctl"
+                ;;
+            test-server)
+                build_image "test-server" "${platforms}" "${push}" "${no_cache}" "example"
+                [[ "${run_tests}" == "true" ]] && test_image "test-server"
+                ;;
+            test-client)
+                build_image "test-client" "${platforms}" "${push}" "${no_cache}" "example"
+                [[ "${run_tests}" == "true" ]] && test_image "test-client"
+                ;;
+            all)
+                build_image "gateway" "${platforms}" "${push}" "${no_cache}" "bin"
+                build_image "controller" "${platforms}" "${push}" "${no_cache}" "bin"
+                build_image "ctl" "${platforms}" "${push}" "${no_cache}" "bin"
+                build_image "test-server" "${platforms}" "${push}" "${no_cache}" "example"
+                build_image "test-client" "${platforms}" "${push}" "${no_cache}" "example"
+                
+                if [[ "${run_tests}" == "true" ]]; then
+                    test_image "gateway"
+                    test_image "controller"
+                    test_image "ctl"
+                    test_image "test-server"
+                    test_image "test-client"
+                fi
+                ;;
+            *)
+                log_error "Unknown target: ${target}"
+                show_usage
+                exit 1
+                ;;
+        esac
+    fi
     
     # Generate report if requested
     if [[ -n "${report_file}" ]]; then
