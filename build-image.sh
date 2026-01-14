@@ -17,11 +17,26 @@ set -euo pipefail
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_DIR="${SCRIPT_DIR}"
+
+# Auto-detect version from git
+# Priority: 1. ENV var 2. git tag 3. "unknown"
+if [[ -z "${VERSION:-}" ]]; then
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        # Try to get tag for current commit
+        GIT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
+        if [[ -n "${GIT_TAG}" ]]; then
+            VERSION="${GIT_TAG#v}"  # Remove 'v' prefix if exists
+        else
+            VERSION="unknown"
+        fi
+    else
+        VERSION="unknown"
+    fi
+fi
 
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
-IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-edgion}"
-VERSION="${VERSION:-0.1.0}"
+IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.92}"
 FEATURES="${FEATURES:-default}"
 
@@ -59,7 +74,9 @@ Targets:
     gateway         Build Gateway image
     controller      Build Controller image
     ctl             Build CLI tool image
-    all             Build all images
+    test-server     Build test server image (example)
+    test-client     Build test client image (example)
+    all             Build all images (including test)
 
 Options:
     --platforms <platforms>  Comma-separated list of platforms (default: linux/amd64)
@@ -71,8 +88,8 @@ Options:
 
 Environment Variables:
     IMAGE_REGISTRY          Docker registry (default: docker.io)
-    IMAGE_NAMESPACE         Image namespace (default: edgion)
-    VERSION                 Image version (default: 0.1.0)
+    IMAGE_NAMESPACE         Image namespace (default: pandaala)
+    VERSION                 Image version (auto: git tag > "unknown")
     RUST_VERSION            Rust version (default: 1.92)
     FEATURES                Cargo features (default: default)
 
@@ -80,6 +97,7 @@ Examples:
     $0 gateway
     $0 controller --push
     $0 all --platforms linux/amd64,linux/arm64 --push
+    $0 test-server --push
     $0 gateway --test --report build-report.txt
 
 EOF
@@ -101,8 +119,8 @@ check_prerequisites() {
     fi
     
     # Check Dockerfile
-    if [[ ! -f "${PROJECT_DIR}/Dockerfile" ]]; then
-        log_error "Dockerfile not found in ${PROJECT_DIR}"
+    if [[ ! -f "${PROJECT_DIR}/docker/Dockerfile" ]]; then
+        log_error "Dockerfile not found in ${PROJECT_DIR}/docker"
         exit 1
     fi
     
@@ -114,23 +132,33 @@ build_image() {
     local platforms=${2:-linux/amd64}
     local push=${3:-false}
     local no_cache=${4:-false}
+    local build_type=${5:-bin}
     
     local image_name="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${binary}"
     local image_tag="${image_name}:${VERSION}"
     local image_latest="${image_name}:latest"
     
-    log_info "Building ${binary} image..."
+    log_info "Building ${binary} image (type: ${build_type})..."
     log_info "  Image: ${image_tag}"
     log_info "  Platforms: ${platforms}"
     log_info "  Push: ${push}"
     
+    # Determine binary name based on build type
+    local binary_arg
+    if [[ "${build_type}" == "example" ]]; then
+        binary_arg="${binary}"
+    else
+        binary_arg="edgion-${binary}"
+    fi
+    
     local build_args=(
-        --build-arg "BINARY=edgion-${binary}"
+        --build-arg "BINARY=${binary_arg}"
+        --build-arg "BUILD_TYPE=${build_type}"
         --build-arg "RUST_VERSION=${RUST_VERSION}"
         --build-arg "FEATURES=${FEATURES}"
         -t "${image_tag}"
         -t "${image_latest}"
-        -f "${PROJECT_DIR}/Dockerfile"
+        -f "${PROJECT_DIR}/docker/Dockerfile"
     )
     
     if [[ "${no_cache}" == "true" ]]; then
@@ -296,26 +324,38 @@ main() {
     # Build images
     case ${target} in
         gateway)
-            build_image "gateway" "${platforms}" "${push}" "${no_cache}"
+            build_image "gateway" "${platforms}" "${push}" "${no_cache}" "bin"
             [[ "${run_tests}" == "true" ]] && test_image "gateway"
             ;;
         controller)
-            build_image "controller" "${platforms}" "${push}" "${no_cache}"
+            build_image "controller" "${platforms}" "${push}" "${no_cache}" "bin"
             [[ "${run_tests}" == "true" ]] && test_image "controller"
             ;;
         ctl)
-            build_image "ctl" "${platforms}" "${push}" "${no_cache}"
+            build_image "ctl" "${platforms}" "${push}" "${no_cache}" "bin"
             [[ "${run_tests}" == "true" ]] && test_image "ctl"
             ;;
+        test-server)
+            build_image "test-server" "${platforms}" "${push}" "${no_cache}" "example"
+            [[ "${run_tests}" == "true" ]] && test_image "test-server"
+            ;;
+        test-client)
+            build_image "test-client" "${platforms}" "${push}" "${no_cache}" "example"
+            [[ "${run_tests}" == "true" ]] && test_image "test-client"
+            ;;
         all)
-            build_image "gateway" "${platforms}" "${push}" "${no_cache}"
-            build_image "controller" "${platforms}" "${push}" "${no_cache}"
-            build_image "ctl" "${platforms}" "${push}" "${no_cache}"
+            build_image "gateway" "${platforms}" "${push}" "${no_cache}" "bin"
+            build_image "controller" "${platforms}" "${push}" "${no_cache}" "bin"
+            build_image "ctl" "${platforms}" "${push}" "${no_cache}" "bin"
+            build_image "test-server" "${platforms}" "${push}" "${no_cache}" "example"
+            build_image "test-client" "${platforms}" "${push}" "${no_cache}" "example"
             
             if [[ "${run_tests}" == "true" ]]; then
                 test_image "gateway"
                 test_image "controller"
                 test_image "ctl"
+                test_image "test-server"
+                test_image "test-client"
             fi
             ;;
         *)

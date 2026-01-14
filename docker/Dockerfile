@@ -1,19 +1,26 @@
 # Edgion Multi-stage Dockerfile
-# Supports building: edgion-gateway, edgion-controller
-# Each image includes edgion-ctl for debugging
+# Supports building: edgion-gateway, edgion-controller, test_server, test_client
+# Each image includes edgion-ctl for debugging (bin only)
 #
 # Build arguments:
 #   BINARY: Target binary name (default: edgion-gateway)
+#   BUILD_TYPE: Build type - bin or example (default: bin)
 #   FEATURES: Cargo features (default: default, which includes boringssl)
-#   RUST_VERSION: Rust version (default: 1.82)
+#   RUST_VERSION: Rust version (default: 1.92)
 #
 # Usage:
-#   docker build --build-arg BINARY=edgion-gateway -t edgion/edgion-gateway:0.1.0 .
-#   docker build --build-arg BINARY=edgion-controller -t edgion/edgion-controller:0.1.0 .
+#   # Build bin targets
+#   docker build --build-arg BINARY=edgion-gateway -t edgion/edgion-gateway:0.1.0 -f docker/Dockerfile .
+#   docker build --build-arg BINARY=edgion-controller -t edgion/edgion-controller:0.1.0 -f docker/Dockerfile .
+#
+#   # Build example targets
+#   docker build --build-arg BUILD_TYPE=example --build-arg BINARY=test_server -t edgion/edgion-test-server:0.1.0 -f docker/Dockerfile .
+#   docker build --build-arg BUILD_TYPE=example --build-arg BINARY=test_client -t edgion/edgion-test-client:0.1.0 -f docker/Dockerfile .
 
 # Build arguments
 ARG RUST_VERSION=1.92
 ARG BINARY=edgion-gateway
+ARG BUILD_TYPE=bin
 ARG FEATURES=default
 
 # =============================================================================
@@ -62,6 +69,7 @@ COPY --from=planner /app/recipe.json recipe.json
 # Build arguments
 ARG FEATURES
 ARG BINARY
+ARG BUILD_TYPE
 
 # Build dependencies (cached layer)
 RUN cargo chef cook --release --features "${FEATURES}" --recipe-path recipe.json
@@ -69,12 +77,20 @@ RUN cargo chef cook --release --features "${FEATURES}" --recipe-path recipe.json
 # Copy source code
 COPY . .
 
-# Build the main binary and ctl
-RUN cargo build --release --features "${FEATURES}" --bin "${BINARY}" --bin edgion-ctl
-
-# Copy binaries to known locations
-RUN cp /app/target/release/${BINARY} /app/edgion-binary && \
-    cp /app/target/release/edgion-ctl /app/edgion-ctl-binary
+# Build based on BUILD_TYPE
+# For bin: build binary and ctl
+# For example: build example only (no ctl bundled)
+RUN if [ "$BUILD_TYPE" = "example" ]; then \
+      echo "Building example: ${BINARY}"; \
+      cargo build --release --features "${FEATURES}" --example "${BINARY}"; \
+      cp /app/target/release/examples/${BINARY} /app/edgion-binary; \
+      touch /app/edgion-ctl-binary; \
+    else \
+      echo "Building bin: ${BINARY}"; \
+      cargo build --release --features "${FEATURES}" --bin "${BINARY}" --bin edgion-ctl; \
+      cp /app/target/release/${BINARY} /app/edgion-binary; \
+      cp /app/target/release/edgion-ctl /app/edgion-ctl-binary; \
+    fi
 
 # =============================================================================
 # Stage 4: Runtime - Minimal runtime environment
@@ -83,6 +99,7 @@ FROM debian:bookworm-slim AS runtime
 
 # Build arguments
 ARG BINARY
+ARG BUILD_TYPE
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -101,13 +118,21 @@ RUN mkdir -p /usr/local/edgion/{config,logs,runtime} && \
 # Set working directory
 WORKDIR /usr/local/edgion
 
-# Copy binaries from builder (main binary + ctl for debugging)
+# Copy binaries from builder
 COPY --from=builder /app/edgion-binary /usr/local/bin/${BINARY}
-COPY --from=builder /app/edgion-ctl-binary /usr/local/bin/edgion-ctl
-RUN chmod +x /usr/local/bin/${BINARY} /usr/local/bin/edgion-ctl
+RUN chmod +x /usr/local/bin/${BINARY}
 
-# Copy default config files
-COPY --chown=edgion:edgion config/*.toml ./config/
+# Copy ctl for bin builds only (example builds have empty file)
+COPY --from=builder /app/edgion-ctl-binary /tmp/edgion-ctl-binary
+RUN if [ "$BUILD_TYPE" != "example" ]; then \
+      mv /tmp/edgion-ctl-binary /usr/local/bin/edgion-ctl && \
+      chmod +x /usr/local/bin/edgion-ctl; \
+    else \
+      rm -f /tmp/edgion-ctl-binary; \
+    fi
+
+# Copy default config files (optional, may not exist for examples)
+COPY --chown=edgion:edgion config/*.toml ./config/ 2>/dev/null || true
 
 # Switch to non-root user
 USER edgion

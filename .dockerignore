@@ -52,16 +52,15 @@ docs/
 .travis.yml
 
 # Docker
-Dockerfile
 .dockerignore
 docker-compose*.yml
 
 # Development tools
+build-image.sh
 Makefile
 scripts/
 
-# Examples and testing
-examples/
+# Testing only (keep examples/ for test_server/test_client builds)
 tests/
 
 # License files

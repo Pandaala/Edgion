@@ -114,7 +114,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile.runtime
+          file: ./docker/Dockerfile.runtime
           build-args: |
             BINARY=${{ matrix.binary }}
             BINARY_PATH=target/${{ matrix.target }}/release
