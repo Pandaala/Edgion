@@ -77,6 +77,9 @@ RUN cargo chef cook --release --features "${FEATURES}" --recipe-path recipe.json
 # Copy source code
 COPY . .
 
+# Ensure config directory exists (for optional config files)
+RUN mkdir -p /app/config && touch /app/config/.placeholder
+
 # Build based on BUILD_TYPE
 # For bin: build binary and ctl
 # For example: build example only (no ctl bundled)
@@ -131,8 +134,8 @@ RUN if [ "$BUILD_TYPE" != "example" ]; then \
       rm -f /tmp/edgion-ctl-binary; \
     fi
 
-# Copy default config files (optional, may not exist for examples)
-COPY --chown=edgion:edgion config/*.toml ./config/ 2>/dev/null || true
+# Copy default config files from builder (if any exist)
+COPY --from=builder --chown=edgion:edgion /app/config ./config
 
 # Switch to non-root user
 USER edgion
