@@ -1,7 +1,7 @@
 use crate::core::conf_sync::cache_client::cache_data::CacheData;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
-use crate::types::{ResourceMeta, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
+use crate::types::{ResourceMeta, WATCH_ERR_NOT_READY, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 use kube::{Resource, ResourceExt};
 use rand::Rng;
 use std::sync::{Arc, RwLock};
@@ -37,6 +37,9 @@ impl<T: ResourceMeta + Resource + Clone + Send + 'static> CacheEventDispatch<T> 
             }
             ResourceChange::EventDelete => {
                 cache.remove(&resource_key);
+            }
+            ResourceChange::InitStart | ResourceChange::InitDone => {
+                // Signal events: no data changes needed
             }
         }
     }
@@ -183,7 +186,12 @@ where
                         (list_result.sync_version, list_result.server_id)
                     }
                     Err(e) => {
-                        tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
+                        let error_message = e.message();
+                        if error_message.contains(WATCH_ERR_NOT_READY) {
+                            tracing::warn!(kind = T::kind_name(), error = %e, "Server not ready, will retry");
+                        } else {
+                            tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
+                        }
                         drop(client_guard);
                         // Increase backoff on failure
                         backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
@@ -295,6 +303,9 @@ where
                                                             // Add compress event to trigger partial_update
                                                             cache.add_compress_event(resource_key, change);
                                                         }
+                                                        ResourceChange::InitStart | ResourceChange::InitDone => {
+                                                            // Signal events: not expected in watch stream
+                                                        }
                                                     }
                                                 }
                                                 Err(e) => {
@@ -313,8 +324,9 @@ where
                                 let error_message = e.message();
                                 if error_message.contains(WATCH_ERR_VERSION_UNEXPECTED)
                                     || error_message.contains(WATCH_ERR_TOO_OLD_VERSION)
+                                    || error_message.contains(WATCH_ERR_NOT_READY)
                                 {
-                                    tracing::warn!(kind = T::kind_name(), error = %e, "Watch stream version error");
+                                    tracing::warn!(kind = T::kind_name(), error = %e, "Watch stream recoverable error, will retry");
                                 } else {
                                     tracing::error!(kind = T::kind_name(), error = %e, "Watch stream error");
                                 }

@@ -316,5 +316,39 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
         "Resource initialization complete"
     );
 
+    // Mark all caches as ready after initial loading (for file system mode)
+    // In K8s mode, this is handled by the watcher's InitDone event
+    let all_kinds = [
+        "GatewayClass",
+        "Gateway",
+        "EdgionGatewayConfig",
+        "HTTPRoute",
+        "GRPCRoute",
+        "TCPRoute",
+        "UDPRoute",
+        "TLSRoute",
+        "Service",
+        "EndpointSlice",
+        "Endpoints",
+        "EdgionTls",
+        "EdgionPlugins",
+        "EdgionStreamPlugins",
+        "ReferenceGrant",
+        "BackendTLSPolicy",
+        "PluginMetaData",
+        "Secret",
+        "LinkSys",
+    ];
+
+    for kind in all_kinds {
+        config_server.set_cache_ready_by_kind(kind);
+    }
+
+    tracing::info!(
+        component = "conf_store",
+        event = "all_caches_ready",
+        "All caches marked as ready after initial load"
+    );
+
     Ok(())
 }

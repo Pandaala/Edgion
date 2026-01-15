@@ -304,7 +304,9 @@ impl KubernetesController {
                 handler(config_server, ResourceChange::InitAdd, resource);
             }
             watcher::Event::InitDone => {
-                tracing::info!("{} watcher initial sync complete", kind);
+                // Mark this cache as ready
+                config_server.set_cache_ready_by_kind(kind);
+                tracing::info!("{} watcher initial sync complete, cache marked as ready", kind);
             }
         }
         Ok(())

@@ -32,7 +32,7 @@ pub use self::resource::{
 // Re-export from other modules
 pub use self::ctx::{BackendContext, BackendTlsInfo, EdgionHttpContext, MatchInfo, RequestInfo, UpstreamInfo};
 pub use self::edgion_status::EdgionStatus;
-pub use self::err::{EdError, WATCH_ERR_EVENTS_LOST, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
+pub use self::err::{EdError, WATCH_ERR_EVENTS_LOST, WATCH_ERR_NOT_READY, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 pub use self::gateway_base_conf::GatewayBaseConf;
 pub use self::global_def::*;
 pub use self::observe::{LogConfig, LogType};

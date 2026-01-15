@@ -29,6 +29,51 @@ impl EdgionControllerCli {
         Self::parse()
     }
 
+    /// Wait for all caches to be ready, with timeout
+    /// Once all caches are ready, set the global all_ready flag
+    async fn wait_all_ready(config_server: &Arc<crate::core::conf_sync::ConfigServer>, timeout_secs: u64) {
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(timeout_secs);
+
+        loop {
+            if config_server.is_each_cache_ready() {
+                // All caches are ready, set global all_ready flag
+                config_server.set_all_ready();
+                tracing::info!(
+                    component = COMPONENT_EDGION_CONTROLLER,
+                    event = "all_caches_ready",
+                    elapsed_ms = start.elapsed().as_millis(),
+                    "All caches are ready, set_all_ready called"
+                );
+                return;
+            }
+
+            if start.elapsed() > timeout {
+                let not_ready = config_server.not_ready_caches();
+                tracing::warn!(
+                    component = COMPONENT_EDGION_CONTROLLER,
+                    event = "wait_all_ready_timeout",
+                    timeout_secs = timeout_secs,
+                    not_ready = ?not_ready,
+                    "Timeout waiting for caches, proceeding anyway"
+                );
+                // Timeout: still set all_ready to let system continue
+                config_server.set_all_ready();
+                return;
+            }
+
+            let not_ready = config_server.not_ready_caches();
+            tracing::info!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                event = "waiting_for_caches",
+                not_ready = ?not_ready,
+                elapsed_ms = start.elapsed().as_millis(),
+                "Waiting for caches to be ready..."
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+    }
+
     pub async fn run(&self) -> Result<()> {
         // Load and merge configuration
         let config = EdgionControllerConfig::load(self.config.clone())?;
@@ -139,14 +184,6 @@ impl EdgionControllerCli {
             return Err(anyhow!("Failed to load user configuration: {}", e));
         }
 
-        // Mark all caches as ready after initial resource loading
-        config_server.set_ready();
-        tracing::info!(
-            component = COMPONENT_EDGION_CONTROLLER,
-            event = "caches_ready",
-            "All caches marked as ready after initial sync"
-        );
-
         // If K8s mode, start the controller to watch for changes
         if k8s_mode {
             tracing::info!(
@@ -210,6 +247,10 @@ impl EdgionControllerCli {
         );
 
         let addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
+
+        // Wait for all caches to be ready before starting services
+        // This ensures data consistency - clients won't get partial data
+        Self::wait_all_ready(&config_server, 30).await;
 
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,

@@ -430,6 +430,9 @@ impl ConfigServer {
             ResourceChange::EventDelete => {
                 self.secret_ref_manager.clear_resource_refs(&resource_ref);
             }
+            ResourceChange::InitStart | ResourceChange::InitDone => {
+                // Signal events: handled by cache directly
+            }
         }
 
         tracing::info!(
@@ -653,6 +656,9 @@ impl ConfigServer {
                 remove.insert(secret_key.clone());
                 update_secrets(HashMap::new(), HashMap::new(), &remove);
             }
+            ResourceChange::InitStart | ResourceChange::InitDone => {
+                // Signal events: no secret store updates needed
+            }
         }
 
         // Handle resource references when Secret is added or updated
@@ -834,6 +840,9 @@ impl ConfigServer {
                     secret_key = %secret_key,
                     "Secret deleted, referencing resources will have empty Secret field"
                 );
+            }
+            ResourceChange::InitStart | ResourceChange::InitDone => {
+                // Signal events: no cascading updates needed
             }
         }
     }

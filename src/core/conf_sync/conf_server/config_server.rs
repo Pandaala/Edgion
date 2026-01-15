@@ -1,5 +1,6 @@
 use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -80,6 +81,11 @@ pub struct ConfigServer {
     /// Server instance ID, generated at startup (millisecond timestamp)
     /// Used by clients to detect server restarts/failovers
     pub server_id: String,
+
+    /// Global all_ready flag - only set to true after all caches are ready
+    /// Clients should check this before list/watch to ensure data consistency
+    all_ready: AtomicBool,
+
     // Base conf resources now use dedicated ServerCache (same as other resources)
     pub gateway_classes: ServerCache<GatewayClass>,
     pub gateways: ServerCache<Gateway>,
@@ -135,6 +141,7 @@ impl ConfigServer {
 
         Self {
             server_id,
+            all_ready: AtomicBool::new(false),
             gateway_classes: ServerCache::new(conf_sync_config.gateway_classes_capacity),
             gateways: ServerCache::new(conf_sync_config.gateways_capacity),
             edgion_gateway_configs: ServerCache::new(conf_sync_config.edgion_gateway_configs_capacity),
@@ -177,6 +184,11 @@ impl ConfigServer {
     }
 
     pub fn list(&self, kind: &ResourceKind) -> Result<ListDataSimple, String> {
+        // Check if all caches are ready before serving data
+        if !self.is_all_ready() {
+            return Err(crate::types::WATCH_ERR_NOT_READY.to_string());
+        }
+
         let (data_json, sync_version) = match kind {
             ResourceKind::Unspecified => return Err("Resource kind unspecified".to_string()),
             ResourceKind::GatewayClass => self.list_gateway_classes().to_json("GatewayClass")?,
@@ -214,6 +226,11 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> Result<mpsc::Receiver<EventDataSimple>, String> {
+        // Check if all caches are ready before serving data
+        if !self.is_all_ready() {
+            return Err(crate::types::WATCH_ERR_NOT_READY.to_string());
+        }
+
         let (tx, rx) = mpsc::channel(100);
         let server_id = self.server_id.clone();
 
@@ -796,7 +813,7 @@ impl ConfigServer {
         println!("==========================\n");
     }
 
-    /// Set all caches to ready state
+    /// Set all caches to ready state (deprecated: use set_cache_ready_by_kind instead)
     pub fn set_ready(&self) {
         self.gateway_classes.set_ready();
         self.gateways.set_ready();
@@ -813,6 +830,148 @@ impl ConfigServer {
         self.edgion_plugins.set_ready();
         self.plugin_metadata.set_ready();
         self.secrets.set_ready();
+    }
+
+    /// Set a specific cache to ready state by kind name
+    /// Called when a K8s watcher receives InitDone event
+    pub fn set_cache_ready_by_kind(&self, kind: &str) {
+        match kind {
+            "GatewayClass" => self.gateway_classes.set_ready(),
+            "Gateway" => self.gateways.set_ready(),
+            "EdgionGatewayConfig" => self.edgion_gateway_configs.set_ready(),
+            "HTTPRoute" => self.routes.set_ready(),
+            "GRPCRoute" => self.grpc_routes.set_ready(),
+            "TCPRoute" => self.tcp_routes.set_ready(),
+            "UDPRoute" => self.udp_routes.set_ready(),
+            "TLSRoute" => self.tls_routes.set_ready(),
+            "LinkSys" => self.link_sys.set_ready(),
+            "Service" => self.services.set_ready(),
+            "EndpointSlice" => self.endpoint_slices.set_ready(),
+            "Endpoints" => self.endpoints.set_ready(),
+            "EdgionTls" => self.edgion_tls.set_ready(),
+            "EdgionPlugins" => self.edgion_plugins.set_ready(),
+            "EdgionStreamPlugins" => self.edgion_stream_plugins.set_ready(),
+            "ReferenceGrant" => self.reference_grants.set_ready(),
+            "BackendTLSPolicy" => self.backend_tls_policies.set_ready(),
+            "PluginMetaData" => self.plugin_metadata.set_ready(),
+            "Secret" => self.secrets.set_ready(),
+            _ => {
+                tracing::warn!(
+                    component = "config_server",
+                    kind = kind,
+                    "Unknown resource kind for set_cache_ready_by_kind"
+                );
+            }
+        }
+        tracing::info!(
+            component = "config_server",
+            kind = kind,
+            "Cache marked as ready"
+        );
+    }
+
+    /// Check if all individual caches are ready (internal check)
+    pub fn is_each_cache_ready(&self) -> bool {
+        self.gateway_classes.is_ready()
+            && self.gateways.is_ready()
+            && self.edgion_gateway_configs.is_ready()
+            && self.routes.is_ready()
+            && self.grpc_routes.is_ready()
+            && self.tcp_routes.is_ready()
+            && self.udp_routes.is_ready()
+            && self.tls_routes.is_ready()
+            && self.link_sys.is_ready()
+            && self.services.is_ready()
+            && self.endpoint_slices.is_ready()
+            && self.endpoints.is_ready()
+            && self.edgion_tls.is_ready()
+            && self.edgion_plugins.is_ready()
+            && self.edgion_stream_plugins.is_ready()
+            && self.reference_grants.is_ready()
+            && self.backend_tls_policies.is_ready()
+            && self.plugin_metadata.is_ready()
+            && self.secrets.is_ready()
+    }
+
+    /// Get list of caches that are not ready yet
+    pub fn not_ready_caches(&self) -> Vec<&'static str> {
+        let mut not_ready = Vec::new();
+        if !self.gateway_classes.is_ready() {
+            not_ready.push("GatewayClass");
+        }
+        if !self.gateways.is_ready() {
+            not_ready.push("Gateway");
+        }
+        if !self.edgion_gateway_configs.is_ready() {
+            not_ready.push("EdgionGatewayConfig");
+        }
+        if !self.routes.is_ready() {
+            not_ready.push("HTTPRoute");
+        }
+        if !self.grpc_routes.is_ready() {
+            not_ready.push("GRPCRoute");
+        }
+        if !self.tcp_routes.is_ready() {
+            not_ready.push("TCPRoute");
+        }
+        if !self.udp_routes.is_ready() {
+            not_ready.push("UDPRoute");
+        }
+        if !self.tls_routes.is_ready() {
+            not_ready.push("TLSRoute");
+        }
+        if !self.link_sys.is_ready() {
+            not_ready.push("LinkSys");
+        }
+        if !self.services.is_ready() {
+            not_ready.push("Service");
+        }
+        if !self.endpoint_slices.is_ready() {
+            not_ready.push("EndpointSlice");
+        }
+        if !self.endpoints.is_ready() {
+            not_ready.push("Endpoints");
+        }
+        if !self.edgion_tls.is_ready() {
+            not_ready.push("EdgionTls");
+        }
+        if !self.edgion_plugins.is_ready() {
+            not_ready.push("EdgionPlugins");
+        }
+        if !self.edgion_stream_plugins.is_ready() {
+            not_ready.push("EdgionStreamPlugins");
+        }
+        if !self.reference_grants.is_ready() {
+            not_ready.push("ReferenceGrant");
+        }
+        if !self.backend_tls_policies.is_ready() {
+            not_ready.push("BackendTLSPolicy");
+        }
+        if !self.plugin_metadata.is_ready() {
+            not_ready.push("PluginMetaData");
+        }
+        if !self.secrets.is_ready() {
+            not_ready.push("Secret");
+        }
+        not_ready
+    }
+
+    /// Set global all_ready state
+    /// Called after wait_all_ready succeeds, indicating all caches are ready
+    /// and clients can start list/watch operations
+    pub fn set_all_ready(&self) {
+        self.all_ready.store(true, Ordering::SeqCst);
+        tracing::info!(
+            component = "config_server",
+            event = "all_ready",
+            "ConfigServer all_ready state set to true, clients can now list/watch"
+        );
+    }
+
+    /// Check global all_ready state
+    /// Clients should check this before list/watch to ensure data consistency
+    pub fn is_all_ready(&self) -> bool {
+        self.all_ready.load(Ordering::SeqCst)
     }
 
     // Helper methods for base conf resources

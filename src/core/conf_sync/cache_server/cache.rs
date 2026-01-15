@@ -274,9 +274,26 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
         );
 
         match change {
+            ResourceChange::InitStart => {
+                // Signal only: log initialization start
+                tracing::info!(
+                    component = "cache_server",
+                    kind = std::any::type_name::<T>(),
+                    "Cache initialization started"
+                );
+            }
             ResourceChange::InitAdd => {
                 let mut store_guard = self.store.write().unwrap();
                 store_guard.init_add(sync_version, resource);
+            }
+            ResourceChange::InitDone => {
+                // Signal: initialization complete, mark cache as ready
+                self.set_ready();
+                tracing::info!(
+                    component = "cache_server",
+                    kind = std::any::type_name::<T>(),
+                    "Cache initialization done, marked as ready"
+                );
             }
             ResourceChange::EventAdd => {
                 self.push_event(EventType::Add, resource, sync_version);
