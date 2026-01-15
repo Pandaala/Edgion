@@ -50,7 +50,9 @@ RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
     fi
 
 # Copy default config files (if exist)
+# Note: mkdir ensures the directory exists even if copy fails
 RUN --mount=type=bind,source=config,target=/tmp/config \
+    mkdir -p ./config && \
     cp -r /tmp/config/*.toml ./config/ 2>/dev/null || true && \
     chown -R edgion:edgion ./config/
 

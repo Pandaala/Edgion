@@ -141,7 +141,7 @@ jobs:
         run: |
           for binary in gateway controller; do
             docker buildx build \
-              --file ./Dockerfile.runtime \
+              --file ./docker/Dockerfile.runtime \
               --build-arg BINARY=$binary \
               --build-arg BINARY_PATH=target/${{ matrix.target }}/release \
               --platform linux/${{ matrix.arch }} \
