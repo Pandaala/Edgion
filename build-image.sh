@@ -30,6 +30,8 @@ PROJECT_DIR="${SCRIPT_DIR}"
 
 # Binaries to build
 BINARIES="gateway controller"
+# Examples to build (only with --with-examples flag)
+EXAMPLES="test_server test_client"
 
 # Get architecture info: returns "platform:target:suffix"
 get_arch_info() {
@@ -110,6 +112,7 @@ Options:
     --rebuild           Force rebuild binaries (ignore cache)
     --version TAG       Specify version tag (default: git tag or "dev")
     --compile-only      Only compile binaries, don't build images
+    --with-examples     Also build test_server and test_client images
     -h, --help          Show this help message
 
 Environment Variables:
@@ -134,6 +137,9 @@ Examples:
 
     # Just compile, don't build images
     $0 --arch arm64 --compile-only
+
+    # Build and push with test_server and test_client
+    $0 --arch arm64,amd64 --push --with-examples
 
 Build Flow:
     Stage 1: Build Docker builder image (one-time)
@@ -294,6 +300,62 @@ compile_binaries() {
 }
 
 # =============================================================================
+# Stage 2b: Compile examples using Docker (only with --with-examples)
+# =============================================================================
+
+compile_examples() {
+    local arch=$1
+    local force_rebuild=$2
+
+    local arch_info
+    arch_info=$(get_arch_info "${arch}")
+    IFS=':' read -r platform target suffix <<< "${arch_info}"
+    local output_dir="${PROJECT_DIR}/target/${target}/release/examples"
+    local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
+
+    # Check if examples already exist
+    local need_build=false
+    if [[ "${force_rebuild}" == "true" ]]; then
+        need_build=true
+        log_info "Force rebuild requested for examples (${arch})"
+    elif [[ ! -f "${output_dir}/test_server" ]] || \
+         [[ ! -f "${output_dir}/test_client" ]]; then
+        need_build=true
+        log_info "Missing examples for ${arch}, will compile"
+    fi
+
+    if [[ "${need_build}" == "false" ]]; then
+        log_success "Examples for ${arch} already exist (use --rebuild to recompile)"
+        return 0
+    fi
+
+    log_info "Compiling examples for ${arch} (${target})..."
+
+    # Ensure builder image exists
+    ensure_builder_image "${platform}"
+
+    # Run compilation in Docker
+    docker run --rm \
+        --platform "${platform}" \
+        -v "${PROJECT_DIR}":/project \
+        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
+        -v "${HOME}/.cargo/git":/usr/local/cargo/git \
+        -w /project \
+        "${builder_tag}" \
+        cargo build --release \
+            --target "${target}" \
+            --examples \
+            --features "${FEATURES}"
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Examples compilation failed for ${arch}"
+        exit 1
+    fi
+
+    log_success "Compiled examples for ${arch}"
+}
+
+# =============================================================================
 # Stage 3: Build Docker images
 # =============================================================================
 
@@ -351,6 +413,69 @@ build_images() {
 
         # Store for report
         BUILD_INFO+=("${binary}|${image_tag}|${arch}")
+    done
+}
+
+# =============================================================================
+# Stage 3b: Build example Docker images (only with --with-examples)
+# =============================================================================
+
+build_example_images() {
+    local arch=$1
+    local push=$2
+    local version=$3
+
+    local arch_info
+    arch_info=$(get_arch_info "${arch}")
+    IFS=':' read -r platform target suffix <<< "${arch_info}"
+    local bin_path="target/${target}/release"
+
+    # Ensure buildx builder exists
+    if ! docker buildx inspect edgion-builder &> /dev/null; then
+        log_info "Creating Docker Buildx builder..."
+        docker buildx create --name edgion-builder --use
+    else
+        docker buildx use edgion-builder
+    fi
+
+    for example in ${EXAMPLES}; do
+        # Convert example name to image name: test_server -> edgion-test-server
+        local image_name="${example//_/-}"
+        local image_base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}"
+        local image_tag="${image_base}:${version}_${suffix}"
+
+        log_info "Building ${example} image for ${arch}..."
+        log_info "  Tag: ${image_tag}"
+
+        local build_cmd=(
+            docker buildx build
+            --file docker/Dockerfile.runtime
+            --build-arg "BINARY=${example}"
+            --build-arg "BUILD_TYPE=example"
+            --build-arg "BINARY_PATH=${bin_path}"
+            --platform "${platform}"
+            --tag "${image_tag}"
+        )
+
+        if [[ "${push}" == "true" ]]; then
+            build_cmd+=(--push)
+        else
+            build_cmd+=(--load)
+        fi
+
+        build_cmd+=("${PROJECT_DIR}")
+
+        "${build_cmd[@]}"
+
+        if [[ $? -ne 0 ]]; then
+            log_error "Failed to build ${example} image for ${arch}"
+            exit 1
+        fi
+
+        log_success "Built ${image_name}:${version}_${suffix}"
+
+        # Store for report
+        BUILD_INFO+=("${example}|${image_tag}|${arch}")
     done
 }
 
@@ -417,6 +542,70 @@ merge_manifests() {
 }
 
 # =============================================================================
+# Stage 4b: Merge example multi-architecture manifests (only with --with-examples)
+# =============================================================================
+
+merge_example_manifests() {
+    local version=$1
+    shift
+    local archs=("$@")
+
+    log_info "Creating multi-architecture manifests for examples..."
+
+    # Extract semantic version components
+    local version_no_v="${version#v}"
+    local major="" minor=""
+
+    if [[ "${version_no_v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+        major=$(echo "${version_no_v}" | cut -d. -f1)
+        minor=$(echo "${version_no_v}" | cut -d. -f1-2)
+    fi
+
+    for example in ${EXAMPLES}; do
+        # Convert example name to image name: test_server -> edgion-test-server
+        local image_name="${example//_/-}"
+        local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}"
+
+        log_info "Creating multi-arch manifest for ${example}..."
+
+        # Build tag list
+        local tags=()
+        tags+=(-t "${base}:${version_no_v}")
+        tags+=(-t "${base}:latest")
+
+        if [[ -n "${minor}" ]]; then
+            tags+=(-t "${base}:${minor}")
+        fi
+        if [[ -n "${major}" ]]; then
+            tags+=(-t "${base}:${major}")
+        fi
+
+        # Source images
+        local sources=()
+        for arch in "${archs[@]}"; do
+            local arch_info
+            arch_info=$(get_arch_info "${arch}")
+            IFS=':' read -r _ _ suffix <<< "${arch_info}"
+            sources+=("${base}:${version}_${suffix}")
+        done
+
+        log_info "  Tags: ${version_no_v}, latest${minor:+, ${minor}}${major:+, ${major}}"
+        log_info "  Sources: ${sources[*]}"
+
+        docker buildx imagetools create \
+            "${tags[@]}" \
+            "${sources[@]}"
+
+        if [[ $? -ne 0 ]]; then
+            log_error "Failed to create manifest for ${example}"
+            exit 1
+        fi
+
+        log_success "Created multi-arch manifest for ${example}"
+    done
+}
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -432,6 +621,7 @@ main() {
     local push=false
     local rebuild=false
     local compile_only=false
+    local with_examples=false
     local version="${VERSION}"
 
     while [[ $# -gt 0 ]]; do
@@ -454,6 +644,10 @@ main() {
                 ;;
             --compile-only)
                 compile_only=true
+                shift
+                ;;
+            --with-examples)
+                with_examples=true
                 shift
                 ;;
             -h|--help)
@@ -495,6 +689,7 @@ main() {
     log_info "Architectures: ${archs[*]}"
     log_info "Registry: ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}"
     log_info "Push: ${push}"
+    log_info "With Examples: ${with_examples}"
     echo ""
     
     check_prerequisites
@@ -507,6 +702,14 @@ main() {
         compile_binaries "${arch}" "${rebuild}"
     done
 
+    # Stage 2b: Compile examples (only with --with-examples)
+    if [[ "${with_examples}" == "true" ]]; then
+        log_stage "Stage 2b: Compiling examples"
+        for arch in "${archs[@]}"; do
+            compile_examples "${arch}" "${rebuild}"
+        done
+    fi
+
     if [[ "${compile_only}" == "true" ]]; then
         log_success "Compilation completed (--compile-only)"
         exit 0
@@ -518,17 +721,30 @@ main() {
         build_images "${arch}" "${push}" "${version}"
     done
 
+    # Stage 3b: Build example images (only with --with-examples)
+    if [[ "${with_examples}" == "true" ]]; then
+        log_stage "Stage 3b: Building example Docker images"
+        for arch in "${archs[@]}"; do
+            build_example_images "${arch}" "${push}" "${version}"
+        done
+    fi
+
     # Stage 4: Merge manifests (only when pushing)
     if [[ "${push}" == "true" ]] && [[ ${#archs[@]} -gt 1 ]]; then
         merge_manifests "${version}" "${archs[@]}"
+        # Stage 4b: Merge example manifests (only with --with-examples)
+        if [[ "${with_examples}" == "true" ]]; then
+            merge_example_manifests "${version}" "${archs[@]}"
+        fi
     elif [[ "${push}" == "true" ]]; then
         log_info "Single architecture build, creating simple tags..."
+        local version_no_v="${version#v}"
+        local arch_info
+        arch_info=$(get_arch_info "${archs[0]}")
+        IFS=':' read -r _ _ suffix <<< "${arch_info}"
+
         for binary in ${BINARIES}; do
             local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${binary}"
-            local version_no_v="${version#v}"
-            local arch_info
-            arch_info=$(get_arch_info "${archs[0]}")
-            IFS=':' read -r _ _ suffix <<< "${arch_info}"
             
             # Tag the arch-specific image as main tags
             docker buildx imagetools create \
@@ -536,6 +752,19 @@ main() {
                 -t "${base}:latest" \
                 "${base}:${version}_${suffix}"
         done
+
+        # Handle examples for single architecture push
+        if [[ "${with_examples}" == "true" ]]; then
+            for example in ${EXAMPLES}; do
+                local image_name="${example//_/-}"
+                local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}"
+                
+                docker buildx imagetools create \
+                    -t "${base}:${version_no_v}" \
+                    -t "${base}:latest" \
+                    "${base}:${version}_${suffix}"
+            done
+        fi
     else
         log_info "Skipping manifest creation (not pushing)"
         log_info "Use --push to create and push multi-arch manifests"
@@ -559,6 +788,25 @@ main() {
             done
         fi
     done
+
+    # Show example images if built
+    if [[ "${with_examples}" == "true" ]]; then
+        echo ""
+        log_info "Built example images:"
+        for example in ${EXAMPLES}; do
+            local image_name="${example//_/-}"
+            if [[ "${push}" == "true" ]]; then
+                echo "  ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}:${version_no_v}"
+            else
+                for arch in "${archs[@]}"; do
+                    local arch_info
+                    arch_info=$(get_arch_info "${arch}")
+                    IFS=':' read -r _ _ suffix <<< "${arch_info}"
+                    echo "  ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}:${version}_${suffix} (local)"
+                done
+            fi
+        done
+    fi
     echo ""
 }
 
