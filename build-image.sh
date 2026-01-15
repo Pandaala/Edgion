@@ -149,21 +149,21 @@ determine_build_mode() {
     
     # Check if multi-platform build
     if [[ "${platforms}" == *","* ]]; then
-        log_info "Multi-platform build detected, using Docker buildx"
+        log_info "Multi-platform build detected, using Docker buildx" >&2
         echo "docker"
         return
     fi
     
     # Check if cargo is available
     if ! command -v cargo &> /dev/null; then
-        log_warning "Cargo not found, falling back to Docker build"
-        log_warning "For faster builds, install Rust: https://rustup.rs/"
+        log_warning "Cargo not found, falling back to Docker build" >&2
+        log_warning "For faster builds, install Rust: https://rustup.rs/" >&2
         echo "docker"
         return
     fi
     
     # Use local build (fastest)
-    log_info "Using local build mode (fast!)"
+    log_info "Using local build mode (fast!)" >&2
     echo "local"
 }
 

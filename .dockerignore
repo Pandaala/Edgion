@@ -1,5 +1,7 @@
-# Rust build artifacts
-target/
+# Rust build artifacts (keep target/release for local builds)
+target/debug/
+target/.rustc_info.json
+target/.cargo-lock
 **/*.rs.bk
 **/*.pdb
 
