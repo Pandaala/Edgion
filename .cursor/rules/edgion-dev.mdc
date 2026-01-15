@@ -1,0 +1,86 @@
+# Edgion Gateway Development Rules
+
+## Coding & Testing
+- Use debug mode for development: `cargo run` (without --release)
+- Quick checks: `cargo check`, `cargo clippy`, `cargo fmt`
+- Run integration tests for refactoring; minor changes don't require full test runs
+- Document impact scope for significant changes
+- Avoid creating temporary scripts/documents
+
+## Code Standards
+- All comments must be in English
+- Control plane logging uses tracing; data plane logs go to access.log
+- Consider access.log output and testing for all request tests
+- Use short `use` imports for non-unit tests, avoid long internal paths
+- Follow the no-hidden-logic principle
+
+## Response Style
+- Daily communication in Chinese, plans in Chinese
+
+## Git Operation Restrictions
+- **Do NOT execute remote branch deletion** (`git push --delete`, `git push origin :branch`)
+- If user requests remote branch deletion, provide the command but don't execute it
+
+## Documentation
+- Current phase: Chinese documentation only
+- Use folder structure for proper document nesting
+
+### Edgion Extension Feature Markers
+For Edgion extension features that differ from standard Gateway API (custom Annotations, extended CRDs, etc.), use unified callout style:
+
+```markdown
+> **🔌 Edgion Extension**
+> 
+> This feature is implemented via Edgion custom Annotation/CRD, not part of standard Gateway API spec.
+```
+
+Usage scenarios:
+- **Entire document** is extension: Add callout after title
+- **Partial config** is extension: Add callout before that config section
+- **Extension fields in tables**: Add callout before table, or mark field name with `🔌`
+
+## Integration Testing
+
+### Running Integration Tests
+```bash
+# Run all integration tests
+./examples/test/scripts/integration/run_integration.sh
+```
+
+### Verifying Test Results
+After tests complete, check `${WORK_DIR}/report.log` for test report:
+
+Report format:
+```
+========================================
+Edgion Integration Test Report
+Time: 2026-01-10 09:42:04
+Work Dir: /path/to/work_dir
+========================================
+
+[PASS] http_direct (2s)
+[PASS] grpc_direct (0s)
+[FAIL] some_test (1s)    # Failed test
+...
+
+========================================
+Summary
+========================================
+Total:  23
+Passed: 22
+Failed: 1
+Pass Rate: 95%
+========================================
+```
+
+### Test Directory Structure
+- `examples/test/code/` - Test code (client, server, validator)
+- `examples/test/conf/` - Test config files (organized by resource type)
+- `examples/test/scripts/` - Test scripts
+- `examples/test/certs/` - Generated certificates (gitignored)
+- `integration_testing/` - Runtime work directory (gitignored)
+
+### Troubleshooting Test Failures
+1. Check `report.log` to identify failed tests
+2. Check `${WORK_DIR}/test_logs/${TEST_NAME}.log` for detailed logs
+3. Check `${WORK_DIR}/logs/` for controller/gateway logs
