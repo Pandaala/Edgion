@@ -29,18 +29,6 @@ impl EdgionControllerCli {
         Self::parse()
     }
 
-    /// Spawn a background task to periodically print all gateway class configs every 10 seconds
-    /// This can be easily removed in the future if not needed
-    fn spawn_config_printer(config_server: Arc<ConfigServer>) {
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
-            loop {
-                interval.tick().await;
-                config_server.print_config().await;
-            }
-        });
-    }
-
     pub async fn run(&self) -> Result<()> {
         // Load and merge configuration
         let config = EdgionControllerConfig::load(self.config.clone())?;
@@ -229,9 +217,6 @@ impl EdgionControllerCli {
             grpc_addr = %addr,
             "Starting gRPC conf_server and configuration loader"
         );
-
-        // Spawn task to print config every 10 seconds
-        Self::spawn_config_printer(config_server.clone());
 
         // Admin API port
         let admin_port = 5800;

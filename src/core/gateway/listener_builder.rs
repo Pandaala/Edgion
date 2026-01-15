@@ -414,14 +414,6 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
                 anyhow::bail!("TLS protocol requires either 'boringssl' or 'openssl' feature")
             }
         }
-        "GRPC" | "GRPCWeb" => {
-            // GRPC always requires HTTP/2
-            tracing::info!(
-                listener=%context.listener.name,
-                "GRPC/GRPCWeb protocol detected, treating as HTTP/2 with TLS (force enabled)"
-            );
-            add_http_listener(server, &context, true, true) // Force enable HTTP/2 for gRPC
-        }
         protocol => {
             anyhow::bail!("Unsupported protocol: {}", protocol)
         }

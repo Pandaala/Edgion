@@ -57,9 +57,6 @@ impl EdgionGatewayCli {
 
     /// Start auxiliary services
     async fn start_auxiliary_services(config_client: Arc<ConfigClient>) {
-        // Spawn config printer
-        Self::spawn_config_printer(config_client.clone());
-
         // Start backend cleaner
         let cleaner = BackendCleaner::new();
         cleaner.start();
@@ -119,17 +116,6 @@ impl EdgionGatewayCli {
                 }
             }
         }
-    }
-
-    /// Spawn config printer task
-    fn spawn_config_printer(config_client: Arc<ConfigClient>) {
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(120));
-            loop {
-                interval.tick().await;
-                config_client.print_config();
-            }
-        });
     }
 
     pub fn run(&self) -> Result<()> {
