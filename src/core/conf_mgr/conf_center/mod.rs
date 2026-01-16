@@ -23,7 +23,7 @@ pub mod status;
 pub mod traits;
 
 pub use config::ConfCenterConfig;
-pub use file_system::FileSystemWriter;
+pub use file_system::{FileSystemWriter, FileWatcher};
 pub use init_loader::load_all_resources;
 pub use kubernetes::{KubernetesController, KubernetesStore, KubernetesWriter};
 pub use status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, StatusStoreError};
@@ -83,7 +83,10 @@ impl ConfCenter {
     /// - Kubernetes: Start controller to watch resources
     pub async fn start(&self, config_server: Arc<ConfigServer>) -> Result<()> {
         match &self.config {
-            ConfCenterConfig::FileSystem { watch_enabled, .. } => {
+            ConfCenterConfig::FileSystem {
+                conf_dir,
+                watch_enabled,
+            } => {
                 // Load all resources from file system
                 tracing::info!(
                     component = "conf_center",
@@ -100,13 +103,23 @@ impl ConfCenter {
                     tracing::info!(
                         component = "conf_center",
                         mode = "file_system",
+                        conf_dir = %conf_dir.display(),
                         "Starting file watcher"
                     );
-                    // TODO: Implement FileWatcher
-                    tracing::warn!(
-                        component = "conf_center",
-                        "File watcher not yet implemented"
-                    );
+
+                    let watcher = FileWatcher::new(conf_dir.clone(), config_server.clone());
+
+                    // Spawn watcher in background
+                    tokio::spawn(async move {
+                        if let Err(e) = watcher.start().await {
+                            tracing::error!(
+                                component = "conf_center",
+                                mode = "file_system",
+                                error = %e,
+                                "File watcher error"
+                            );
+                        }
+                    });
                 }
 
                 Ok(())
