@@ -1,27 +1,74 @@
-use super::FileSystemStore;
-use crate::core::conf_mgr::{ConfEntry, ConfStore, ConfStoreError};
+//! FileSystemWriter implementation
+//!
+//! Implements the ConfWriter trait using local file system as the backend.
+//! Stores resources as YAML files with naming convention: Kind_namespace_name.yaml
+
+use crate::core::conf_mgr::conf_center::{ConfEntry, ConfWriter, ConfWriterError};
 use crate::core::utils::extract_resource_metadata;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
+/// File system based configuration writer
+///
+/// Stores resources as YAML files with naming convention: Kind_namespace_name.yaml
+/// or Kind__name.yaml for cluster-scoped resources.
+pub struct FileSystemWriter {
+    root: PathBuf,
+}
+
+impl FileSystemWriter {
+    /// Create a new file system writer with root directory path
+    pub fn new<P: Into<PathBuf>>(root: P) -> Self {
+        let root_path = root.into();
+        let root_abs = if root_path.is_absolute() {
+            root_path
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&root_path))
+                .unwrap_or(root_path)
+        };
+
+        tracing::info!(
+            component = "file_system_writer",
+            event = "init",
+            root = ?root_abs,
+            "Initialized FileSystemWriter"
+        );
+
+        Self { root: root_abs }
+    }
+
+    /// Get the root directory path
+    pub fn root(&self) -> &PathBuf {
+        &self.root
+    }
+}
+
 #[async_trait]
-impl ConfStore for FileSystemStore {
+impl ConfWriter for FileSystemWriter {
     async fn set_one(
         &self,
         kind: &str,
         namespace: Option<&str>,
         name: &str,
         content: String,
-    ) -> Result<(), ConfStoreError> {
+    ) -> Result<(), ConfWriterError> {
         let path = build_resource_path(&self.root, kind, namespace, name);
+
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| ConfWriterError::IOError(format!("Failed to create directory: {}", e)))?;
+        }
 
         fs::write(&path, content)
             .await
-            .map_err(|e| ConfStoreError::IOError(format!("Failed to write file: {}", e)))?;
+            .map_err(|e| ConfWriterError::IOError(format!("Failed to write file: {}", e)))?;
 
         tracing::info!(
-            component = "file_system_store",
+            component = "file_system_writer",
             event = "resource_set",
             kind = kind,
             namespace = ?namespace,
@@ -33,11 +80,11 @@ impl ConfStore for FileSystemStore {
         Ok(())
     }
 
-    async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfStoreError> {
+    async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
         let path = build_resource_path(&self.root, kind, namespace, name);
 
         if !path.exists() {
-            return Err(ConfStoreError::NotFound(format!(
+            return Err(ConfWriterError::NotFound(format!(
                 "{}/{}/{}",
                 kind,
                 namespace.unwrap_or("_"),
@@ -47,24 +94,24 @@ impl ConfStore for FileSystemStore {
 
         let content = fs::read_to_string(&path)
             .await
-            .map_err(|e| ConfStoreError::IOError(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ConfWriterError::IOError(format!("Failed to read file: {}", e)))?;
 
         Ok(content)
     }
 
-    async fn list_all(&self) -> Result<Vec<ConfEntry>, ConfStoreError> {
+    async fn list_all(&self) -> Result<Vec<ConfEntry>, ConfWriterError> {
         let mut resources = Vec::new();
         let mut stack = vec![self.root.clone()];
 
         while let Some(dir) = stack.pop() {
             let mut entries = fs::read_dir(&dir)
                 .await
-                .map_err(|e| ConfStoreError::IOError(format!("Failed to read dir: {}", e)))?;
+                .map_err(|e| ConfWriterError::IOError(format!("Failed to read dir: {}", e)))?;
 
             while let Some(entry) = entries
                 .next_entry()
                 .await
-                .map_err(|e| ConfStoreError::IOError(format!("Failed to read entry: {}", e)))?
+                .map_err(|e| ConfWriterError::IOError(format!("Failed to read entry: {}", e)))?
             {
                 let path = entry.path();
 
@@ -82,7 +129,7 @@ impl ConfStore for FileSystemStore {
                 // Read and parse file
                 let content = fs::read_to_string(&path)
                     .await
-                    .map_err(|e| ConfStoreError::IOError(format!("Failed to read {:?}: {}", path, e)))?;
+                    .map_err(|e| ConfWriterError::IOError(format!("Failed to read {:?}: {}", path, e)))?;
 
                 // Extract metadata
                 if let Some(metadata) = extract_resource_metadata(&content) {
@@ -94,7 +141,7 @@ impl ConfStore for FileSystemStore {
                     });
                 } else {
                     tracing::warn!(
-                        component = "file_system_store",
+                        component = "file_system_writer",
                         path = ?path,
                         "Failed to extract metadata from file"
                     );
@@ -103,7 +150,7 @@ impl ConfStore for FileSystemStore {
         }
 
         tracing::info!(
-            component = "file_system_store",
+            component = "file_system_writer",
             count = resources.len(),
             "Loaded all resources from file system"
         );
@@ -111,11 +158,11 @@ impl ConfStore for FileSystemStore {
         Ok(resources)
     }
 
-    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfStoreError> {
+    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
         let path = build_resource_path(&self.root, kind, namespace, name);
 
         if !path.exists() {
-            return Err(ConfStoreError::NotFound(format!(
+            return Err(ConfWriterError::NotFound(format!(
                 "{}/{}/{}",
                 kind,
                 namespace.unwrap_or("_"),
@@ -125,10 +172,10 @@ impl ConfStore for FileSystemStore {
 
         fs::remove_file(&path)
             .await
-            .map_err(|e| ConfStoreError::IOError(format!("Failed to delete file: {}", e)))?;
+            .map_err(|e| ConfWriterError::IOError(format!("Failed to delete file: {}", e)))?;
 
         tracing::info!(
-            component = "file_system_store",
+            component = "file_system_writer",
             event = "resource_deleted",
             kind = kind,
             namespace = ?namespace,
@@ -139,18 +186,18 @@ impl ConfStore for FileSystemStore {
         Ok(())
     }
 
-    async fn get_list_by_kind(&self, kind: &str) -> Result<Vec<ConfEntry>, ConfStoreError> {
+    async fn get_list_by_kind(&self, kind: &str) -> Result<Vec<ConfEntry>, ConfWriterError> {
         let mut resources = Vec::new();
         let prefix = format!("{}_", kind);
 
         let mut entries = fs::read_dir(&self.root)
             .await
-            .map_err(|e| ConfStoreError::IOError(format!("Failed to read dir: {}", e)))?;
+            .map_err(|e| ConfWriterError::IOError(format!("Failed to read dir: {}", e)))?;
 
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|e| ConfStoreError::IOError(format!("Failed to read entry: {}", e)))?
+            .map_err(|e| ConfWriterError::IOError(format!("Failed to read entry: {}", e)))?
         {
             let path = entry.path();
 
@@ -173,7 +220,7 @@ impl ConfStore for FileSystemStore {
                 // Read and parse file
                 let content = fs::read_to_string(&path)
                     .await
-                    .map_err(|e| ConfStoreError::IOError(format!("Failed to read {:?}: {}", path, e)))?;
+                    .map_err(|e| ConfWriterError::IOError(format!("Failed to read {:?}: {}", path, e)))?;
 
                 // Extract metadata to verify
                 if let Some(metadata) = extract_resource_metadata(&content) {
@@ -190,7 +237,7 @@ impl ConfStore for FileSystemStore {
         }
 
         tracing::debug!(
-            component = "file_system_store",
+            component = "file_system_writer",
             kind = kind,
             count = resources.len(),
             "Loaded resources by kind"
@@ -199,18 +246,18 @@ impl ConfStore for FileSystemStore {
         Ok(resources)
     }
 
-    async fn get_list_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<Vec<ConfEntry>, ConfStoreError> {
+    async fn get_list_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<Vec<ConfEntry>, ConfWriterError> {
         let mut resources = Vec::new();
         let prefix = format!("{}_{}_", kind, namespace);
 
         let mut entries = fs::read_dir(&self.root)
             .await
-            .map_err(|e| ConfStoreError::IOError(format!("Failed to read dir: {}", e)))?;
+            .map_err(|e| ConfWriterError::IOError(format!("Failed to read dir: {}", e)))?;
 
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|e| ConfStoreError::IOError(format!("Failed to read entry: {}", e)))?
+            .map_err(|e| ConfWriterError::IOError(format!("Failed to read entry: {}", e)))?
         {
             let path = entry.path();
 
@@ -233,7 +280,7 @@ impl ConfStore for FileSystemStore {
                 // Read and parse file
                 let content = fs::read_to_string(&path)
                     .await
-                    .map_err(|e| ConfStoreError::IOError(format!("Failed to read {:?}: {}", path, e)))?;
+                    .map_err(|e| ConfWriterError::IOError(format!("Failed to read {:?}: {}", path, e)))?;
 
                 // Extract metadata to verify
                 if let Some(metadata) = extract_resource_metadata(&content) {
@@ -250,7 +297,7 @@ impl ConfStore for FileSystemStore {
         }
 
         tracing::debug!(
-            component = "file_system_store",
+            component = "file_system_writer",
             kind = kind,
             namespace = namespace,
             count = resources.len(),
@@ -260,18 +307,18 @@ impl ConfStore for FileSystemStore {
         Ok(resources)
     }
 
-    async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfStoreError> {
+    async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfWriterError> {
         let prefix = format!("{}_", kind);
         let mut count = 0;
 
         let mut entries = fs::read_dir(&self.root)
             .await
-            .map_err(|e| ConfStoreError::IOError(format!("Failed to read dir: {}", e)))?;
+            .map_err(|e| ConfWriterError::IOError(format!("Failed to read dir: {}", e)))?;
 
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|e| ConfStoreError::IOError(format!("Failed to read entry: {}", e)))?
+            .map_err(|e| ConfWriterError::IOError(format!("Failed to read entry: {}", e)))?
         {
             let path = entry.path();
 
@@ -292,18 +339,18 @@ impl ConfStore for FileSystemStore {
         Ok(count)
     }
 
-    async fn cnt_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<usize, ConfStoreError> {
+    async fn cnt_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<usize, ConfWriterError> {
         let prefix = format!("{}_{}_", kind, namespace);
         let mut count = 0;
 
         let mut entries = fs::read_dir(&self.root)
             .await
-            .map_err(|e| ConfStoreError::IOError(format!("Failed to read dir: {}", e)))?;
+            .map_err(|e| ConfWriterError::IOError(format!("Failed to read dir: {}", e)))?;
 
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|e| ConfStoreError::IOError(format!("Failed to read entry: {}", e)))?
+            .map_err(|e| ConfWriterError::IOError(format!("Failed to read entry: {}", e)))?
         {
             let path = entry.path();
 
@@ -322,10 +369,6 @@ impl ConfStore for FileSystemStore {
         }
 
         Ok(count)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

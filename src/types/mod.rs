@@ -42,7 +42,7 @@ pub use self::work_dir::{init_work_dir, work_dir, WorkDir};
 
 // Re-export from conf_mgr for backward compatibility
 pub use crate::core::conf_mgr::{
-    ConfEntry as ResourceEntry, ConfMgrError as ResourceMgrError, ConfStore as ResourceStore,
+    ConfEntry as ResourceEntry, ConfMgrError as ResourceMgrError, ConfWriter as ResourceStore,
     ConfStoreError as ResourceStoreError, EdgionConfMgr as EdgionResourceMgr,
 };
 

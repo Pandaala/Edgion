@@ -1,10 +1,12 @@
-use super::{ConfEntry, ConfStore, ConfStoreError};
+use super::{ConfEntry, ConfWriter, ConfWriterError};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 /// Resource manager API supporting multiple storage backends
+///
+/// Now uses ConfWriter trait (unified interface for FileSystem and Kubernetes)
 pub struct ResourceMgrAPI {
-    backends: RwLock<HashMap<String, Arc<dyn ConfStore>>>,
+    backends: RwLock<HashMap<String, Arc<dyn ConfWriter>>>,
     default_backend: RwLock<Option<String>>,
 }
 
@@ -23,7 +25,7 @@ impl ResourceMgrAPI {
     }
 
     /// Register a storage backend
-    pub fn register_backend(&self, name: String, backend: Arc<dyn ConfStore>) {
+    pub fn register_backend(&self, name: String, backend: Arc<dyn ConfWriter>) {
         let mut backends = self.backends.write().unwrap();
         backends.insert(name.clone(), backend);
         tracing::info!(component = "conf_mgr_api", backend = name, "Storage backend registered");
@@ -44,7 +46,7 @@ impl ResourceMgrAPI {
     }
 
     /// Get backend by name (or default if None)
-    pub fn get_backend(&self, name: Option<&str>) -> Result<Arc<dyn ConfStore>, String> {
+    pub fn get_backend(&self, name: Option<&str>) -> Result<Arc<dyn ConfWriter>, String> {
         let backends = self.backends.read().unwrap();
         let backend_name: String = match name {
             Some(n) => n.to_string(),
@@ -66,33 +68,33 @@ impl ResourceMgrAPI {
         namespace: Option<&str>,
         name: &str,
         content: String,
-    ) -> Result<(), ConfStoreError> {
-        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
+    ) -> Result<(), ConfWriterError> {
+        let backend = self.get_backend(None).map_err(ConfWriterError::InternalError)?;
         backend.set_one(kind, namespace, name, content).await
     }
 
-    pub async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfStoreError> {
-        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
+    pub async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
+        let backend = self.get_backend(None).map_err(ConfWriterError::InternalError)?;
         backend.get_one(kind, namespace, name).await
     }
 
-    pub async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfStoreError> {
-        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
+    pub async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
+        let backend = self.get_backend(None).map_err(ConfWriterError::InternalError)?;
         backend.delete_one(kind, namespace, name).await
     }
 
-    pub async fn list_all(&self) -> Result<Vec<ConfEntry>, ConfStoreError> {
-        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
+    pub async fn list_all(&self) -> Result<Vec<ConfEntry>, ConfWriterError> {
+        let backend = self.get_backend(None).map_err(ConfWriterError::InternalError)?;
         backend.list_all().await
     }
 
-    pub async fn get_list_by_kind(&self, kind: &str) -> Result<Vec<ConfEntry>, ConfStoreError> {
-        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
+    pub async fn get_list_by_kind(&self, kind: &str) -> Result<Vec<ConfEntry>, ConfWriterError> {
+        let backend = self.get_backend(None).map_err(ConfWriterError::InternalError)?;
         backend.get_list_by_kind(kind).await
     }
 
-    pub async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfStoreError> {
-        let backend = self.get_backend(None).map_err(ConfStoreError::InternalError)?;
+    pub async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfWriterError> {
+        let backend = self.get_backend(None).map_err(ConfWriterError::InternalError)?;
         backend.cnt_by_kind(kind).await
     }
 }

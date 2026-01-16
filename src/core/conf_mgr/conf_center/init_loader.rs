@@ -2,10 +2,8 @@
 //!
 //! Unified single-pass loading that works for both file system and Kubernetes modes
 
-use crate::core::conf_mgr::resource_check::{
-    self, check_edgion_tls, ResourceCheckContext,
-};
-use crate::core::conf_mgr::ConfStore;
+use crate::core::conf_mgr::conf_center::ConfWriter;
+use crate::core::conf_mgr::resource_check::{self, check_edgion_tls, ResourceCheckContext};
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{CacheEventDispatch, ConfigServer, ServerCache};
 use crate::types::prelude_resources::*;
@@ -102,17 +100,17 @@ fn load_route_with_validation<T, F>(
 
 /// Load all resources from storage into ConfigServer
 /// Unified single-pass loading suitable for both file system and Kubernetes modes
-pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_server: Arc<ConfigServer>) -> Result<()> {
+pub async fn load_all_resources(writer: Arc<dyn ConfWriter>, config_server: Arc<ConfigServer>) -> Result<()> {
     tracing::info!(
-        component = "conf_store",
+        component = "conf_center",
         event = "init_load_start",
-        "Loading all resources from store..."
+        "Loading all resources from conf center..."
     );
 
-    let all_resources = store
+    let all_resources = writer
         .list_all()
         .await
-        .context("Failed to list all resources from store")?;
+        .context("Failed to list all resources from conf center")?;
 
     let mut stats = LoadStats::new();
 

@@ -1,10 +1,7 @@
 use crate::core::cli::config::EdgionControllerConfig;
-use crate::core::conf_mgr::{
-    load_all_resources_from_store, ConfStore, FileSystemStore, KubernetesStore, ResourceMgrAPI, SchemaValidator,
-};
+use crate::core::conf_mgr::{ConfCenter, ConfCenterConfig, ResourceMgrAPI, SchemaValidator};
 use crate::core::conf_sync::{ConfigServer, ConfigSyncServer};
 use crate::core::observe::init_logging;
-use tracing_appender::non_blocking::WorkerGuard;
 use crate::core::utils;
 use crate::types::{init_work_dir, work_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
 use anyhow::{anyhow, Result};
@@ -13,6 +10,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing_appender::non_blocking::WorkerGuard;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -29,6 +27,26 @@ pub struct EdgionControllerCli {
 impl EdgionControllerCli {
     pub fn parse_args() -> Self {
         Self::parse()
+    }
+
+    /// Build ConfCenterConfig from EdgionControllerConfig
+    fn build_conf_center_config(config: &EdgionControllerConfig, k8s_mode: bool) -> Result<ConfCenterConfig> {
+        if k8s_mode {
+            let gateway_class = config
+                .gateway_class()
+                .ok_or_else(|| anyhow!("gateway_class must be specified in Kubernetes mode"))?;
+
+            Ok(ConfCenterConfig::Kubernetes {
+                watch_namespaces: config.watch_namespaces().to_vec(),
+                label_selector: config.label_selector().map(|s| s.to_string()),
+                gateway_class,
+            })
+        } else {
+            Ok(ConfCenterConfig::FileSystem {
+                conf_dir: PathBuf::from(config.conf_dir()),
+                watch_enabled: false, // File watching not yet implemented
+            })
+        }
     }
 
     /// Initialize environment: k8s_mode, work_dir, logging
@@ -75,126 +93,6 @@ impl EdgionControllerCli {
         Ok((k8s_mode, log_guard))
     }
 
-    /// Initialize store based on k8s_mode
-    async fn init_store(k8s_mode: bool, config: &EdgionControllerConfig) -> Result<Arc<dyn ConfStore>> {
-        let store: Arc<dyn ConfStore> = if k8s_mode {
-            tracing::info!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                event = "store_init",
-                "Running in Kubernetes mode, initializing KubernetesStore"
-            );
-            KubernetesStore::new().await?
-        } else {
-            let conf_dir = config.conf_dir();
-            tracing::info!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                event = "store_init",
-                conf_dir = %conf_dir,
-                "Running in file system mode, using FileSystemStore"
-            );
-            FileSystemStore::new(&conf_dir) as Arc<dyn ConfStore>
-        };
-        Ok(store)
-    }
-
-    /// Initialize ConfigServer, ResourceMgrAPI, and load resources
-    async fn init_config_server(
-        config: &EdgionControllerConfig,
-        store: Arc<dyn ConfStore>,
-        k8s_mode: bool,
-    ) -> Result<(Arc<ConfigServer>, Arc<ResourceMgrAPI>)> {
-        let gateway_class_name = config
-            .gateway_class()
-            .ok_or_else(|| anyhow!("gateway_class must be specified in configuration"))?;
-
-        tracing::info!(
-            component = COMPONENT_EDGION_CONTROLLER,
-            event = "config_server_init",
-            gateway_class = gateway_class_name,
-            "Initializing ConfigServer"
-        );
-
-        let config_server = Arc::new(ConfigServer::new(&config.conf_sync));
-
-        // Create ResourceMgrAPI and register backend
-        let resource_mgr = Arc::new(ResourceMgrAPI::new());
-        let backend_name = if k8s_mode { "kubernetes" } else { "filesystem" };
-        resource_mgr.register_backend(backend_name.to_string(), store.clone());
-        if let Err(e) = resource_mgr.set_default_backend(backend_name.to_string()) {
-            tracing::error!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                event = "resource_mgr_init_error",
-                error = %e,
-                "Failed to set default backend"
-            );
-            return Err(anyhow!("Failed to initialize resource manager: {}", e));
-        }
-
-        // Load all user resources from storage into ConfigServer
-        tracing::info!(
-            component = COMPONENT_EDGION_CONTROLLER,
-            event = "loading_user_conf",
-            "Loading all user resources from storage"
-        );
-        if let Err(e) = load_all_resources_from_store(store, config_server.clone()).await {
-            tracing::error!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                event = "user_conf_load_error",
-                error = %e,
-                "Failed to load user resources from storage"
-            );
-            return Err(anyhow!("Failed to load user configuration: {}", e));
-        }
-
-        Ok((config_server, resource_mgr))
-    }
-
-    /// Start Kubernetes controller to watch for resource changes (k8s mode only)
-    async fn start_k8s_controller(
-        config: &EdgionControllerConfig,
-        store: Arc<dyn ConfStore>,
-        config_server: Arc<ConfigServer>,
-    ) -> Result<()> {
-        tracing::info!(
-            component = COMPONENT_EDGION_CONTROLLER,
-            event = "k8s_controller_start",
-            "Starting Kubernetes controller to watch resources"
-        );
-
-        let gateway_class_name = config
-            .gateway_class()
-            .ok_or_else(|| anyhow!("gateway_class must be specified"))?;
-
-        let k8s_store = store
-            .as_any()
-            .downcast_ref::<KubernetesStore>()
-            .expect("Store should be KubernetesStore in K8s mode");
-
-        let k8s_store_arc = Arc::new(k8s_store.clone());
-
-        let controller = crate::core::conf_mgr::conf_store::kubernetes::controller::KubernetesController::new(
-            config_server,
-            k8s_store_arc,
-            gateway_class_name.to_string(),
-            config.watch_namespaces().to_vec(),
-            config.label_selector().map(|s| s.to_string()),
-        )
-        .await?;
-
-        tokio::spawn(async move {
-            if let Err(e) = controller.run().await {
-                tracing::error!(
-                    component = COMPONENT_EDGION_CONTROLLER,
-                    event = "k8s_controller_error",
-                    error = %e,
-                    "Kubernetes controller encountered an error"
-                );
-            }
-        });
-
-        Ok(())
-    }
-
     /// Load CRD schemas for validation
     fn load_schemas() -> Arc<SchemaValidator> {
         tracing::info!(
@@ -226,7 +124,18 @@ impl EdgionControllerCli {
     }
 
     /// Wait for all caches to be ready, with timeout
-    async fn wait_all_ready(config_server: &Arc<ConfigServer>, timeout_secs: u64) {
+    async fn wait_all_ready(config_server: &Arc<ConfigServer>, timeout_secs: u64, k8s_mode: bool) {
+        // FileSystem mode: caches are already marked ready by ConfCenter::start
+        if !k8s_mode {
+            tracing::info!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                event = "all_caches_ready",
+                "FileSystem mode: all caches ready"
+            );
+            return;
+        }
+
+        // K8s mode: wait for controller to sync all caches
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(timeout_secs);
 
@@ -274,11 +183,12 @@ impl EdgionControllerCli {
         schema_validator: Arc<SchemaValidator>,
         grpc_addr: SocketAddr,
         admin_port: u16,
+        k8s_mode: bool,
     ) -> Result<()> {
         let sync_server = ConfigSyncServer::new(config_server.clone());
 
         // Wait for all caches to be ready before starting services
-        Self::wait_all_ready(&config_server, 30).await;
+        Self::wait_all_ready(&config_server, 30, k8s_mode).await;
 
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
@@ -338,24 +248,41 @@ impl EdgionControllerCli {
         // 1. Initialize environment (k8s_mode, work_dir, logging)
         let (k8s_mode, _log_guard) = self.init_environment(&config).await?;
 
-        // 2. Initialize store (Kubernetes or FileSystem)
-        let store = Self::init_store(k8s_mode, &config).await?;
+        // 2. Build ConfCenterConfig from EdgionControllerConfig
+        let conf_center_config = Self::build_conf_center_config(&config, k8s_mode)?;
 
-        // 3. Initialize ConfigServer and load resources
-        let (config_server, resource_mgr) = Self::init_config_server(&config, store.clone(), k8s_mode).await?;
+        tracing::info!(
+            component = COMPONENT_EDGION_CONTROLLER,
+            event = "conf_center_config",
+            k8s_mode = k8s_mode,
+            config = ?conf_center_config,
+            "ConfCenter configuration built"
+        );
 
-        // 4. Start Kubernetes controller (k8s mode only)
-        if k8s_mode {
-            Self::start_k8s_controller(&config, store, config_server.clone()).await?;
+        // 3. Create ConfCenter
+        let conf_center = ConfCenter::create(conf_center_config).await?;
+
+        // 4. Create ConfigServer
+        let config_server = Arc::new(ConfigServer::new(&config.conf_sync));
+
+        // 5. Create ResourceMgrAPI and register ConfWriter as backend
+        let resource_mgr = Arc::new(ResourceMgrAPI::new());
+        let backend_name = if k8s_mode { "kubernetes" } else { "filesystem" };
+        resource_mgr.register_backend(backend_name.to_string(), conf_center.writer());
+        if let Err(e) = resource_mgr.set_default_backend(backend_name.to_string()) {
+            return Err(anyhow!("Failed to set default backend: {}", e));
         }
 
-        // 5. Load CRD schemas for validation
+        // 6. Start ConfCenter (load resources + start watcher/controller)
+        conf_center.start(config_server.clone()).await?;
+
+        // 7. Load CRD schemas for validation
         let schema_validator = Self::load_schemas();
 
-        // 6. Parse addresses and start services
+        // 8. Parse addresses and start services
         let grpc_addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
         let admin_port = 5800;
 
-        Self::start_services(config_server, resource_mgr, schema_validator, grpc_addr, admin_port).await
+        Self::start_services(config_server, resource_mgr, schema_validator, grpc_addr, admin_port, k8s_mode).await
     }
 }

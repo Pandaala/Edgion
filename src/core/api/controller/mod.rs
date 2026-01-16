@@ -3,7 +3,7 @@ mod common;
 mod namespaced_handlers;
 mod types;
 
-use crate::core::conf_mgr::{load_all_resources_from_store, ResourceMgrAPI, SchemaValidator};
+use crate::core::conf_mgr::{load_all_resources, ResourceMgrAPI, SchemaValidator};
 use crate::core::conf_sync::ConfigServer;
 use axum::{
     extract::State,
@@ -52,7 +52,7 @@ async fn reload_all_resources(
         .get_backend(None)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    load_all_resources_from_store(store, state.config_server.clone())
+    load_all_resources(store, state.config_server.clone())
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

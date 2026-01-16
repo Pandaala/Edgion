@@ -20,8 +20,8 @@ use kube::{Api, Client, ResourceExt};
 use std::sync::Arc;
 
 use super::{KubernetesStore, StatusReconciler};
+use crate::core::conf_mgr::conf_center::{KubernetesStatusStore, StatusStore};
 use crate::core::conf_mgr::resource_check::{self, check_edgion_tls, ResourceCheckContext};
-use crate::core::conf_mgr::{KubernetesStatusStore, StatusStore};
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{CacheEventDispatch, ConfigServer};
 use crate::core::observe::metrics::global_metrics;
