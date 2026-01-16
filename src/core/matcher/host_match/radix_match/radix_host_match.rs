@@ -204,9 +204,6 @@ impl<T> Default for RadixHostMatchEngine<T> {
     }
 }
 
-// Thread-safe with lock-free reads
-unsafe impl<T: Send + Sync> Sync for RadixHostMatchEngine<T> {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

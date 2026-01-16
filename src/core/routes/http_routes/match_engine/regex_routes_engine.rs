@@ -141,9 +141,6 @@ impl RegexRoutesEngine {
     }
 }
 
-// RegexRoutesEngine is thread-safe with lock-free reads!
-// The routes vector is immutable after initialization.
-unsafe impl Sync for RegexRoutesEngine {}
 
 #[cfg(test)]
 mod tests {

@@ -112,8 +112,8 @@ impl ResourceKind {
             "tlsroute" => Some(ResourceKind::TLSRoute),
             "linksys" => Some(ResourceKind::LinkSys),
             "edgionstreamplugins" => Some(ResourceKind::EdgionStreamPlugins),
-            "referencegrant" => Some(ResourceKind::ReferenceGrant),
-            "backendtlspolicy" => Some(ResourceKind::BackendTLSPolicy),
+            "referencegrant" | "referencegrants" => Some(ResourceKind::ReferenceGrant),
+            "backendtlspolicy" | "backendtlspolicies" => Some(ResourceKind::BackendTLSPolicy),
             "endpoint" | "endpoints" => Some(ResourceKind::Endpoint),
             _ => None,
         }

@@ -1,10 +1,14 @@
 //! Cache-friendly frozen radix tree implementation
 //!
 //! This module provides the flattened, cache-optimized tree structure for fast lookups.
+//! Now supports parameter segments (`:param`) for dynamic route matching.
 
-use crate::core::matcher::radix_tree::builder::BuildNode;
+use crate::core::matcher::radix_tree::builder::{BuildNode, NodeType};
 use crate::core::matcher::radix_tree::error::RouterError;
 use smallvec::SmallVec;
+
+/// Sentinel value indicating no parameter child
+const NO_PARAM_CHILD: u32 = u32::MAX;
 
 /// A flattened node optimized for cache performance.
 ///
@@ -13,7 +17,9 @@ use smallvec::SmallVec;
 /// - 1-2 values: stored inline in values_data, values_flags = 0
 /// - 3+ values: stored in values_pool, values_data[0] = offset, values_flags = 1
 ///
-/// Fields are carefully ordered to eliminate padding while maintaining 8-byte alignment.
+/// Now also supports parameter nodes for dynamic route matching.
+///
+/// Fields are carefully ordered to minimize padding while maintaining 8-byte alignment.
 #[repr(C, align(8))]
 #[derive(Debug, Clone, Copy)]
 struct FlatNode {
@@ -28,6 +34,9 @@ struct FlatNode {
     /// - When external (count > 2): [offset_in_values_pool, _]
     values_data: [u32; 2],
 
+    /// Index of parameter child node, or NO_PARAM_CHILD if none
+    param_child_idx: u32,
+
     /// Length of the prefix
     prefix_len: u16,
 
@@ -39,6 +48,12 @@ struct FlatNode {
 
     /// Flags: bit 0 = 0 (inline), 1 (external in values_pool)
     values_flags: u8,
+
+    /// Node type: 0 = Static, 1 = Param
+    node_type: u8,
+
+    /// Padding for alignment
+    _padding: u8,
 }
 
 /// A child entry that maps a first byte to a node index.
@@ -326,6 +341,103 @@ impl FrozenRadixTree {
         results
     }
 
+    /// Matches all routes (static, prefix, and parametric) that match the given path.
+    ///
+    /// This method performs a DFS traversal of the tree, exploring both static
+    /// children and parameter children at each node. It returns all values from
+    /// all matching routes.
+    ///
+    /// # Arguments
+    /// * `path` - The path to match
+    ///
+    /// # Returns
+    /// A vector of all matching values from all matching routes
+    ///
+    /// # Example
+    /// ```
+    /// use edgion::core::matcher::radix_tree::RadixTreeBuilder;
+    ///
+    /// let mut builder = RadixTreeBuilder::new();
+    /// builder.insert("/api", 1).unwrap();
+    /// builder.insert("/api/v1/users", 2).unwrap();
+    /// builder.insert("/api/:version/users", 3).unwrap();
+    ///
+    /// let tree = builder.freeze().unwrap();
+    ///
+    /// // Returns all matching routes (prefix + static + parametric)
+    /// let results = tree.match_all("/api/v1/users");
+    /// assert!(results.contains(&1));  // prefix match
+    /// assert!(results.contains(&2));  // static match
+    /// assert!(results.contains(&3));  // parametric match
+    /// ```
+    pub fn match_all(&self, path: &str) -> SmallVec<[u32; 8]> {
+        let mut results = SmallVec::<[u32; 8]>::new();
+
+        if self.nodes.is_empty() {
+            return results;
+        }
+
+        // Stack for DFS traversal: (node_index, remaining_path)
+        let mut stack = SmallVec::<[(usize, &[u8]); 16]>::new();
+        stack.push((0, path.as_bytes()));
+
+        while let Some((node_idx, remaining)) = stack.pop() {
+            let node = &self.nodes[node_idx];
+
+            // Handle node based on its type
+            let after_match = if node.node_type == NodeType::Param as u8 {
+                // Parameter node: consume until next '/' or end
+                let end = remaining
+                    .iter()
+                    .position(|&c| c == b'/')
+                    .unwrap_or(remaining.len());
+
+                // Empty parameter doesn't match
+                if end == 0 {
+                    continue;
+                }
+
+                &remaining[end..]
+            } else {
+                // Static node: must match prefix exactly
+                let prefix = self.get_node_prefix(node);
+
+                if !remaining.starts_with(prefix) {
+                    continue;
+                }
+
+                &remaining[prefix.len()..]
+            };
+
+            // Collect values from this node
+            if node.values_count > 0 {
+                results.extend_from_slice(self.get_node_values(node_idx));
+            }
+
+            // If there's more path to match, explore children
+            if !after_match.is_empty() {
+                let next_byte = after_match[0];
+
+                // Try static children
+                let children_start = node.children_offset as usize;
+                let children_end = children_start + node.children_count as usize;
+
+                for child_entry in &self.children[children_start..children_end] {
+                    if child_entry.first_byte == next_byte {
+                        stack.push((child_entry.node_index as usize, after_match));
+                    }
+                }
+
+                // Try parameter child
+                if node.param_child_idx != NO_PARAM_CHILD {
+                    stack.push((node.param_child_idx as usize, after_match));
+                }
+            }
+        }
+
+        results
+    }
+
     /// Matches a route exactly (no prefix matching).
     ///
     /// Unlike `match_route_longest` which matches prefixes, this method only
@@ -425,12 +537,22 @@ fn count_tree_stats(node: &BuildNode) -> TreeStatistics {
         total_values_external: external_values,
     };
 
+    // Count static children
     for child in node.children().values() {
         let child_stats = count_tree_stats(child);
         stats.node_count += child_stats.node_count;
         stats.child_count += child_stats.child_count;
         stats.total_string_bytes += child_stats.total_string_bytes;
         stats.total_values_external += child_stats.total_values_external;
+    }
+
+    // Count parameter child if present
+    if let Some(param_child) = node.param_child() {
+        let param_stats = count_tree_stats(param_child);
+        stats.node_count += param_stats.node_count;
+        stats.child_count += param_stats.child_count;
+        stats.total_string_bytes += param_stats.total_string_bytes;
+        stats.total_values_external += param_stats.total_values_external;
     }
 
     stats
@@ -542,20 +664,31 @@ impl FlatTreeBuilder {
             prefix_offset,
             children_offset: 0, // Will be updated later
             values_data,
+            param_child_idx: NO_PARAM_CHILD, // Will be updated if param child exists
             prefix_len: prefix_len as u16,
             children_count: children_count as u16,
             values_count: values_count as u8,
             values_flags,
+            node_type: node.node_type() as u8,
+            _padding: 0,
         };
 
         self.nodes.push(flat_node);
 
-        // First, recursively flatten all children nodes
+        // First, recursively flatten all static children nodes
         let mut child_indices = Vec::with_capacity(node.children().len());
         for (&first_byte, child) in node.children().iter() {
             let child_index = self.flatten_node(child)?;
             child_indices.push((first_byte, child_index));
         }
+
+        // Flatten parameter child if present
+        let param_child_idx = if let Some(param_child) = node.param_child() {
+            self.flatten_node(param_child)?
+        } else {
+            NO_PARAM_CHILD
+        };
+        self.nodes[node_index as usize].param_child_idx = param_child_idx;
 
         // Check children offset won't overflow
         if self.children.len() > u32::MAX as usize {
@@ -587,5 +720,59 @@ impl FlatTreeBuilder {
             string_pool: self.string_pool,
             values_pool: self.values_pool,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::matcher::radix_tree::RadixTreeBuilder;
+
+    #[test]
+    fn test_match_all_static_routes() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/health", 1).unwrap();
+        builder.insert("/echo", 2).unwrap();
+        builder.insert("/api/v1/users", 3).unwrap();
+        let tree = builder.freeze().unwrap();
+
+        // Test static route matching
+        let results = tree.match_all("/health");
+        assert!(results.contains(&1), "Should match /health");
+
+        let results = tree.match_all("/echo");
+        assert!(results.contains(&2), "Should match /echo");
+
+        let results = tree.match_all("/api/v1/users");
+        assert!(results.contains(&3), "Should match /api/v1/users");
+
+        // Test non-matching path
+        let results = tree.match_all("/notfound");
+        assert!(results.is_empty(), "Should not match /notfound");
+    }
+
+    #[test]
+    fn test_match_all_with_params() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/api/:version/users", 1).unwrap();
+        builder.insert("/api/v1/users", 2).unwrap();
+        let tree = builder.freeze().unwrap();
+
+        // Should match both parametric and static routes
+        let results = tree.match_all("/api/v1/users");
+        assert!(results.contains(&1), "Should match parametric /api/:version/users");
+        assert!(results.contains(&2), "Should match static /api/v1/users");
+    }
+
+    #[test]
+    fn test_match_all_prefixes_still_works() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/api", 1).unwrap();
+        builder.insert("/api/users", 2).unwrap();
+        let tree = builder.freeze().unwrap();
+
+        // match_all should find all matching prefixes
+        let results = tree.match_all("/api/users/123");
+        assert!(results.contains(&1), "Should match prefix /api");
+        assert!(results.contains(&2), "Should match prefix /api/users");
     }
 }
