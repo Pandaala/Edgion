@@ -2,6 +2,7 @@ mod api;
 pub mod base_conf_loader;
 pub mod conf_mgr_trait;
 pub mod conf_store;
+pub mod resource_check;
 pub mod schema_validator;
 
 pub use api::ResourceMgrAPI;

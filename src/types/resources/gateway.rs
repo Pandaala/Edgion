@@ -166,7 +166,7 @@ pub struct GatewayStatus {
     pub listeners: Option<Vec<ListenerStatus>>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayStatusAddress {
     /// Type of the address

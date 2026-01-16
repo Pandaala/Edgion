@@ -1,3 +1,4 @@
+use crate::core::conf_mgr::resource_check::{check_edgion_tls, ResourceCheckContext};
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::CacheEventDispatch;
 use crate::types::prelude_resources::*;
@@ -213,6 +214,35 @@ pub async fn create_namespaced(
         crate::types::ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource_and_update_version(&content, state.resource_mgr.is_some())?;
             validate_resource(&state.schema_validator, kind, &tls)?;
+
+            // Use resource_check to validate EdgionTls before apply
+            let ctx = ResourceCheckContext::new(&state.config_server);
+            let check_result = check_edgion_tls(&ctx, &tls);
+
+            if let Some(reason) = check_result.skip_reason {
+                tracing::info!(
+                    component = "unified_api",
+                    kind = "EdgionTls",
+                    name = %name,
+                    namespace = %ns,
+                    reason = %reason,
+                    "EdgionTls validation failed"
+                );
+                return Err(StatusCode::UNPROCESSABLE_ENTITY);
+            }
+
+            // Log warnings if any
+            for warning in &check_result.warnings {
+                tracing::warn!(
+                    component = "unified_api",
+                    kind = "EdgionTls",
+                    name = %name,
+                    namespace = %ns,
+                    warning = %warning,
+                    "EdgionTls validation warning"
+                );
+            }
+
             let json_content = serde_json::to_string(&tls).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr
                 .set_one(&kind_str, Some(&ns), &name, json_content)
@@ -421,6 +451,35 @@ pub async fn update_namespaced(
         crate::types::ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource_and_update_version(&content, state.resource_mgr.is_some())?;
             validate_resource(&state.schema_validator, kind, &tls)?;
+
+            // Use resource_check to validate EdgionTls before apply
+            let ctx = ResourceCheckContext::new(&state.config_server);
+            let check_result = check_edgion_tls(&ctx, &tls);
+
+            if let Some(reason) = check_result.skip_reason {
+                tracing::info!(
+                    component = "unified_api",
+                    kind = "EdgionTls",
+                    name = %name,
+                    namespace = %ns,
+                    reason = %reason,
+                    "EdgionTls validation failed on update"
+                );
+                return Err(StatusCode::UNPROCESSABLE_ENTITY);
+            }
+
+            // Log warnings if any
+            for warning in &check_result.warnings {
+                tracing::warn!(
+                    component = "unified_api",
+                    kind = "EdgionTls",
+                    name = %name,
+                    namespace = %ns,
+                    warning = %warning,
+                    "EdgionTls validation warning"
+                );
+            }
+
             let json_content = serde_json::to_string(&tls).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             resource_mgr
                 .set_one(&kind_str, Some(&ns), &name, json_content)

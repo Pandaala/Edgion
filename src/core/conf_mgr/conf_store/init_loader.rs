@@ -2,6 +2,9 @@
 //!
 //! Unified single-pass loading that works for both file system and Kubernetes modes
 
+use crate::core::conf_mgr::resource_check::{
+    self, check_edgion_tls, ResourceCheckContext,
+};
 use crate::core::conf_mgr::ConfStore;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{CacheEventDispatch, ConfigServer, ServerCache};
@@ -152,7 +155,7 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
                 );
             }
 
-            // === Route Resources (with validation) ===
+            // === Route Resources (with validation via resource_check) ===
             Some(ResourceKind::HTTPRoute) => {
                 load_route_with_validation::<HTTPRoute, _>(
                     content,
@@ -160,7 +163,7 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
                     "HTTPRoute",
                     &config_server.routes,
                     &mut stats,
-                    crate::core::ref_grant::validate_http_route_if_enabled,
+                    resource_check::validate_http_route,
                 );
             }
             Some(ResourceKind::GRPCRoute) => {
@@ -170,7 +173,7 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
                     "GRPCRoute",
                     &config_server.grpc_routes,
                     &mut stats,
-                    crate::core::ref_grant::validate_grpc_route_if_enabled,
+                    resource_check::validate_grpc_route,
                 );
             }
             Some(ResourceKind::TCPRoute) => {
@@ -180,7 +183,7 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
                     "TCPRoute",
                     &config_server.tcp_routes,
                     &mut stats,
-                    crate::core::ref_grant::validate_tcp_route_if_enabled,
+                    resource_check::validate_tcp_route,
                 );
             }
             Some(ResourceKind::UDPRoute) => {
@@ -190,7 +193,7 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
                     "UDPRoute",
                     &config_server.udp_routes,
                     &mut stats,
-                    crate::core::ref_grant::validate_udp_route_if_enabled,
+                    resource_check::validate_udp_route,
                 );
             }
             Some(ResourceKind::TLSRoute) => {
@@ -200,7 +203,7 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
                     "TLSRoute",
                     &config_server.tls_routes,
                     &mut stats,
-                    crate::core::ref_grant::validate_tls_route_if_enabled,
+                    resource_check::validate_tls_route,
                 );
             }
 
@@ -241,11 +244,37 @@ pub async fn load_all_resources_from_store(store: Arc<dyn ConfStore>, config_ser
                 );
             }
             Some(ResourceKind::EdgionTls) => {
-                // EdgionTls has special handling for secret refs
+                // EdgionTls has special handling for secret refs and requires Gateway check
                 match serde_yaml::from_str::<EdgionTls>(content) {
                     Ok(tls) => {
-                        config_server.apply_edgion_tls_change(ResourceChange::InitAdd, tls);
-                        stats.success();
+                        // Use resource_check to validate EdgionTls
+                        let ctx = ResourceCheckContext::new(&config_server);
+                        let check_result = check_edgion_tls(&ctx, &tls);
+
+                        if let Some(reason) = check_result.skip_reason {
+                            tracing::info!(
+                                component = "conf_store",
+                                kind = "EdgionTls",
+                                name = %name,
+                                reason = %reason,
+                                "Skipping EdgionTls resource (Gateway not found)"
+                            );
+                            // Count as skipped - not an error, just not applied yet
+                            // The resource will be re-evaluated when Gateway is added
+                        } else {
+                            // Log warnings if any
+                            for warning in &check_result.warnings {
+                                tracing::warn!(
+                                    component = "conf_store",
+                                    kind = "EdgionTls",
+                                    name = %name,
+                                    warning = %warning,
+                                    "EdgionTls validation warning"
+                                );
+                            }
+                            config_server.apply_edgion_tls_change(ResourceChange::InitAdd, tls);
+                            stats.success();
+                        }
                     }
                     Err(e) => {
                         stats.error();

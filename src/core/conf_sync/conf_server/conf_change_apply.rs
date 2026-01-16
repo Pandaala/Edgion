@@ -288,54 +288,11 @@ impl ConfigServer {
         execute_change_on_cache(change, &self.tls_routes, resource);
     }
 
-    /// Apply EdgionTls change with gateway and secret reference handling
+    /// Apply EdgionTls change with secret reference handling
+    ///
+    /// Note: Gateway existence check is now handled by callers via `resource_check::check_edgion_tls`.
+    /// This method focuses on Secret resolution and SecretRefManager maintenance.
     pub fn apply_edgion_tls_change(&self, change: ResourceChange, mut resource: EdgionTls) {
-        // Check if EdgionTls references a gateway that exists in base_conf
-        let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
-            if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
-                let gateway_name = Some(&first_ref.name);
-
-                self.has_gateway(gateway_namespace, gateway_name)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if !gateway_exists {
-            let (gateway_info, message) = if let Some(parent_refs) = &resource.spec.parent_refs {
-                if let Some(first_ref) = parent_refs.first() {
-                    let info = format!(
-                        "namespace={:?}, name={}",
-                        first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref()),
-                        first_ref.name
-                    );
-                    (info, "EdgionTls references a Gateway that does not exist, skipping")
-                } else {
-                    (
-                        "no parent_refs".to_string(),
-                        "EdgionTls has empty parent_refs, skipping",
-                    )
-                }
-            } else {
-                ("no parent_refs".to_string(), "EdgionTls has no parent_refs, skipping")
-            };
-
-            tracing::info!(
-                component = "config_server",
-                change = ?change,
-                kind = "EdgionTls",
-                tls_name = ?resource.metadata.name,
-                tls_namespace = ?resource.metadata.namespace,
-                gateway = gateway_info,
-                "{}",
-                message
-            );
-            return;
-        }
-
         // Handle Secret reference
         use super::secret_ref::ResourceRef;
         use crate::types::ResourceKind as RK;
