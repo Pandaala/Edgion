@@ -15,274 +15,66 @@ where
 }
 
 impl ConfigServer {
-    /// Check if a Gateway exists in the gateway cache
-    fn has_gateway(&self, namespace: Option<&String>, name: Option<&String>) -> bool {
-        if let Some(name_str) = name {
-            let gateways = self.gateways.list_owned();
-            gateways.data.iter().any(|gw| {
-                let gw_name_matches = gw.metadata.name.as_ref() == Some(name_str);
-                let gw_namespace_matches = match (namespace, &gw.metadata.namespace) {
-                    (Some(ns), Some(gw_ns)) => ns == gw_ns,
-                    (None, None) => true,
-                    _ => false,
-                };
-                gw_name_matches && gw_namespace_matches
-            })
-        } else {
-            false
-        }
-    }
-
-    /// Apply HTTPRoute change with gateway validation
+    /// Apply HTTPRoute change (no gateway validation - controlled by K8s RBAC)
     pub fn apply_http_route_change(&self, change: ResourceChange, resource: HTTPRoute) {
-        // Check if HTTPRoute references a gateway that exists
-        let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
-            if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
-                let gateway_name = Some(&first_ref.name);
-
-                self.has_gateway(gateway_namespace, gateway_name)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if !gateway_exists {
-            let (gateway_info, message) = if let Some(parent_refs) = &resource.spec.parent_refs {
-                if let Some(first_ref) = parent_refs.first() {
-                    let info = format!(
-                        "namespace={:?}, name={}",
-                        first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref()),
-                        first_ref.name
-                    );
-                    (info, "HTTPRoute references a Gateway that does not exist, skipping")
-                } else {
-                    (
-                        "no parent_refs".to_string(),
-                        "HTTPRoute has empty parent_refs, skipping",
-                    )
-                }
-            } else {
-                ("no parent_refs".to_string(), "HTTPRoute has no parent_refs, skipping")
-            };
-
-            tracing::warn!(
-                component = "config_server",
-                change = ?change,
-                kind = "HTTPRoute",
-                route_name = ?resource.metadata.name,
-                route_namespace = ?resource.metadata.namespace,
-                gateway = gateway_info,
-                "{}",
-                message
-            );
-            return;
-        }
-
         tracing::info!(
             component = "config_server",
             change = ?change,
             kind = "HTTPRoute",
+            route_name = ?resource.metadata.name,
+            route_namespace = ?resource.metadata.namespace,
             "Applying HTTPRoute resource change"
         );
         execute_change_on_cache(change, &self.routes, resource);
     }
 
-    /// Apply GRPCRoute change with gateway validation
+    /// Apply GRPCRoute change (no gateway validation - controlled by K8s RBAC)
     pub fn apply_grpc_route_change(&self, change: ResourceChange, resource: GRPCRoute) {
-        let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
-            if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
-                let gateway_name = Some(&first_ref.name);
-
-                self.has_gateway(gateway_namespace, gateway_name)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if !gateway_exists {
-            let (gateway_info, message) = if let Some(parent_refs) = &resource.spec.parent_refs {
-                if let Some(first_ref) = parent_refs.first() {
-                    let info = format!(
-                        "namespace={:?}, name={}",
-                        first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref()),
-                        first_ref.name
-                    );
-                    (info, "GRPCRoute references a Gateway that does not exist, skipping")
-                } else {
-                    (
-                        "no parent_refs".to_string(),
-                        "GRPCRoute has empty parent_refs, skipping",
-                    )
-                }
-            } else {
-                ("no parent_refs".to_string(), "GRPCRoute has no parent_refs, skipping")
-            };
-
-            tracing::warn!(
-                component = "config_server",
-                change = ?change,
-                kind = "GRPCRoute",
-                route_name = ?resource.metadata.name,
-                route_namespace = ?resource.metadata.namespace,
-                gateway = gateway_info,
-                "{}",
-                message
-            );
-            return;
-        }
-
         tracing::info!(
             component = "config_server",
             change = ?change,
             kind = "GRPCRoute",
+            route_name = ?resource.metadata.name,
+            route_namespace = ?resource.metadata.namespace,
             "Applying GRPCRoute resource change"
         );
         execute_change_on_cache(change, &self.grpc_routes, resource);
     }
 
-    /// Apply TCPRoute change with gateway validation
+    /// Apply TCPRoute change (no gateway validation - controlled by K8s RBAC)
     pub fn apply_tcp_route_change(&self, change: ResourceChange, resource: TCPRoute) {
-        let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
-            if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
-                let gateway_name = Some(&first_ref.name);
-
-                self.has_gateway(gateway_namespace, gateway_name)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if !gateway_exists {
-            let (gateway_info, message) = if let Some(parent_refs) = &resource.spec.parent_refs {
-                if let Some(first_ref) = parent_refs.first() {
-                    let info = format!(
-                        "namespace={:?}, name={}",
-                        first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref()),
-                        first_ref.name
-                    );
-                    (info, "TCPRoute references a Gateway that does not exist, skipping")
-                } else {
-                    ("no parent_refs".to_string(), "TCPRoute has empty parent_refs, skipping")
-                }
-            } else {
-                ("no parent_refs".to_string(), "TCPRoute has no parent_refs, skipping")
-            };
-
-            tracing::warn!(
-                component = "config_server",
-                change = ?change,
-                kind = "TCPRoute",
-                route_name = ?resource.metadata.name,
-                route_namespace = ?resource.metadata.namespace,
-                gateway = gateway_info,
-                "{}",
-                message
-            );
-            return;
-        }
-
         tracing::info!(
             component = "config_server",
             change = ?change,
             kind = "TCPRoute",
+            route_name = ?resource.metadata.name,
+            route_namespace = ?resource.metadata.namespace,
             "Applying TCPRoute resource change"
         );
         execute_change_on_cache(change, &self.tcp_routes, resource);
     }
 
-    /// Apply UDPRoute change with gateway validation
+    /// Apply UDPRoute change (no gateway validation - controlled by K8s RBAC)
     pub fn apply_udp_route_change(&self, change: ResourceChange, resource: UDPRoute) {
-        let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
-            if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
-                let gateway_name = Some(&first_ref.name);
-
-                self.has_gateway(gateway_namespace, gateway_name)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if !gateway_exists {
-            let (gateway_info, message) = if let Some(parent_refs) = &resource.spec.parent_refs {
-                if let Some(first_ref) = parent_refs.first() {
-                    let info = format!(
-                        "namespace={:?}, name={}",
-                        first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref()),
-                        first_ref.name
-                    );
-                    (info, "UDPRoute references a Gateway that does not exist, skipping")
-                } else {
-                    ("no parent_refs".to_string(), "UDPRoute has empty parent_refs, skipping")
-                }
-            } else {
-                ("no parent_refs".to_string(), "UDPRoute has no parent_refs, skipping")
-            };
-
-            tracing::warn!(
-                component = "config_server",
-                change = ?change,
-                kind = "UDPRoute",
-                route_name = ?resource.metadata.name,
-                route_namespace = ?resource.metadata.namespace,
-                gateway = gateway_info,
-                "{}",
-                message
-            );
-            return;
-        }
-
         tracing::info!(
             component = "config_server",
             change = ?change,
             kind = "UDPRoute",
+            route_name = ?resource.metadata.name,
+            route_namespace = ?resource.metadata.namespace,
             "Applying UDPRoute resource change"
         );
         execute_change_on_cache(change, &self.udp_routes, resource);
     }
 
-    /// Apply TLSRoute change with gateway validation
+    /// Apply TLSRoute change (no gateway validation - controlled by K8s RBAC)
     pub fn apply_tls_route_change(&self, change: ResourceChange, resource: TLSRoute) {
-        let gateway_exists = if let Some(parent_refs) = &resource.spec.parent_refs {
-            if let Some(first_ref) = parent_refs.first() {
-                let gateway_namespace = first_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
-                let gateway_name = Some(&first_ref.name);
-
-                self.has_gateway(gateway_namespace, gateway_name)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if !gateway_exists {
-            tracing::warn!(
-                component = "config_server",
-                change = ?change,
-                kind = "TLSRoute",
-                route_name = ?resource.metadata.name,
-                route_namespace = ?resource.metadata.namespace,
-                "TLSRoute references a Gateway that does not exist, skipping"
-            );
-            return;
-        }
-
         tracing::info!(
             component = "config_server",
             change = ?change,
             kind = "TLSRoute",
+            route_name = ?resource.metadata.name,
+            route_namespace = ?resource.metadata.namespace,
             "Applying TLSRoute resource change"
         );
         execute_change_on_cache(change, &self.tls_routes, resource);
@@ -456,10 +248,7 @@ impl ConfigServer {
                     let mut resolved_secrets = Vec::new();
 
                     for cert_ref in cert_refs {
-                        let secret_ns = cert_ref
-                            .namespace
-                            .as_ref()
-                            .or(resource.metadata.namespace.as_ref());
+                        let secret_ns = cert_ref.namespace.as_ref().or(resource.metadata.namespace.as_ref());
 
                         // Build secret key and register reference
                         let secret_key = if let Some(ns) = secret_ns {
@@ -716,7 +505,8 @@ impl ConfigServer {
                                                             .namespace
                                                             .as_ref()
                                                             .or(gateway.metadata.namespace.as_ref());
-                                                        ref_ns.map(|s| s.as_str()) == secret_namespace.map(|s| s.as_str())
+                                                        ref_ns.map(|s| s.as_str())
+                                                            == secret_namespace.map(|s| s.as_str())
                                                             && cert_ref.name == secret_name
                                                     })
                                                     .collect();
@@ -733,18 +523,21 @@ impl ConfigServer {
                                                             .or(gateway.metadata.namespace.as_ref());
 
                                                         // If this is the updated secret, use it
-                                                        if ref_ns.map(|s| s.as_str()) == secret_namespace.map(|s| s.as_str())
+                                                        if ref_ns.map(|s| s.as_str())
+                                                            == secret_namespace.map(|s| s.as_str())
                                                             && cert_ref.name == secret_name
                                                         {
                                                             resolved_secrets.push(resource.clone());
                                                         } else {
                                                             // Find other secrets from cache
-                                                            if let Some(other_secret) = all_secrets.data.iter().find(|s| {
-                                                                s.metadata.namespace.as_deref()
-                                                                    == ref_ns.map(|s| s.as_str())
-                                                                    && s.metadata.name.as_deref()
-                                                                        == Some(cert_ref.name.as_str())
-                                                            }) {
+                                                            if let Some(other_secret) =
+                                                                all_secrets.data.iter().find(|s| {
+                                                                    s.metadata.namespace.as_deref()
+                                                                        == ref_ns.map(|s| s.as_str())
+                                                                        && s.metadata.name.as_deref()
+                                                                            == Some(cert_ref.name.as_str())
+                                                                })
+                                                            {
                                                                 resolved_secrets.push(other_secret.clone());
                                                             }
                                                         }

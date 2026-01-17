@@ -1,6 +1,7 @@
 //! EdgionTls Resource Check
 //!
 //! Validates EdgionTls resources before apply.
+//! Note: Gateway existence check is removed - controlled by K8s RBAC instead.
 
 use super::ResourceCheckContext;
 use crate::types::prelude_resources::EdgionTls;
@@ -30,45 +31,26 @@ impl EdgionTlsCheckResult {
 
 /// Check EdgionTls resource for validity
 ///
-/// Validates:
-/// - Referenced Gateway exists in cache
+/// Note: Gateway existence is NOT checked here. Permission control is handled by K8s RBAC.
+/// This function only provides warnings for potential issues.
 ///
 /// # Arguments
 /// * `ctx` - Resource check context
 /// * `tls` - The EdgionTls resource to check
 ///
 /// # Returns
-/// `EdgionTlsCheckResult` with skip_reason if validation fails, or warnings if any
+/// `EdgionTlsCheckResult` with warnings if any (skip_reason is no longer used for Gateway checks)
 pub fn check_edgion_tls(ctx: &ResourceCheckContext, tls: &EdgionTls) -> EdgionTlsCheckResult {
     let mut result = EdgionTlsCheckResult::default();
 
-    // Check if EdgionTls references a Gateway that exists
-    if let Some(parent_refs) = &tls.spec.parent_refs {
-        if let Some(first_ref) = parent_refs.first() {
-            let gateway_namespace = first_ref.namespace.as_ref().or(tls.metadata.namespace.as_ref());
-            let gateway_name = &first_ref.name;
-
-            if !ctx.gateway_exists(gateway_namespace.map(|s| s.as_str()), gateway_name) {
-                let ns_display = gateway_namespace
-                    .map(|s| s.as_str())
-                    .unwrap_or("default");
-                result.skip_reason = Some(format!(
-                    "EdgionTls references Gateway that does not exist: {}/{}",
-                    ns_display, gateway_name
-                ));
-                return result;
-            }
-        } else {
-            result.skip_reason = Some("EdgionTls has empty parent_refs".to_string());
-            return result;
-        }
-    } else {
-        result.skip_reason = Some("EdgionTls has no parent_refs".to_string());
-        return result;
+    // Warn if parent_refs is empty (structural issue)
+    if tls.spec.parent_refs.as_ref().is_none_or(|p| p.is_empty()) {
+        result
+            .warnings
+            .push("EdgionTls has no parent_refs, it may not be associated with any Gateway".to_string());
     }
 
-    // Add more validation checks here as needed
-    // e.g., Secret existence check (as warning, since Secret might come later)
+    // Secret existence check (as warning only, since Secret might come later)
     let secret_namespace = tls
         .spec
         .secret_ref

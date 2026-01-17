@@ -18,7 +18,7 @@ pub struct ConfigSyncClient {
 impl ConfigSyncClient {
     /// Create a new ConfigSync conf_client and connect to conf_server
     /// Uses lazy connection to allow cold start even if the server is not available immediately.
-    /// 
+    ///
     /// # Arguments
     /// * `grpc_server_addr` - Address of the gRPC server
     /// * `client_name` - Human-readable name for this client
@@ -29,10 +29,7 @@ impl ConfigSyncClient {
         timeout: Duration,
     ) -> Result<Self, tonic::transport::Error> {
         let client_id = Uuid::new_v4().to_string();
-        let config_client = Arc::new(ConfigClient::new(
-            client_id.clone(),
-            client_name.clone(),
-        ));
+        let config_client = Arc::new(ConfigClient::new(client_id.clone(), client_name.clone()));
 
         // TODO: Currently this allows cold start (gateway starts without controller).
         // However, without local cache persistence, the gateway will have no configuration

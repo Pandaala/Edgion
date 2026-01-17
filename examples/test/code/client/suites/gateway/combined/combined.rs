@@ -25,11 +25,7 @@ impl CombinedScenariosTestSuite {
                     let client = reqwest::Client::new();
                     let url = format!("http://127.0.0.1:31230/health");
 
-                    let response = client
-                        .get(&url)
-                        .header("Host", "api.combined.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(&url).header("Host", "api.combined.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
@@ -63,11 +59,7 @@ impl CombinedScenariosTestSuite {
                     let client = reqwest::Client::new();
                     let url = format!("http://127.0.0.1:31230/health");
 
-                    let response = client
-                        .get(&url)
-                        .header("Host", "www.combined.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(&url).header("Host", "www.combined.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
@@ -101,11 +93,7 @@ impl CombinedScenariosTestSuite {
                     let client = reqwest::Client::new();
                     let url = format!("http://127.0.0.1:31230/health");
 
-                    let response = client
-                        .get(&url)
-                        .header("Host", "other.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(&url).header("Host", "other.example.com").send().await;
 
                     match response {
                         Ok(resp) => {

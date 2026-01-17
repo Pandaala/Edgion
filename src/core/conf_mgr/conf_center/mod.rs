@@ -32,27 +32,36 @@ pub use traits::{ConfEntry, ConfWriter, ConfWriterError};
 use crate::core::cli::config::ConfSyncConfig;
 use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// ConfCenter - Unified configuration center
 ///
 /// Provides a unified interface for configuration management regardless of backend.
-/// Internally holds the ConfigServer instance.
+/// Internally holds the ConfigServer instance and global ready state.
 pub struct ConfCenter {
     config: ConfCenterConfig,
     writer: Arc<dyn ConfWriter>,
     config_server: Arc<ConfigServer>,
     // K8s specific: store reference for controller
     k8s_store: Option<Arc<kubernetes::KubernetesStore>>,
+    /// Global all_ready flag - controlled at Controller level
+    /// When true, ConfigServer and Admin API can serve requests
+    all_ready: Arc<AtomicBool>,
 }
 
 impl ConfCenter {
     /// Create a new ConfCenter based on configuration
     ///
     /// This creates the ConfigServer internally based on the provided ConfSyncConfig.
-    pub async fn create(config: ConfCenterConfig, conf_sync_config: &ConfSyncConfig) -> Result<Self> {
-        // Create ConfigServer internally
-        let config_server = Arc::new(ConfigServer::new(conf_sync_config));
+    /// The all_ready flag is passed from Controller level for global state management.
+    pub async fn create(
+        config: ConfCenterConfig,
+        conf_sync_config: &ConfSyncConfig,
+        all_ready: Arc<AtomicBool>,
+    ) -> Result<Self> {
+        // Create ConfigServer internally, passing the shared all_ready flag
+        let config_server = Arc::new(ConfigServer::new(conf_sync_config, all_ready.clone()));
 
         match &config {
             ConfCenterConfig::FileSystem { conf_dir, .. } => {
@@ -68,6 +77,7 @@ impl ConfCenter {
                     writer: Arc::new(writer),
                     config_server,
                     k8s_store: None,
+                    all_ready,
                 })
             }
             ConfCenterConfig::Kubernetes { .. } => {
@@ -82,6 +92,7 @@ impl ConfCenter {
                     writer: Arc::new(writer),
                     config_server,
                     k8s_store: Some(store),
+                    all_ready,
                 })
             }
         }
@@ -195,5 +206,21 @@ impl ConfCenter {
     /// Get the configuration
     pub fn config(&self) -> &ConfCenterConfig {
         &self.config
+    }
+
+    /// Check if the system is ready (all caches loaded)
+    pub fn is_all_ready(&self) -> bool {
+        self.all_ready.load(Ordering::SeqCst)
+    }
+
+    /// Set the system ready state
+    /// Called by Controller after all caches are verified ready
+    pub fn set_all_ready(&self) {
+        self.all_ready.store(true, Ordering::SeqCst);
+        tracing::info!(
+            component = "conf_center",
+            event = "all_ready",
+            "System all_ready state set to true"
+        );
     }
 }

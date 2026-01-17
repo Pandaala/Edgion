@@ -90,12 +90,7 @@ pub struct GrpcRouteRuleUnit {
 
 impl GrpcRouteRuleUnit {
     /// Deep match: check hostname, Gateway/sectionName, and headers
-    pub fn deep_match(
-        &self,
-        session: &Session,
-        gateway_info: &GatewayInfo,
-        hostname: &str,
-    ) -> Result<bool, EdError> {
+    pub fn deep_match(&self, session: &Session, gateway_info: &GatewayInfo, hostname: &str) -> Result<bool, EdError> {
         let req_header = session.req_header();
 
         // Check Hostname (if route specifies hostnames)

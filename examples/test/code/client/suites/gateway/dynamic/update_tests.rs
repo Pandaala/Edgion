@@ -11,10 +11,7 @@ impl TestSuite for UpdatePhaseTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::test_hostname_removed(),
-            Self::test_post_method_works(),
-        ]
+        vec![Self::test_hostname_removed(), Self::test_post_method_works()]
     }
 }
 
@@ -28,7 +25,7 @@ impl UpdatePhaseTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    
+
                     // 同样的请求，现在应该成功（或 502 backend 不可用）
                     let resp = client
                         .get("http://127.0.0.1:31250/match")
@@ -73,7 +70,7 @@ impl UpdatePhaseTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    
+
                     // GET 应该失败 (404)（需要带正确的 Host header）
                     let get_resp = client
                         .get("http://127.0.0.1:31251/api/v1")

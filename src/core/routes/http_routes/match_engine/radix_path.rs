@@ -51,7 +51,7 @@ impl RadixPath {
         }
 
         // Check for empty parameter names
-        if normalized.contains("/:/" ) || normalized.ends_with("/:") {
+        if normalized.contains("/:/") || normalized.ends_with("/:") {
             tracing::warn!("Path contains empty parameter name: '{}'", path);
         }
 
@@ -159,9 +159,7 @@ fn count_path_segments(path: &str) -> usize {
         return 0;
     }
 
-    path.split('/')
-        .filter(|s| !s.is_empty())
-        .count()
+    path.split('/').filter(|s| !s.is_empty()).count()
 }
 
 /// Count segments and detect if path contains parameters.
@@ -471,7 +469,7 @@ mod tests {
 
         // Exact should have higher priority than prefix
         assert!(exact.priority_weight > prefix.priority_weight);
-        
+
         // Both have same segment count
         assert_eq!(exact.segment_count, prefix.segment_count);
     }
@@ -503,16 +501,16 @@ mod tests {
 
         // Verify exact weights: segment_count * 4 + type_bonus
         assert_eq!(static_exact_2seg.priority_weight, 2 * 4 + 3); // 11
-        assert_eq!(param_exact_2seg.priority_weight, 2 * 4 + 2);  // 10
+        assert_eq!(param_exact_2seg.priority_weight, 2 * 4 + 2); // 10
         assert_eq!(static_prefix_2seg.priority_weight, 2 * 4 + 1); // 9
-        assert_eq!(param_prefix_2seg.priority_weight, 2 * 4 + 0);  // 8
+        assert_eq!(param_prefix_2seg.priority_weight, 2 * 4 + 0); // 8
     }
 
     #[test]
     fn test_longer_path_beats_shorter_even_with_lower_type() {
         // A longer param route should beat a shorter static route
-        let short_static = RadixPath::new("/a", 0, false);      // 1*4+3 = 7
-        let long_param = RadixPath::new("/a/:b/c", 1, false);   // 3*4+2 = 14
+        let short_static = RadixPath::new("/a", 0, false); // 1*4+3 = 7
+        let long_param = RadixPath::new("/a/:b/c", 1, false); // 3*4+2 = 14
 
         assert!(long_param.priority_weight > short_static.priority_weight);
     }

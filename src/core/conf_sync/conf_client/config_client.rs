@@ -38,7 +38,7 @@ pub struct ConfigClient {
 
 impl ConfigClient {
     /// Create a new ConfigClient
-    /// 
+    ///
     /// # Arguments
     /// * `client_id` - Unique identifier for this client
     /// * `client_name` - Human-readable name for this client

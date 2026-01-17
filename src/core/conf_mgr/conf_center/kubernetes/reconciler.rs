@@ -106,10 +106,7 @@ impl StatusReconciler {
             self.update_gateway_status(&gateway).await;
         }
 
-        tracing::info!(
-            component = "status_reconciler",
-            "All Gateway statuses synced"
-        );
+        tracing::info!(component = "status_reconciler", "All Gateway statuses synced");
     }
 
     /// Sync all HTTPRoute statuses (for startup or manual reconciliation)
@@ -121,9 +118,6 @@ impl StatusReconciler {
             self.update_http_route_status(&route).await;
         }
 
-        tracing::info!(
-            component = "status_reconciler",
-            "All HTTPRoute statuses synced"
-        );
+        tracing::info!(component = "status_reconciler", "All HTTPRoute statuses synced");
     }
 }

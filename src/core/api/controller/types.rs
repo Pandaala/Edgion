@@ -24,6 +24,13 @@ impl AdminState {
     pub fn is_k8s_mode(&self) -> bool {
         self.conf_center.is_k8s_mode()
     }
+
+    /// Check if the system is ready (all caches loaded)
+    /// Returns false during initialization, true after all caches are ready
+    #[allow(dead_code)]
+    pub fn is_all_ready(&self) -> bool {
+        self.conf_center.is_all_ready()
+    }
 }
 
 /// Standard API response format

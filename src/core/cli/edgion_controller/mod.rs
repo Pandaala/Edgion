@@ -9,6 +9,7 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tracing_appender::non_blocking::WorkerGuard;
 
@@ -104,26 +105,15 @@ impl EdgionControllerCli {
     }
 
     /// Wait for all caches to be ready, with timeout
+    /// Sets conf_center.set_all_ready() when complete (global state)
     async fn wait_all_ready(conf_center: &Arc<ConfCenter>, timeout_secs: u64) {
         let config_server = conf_center.config_server();
-
-        // FileSystem mode: caches are already marked ready by init_loader
-        if !conf_center.is_k8s_mode() {
-            tracing::info!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                event = "all_caches_ready",
-                "FileSystem mode: all caches ready"
-            );
-            return;
-        }
-
-        // K8s mode: wait for controller to sync all caches
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(timeout_secs);
 
         loop {
             if config_server.is_each_cache_ready() {
-                config_server.set_all_ready();
+                conf_center.set_all_ready();
                 tracing::info!(
                     component = COMPONENT_EDGION_CONTROLLER,
                     event = "all_caches_ready",
@@ -142,7 +132,7 @@ impl EdgionControllerCli {
                     not_ready = ?not_ready,
                     "Timeout waiting for caches, proceeding anyway"
                 );
-                config_server.set_all_ready();
+                conf_center.set_all_ready();
                 return;
             }
 
@@ -182,11 +172,7 @@ impl EdgionControllerCli {
         // Run both services concurrently
         let (sync_result, admin_result) = tokio::join!(
             sync_server.serve(grpc_addr),
-            crate::core::api::controller::serve(
-                conf_center.clone(),
-                schema_validator,
-                admin_port
-            )
+            crate::core::api::controller::serve(conf_center.clone(), schema_validator, admin_port)
         );
 
         // Check results
@@ -239,16 +225,19 @@ impl EdgionControllerCli {
             "ConfCenter configuration"
         );
 
-        // 3. Create ConfCenter (internally creates ConfigServer)
-        let conf_center = Arc::new(ConfCenter::create(conf_center_config, &config.conf_sync).await?);
+        // 3. Create global all_ready flag
+        let all_ready = Arc::new(AtomicBool::new(false));
 
-        // 4. Start ConfCenter (load resources + start watcher/controller)
+        // 4. Create ConfCenter (internally creates ConfigServer with shared all_ready)
+        let conf_center = Arc::new(ConfCenter::create(conf_center_config, &config.conf_sync, all_ready).await?);
+
+        // 5. Start ConfCenter (load resources + start watcher/controller)
         conf_center.start().await?;
 
-        // 5. Load CRD schemas for validation
+        // 6. Load CRD schemas for validation
         let schema_validator = Self::load_schemas();
 
-        // 6. Parse addresses and start services
+        // 7. Parse addresses and start services
         let grpc_addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
         let admin_port = 5800;
 

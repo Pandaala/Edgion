@@ -121,10 +121,7 @@ impl TlsCallback {
             return;
         }
 
-        entry.error(format!(
-            "Certificate not found for port={}, SNI={}",
-            self.port, sni
-        ));
+        entry.error(format!("Certificate not found for port={}, SNI={}", self.port, sni));
     }
 
     /// Apply certificate from EdgionTls resource

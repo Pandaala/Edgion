@@ -22,18 +22,17 @@ impl AllowedRoutesAllNamespacesTestSuite {
                     let client = reqwest::Client::new();
                     let url = format!("http://127.0.0.1:31211/health");
 
-                    let response = client
-                        .get(&url)
-                        .header("Host", "all-same-ns.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(&url).header("Host", "all-same-ns.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
                             if resp.status().is_success() {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("✓ Same namespace route allowed with from: All (status: {})", resp.status()),
+                                    format!(
+                                        "✓ Same namespace route allowed with from: All (status: {})",
+                                        resp.status()
+                                    ),
                                 )
                             } else {
                                 TestResult::failed(
@@ -60,23 +59,25 @@ impl AllowedRoutesAllNamespacesTestSuite {
                     let client = reqwest::Client::new();
                     let url = format!("http://127.0.0.1:31211/health");
 
-                    let response = client
-                        .get(&url)
-                        .header("Host", "all-cross-ns.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(&url).header("Host", "all-cross-ns.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
                             if resp.status().is_success() {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("✓ Cross namespace route allowed with from: All (status: {})", resp.status()),
+                                    format!(
+                                        "✓ Cross namespace route allowed with from: All (status: {})",
+                                        resp.status()
+                                    ),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("Expected 200 OK for cross namespace route with from: All, got {}", resp.status()),
+                                    format!(
+                                        "Expected 200 OK for cross namespace route with from: All, got {}",
+                                        resp.status()
+                                    ),
                                 )
                             }
                         }

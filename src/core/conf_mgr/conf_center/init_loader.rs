@@ -243,37 +243,28 @@ pub async fn load_all_resources(writer: Arc<dyn ConfWriter>, config_server: Arc<
                 );
             }
             Some(ResourceKind::EdgionTls) => {
-                // EdgionTls has special handling for secret refs and requires Gateway check
+                // EdgionTls has special handling for secret refs
+                // Note: Gateway existence is NOT checked - controlled by K8s RBAC
                 match serde_yaml::from_str::<EdgionTls>(content) {
                     Ok(tls) => {
-                        // Use resource_check to validate EdgionTls
+                        // Use resource_check to get warnings (no longer skips for Gateway)
                         let ctx = ResourceCheckContext::new(&config_server);
                         let check_result = check_edgion_tls(&ctx, &tls);
 
-                        if let Some(reason) = check_result.skip_reason {
-                            tracing::info!(
+                        // Log warnings if any
+                        for warning in &check_result.warnings {
+                            tracing::warn!(
                                 component = "conf_store",
                                 kind = "EdgionTls",
                                 name = %name,
-                                reason = %reason,
-                                "Skipping EdgionTls resource (Gateway not found)"
+                                warning = %warning,
+                                "EdgionTls validation warning"
                             );
-                            // Count as skipped - not an error, just not applied yet
-                            // The resource will be re-evaluated when Gateway is added
-                        } else {
-                            // Log warnings if any
-                            for warning in &check_result.warnings {
-                                tracing::warn!(
-                                    component = "conf_store",
-                                    kind = "EdgionTls",
-                                    name = %name,
-                                    warning = %warning,
-                                    "EdgionTls validation warning"
-                                );
-                            }
-                            config_server.apply_edgion_tls_change(ResourceChange::InitAdd, tls);
-                            stats.success();
                         }
+
+                        // Always apply - no Gateway existence check
+                        config_server.apply_edgion_tls_change(ResourceChange::InitAdd, tls);
+                        stats.success();
                     }
                     Err(e) => {
                         stats.error();
@@ -352,6 +343,9 @@ pub async fn load_all_resources(writer: Arc<dyn ConfWriter>, config_server: Arc<
         let kind_name = format!("{:?}", info.kind);
         config_server.set_cache_ready_by_kind(&kind_name);
     }
+
+    // Note: set_all_ready() is called by wait_all_ready() in edgion_controller
+    // after all caches are marked ready
 
     tracing::info!(
         component = "conf_store",

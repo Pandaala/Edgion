@@ -317,20 +317,13 @@ impl RadixRouteMatchEngine {
 
                 // Check if this path already has a value assigned
                 let tree_value = if let Some(&existing_value) = path_to_value.get(&tree_key) {
-                    tracing::debug!(
-                        "    Reusing tree value: {} for path: '{}'",
-                        existing_value,
-                        tree_key
-                    );
+                    tracing::debug!("    Reusing tree value: {} for path: '{}'", existing_value, tree_key);
                     existing_value
                 } else {
                     // First time seeing this path, assign a new value and insert into builder
                     let new_value = next_tree_value;
                     builder.insert(&tree_key, new_value).map_err(|e: RouterError| {
-                        EdError::InternalError(format!(
-                            "Failed to insert path '{}' into radix tree: {}",
-                            tree_key, e
-                        ))
+                        EdError::InternalError(format!("Failed to insert path '{}' into radix tree: {}", tree_key, e))
                     })?;
 
                     path_to_value.insert(tree_key.clone(), new_value);

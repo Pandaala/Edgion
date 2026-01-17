@@ -133,8 +133,8 @@ macro_rules! list_all_resources {
 #[macro_export]
 macro_rules! list_namespaced_resources {
     ($server:expr, $kind:expr, $ns:expr) => {{
-        use $crate::types::ResourceKind;
         use kube::ResourceExt;
+        use $crate::types::ResourceKind;
         let ns_str = $ns.as_str();
         match $kind {
             ResourceKind::HTTPRoute => {
@@ -306,8 +306,8 @@ macro_rules! list_namespaced_resources {
 #[macro_export]
 macro_rules! get_namespaced_resource {
     ($server:expr, $kind:expr, $ns:expr, $name:expr) => {{
-        use $crate::types::ResourceKind;
         use kube::ResourceExt;
+        use $crate::types::ResourceKind;
         let ns_str = $ns.as_str();
         let name_str = $name.as_str();
         match $kind {
@@ -432,8 +432,8 @@ macro_rules! get_namespaced_resource {
 #[macro_export]
 macro_rules! resource_exists_namespaced {
     ($server:expr, $kind:expr, $ns:expr, $name:expr) => {{
-        use $crate::types::ResourceKind;
         use kube::ResourceExt;
+        use $crate::types::ResourceKind;
         let ns_str = $ns.as_str();
         let name_str = $name.as_str();
         match $kind {

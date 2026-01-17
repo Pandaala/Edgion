@@ -11,10 +11,7 @@ impl TestSuite for InitialPhaseTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::test_hostname_restriction(),
-            Self::test_get_method_only(),
-        ]
+        vec![Self::test_hostname_restriction(), Self::test_get_method_only()]
     }
 }
 
@@ -28,11 +25,11 @@ impl InitialPhaseTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    
+
                     // 尝试访问 hostname 不匹配的路由
                     let resp = client
                         .get("http://127.0.0.1:31250/match")
-                        .header("Host", "other.example.com")  // 不匹配 api.example.com
+                        .header("Host", "other.example.com") // 不匹配 api.example.com
                         .send()
                         .await;
 
@@ -66,7 +63,7 @@ impl InitialPhaseTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    
+
                     // GET 请求应该成功（需要带正确的 Host header）
                     let resp = client
                         .get("http://127.0.0.1:31251/api/v1")
@@ -84,10 +81,7 @@ impl InitialPhaseTestSuite {
                                     format!("✓ GET method works (status: {})", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected success or 502, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected success or 502, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),

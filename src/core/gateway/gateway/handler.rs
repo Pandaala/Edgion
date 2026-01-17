@@ -34,6 +34,8 @@ impl ConfHandler<Gateway> for GatewayHandler {
         let mut store = global_store.write().unwrap();
         store.clear();
 
+        let route_manager = get_global_route_manager();
+
         for (key, gateway) in data {
             let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
             tracing::info!(
@@ -50,7 +52,6 @@ impl ConfHandler<Gateway> for GatewayHandler {
             }
 
             // Initialize route manager entry for this gateway
-            let route_manager = get_global_route_manager();
             let namespace = gateway.namespace().unwrap_or_default();
             let name = gateway.name_any();
             route_manager.get_or_create_domain_routes(&namespace, &name);
@@ -65,6 +66,20 @@ impl ConfHandler<Gateway> for GatewayHandler {
 
         // Rebuild Gateway TLS matcher (port-based certificate lookup)
         rebuild_gateway_tls_matcher(&gateways);
+
+        // Drop store lock before rebuilding routes
+        drop(store);
+
+        // Rebuild HTTPRoutes with the new gateways available
+        // This handles the case where HTTPRoutes arrived before Gateways
+        let http_routes = route_manager.http_routes.lock().unwrap().clone();
+        if !http_routes.is_empty() {
+            tracing::info!(
+                count = http_routes.len(),
+                "Gateway full_set: rebuilding HTTPRoutes after Gateway sync"
+            );
+            route_manager.full_set(&http_routes);
+        }
     }
 
     fn partial_update(&self, add: HashMap<String, Gateway>, update: HashMap<String, Gateway>, remove: HashSet<String>) {

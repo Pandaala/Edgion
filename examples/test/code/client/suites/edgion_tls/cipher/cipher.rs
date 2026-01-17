@@ -77,12 +77,7 @@ fn get_tls_info(host: &str, port: u16, servername: &str, tls_version: &str) -> R
 }
 
 /// Test connection with a specific cipher (verify server accepts/rejects it)
-fn test_with_specific_cipher(
-    host: &str,
-    port: u16,
-    servername: &str,
-    cipher: &str,
-) -> Result<(bool, String), String> {
+fn test_with_specific_cipher(host: &str, port: u16, servername: &str, cipher: &str) -> Result<(bool, String), String> {
     let output = Command::new("openssl")
         .args([
             "s_client",
@@ -106,8 +101,7 @@ fn test_with_specific_cipher(
         .or_else(|| extract_field(&combined, "Cipher:"))
         .unwrap_or_default();
 
-    let success =
-        combined.contains("CONNECTED") && !negotiated_cipher.is_empty() && negotiated_cipher != "(NONE)";
+    let success = combined.contains("CONNECTED") && !negotiated_cipher.is_empty() && negotiated_cipher != "(NONE)";
 
     Ok((success, negotiated_cipher))
 }
@@ -148,16 +142,16 @@ impl CipherTestSuite {
                                 } else {
                                     TestResult::passed_with_message(
                                         start.elapsed(),
-                                        format!(
-                                            "Connected with cipher: {} (Protocol: {})",
-                                            info.cipher, info.protocol
-                                        ),
+                                        format!("Connected with cipher: {} (Protocol: {})", info.cipher, info.protocol),
                                     )
                                 }
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("TLS connection failed. Protocol: {}, Cipher: {}", info.protocol, info.cipher),
+                                    format!(
+                                        "TLS connection failed. Protocol: {}, Cipher: {}",
+                                        info.protocol, info.cipher
+                                    ),
                                 )
                             }
                         }
@@ -198,16 +192,16 @@ impl CipherTestSuite {
                                 } else {
                                     TestResult::passed_with_message(
                                         start.elapsed(),
-                                        format!(
-                                            "Connected with cipher: {} (Protocol: {})",
-                                            info.cipher, info.protocol
-                                        ),
+                                        format!("Connected with cipher: {} (Protocol: {})", info.cipher, info.protocol),
                                     )
                                 }
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("TLS connection failed. Protocol: {}, Cipher: {}", info.protocol, info.cipher),
+                                    format!(
+                                        "TLS connection failed. Protocol: {}, Cipher: {}",
+                                        info.protocol, info.cipher
+                                    ),
                                 )
                             }
                         }

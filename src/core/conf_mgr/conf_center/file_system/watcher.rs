@@ -100,7 +100,7 @@ impl FileWatcher {
                     for path in event.paths {
                         // Only process YAML files
                         if self.is_yaml_file(&path) {
-                            pending_events.insert(path, event.kind.clone());
+                            pending_events.insert(path, event.kind);
                         }
                     }
                 }
@@ -156,9 +156,7 @@ impl FileWatcher {
     /// Handle file creation or modification
     async fn handle_file_change(&mut self, path: &Path) -> Result<()> {
         // Read file content
-        let content = tokio::fs::read_to_string(path)
-            .await
-            .context("Failed to read file")?;
+        let content = tokio::fs::read_to_string(path).await.context("Failed to read file")?;
 
         // Calculate hash to detect actual changes
         let new_hash = self.hash_content(&content);
@@ -237,9 +235,7 @@ impl FileWatcher {
         match kind {
             Some(ResourceKind::GatewayClass) => {
                 if let Ok(resource) = serde_yaml::from_str::<GatewayClass>(content) {
-                    self.config_server
-                        .gateway_classes
-                        .apply_change(change, resource);
+                    self.config_server.gateway_classes.apply_change(change, resource);
                 }
             }
             Some(ResourceKind::Gateway) => {
@@ -249,9 +245,7 @@ impl FileWatcher {
             }
             Some(ResourceKind::EdgionGatewayConfig) => {
                 if let Ok(resource) = serde_yaml::from_str::<EdgionGatewayConfig>(content) {
-                    self.config_server
-                        .edgion_gateway_configs
-                        .apply_change(change, resource);
+                    self.config_server.edgion_gateway_configs.apply_change(change, resource);
                 }
             }
             Some(ResourceKind::HTTPRoute) => {
@@ -291,22 +285,17 @@ impl FileWatcher {
             }
             Some(ResourceKind::EndpointSlice) => {
                 if let Ok(resource) = serde_yaml::from_str::<EndpointSlice>(content) {
-                    self.config_server
-                        .apply_endpoint_slice_change(change, resource);
+                    self.config_server.apply_endpoint_slice_change(change, resource);
                 }
             }
             Some(ResourceKind::ReferenceGrant) => {
                 if let Ok(resource) = serde_yaml::from_str::<ReferenceGrant>(content) {
-                    self.config_server
-                        .reference_grants
-                        .apply_change(change, resource);
+                    self.config_server.reference_grants.apply_change(change, resource);
                 }
             }
             Some(ResourceKind::BackendTLSPolicy) => {
                 if let Ok(resource) = serde_yaml::from_str::<BackendTLSPolicy>(content) {
-                    self.config_server
-                        .backend_tls_policies
-                        .apply_change(change, resource);
+                    self.config_server.backend_tls_policies.apply_change(change, resource);
                 }
             }
             Some(ResourceKind::EdgionTls) => {
@@ -321,21 +310,17 @@ impl FileWatcher {
             }
             Some(ResourceKind::EdgionPlugins) => {
                 if let Ok(resource) = serde_yaml::from_str::<EdgionPlugins>(content) {
-                    self.config_server
-                        .apply_edgion_plugins_change(change, resource);
+                    self.config_server.apply_edgion_plugins_change(change, resource);
                 }
             }
             Some(ResourceKind::EdgionStreamPlugins) => {
                 if let Ok(resource) = serde_yaml::from_str::<EdgionStreamPlugins>(content) {
-                    self.config_server
-                        .edgion_stream_plugins
-                        .apply_change(change, resource);
+                    self.config_server.edgion_stream_plugins.apply_change(change, resource);
                 }
             }
             Some(ResourceKind::PluginMetaData) => {
                 if let Ok(resource) = serde_yaml::from_str::<PluginMetaData>(content) {
-                    self.config_server
-                        .apply_plugin_metadata_change(change, resource);
+                    self.config_server.apply_plugin_metadata_change(change, resource);
                 }
             }
             Some(ResourceKind::LinkSys) => {

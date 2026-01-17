@@ -200,7 +200,9 @@ pub fn gateway_status_needs_update(current: &Option<GatewayStatus>, expected: &G
                         return true;
                     }
                     for (cl, el) in c.iter().zip(e.iter()) {
-                        if cl.name != el.name || !status_conditions_equal(&Some(cl.conditions.clone()), &Some(el.conditions.clone())) {
+                        if cl.name != el.name
+                            || !status_conditions_equal(&Some(cl.conditions.clone()), &Some(el.conditions.clone()))
+                        {
                             return true;
                         }
                     }
@@ -230,9 +232,7 @@ pub fn http_route_status_needs_update(current: &Option<HTTPRouteStatus>, expecte
                     return true;
                 }
                 // Compare parent_ref (simplified)
-                if cp.parent_ref.name != ep.parent_ref.name
-                    || cp.parent_ref.namespace != ep.parent_ref.namespace
-                {
+                if cp.parent_ref.name != ep.parent_ref.name || cp.parent_ref.namespace != ep.parent_ref.namespace {
                     return true;
                 }
                 // Compare conditions

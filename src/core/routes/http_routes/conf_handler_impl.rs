@@ -510,7 +510,6 @@ impl RouteManager {
             Ok(Some(new_engine))
         }
     }
-
 }
 
 /// Parse all HTTPRoutes and collect rules into gateway->domain->rules structure

@@ -141,7 +141,6 @@ impl RegexRoutesEngine {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

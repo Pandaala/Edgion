@@ -82,9 +82,9 @@ pub struct ConfigServer {
     /// Used by clients to detect server restarts/failovers
     pub server_id: String,
 
-    /// Global all_ready flag - only set to true after all caches are ready
-    /// Clients should check this before list/watch to ensure data consistency
-    all_ready: AtomicBool,
+    /// Global all_ready flag - shared from Controller level
+    /// Controlled externally by ConfCenter, checked here before list/watch
+    all_ready: Arc<AtomicBool>,
 
     // Base conf resources now use dedicated ServerCache (same as other resources)
     pub gateway_classes: ServerCache<GatewayClass>,
@@ -123,7 +123,7 @@ pub struct EventDataSimple {
 }
 
 impl ConfigServer {
-    pub fn new(conf_sync_config: &crate::core::cli::config::ConfSyncConfig) -> Self {
+    pub fn new(conf_sync_config: &crate::core::cli::config::ConfSyncConfig, all_ready: Arc<AtomicBool>) -> Self {
         // Generate server_id using millisecond timestamp
         let server_id = format!(
             "{}",
@@ -141,7 +141,7 @@ impl ConfigServer {
 
         Self {
             server_id,
-            all_ready: AtomicBool::new(false),
+            all_ready,
             gateway_classes: ServerCache::new(conf_sync_config.gateway_classes_capacity),
             gateways: ServerCache::new(conf_sync_config.gateways_capacity),
             edgion_gateway_configs: ServerCache::new(conf_sync_config.edgion_gateway_configs_capacity),
@@ -847,7 +847,7 @@ impl ConfigServer {
             "LinkSys" => self.link_sys.set_ready(),
             "Service" => self.services.set_ready(),
             "EndpointSlice" => self.endpoint_slices.set_ready(),
-            "Endpoints" => self.endpoints.set_ready(),
+            "Endpoint" | "Endpoints" => self.endpoints.set_ready(),
             "EdgionTls" => self.edgion_tls.set_ready(),
             "EdgionPlugins" => self.edgion_plugins.set_ready(),
             "EdgionStreamPlugins" => self.edgion_stream_plugins.set_ready(),
@@ -863,11 +863,7 @@ impl ConfigServer {
                 );
             }
         }
-        tracing::info!(
-            component = "config_server",
-            kind = kind,
-            "Cache marked as ready"
-        );
+        tracing::info!(component = "config_server", kind = kind, "Cache marked as ready");
     }
 
     /// Check if all individual caches are ready (internal check)
@@ -956,20 +952,9 @@ impl ConfigServer {
         not_ready
     }
 
-    /// Set global all_ready state
-    /// Called after wait_all_ready succeeds, indicating all caches are ready
-    /// and clients can start list/watch operations
-    pub fn set_all_ready(&self) {
-        self.all_ready.store(true, Ordering::SeqCst);
-        tracing::info!(
-            component = "config_server",
-            event = "all_ready",
-            "ConfigServer all_ready state set to true, clients can now list/watch"
-        );
-    }
-
     /// Check global all_ready state
     /// Clients should check this before list/watch to ensure data consistency
+    /// Note: This flag is controlled externally by ConfCenter
     pub fn is_all_ready(&self) -> bool {
         self.all_ready.load(Ordering::SeqCst)
     }

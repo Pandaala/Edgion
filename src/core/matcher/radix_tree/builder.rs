@@ -164,16 +164,16 @@ impl RadixRouter {
                     // We need to build the static segment with the escape resolved
                     let mut static_part: Vec<u8> = path[static_start..=i].to_vec(); // include "/"
                     static_part.push(b':'); // add the escaped ":"
-                    
+
                     // Skip "/::" and collect remaining chars until next "/"
                     i += 3;
-                    
+
                     // Find next "/" or end to complete this static segment
                     while i < path.len() && path[i] != b'/' {
                         static_part.push(path[i]);
                         i += 1;
                     }
-                    
+
                     if !static_part.is_empty() {
                         segments.push(PathSegment::Static(static_part));
                     }
@@ -187,13 +187,13 @@ impl RadixRouter {
                         // No prior static, but we still need the "/" before param
                         segments.push(PathSegment::Static(vec![b'/']));
                     }
-                    
+
                     // Skip "/:" and the parameter name
                     i += 2; // skip "/:"
                     while i < path.len() && path[i] != b'/' {
                         i += 1; // skip parameter name
                     }
-                    
+
                     // Add parameter segment
                     segments.push(PathSegment::Param);
                     static_start = i;
@@ -245,9 +245,7 @@ impl RadixRouter {
             }
             PathSegment::Param => {
                 // Get or create the parameter child
-                let param_child = node.param_child.get_or_insert_with(|| {
-                    Box::new(BuildNode::new_param())
-                });
+                let param_child = node.param_child.get_or_insert_with(|| Box::new(BuildNode::new_param()));
                 // Continue inserting remaining segments
                 Self::insert_segments(param_child, &segments[1..], value, original_path)
             }
@@ -283,7 +281,12 @@ impl RadixRouter {
         }
 
         // Find common prefix length with current node
-        let common_len = node.prefix.iter().zip(prefix.iter()).take_while(|(a, b)| a == b).count();
+        let common_len = node
+            .prefix
+            .iter()
+            .zip(prefix.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
 
         // Case 1: Need to split the node
         if common_len < node.prefix.len() {
@@ -389,40 +392,49 @@ mod tests {
     #[test]
     fn test_parse_path_single_param() {
         let segments = RadixRouter::parse_path(b"/api/:version/users");
-        assert_eq!(segments, vec![
-            PathSegment::Static(b"/api/".to_vec()),
-            PathSegment::Param,
-            PathSegment::Static(b"/users".to_vec()),
-        ]);
+        assert_eq!(
+            segments,
+            vec![
+                PathSegment::Static(b"/api/".to_vec()),
+                PathSegment::Param,
+                PathSegment::Static(b"/users".to_vec()),
+            ]
+        );
     }
 
     #[test]
     fn test_parse_path_multi_params() {
         let segments = RadixRouter::parse_path(b"/api/:version/:resource");
-        assert_eq!(segments, vec![
-            PathSegment::Static(b"/api/".to_vec()),
-            PathSegment::Param,
-            PathSegment::Static(b"/".to_vec()),
-            PathSegment::Param,
-        ]);
+        assert_eq!(
+            segments,
+            vec![
+                PathSegment::Static(b"/api/".to_vec()),
+                PathSegment::Param,
+                PathSegment::Static(b"/".to_vec()),
+                PathSegment::Param,
+            ]
+        );
     }
 
     #[test]
     fn test_parse_path_escaped_colon() {
         let segments = RadixRouter::parse_path(b"/api/::literal/test");
-        assert_eq!(segments, vec![
-            PathSegment::Static(b"/api/:literal".to_vec()),
-            PathSegment::Static(b"/test".to_vec()),
-        ]);
+        assert_eq!(
+            segments,
+            vec![
+                PathSegment::Static(b"/api/:literal".to_vec()),
+                PathSegment::Static(b"/test".to_vec()),
+            ]
+        );
     }
 
     #[test]
     fn test_parse_path_param_at_end() {
         let segments = RadixRouter::parse_path(b"/users/:id");
-        assert_eq!(segments, vec![
-            PathSegment::Static(b"/users/".to_vec()),
-            PathSegment::Param,
-        ]);
+        assert_eq!(
+            segments,
+            vec![PathSegment::Static(b"/users/".to_vec()), PathSegment::Param,]
+        );
     }
 
     #[test]
@@ -435,21 +447,24 @@ mod tests {
     fn test_parse_path_param_empty_name() {
         // /api/:/test - param has empty name (just ":")
         let segments = RadixRouter::parse_path(b"/api/:/test");
-        assert_eq!(segments, vec![
-            PathSegment::Static(b"/api/".to_vec()),
-            PathSegment::Param,
-            PathSegment::Static(b"/test".to_vec()),
-        ]);
+        assert_eq!(
+            segments,
+            vec![
+                PathSegment::Static(b"/api/".to_vec()),
+                PathSegment::Param,
+                PathSegment::Static(b"/test".to_vec()),
+            ]
+        );
     }
 
     #[test]
     fn test_parse_path_trailing_param() {
         // /api/: - param at end with empty name
         let segments = RadixRouter::parse_path(b"/api/:");
-        assert_eq!(segments, vec![
-            PathSegment::Static(b"/api/".to_vec()),
-            PathSegment::Param,
-        ]);
+        assert_eq!(
+            segments,
+            vec![PathSegment::Static(b"/api/".to_vec()), PathSegment::Param,]
+        );
     }
 
     #[test]

@@ -370,7 +370,8 @@ impl KubernetesController {
                                 .await
                                 .map_err(|e| anyhow::anyhow!("Watcher for {} failed: {}", kind, e))?
                             {
-                                Self::handle_http_route_event(&store, &config_server, &status_store, event, &kind).await?;
+                                Self::handle_http_route_event(&store, &config_server, &status_store, event, &kind)
+                                    .await?;
                             }
                             Ok::<(), anyhow::Error>(())
                         }
@@ -418,7 +419,9 @@ impl KubernetesController {
                 store
                     .apply_resource(kind.to_string(), resource.namespace(), resource.name_any(), yaml)
                     .await;
-                config_server.routes.apply_change(ResourceChange::EventAdd, resource.clone());
+                config_server
+                    .routes
+                    .apply_change(ResourceChange::EventAdd, resource.clone());
 
                 // Event-driven status update with comparison
                 Self::update_http_route_status_if_needed(status_store, &resource).await;
@@ -428,7 +431,9 @@ impl KubernetesController {
                 store
                     .apply_resource(kind.to_string(), resource.namespace(), resource.name_any(), yaml)
                     .await;
-                config_server.routes.apply_change(ResourceChange::InitAdd, resource.clone());
+                config_server
+                    .routes
+                    .apply_change(ResourceChange::InitAdd, resource.clone());
 
                 // Event-driven status update with comparison
                 Self::update_http_route_status_if_needed(status_store, &resource).await;
@@ -850,10 +855,28 @@ impl KubernetesController {
     ) -> Result<()> {
         match event {
             watcher::Event::Apply(resource) => {
-                Self::process_gateway_apply(store, config_server, status_store, resource, kind, gateway_class_name, ResourceChange::EventAdd).await?;
+                Self::process_gateway_apply(
+                    store,
+                    config_server,
+                    status_store,
+                    resource,
+                    kind,
+                    gateway_class_name,
+                    ResourceChange::EventAdd,
+                )
+                .await?;
             }
             watcher::Event::InitApply(resource) => {
-                Self::process_gateway_apply(store, config_server, status_store, resource, kind, gateway_class_name, ResourceChange::InitAdd).await?;
+                Self::process_gateway_apply(
+                    store,
+                    config_server,
+                    status_store,
+                    resource,
+                    kind,
+                    gateway_class_name,
+                    ResourceChange::InitAdd,
+                )
+                .await?;
             }
             watcher::Event::Delete(resource) => {
                 store

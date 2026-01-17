@@ -30,7 +30,13 @@ impl KubernetesWriter {
     pub async fn new() -> Result<(Self, Arc<KubernetesStore>)> {
         let client = Client::try_default().await?;
         let store = KubernetesStore::with_client(client.clone());
-        Ok((Self { client, store: store.clone() }, store))
+        Ok((
+            Self {
+                client,
+                store: store.clone(),
+            },
+            store,
+        ))
     }
 
     /// Create a new KubernetesWriter with existing client and store
@@ -141,15 +147,12 @@ impl ConfWriter for KubernetesWriter {
     async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
         let (api, _gvk) = self.dynamic_api(kind, namespace).await?;
 
-        let obj = api
-            .get(name)
-            .await
-            .map_err(|e| match e {
-                kube::Error::Api(ae) if ae.code == 404 => {
-                    ConfWriterError::NotFound(format!("{}/{}/{}", kind, namespace.unwrap_or("_"), name))
-                }
-                _ => ConfWriterError::KubeError(format!("Failed to get resource: {}", e)),
-            })?;
+        let obj = api.get(name).await.map_err(|e| match e {
+            kube::Error::Api(ae) if ae.code == 404 => {
+                ConfWriterError::NotFound(format!("{}/{}/{}", kind, namespace.unwrap_or("_"), name))
+            }
+            _ => ConfWriterError::KubeError(format!("Failed to get resource: {}", e)),
+        })?;
 
         let content = serde_yaml::to_string(&obj)
             .map_err(|e| ConfWriterError::ParseError(format!("Failed to serialize: {}", e)))?;
@@ -161,14 +164,12 @@ impl ConfWriter for KubernetesWriter {
         let (api, _gvk) = self.dynamic_api(kind, namespace).await?;
 
         let params = DeleteParams::default();
-        api.delete(name, &params)
-            .await
-            .map_err(|e| match e {
-                kube::Error::Api(ae) if ae.code == 404 => {
-                    ConfWriterError::NotFound(format!("{}/{}/{}", kind, namespace.unwrap_or("_"), name))
-                }
-                _ => ConfWriterError::KubeError(format!("Failed to delete resource: {}", e)),
-            })?;
+        api.delete(name, &params).await.map_err(|e| match e {
+            kube::Error::Api(ae) if ae.code == 404 => {
+                ConfWriterError::NotFound(format!("{}/{}/{}", kind, namespace.unwrap_or("_"), name))
+            }
+            _ => ConfWriterError::KubeError(format!("Failed to delete resource: {}", e)),
+        })?;
 
         tracing::info!(
             component = "kubernetes_writer",
@@ -208,9 +209,6 @@ impl ConfWriter for KubernetesWriter {
 
     async fn cnt_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<usize, ConfWriterError> {
         let all = self.store.list_by_kind(kind).await;
-        Ok(all
-            .iter()
-            .filter(|e| e.namespace.as_deref() == Some(namespace))
-            .count())
+        Ok(all.iter().filter(|e| e.namespace.as_deref() == Some(namespace)).count())
     }
 }

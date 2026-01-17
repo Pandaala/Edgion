@@ -123,19 +123,19 @@ where
 
         tokio::spawn(async move {
             let mut is_ready = false;
-            
+
             // Exponential backoff: 2s -> 4s -> 8s -> 16s -> 32s (max)
             const BACKOFF_INIT_SECS: u64 = 2;
             const BACKOFF_MAX_SECS: u64 = 32;
             let mut backoff_secs = BACKOFF_INIT_SECS;
-            
+
             // Outer loop: perform list operation
             loop {
                 // === Backoff before list ===
                 // Add jitter (0-3s) to spread requests and prevent relist storms
                 let jitter_ms = rand::thread_rng().gen_range(0..3000);
-                let wait_duration = std::time::Duration::from_secs(backoff_secs) 
-                    + std::time::Duration::from_millis(jitter_ms);
+                let wait_duration =
+                    std::time::Duration::from_secs(backoff_secs) + std::time::Duration::from_millis(jitter_ms);
                 tracing::info!(
                     kind = T::kind_name(),
                     backoff_secs = backoff_secs,
@@ -143,7 +143,7 @@ where
                     "Waiting before list"
                 );
                 tokio::time::sleep(wait_duration).await;
-                
+
                 // Get gRPC conf_client
                 let mut client_guard = grpc_client.write().await;
                 let client = match client_guard.as_mut() {
@@ -158,46 +158,47 @@ where
                 };
 
                 // Perform list_and_reset to get latest sync version and server_id
-                let (from_version, current_server_id) = match Self::list_and_reset(client, "", &cache_data, "watch relist").await {
-                    Ok(list_result) => {
-                        // Reset backoff on success
-                        backoff_secs = BACKOFF_INIT_SECS;
-                        
-                        let count = {
-                            let cache = cache_data.read().unwrap();
-                            cache.len()
-                        };
-                        tracing::info!(
-                            kind = T::kind_name(),
-                            count = count,
-                            sync_version = list_result.sync_version,
-                            server_id = %list_result.server_id,
-                            "List completed, starting watch"
-                        );
+                let (from_version, current_server_id) =
+                    match Self::list_and_reset(client, "", &cache_data, "watch relist").await {
+                        Ok(list_result) => {
+                            // Reset backoff on success
+                            backoff_secs = BACKOFF_INIT_SECS;
 
-                        // Set ready after first successful list
-                        if !is_ready {
-                            let mut cache = cache_data.write().unwrap();
-                            cache.set_ready();
-                            is_ready = true;
-                            tracing::info!(kind = T::kind_name(), "Cache is ready");
-                        }
+                            let count = {
+                                let cache = cache_data.read().unwrap();
+                                cache.len()
+                            };
+                            tracing::info!(
+                                kind = T::kind_name(),
+                                count = count,
+                                sync_version = list_result.sync_version,
+                                server_id = %list_result.server_id,
+                                "List completed, starting watch"
+                            );
 
-                        (list_result.sync_version, list_result.server_id)
-                    }
-                    Err(e) => {
-                        let error_message = e.message();
-                        if error_message.contains(WATCH_ERR_NOT_READY) {
-                            tracing::warn!(kind = T::kind_name(), error = %e, "Server not ready, will retry");
-                        } else {
-                            tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
+                            // Set ready after first successful list
+                            if !is_ready {
+                                let mut cache = cache_data.write().unwrap();
+                                cache.set_ready();
+                                is_ready = true;
+                                tracing::info!(kind = T::kind_name(), "Cache is ready");
+                            }
+
+                            (list_result.sync_version, list_result.server_id)
                         }
-                        drop(client_guard);
-                        // Increase backoff on failure
-                        backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
-                        continue;
-                    }
-                };
+                        Err(e) => {
+                            let error_message = e.message();
+                            if error_message.contains(WATCH_ERR_NOT_READY) {
+                                tracing::warn!(kind = T::kind_name(), error = %e, "Server not ready, will retry");
+                            } else {
+                                tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
+                            }
+                            drop(client_guard);
+                            // Increase backoff on failure
+                            backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
+                            continue;
+                        }
+                    };
 
                 drop(client_guard);
 
@@ -251,7 +252,8 @@ where
 
                                 // Check for server_id change (server restart/failover detection)
                                 // Always trigger relist when server instance changes
-                                if !watch_response.server_id.is_empty() && watch_response.server_id != current_server_id {
+                                if !watch_response.server_id.is_empty() && watch_response.server_id != current_server_id
+                                {
                                     tracing::warn!(
                                         kind = T::kind_name(),
                                         last_server_id = %current_server_id,

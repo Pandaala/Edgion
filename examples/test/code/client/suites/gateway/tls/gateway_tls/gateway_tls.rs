@@ -43,7 +43,11 @@ impl GatewayTlsTestSuite {
                                     if status.is_success() {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
-                                            format!("Gateway TLS works! Status: {}, Body length: {}", status, body.len()),
+                                            format!(
+                                                "Gateway TLS works! Status: {}, Body length: {}",
+                                                status,
+                                                body.len()
+                                            ),
                                         )
                                     } else {
                                         TestResult::failed(
@@ -106,7 +110,9 @@ impl GatewayTlsTestSuite {
                                 }
                             }
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Gateway TLS echo request failed: {}", e)),
+                        Err(e) => {
+                            TestResult::failed(start.elapsed(), format!("Gateway TLS echo request failed: {}", e))
+                        }
                     }
                 })
             },
@@ -138,7 +144,9 @@ impl GatewayTlsTestSuite {
                                 TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
                             }
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Gateway TLS status request failed: {}", e)),
+                        Err(e) => {
+                            TestResult::failed(start.elapsed(), format!("Gateway TLS status request failed: {}", e))
+                        }
                     }
                 })
             },

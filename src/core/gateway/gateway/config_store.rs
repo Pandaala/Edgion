@@ -100,17 +100,11 @@ impl std::fmt::Debug for GatewayListenerConfig {
         f.debug_struct("GatewayListenerConfig")
             .field(
                 "host_map_keys",
-                &self
-                    .host_map
-                    .as_ref()
-                    .map(|m| m.keys().collect::<Vec<_>>()),
+                &self.host_map.as_ref().map(|m| m.keys().collect::<Vec<_>>()),
             )
             .field(
                 "listener_map_keys",
-                &self
-                    .listener_map
-                    .as_ref()
-                    .map(|m| m.keys().collect::<Vec<_>>()),
+                &self.listener_map.as_ref().map(|m| m.keys().collect::<Vec<_>>()),
             )
             .finish()
     }
@@ -168,9 +162,7 @@ impl GatewayListenerConfig {
     /// Get listener config by name
     #[inline]
     pub fn get_listener(&self, listener_name: &str) -> Option<Arc<ListenerConfig>> {
-        self.listener_map
-            .as_ref()
-            .and_then(|m| m.get(listener_name).cloned())
+        self.listener_map.as_ref().and_then(|m| m.get(listener_name).cloned())
     }
 
     /// Add a listener config
@@ -189,9 +181,7 @@ impl GatewayListenerConfig {
                     .insert(&hostname, config);
             } else {
                 // Exact hostname - add to host_map
-                self.host_map
-                    .get_or_insert_with(HashMap::new)
-                    .insert(hostname, config);
+                self.host_map.get_or_insert_with(HashMap::new).insert(hostname, config);
             }
         }
     }
@@ -339,8 +329,7 @@ fn parse_gateway_to_config(gateway: &Gateway) -> GatewayListenerConfig {
 }
 
 /// Global GatewayConfigStore instance
-static GLOBAL_GATEWAY_CONFIG_STORE: LazyLock<GatewayConfigStore> =
-    LazyLock::new(GatewayConfigStore::new);
+static GLOBAL_GATEWAY_CONFIG_STORE: LazyLock<GatewayConfigStore> = LazyLock::new(GatewayConfigStore::new);
 
 /// Get the global GatewayConfigStore instance
 pub fn get_global_gateway_config_store() -> &'static GatewayConfigStore {

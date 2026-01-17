@@ -25,18 +25,17 @@ impl ListenerHostnameTestSuite {
                     let client = reqwest::Client::new();
                     let url = format!("http://127.0.0.1:31240/health");
 
-                    let response = client
-                        .get(&url)
-                        .header("Host", "api.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(&url).header("Host", "api.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
                             if resp.status().is_success() {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("✓ Exact hostname match works: api.example.com (status: {})", resp.status()),
+                                    format!(
+                                        "✓ Exact hostname match works: api.example.com (status: {})",
+                                        resp.status()
+                                    ),
                                 )
                             } else {
                                 TestResult::failed(
@@ -63,11 +62,7 @@ impl ListenerHostnameTestSuite {
                     let client = reqwest::Client::new();
                     let url = format!("http://127.0.0.1:31240/health");
 
-                    let response = client
-                        .get(&url)
-                        .header("Host", "other.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(&url).header("Host", "other.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
@@ -99,7 +94,7 @@ impl ListenerHostnameTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    
+
                     // Test 1: api.wildcard.example.com should match
                     let url1 = format!("http://127.0.0.1:31241/health");
                     let response1 = client
@@ -113,7 +108,10 @@ impl ListenerHostnameTestSuite {
                             if !resp.status().is_success() {
                                 return TestResult::failed(
                                     start.elapsed(),
-                                    format!("api.wildcard.example.com should match *.wildcard.example.com, got {}", resp.status()),
+                                    format!(
+                                        "api.wildcard.example.com should match *.wildcard.example.com, got {}",
+                                        resp.status()
+                                    ),
                                 );
                             }
                         }
@@ -162,7 +160,7 @@ impl ListenerHostnameTestSuite {
 
                     let response = client
                         .get(&url)
-                        .header("Host", "wildcard.example.com")  // Root domain
+                        .header("Host", "wildcard.example.com") // Root domain
                         .send()
                         .await;
 
@@ -176,7 +174,10 @@ impl ListenerHostnameTestSuite {
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("Expected 404 for root domain with wildcard listener, got {}", resp.status()),
+                                    format!(
+                                        "Expected 404 for root domain with wildcard listener, got {}",
+                                        resp.status()
+                                    ),
                                 )
                             }
                         }
@@ -198,11 +199,7 @@ impl ListenerHostnameTestSuite {
                     let client = reqwest::Client::new();
                     let url = format!("http://127.0.0.1:31242/health");
 
-                    let response = client
-                        .get(&url)
-                        .header("Host", "any-domain.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(&url).header("Host", "any-domain.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
@@ -214,7 +211,10 @@ impl ListenerHostnameTestSuite {
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("Expected 200 OK for listener without hostname restriction, got {}", resp.status()),
+                                    format!(
+                                        "Expected 200 OK for listener without hostname restriction, got {}",
+                                        resp.status()
+                                    ),
                                 )
                             }
                         }

@@ -387,10 +387,7 @@ impl FrozenRadixTree {
             // Handle node based on its type
             let after_match = if node.node_type == NodeType::Param as u8 {
                 // Parameter node: consume until next '/' or end
-                let end = remaining
-                    .iter()
-                    .position(|&c| c == b'/')
-                    .unwrap_or(remaining.len());
+                let end = remaining.iter().position(|&c| c == b'/').unwrap_or(remaining.len());
 
                 // Empty parameter doesn't match
                 if end == 0 {

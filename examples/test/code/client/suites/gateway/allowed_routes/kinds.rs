@@ -22,23 +22,25 @@ impl AllowedRoutesKindsTestSuite {
                     let client = reqwest::Client::new();
                     let url = format!("http://127.0.0.1:31213/health");
 
-                    let response = client
-                        .get(&url)
-                        .header("Host", "kinds-http.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(&url).header("Host", "kinds-http.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
                             if resp.status().is_success() {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("✓ HTTPRoute allowed when specified in kinds (status: {})", resp.status()),
+                                    format!(
+                                        "✓ HTTPRoute allowed when specified in kinds (status: {})",
+                                        resp.status()
+                                    ),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("Expected 200 OK for HTTPRoute with kinds restriction, got {}", resp.status()),
+                                    format!(
+                                        "Expected 200 OK for HTTPRoute with kinds restriction, got {}",
+                                        resp.status()
+                                    ),
                                 )
                             }
                         }
@@ -57,22 +59,19 @@ impl AllowedRoutesKindsTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    
+
                     // Use gRPC client to test
                     // Since we don't have a dedicated gRPC client here, we'll use HTTP/2
                     // In a real scenario, this would fail at routing level
-                    let client = reqwest::Client::builder()
-                        .http2_prior_knowledge()
-                        .build()
-                        .unwrap();
-                    
+                    let client = reqwest::Client::builder().http2_prior_knowledge().build().unwrap();
+
                     let url = format!("http://127.0.0.1:31213/test.TestService/SayHello");
 
                     let response = client
                         .post(&url)
                         .header("Host", "kinds-grpc.example.com")
                         .header("content-type", "application/grpc")
-                        .body(vec![0u8; 5])  // Minimal gRPC frame
+                        .body(vec![0u8; 5]) // Minimal gRPC frame
                         .send()
                         .await;
 
@@ -82,12 +81,18 @@ impl AllowedRoutesKindsTestSuite {
                             if resp.status() == 404 || !resp.status().is_success() {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("✓ GRPCRoute correctly denied when not in kinds (status: {})", resp.status()),
+                                    format!(
+                                        "✓ GRPCRoute correctly denied when not in kinds (status: {})",
+                                        resp.status()
+                                    ),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("Expected 404 or error for GRPCRoute not in kinds, got {}", resp.status()),
+                                    format!(
+                                        "Expected 404 or error for GRPCRoute not in kinds, got {}",
+                                        resp.status()
+                                    ),
                                 )
                             }
                         }
@@ -111,9 +116,6 @@ impl TestSuite for AllowedRoutesKindsTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::test_http_route_allowed(),
-            Self::test_grpc_route_denied(),
-        ]
+        vec![Self::test_http_route_allowed(), Self::test_grpc_route_denied()]
     }
 }

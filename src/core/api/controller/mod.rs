@@ -67,10 +67,7 @@ async fn reload_all_resources(
 // ============= Router Setup =============
 
 /// Create the admin API router with unified K8s-style endpoints
-pub fn create_admin_router(
-    conf_center: Arc<ConfCenter>,
-    schema_validator: Arc<SchemaValidator>,
-) -> Router {
+pub fn create_admin_router(conf_center: Arc<ConfCenter>, schema_validator: Arc<SchemaValidator>) -> Router {
     let admin_state = Arc::new(AdminState {
         conf_center,
         schema_validator,

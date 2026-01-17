@@ -74,9 +74,7 @@ pub fn check_allowed_routes(
             "Selector" => {
                 // Label selector matching - would need namespace labels
                 // For now, treat as allow (full implementation requires k8s API access)
-                tracing::trace!(
-                    "AllowedRoutes.namespaces.from=Selector not fully implemented, allowing"
-                );
+                tracing::trace!("AllowedRoutes.namespaces.from=Selector not fully implemented, allowing");
             }
             _ => {
                 tracing::warn!(from = %from, "Unknown AllowedRoutes.namespaces.from value");
@@ -211,10 +209,7 @@ mod tests {
         assert!(!hostname_matches_listener("api.other.com", "*.example.com"));
 
         // Wildcard should NOT match multi-level subdomain
-        assert!(!hostname_matches_listener(
-            "foo.api.example.com",
-            "*.example.com"
-        ));
+        assert!(!hostname_matches_listener("foo.api.example.com", "*.example.com"));
     }
 
     #[test]
@@ -244,11 +239,6 @@ mod tests {
         ));
 
         // Different namespace - not allowed
-        assert!(!check_allowed_routes(
-            &Some(allowed),
-            "other",
-            "HTTPRoute",
-            "default"
-        ));
+        assert!(!check_allowed_routes(&Some(allowed), "other", "HTTPRoute", "default"));
     }
 }

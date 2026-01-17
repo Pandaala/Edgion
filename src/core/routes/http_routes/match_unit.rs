@@ -51,13 +51,7 @@ impl HttpRouteRuleUnit {
         gateway_info: &GatewayInfo,
     ) -> Result<bool, EdError> {
         let req_header = session.req_header();
-        Self::deep_match_common(
-            &self.matched_info,
-            req_header,
-            &self.parent_refs,
-            ctx,
-            gateway_info,
-        )
+        Self::deep_match_common(&self.matched_info, req_header, &self.parent_refs, ctx, gateway_info)
     }
 
     /// Get route identifier

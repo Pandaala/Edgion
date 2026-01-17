@@ -5,7 +5,10 @@ use kube::ResourceExt;
 use std::sync::Arc;
 
 /// Load base configuration (GatewayClass, EdgionGatewayConfig, Gateway) from store
-pub async fn load_base_conf_from_store(store: Arc<dyn ConfWriter>, gateway_class_name: &str) -> Result<GatewayBaseConf> {
+pub async fn load_base_conf_from_store(
+    store: Arc<dyn ConfWriter>,
+    gateway_class_name: &str,
+) -> Result<GatewayBaseConf> {
     tracing::info!(
         component = "conf_mgr",
         event = "load_base_start",

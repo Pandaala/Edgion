@@ -22,11 +22,7 @@ impl AllowedRoutesSameNamespaceTestSuite {
                     let client = reqwest::Client::new();
                     let url = format!("http://127.0.0.1:31210/health");
 
-                    let response = client
-                        .get(&url)
-                        .header("Host", "same-ns.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(&url).header("Host", "same-ns.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
@@ -60,11 +56,7 @@ impl AllowedRoutesSameNamespaceTestSuite {
                     let client = reqwest::Client::new();
                     let url = format!("http://127.0.0.1:31210/health");
 
-                    let response = client
-                        .get(&url)
-                        .header("Host", "diff-ns.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(&url).header("Host", "diff-ns.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
@@ -94,9 +86,6 @@ impl TestSuite for AllowedRoutesSameNamespaceTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::test_same_namespace_allowed(),
-            Self::test_diff_namespace_denied(),
-        ]
+        vec![Self::test_same_namespace_allowed(), Self::test_diff_namespace_denied()]
     }
 }
