@@ -1,5 +1,4 @@
 use crate::core::conf_sync::traits::ConfHandler;
-use crate::core::gateway::gateway::get_global_gateway_store;
 use crate::core::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
 use crate::core::routes::http_routes::lb_policy_sync::{cleanup_lb_policies_for_routes, sync_lb_policies_for_routes};
 use crate::core::routes::http_routes::match_engine::radix_route_match::RadixRouteMatchEngine;
@@ -683,20 +682,11 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         let gateway_domain_rules_new = parse_http_routes_to_gateway_domain_rules(data);
 
         // Step 2: Build RouteRules with RadixRouteMatchEngine and update gateway_routes_map
-        let gateway_store = get_global_gateway_store();
-        let gateway_store_guard = gateway_store.read().unwrap();
-
+        // Note: We no longer check GatewayStore - routes are built based on HTTPRoute's parentRef
+        // and will be available when the Gateway arrives later
         let mut processed_gateways = 0;
-        let mut skipped_gateways = 0;
 
         for (gateway_key, domain_rules_map) in gateway_domain_rules_new.into_iter() {
-            // Check if gateway exists in store
-            if gateway_store_guard.get_gateway(&gateway_key).is_err() {
-                tracing::debug!(component="route_manager",gw=%gateway_key,"gw not in store");
-                skipped_gateways += 1;
-                continue;
-            }
-
             // Separate exact domains and wildcard domains
             let mut exact_domain_map: HashMap<DomainStr, Arc<RouteRules>> = HashMap::new();
             let mut wildcard_hosts: Vec<RadixHost<RouteRules>> = Vec::new();
@@ -752,14 +742,10 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 }
             }
 
-            // Get existing DomainRouteRules for this gateway (don't create new)
-            let domain_route_rules = if let Some(entry) = self.gateway_routes_map.get(&gateway_key) {
-                entry.value().clone()
-            } else {
-                tracing::debug!(component="route_manager",gw=%gateway_key,"gw not in routes map");
-                skipped_gateways += 1;
-                continue;
-            };
+            // Get or create DomainRouteRules for this gateway
+            // This allows HTTPRoutes to be processed even before Gateway arrives
+            let (namespace, name) = gateway_key.split_once('/').unwrap_or(("", gateway_key.as_str()));
+            let domain_route_rules = self.get_or_create_domain_routes(namespace, name);
 
             // Build and store exact domain map
             domain_route_rules.exact_domain_map.store(Arc::new(exact_domain_map));
@@ -769,7 +755,6 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 let mut engine = RadixHostMatchEngine::new();
                 if let Err(e) = engine.initialize(wildcard_hosts) {
                     tracing::error!(component="route_manager",gw=%gateway_key,err=%e,"failed to build RadixHostMatchEngine");
-                    skipped_gateways += 1;
                     continue;
                 }
                 Some(engine)
@@ -784,9 +769,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         let elapsed = start_time.elapsed();
         tracing::info!(
             component = "route_manager",
-            total = processed_gateways + skipped_gateways,
-            proc = processed_gateways,
-            skip = skipped_gateways,
+            total = processed_gateways,
             ms = elapsed.as_millis(),
             "full set done"
         );
@@ -831,61 +814,58 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         for (gateway_key, affected_hostnames) in gateway_hostnames.iter() {
             tracing::debug!(component="route_manager",gw=%gateway_key,affected=affected_hostnames.len(),"processing affected hostnames");
 
-            if let Some(domain_routes_ref) = self.gateway_routes_map.get(gateway_key) {
-                // Separate exact and wildcard hostnames
-                let mut exact_hostnames: HashSet<String> = HashSet::new();
-                let mut wildcard_hostnames: HashSet<String> = HashSet::new();
+            // Get or create DomainRouteRules - allows HTTPRoutes to be processed before Gateway arrives
+            let (namespace, name) = gateway_key.split_once('/').unwrap_or(("", gateway_key.as_str()));
+            let domain_routes_ref = self.get_or_create_domain_routes(namespace, name);
 
-                for hostname in affected_hostnames {
-                    if hostname.starts_with("*.") {
-                        wildcard_hostnames.insert(hostname.clone());
-                    } else {
-                        exact_hostnames.insert(hostname.clone());
+            // Separate exact and wildcard hostnames
+            let mut exact_hostnames: HashSet<String> = HashSet::new();
+            let mut wildcard_hostnames: HashSet<String> = HashSet::new();
+
+            for hostname in affected_hostnames {
+                if hostname.starts_with("*.") {
+                    wildcard_hostnames.insert(hostname.clone());
+                } else {
+                    exact_hostnames.insert(hostname.clone());
+                }
+            }
+
+            // Update exact domains (fine-grained, RCU pattern)
+            if !exact_hostnames.is_empty() {
+                let current_map = domain_routes_ref.exact_domain_map.load();
+                let mut new_map = (**current_map).clone(); // Clone HashMap
+
+                for hostname in exact_hostnames.iter() {
+                    match self.rebuild_exact_hostname(hostname, gateway_key, &remove) {
+                        Some(new_route_rules) => {
+                            // Store with lowercase key for case-insensitive matching
+                            new_map.insert(hostname.to_lowercase(), new_route_rules);
+                            tracing::debug!(component="route_manager",gw=%gateway_key,hostname=%hostname,"updated exact domain");
+                        }
+                        None => {
+                            new_map.remove(&hostname.to_lowercase());
+                            tracing::debug!(component="route_manager",gw=%gateway_key,hostname=%hostname,"removed exact domain (no routes)");
+                        }
                     }
                 }
 
-                // Update exact domains (fine-grained, RCU pattern)
-                if !exact_hostnames.is_empty() {
-                    let current_map = domain_routes_ref.exact_domain_map.load();
-                    let mut new_map = (**current_map).clone(); // Clone HashMap
+                // Atomically replace the exact domain map
+                domain_routes_ref.exact_domain_map.store(Arc::new(new_map));
+                tracing::info!(component="route_manager",gw=%gateway_key,cnt=exact_hostnames.len(),"exact domains updated");
+            }
 
-                    for hostname in exact_hostnames.iter() {
-                        match self.rebuild_exact_hostname(hostname, gateway_key, &remove) {
-                            Some(new_route_rules) => {
-                                // Store with lowercase key for case-insensitive matching
-                                new_map.insert(hostname.to_lowercase(), new_route_rules);
-                                tracing::debug!(component="route_manager",gw=%gateway_key,hostname=%hostname,"updated exact domain");
-                            }
-                            None => {
-                                new_map.remove(&hostname.to_lowercase());
-                                tracing::debug!(component="route_manager",gw=%gateway_key,hostname=%hostname,"removed exact domain (no routes)");
-                            }
-                        }
+            // Update wildcard domains (rebuild engine with Arc reuse)
+            if !wildcard_hostnames.is_empty() {
+                let current_engine_opt = domain_routes_ref.wildcard_engine.load();
+                let current_engine = current_engine_opt.as_ref().as_ref();
+
+                match self.rebuild_gateway_wildcard_engine(gateway_key, &wildcard_hostnames, &remove, current_engine) {
+                    Ok(new_engine_opt) => {
+                        domain_routes_ref.wildcard_engine.store(Arc::new(new_engine_opt));
+                        tracing::info!(component="route_manager",gw=%gateway_key,cnt=wildcard_hostnames.len(),"wildcard engine rebuilt with Arc reuse");
                     }
-
-                    // Atomically replace the exact domain map
-                    domain_routes_ref.exact_domain_map.store(Arc::new(new_map));
-                    tracing::info!(component="route_manager",gw=%gateway_key,cnt=exact_hostnames.len(),"exact domains updated");
-                }
-
-                // Update wildcard domains (rebuild engine with Arc reuse)
-                if !wildcard_hostnames.is_empty() {
-                    let current_engine_opt = domain_routes_ref.wildcard_engine.load();
-                    let current_engine = current_engine_opt.as_ref().as_ref();
-
-                    match self.rebuild_gateway_wildcard_engine(
-                        gateway_key,
-                        &wildcard_hostnames,
-                        &remove,
-                        current_engine,
-                    ) {
-                        Ok(new_engine_opt) => {
-                            domain_routes_ref.wildcard_engine.store(Arc::new(new_engine_opt));
-                            tracing::info!(component="route_manager",gw=%gateway_key,cnt=wildcard_hostnames.len(),"wildcard engine rebuilt with Arc reuse");
-                        }
-                        Err(e) => {
-                            tracing::error!(component="route_manager",gw=%gateway_key,err=%e,"failed to rebuild wildcard engine");
-                        }
+                    Err(e) => {
+                        tracing::error!(component="route_manager",gw=%gateway_key,err=%e,"failed to rebuild wildcard engine");
                     }
                 }
             }
@@ -908,6 +888,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::gateway::gateway::get_global_gateway_store;
     use crate::types::{Gateway, HTTPRoute};
 
     /// Helper function to create a test Gateway from JSON

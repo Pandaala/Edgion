@@ -31,6 +31,7 @@ impl GatewayStore {
     }
 
     /// Get a gateway by key
+    #[allow(dead_code)]
     pub fn get_gateway(&self, key: &str) -> Result<&Gateway> {
         self.gateways
             .get(key)
