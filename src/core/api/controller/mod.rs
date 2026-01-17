@@ -3,8 +3,7 @@ mod common;
 mod namespaced_handlers;
 mod types;
 
-use crate::core::conf_mgr::{load_all_resources, ResourceMgrAPI, SchemaValidator};
-use crate::core::conf_sync::ConfigServer;
+use crate::core::conf_mgr::{load_all_resources, ConfCenter, SchemaValidator};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -47,12 +46,10 @@ async fn health_check() -> Json<ApiResponse<String>> {
 async fn reload_all_resources(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<types::ApiResponse<String>>, StatusCode> {
-    let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let store = resource_mgr
-        .get_backend(None)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let writer = state.conf_center.writer();
+    let config_server = state.conf_center.config_server();
 
-    load_all_resources(store, state.config_server.clone())
+    load_all_resources(writer, config_server)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -71,13 +68,11 @@ async fn reload_all_resources(
 
 /// Create the admin API router with unified K8s-style endpoints
 pub fn create_admin_router(
-    config_server: Arc<ConfigServer>,
-    resource_mgr: Option<Arc<ResourceMgrAPI>>,
+    conf_center: Arc<ConfCenter>,
     schema_validator: Arc<SchemaValidator>,
 ) -> Router {
     let admin_state = Arc::new(AdminState {
-        config_server,
-        resource_mgr,
+        conf_center,
         schema_validator,
     });
 
@@ -126,12 +121,11 @@ pub fn create_admin_router(
 
 /// Serve the admin API on the specified port
 pub async fn serve(
-    config_server: Arc<ConfigServer>,
-    resource_mgr: Option<Arc<ResourceMgrAPI>>,
+    conf_center: Arc<ConfCenter>,
     schema_validator: Arc<SchemaValidator>,
     port: u16,
 ) -> anyhow::Result<()> {
-    let app = create_admin_router(config_server, resource_mgr, schema_validator);
+    let app = create_admin_router(conf_center, schema_validator);
     let addr_str = format!("0.0.0.0:{}", port);
     let addr: std::net::SocketAddr = addr_str.parse()?;
 

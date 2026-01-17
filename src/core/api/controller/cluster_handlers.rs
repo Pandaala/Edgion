@@ -52,7 +52,13 @@ pub async fn create_cluster(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    // In K8s mode, write operations are not supported via Admin API
+    if state.is_k8s_mode() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    let writer = state.writer();
+    let config_server = state.config_server();
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let metadata = crate::core::utils::extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
@@ -63,12 +69,12 @@ pub async fn create_cluster(
         match kind {
             crate::types::ResourceKind::GatewayClass => {
                 use kube::ResourceExt;
-                let list = state.config_server.list_gateway_classes();
+                let list = config_server.list_gateway_classes();
                 list.data.iter().any(|gc| gc.name_any() == name)
             }
             crate::types::ResourceKind::EdgionGatewayConfig => {
                 use kube::ResourceExt;
-                let list = state.config_server.list_edgion_gateway_configs();
+                let list = config_server.list_edgion_gateway_configs();
                 list.data.iter().any(|cfg| cfg.name_any() == name)
             }
             _ => return Err(StatusCode::BAD_REQUEST),
@@ -86,22 +92,22 @@ pub async fn create_cluster(
         return Err(StatusCode::CONFLICT);
     }
 
-    // Parse, validate, and persist
+    // Parse, validate, and persist to writer only (FileWatcher will update ConfigServer)
     match kind {
         crate::types::ResourceKind::GatewayClass => {
-            let gc: GatewayClass = parse_resource_and_update_version(&content, state.resource_mgr.is_some())?;
+            let gc: GatewayClass = parse_resource_and_update_version(&content, true)?;
             validate_resource(&state.schema_validator, kind, &gc)?;
             let json_content = serde_json::to_string(&gc).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            resource_mgr
+            writer
                 .set_one(&kind_str, None, &name, json_content)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         crate::types::ResourceKind::EdgionGatewayConfig => {
-            let cfg: EdgionGatewayConfig = parse_resource_and_update_version(&content, state.resource_mgr.is_some())?;
+            let cfg: EdgionGatewayConfig = parse_resource_and_update_version(&content, true)?;
             validate_resource(&state.schema_validator, kind, &cfg)?;
             let json_content = serde_json::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            resource_mgr
+            writer
                 .set_one(&kind_str, None, &name, json_content)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -132,25 +138,30 @@ pub async fn update_cluster(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    // In K8s mode, write operations are not supported via Admin API
+    if state.is_k8s_mode() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    let writer = state.writer();
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    // Parse, validate, and persist
+    // Parse, validate, and persist to writer only (FileWatcher will update ConfigServer)
     match kind {
         crate::types::ResourceKind::GatewayClass => {
-            let gc: GatewayClass = parse_resource_and_update_version(&content, state.resource_mgr.is_some())?;
+            let gc: GatewayClass = parse_resource_and_update_version(&content, true)?;
             validate_resource(&state.schema_validator, kind, &gc)?;
             let json_content = serde_json::to_string(&gc).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            resource_mgr
+            writer
                 .set_one(&kind_str, None, &name, json_content)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         crate::types::ResourceKind::EdgionGatewayConfig => {
-            let cfg: EdgionGatewayConfig = parse_resource_and_update_version(&content, state.resource_mgr.is_some())?;
+            let cfg: EdgionGatewayConfig = parse_resource_and_update_version(&content, true)?;
             validate_resource(&state.schema_validator, kind, &cfg)?;
             let json_content = serde_json::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            resource_mgr
+            writer
                 .set_one(&kind_str, None, &name, json_content)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -180,19 +191,25 @@ pub async fn delete_cluster(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    // In K8s mode, write operations are not supported via Admin API
+    if state.is_k8s_mode() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    let writer = state.writer();
+    let config_server = state.config_server();
 
     // Check if resource exists in ConfigServer
     let exists = {
         match kind {
             crate::types::ResourceKind::GatewayClass => {
                 use kube::ResourceExt;
-                let list = state.config_server.list_gateway_classes();
+                let list = config_server.list_gateway_classes();
                 list.data.iter().any(|gc| gc.name_any() == name)
             }
             crate::types::ResourceKind::EdgionGatewayConfig => {
                 use kube::ResourceExt;
-                let list = state.config_server.list_edgion_gateway_configs();
+                let list = config_server.list_edgion_gateway_configs();
                 list.data.iter().any(|cfg| cfg.name_any() == name)
             }
             _ => return Err(StatusCode::BAD_REQUEST),
@@ -210,18 +227,15 @@ pub async fn delete_cluster(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    // Delete from persistence (ignore error if not in filesystem)
-    let _ = resource_mgr.delete_one(&kind_str, None, &name).await;
-
-    // Note: Cluster-scoped resources can be removed from cache via resource change events.
-    // This is handled through the watch mechanism.
+    // Delete from persistence (FileWatcher will update ConfigServer)
+    let _ = writer.delete_one(&kind_str, None, &name).await;
 
     tracing::info!(
         component = "unified_api",
         event = "cluster_resource_deleted",
         kind = %kind_str,
         name = %name,
-        "Cluster resource deleted from persistence (cache unchanged)"
+        "Cluster resource deleted from persistence"
     );
 
     Ok(Json(ApiResponse::success(format!("{} deleted", kind_str))))

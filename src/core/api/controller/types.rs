@@ -1,13 +1,29 @@
-use crate::core::conf_mgr::{ResourceMgrAPI, SchemaValidator};
+use crate::core::conf_mgr::{ConfCenter, ConfWriter, SchemaValidator};
 use crate::core::conf_sync::ConfigServer;
 use serde::Serialize;
 use std::sync::Arc;
 
-/// Admin state containing ConfigServer, optional ResourceMgrAPI, and SchemaValidator
+/// Admin state containing ConfCenter and SchemaValidator
 pub struct AdminState {
-    pub config_server: Arc<ConfigServer>,
-    pub resource_mgr: Option<Arc<ResourceMgrAPI>>,
+    pub conf_center: Arc<ConfCenter>,
     pub schema_validator: Arc<SchemaValidator>,
+}
+
+impl AdminState {
+    /// Get the ConfigServer from ConfCenter
+    pub fn config_server(&self) -> Arc<ConfigServer> {
+        self.conf_center.config_server()
+    }
+
+    /// Get the ConfWriter from ConfCenter
+    pub fn writer(&self) -> Arc<dyn ConfWriter> {
+        self.conf_center.writer()
+    }
+
+    /// Check if running in Kubernetes mode
+    pub fn is_k8s_mode(&self) -> bool {
+        self.conf_center.is_k8s_mode()
+    }
 }
 
 /// Standard API response format

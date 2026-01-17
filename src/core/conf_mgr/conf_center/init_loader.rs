@@ -7,6 +7,7 @@ use crate::core::conf_mgr::resource_check::{self, check_edgion_tls, ResourceChec
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{CacheEventDispatch, ConfigServer, ServerCache};
 use crate::types::prelude_resources::*;
+use crate::types::resource::ALL_RESOURCE_INFOS;
 use crate::types::{ResourceKind, ResourceMeta};
 use anyhow::{Context, Result};
 use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
@@ -345,30 +346,11 @@ pub async fn load_all_resources(writer: Arc<dyn ConfWriter>, config_server: Arc<
 
     // Mark all caches as ready after initial loading (for file system mode)
     // In K8s mode, this is handled by the watcher's InitDone event
-    let all_kinds = [
-        "GatewayClass",
-        "Gateway",
-        "EdgionGatewayConfig",
-        "HTTPRoute",
-        "GRPCRoute",
-        "TCPRoute",
-        "UDPRoute",
-        "TLSRoute",
-        "Service",
-        "EndpointSlice",
-        "Endpoints",
-        "EdgionTls",
-        "EdgionPlugins",
-        "EdgionStreamPlugins",
-        "ReferenceGrant",
-        "BackendTLSPolicy",
-        "PluginMetaData",
-        "Secret",
-        "LinkSys",
-    ];
-
-    for kind in all_kinds {
-        config_server.set_cache_ready_by_kind(kind);
+    // Use ALL_RESOURCE_INFOS to avoid hardcoded kind list
+    for info in ALL_RESOURCE_INFOS {
+        // Use Debug format to get PascalCase kind name (e.g., "GatewayClass")
+        let kind_name = format!("{:?}", info.kind);
+        config_server.set_cache_ready_by_kind(&kind_name);
     }
 
     tracing::info!(

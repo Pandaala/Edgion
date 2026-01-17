@@ -29,6 +29,7 @@ pub use kubernetes::{KubernetesController, KubernetesStore, KubernetesWriter};
 pub use status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, StatusStoreError};
 pub use traits::{ConfEntry, ConfWriter, ConfWriterError};
 
+use crate::core::cli::config::ConfSyncConfig;
 use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;
 use std::sync::Arc;
@@ -36,16 +37,23 @@ use std::sync::Arc;
 /// ConfCenter - Unified configuration center
 ///
 /// Provides a unified interface for configuration management regardless of backend.
+/// Internally holds the ConfigServer instance.
 pub struct ConfCenter {
     config: ConfCenterConfig,
     writer: Arc<dyn ConfWriter>,
+    config_server: Arc<ConfigServer>,
     // K8s specific: store reference for controller
     k8s_store: Option<Arc<kubernetes::KubernetesStore>>,
 }
 
 impl ConfCenter {
     /// Create a new ConfCenter based on configuration
-    pub async fn create(config: ConfCenterConfig) -> Result<Self> {
+    ///
+    /// This creates the ConfigServer internally based on the provided ConfSyncConfig.
+    pub async fn create(config: ConfCenterConfig, conf_sync_config: &ConfSyncConfig) -> Result<Self> {
+        // Create ConfigServer internally
+        let config_server = Arc::new(ConfigServer::new(conf_sync_config));
+
         match &config {
             ConfCenterConfig::FileSystem { conf_dir, .. } => {
                 tracing::info!(
@@ -58,6 +66,7 @@ impl ConfCenter {
                 Ok(Self {
                     config,
                     writer: Arc::new(writer),
+                    config_server,
                     k8s_store: None,
                 })
             }
@@ -71,6 +80,7 @@ impl ConfCenter {
                 Ok(Self {
                     config,
                     writer: Arc::new(writer),
+                    config_server,
                     k8s_store: Some(store),
                 })
             }
@@ -81,7 +91,7 @@ impl ConfCenter {
     ///
     /// - FileSystem: Load all configs, optionally start file watcher
     /// - Kubernetes: Start controller to watch resources
-    pub async fn start(&self, config_server: Arc<ConfigServer>) -> Result<()> {
+    pub async fn start(&self) -> Result<()> {
         match &self.config {
             ConfCenterConfig::FileSystem {
                 conf_dir,
@@ -93,10 +103,9 @@ impl ConfCenter {
                     mode = "file_system",
                     "Loading all resources from file system"
                 );
-                load_all_resources(self.writer.clone(), config_server.clone()).await?;
+                load_all_resources(self.writer.clone(), self.config_server.clone()).await?;
 
-                // Mark all caches as ready (file system loads synchronously)
-                config_server.set_all_ready();
+                // Note: set_all_ready() will be called by init_loader via InitDone events
 
                 // Start file watcher if enabled
                 if *watch_enabled {
@@ -107,7 +116,7 @@ impl ConfCenter {
                         "Starting file watcher"
                     );
 
-                    let watcher = FileWatcher::new(conf_dir.clone(), config_server.clone());
+                    let watcher = FileWatcher::new(conf_dir.clone(), self.config_server.clone());
 
                     // Spawn watcher in background
                     tokio::spawn(async move {
@@ -143,7 +152,7 @@ impl ConfCenter {
                     .expect("K8s store should be set in Kubernetes mode");
 
                 let controller = KubernetesController::new(
-                    config_server,
+                    self.config_server.clone(),
                     store.clone(),
                     gateway_class.clone(),
                     watch_namespaces.clone(),
@@ -171,6 +180,11 @@ impl ConfCenter {
     /// Get the configuration writer
     pub fn writer(&self) -> Arc<dyn ConfWriter> {
         self.writer.clone()
+    }
+
+    /// Get the ConfigServer
+    pub fn config_server(&self) -> Arc<ConfigServer> {
+        self.config_server.clone()
     }
 
     /// Check if running in Kubernetes mode

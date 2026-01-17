@@ -1,3 +1,4 @@
+use crate::core::conf_mgr::ConfCenterConfig;
 use anyhow::{Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
@@ -41,20 +42,17 @@ pub struct EdgionControllerConfig {
 
     #[command(flatten)]
     #[serde(default)]
-    pub conf: ConfConfig,
-
-    #[command(flatten)]
-    #[serde(default)]
     pub debug: DebugConfig,
 
     #[command(flatten)]
     #[serde(default)]
     pub conf_sync: ConfSyncConfig,
 
-    /// K8s mode (explicit CLI override)
-    #[arg(long)]
+    /// Configuration center config (FileSystem or Kubernetes)
+    /// Determines which backend to use for configuration management
+    #[arg(skip)]
     #[serde(default)]
-    pub k8s_mode: Option<bool>,
+    pub conf_center: ConfCenterConfig,
 }
 
 /// Server configuration
@@ -69,26 +67,7 @@ pub struct ServerConfig {
     #[arg(long, value_name = "ADDR")]
     #[serde(default)]
     pub admin_listen: Option<String>,
-
-    /// Gateway class name that this operator instance will handle
-    #[arg(long = "gateway-class", value_name = "NAME")]
-    #[serde(default)]
-    pub gateway_class: Option<String>,
-
-    /// Namespaces to watch (empty = all namespaces, single = one namespace, multiple = multi-namespace mode)
-    /// Examples:
-    ///   --watch-namespaces ""           # All namespaces (default)
-    ///   --watch-namespaces "default"    # Single namespace
-    ///   --watch-namespaces "ns1,ns2"    # Multiple namespaces
-    #[arg(long = "watch-namespaces", value_name = "NS", value_delimiter = ',')]
-    #[serde(default)]
-    pub watch_namespaces: Vec<String>,
-
-    /// Label selector for filtering resources (applies to all watched resources)
-    /// Example: --label-selector "app.kubernetes.io/managed-by=edgion"
-    #[arg(long = "label-selector", value_name = "SELECTOR")]
-    #[serde(default)]
-    pub label_selector: Option<String>,
+    // Note: gateway_class, watch_namespaces, label_selector moved to ConfCenterConfig::Kubernetes
 }
 
 /// Logging configuration
@@ -118,14 +97,7 @@ pub struct LoggingConfig {
     pub buffer_size: usize,
 }
 
-/// Configuration directory settings
-#[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
-pub struct ConfConfig {
-    /// Configuration directory path
-    #[arg(long = "conf-dir", value_name = "DIR")]
-    #[serde(default)]
-    pub dir: Option<String>,
-}
+// Note: ConfConfig removed, conf_dir now in ConfCenterConfig::FileSystem
 
 /// Debug configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
@@ -384,15 +356,6 @@ impl EdgionControllerConfig {
         if cli.server.admin_listen.is_some() {
             base.server.admin_listen = cli.server.admin_listen.clone();
         }
-        if cli.server.gateway_class.is_some() {
-            base.server.gateway_class = cli.server.gateway_class.clone();
-        }
-        if !cli.server.watch_namespaces.is_empty() {
-            base.server.watch_namespaces = cli.server.watch_namespaces.clone();
-        }
-        if cli.server.label_selector.is_some() {
-            base.server.label_selector = cli.server.label_selector.clone();
-        }
 
         // Logging config
         if cli.logging.log_dir.is_some() {
@@ -405,10 +368,7 @@ impl EdgionControllerConfig {
             base.logging.json_format = cli.logging.json_format;
         }
 
-        // Conf config
-        if cli.conf.dir.is_some() {
-            base.conf.dir = cli.conf.dir.clone();
-        }
+        // Note: conf_center config is loaded from file, no CLI override currently
     }
 
     /// Get grpc_listen with default fallback
@@ -419,11 +379,6 @@ impl EdgionControllerConfig {
     /// Get admin_listen with default fallback
     pub fn admin_listen(&self) -> String {
         self.server.admin_listen.clone().unwrap_or_else(default_admin_listen)
-    }
-
-    /// Get gateway_class
-    pub fn gateway_class(&self) -> Option<String> {
-        self.server.gateway_class.clone()
     }
 
     /// Get log_dir with default fallback
@@ -441,19 +396,14 @@ impl EdgionControllerConfig {
         self.logging.json_format.unwrap_or(false)
     }
 
-    /// Get configuration directory with default fallback
-    pub fn conf_dir(&self) -> String {
-        self.conf.dir.clone().unwrap_or_else(|| "examples/conf".to_string())
+    /// Check if running in Kubernetes mode
+    pub fn is_k8s_mode(&self) -> bool {
+        self.conf_center.is_k8s_mode()
     }
 
-    /// Get watch_namespaces (empty = all namespaces)
-    pub fn watch_namespaces(&self) -> &[String] {
-        &self.server.watch_namespaces
-    }
-
-    /// Get label_selector
-    pub fn label_selector(&self) -> Option<&str> {
-        self.server.label_selector.as_deref()
+    /// Get the ConfCenterConfig
+    pub fn conf_center_config(&self) -> &ConfCenterConfig {
+        &self.conf_center
     }
 
     /// Convert to SysLogConfig (for system logging)
