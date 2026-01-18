@@ -1,9 +1,69 @@
 //! Kubernetes Controller using kube-runtime
 //!
-//! Uses kube-runtime's Controller pattern for event-driven reconciliation:
-//! - Each resource type has its own Controller with reflector::Store
-//! - Initial sync: wait for Store ready, then apply all with InitAdd
-//! - Runtime: event-driven reconcile with EventUpdate/EventDelete
+//! This module implements a Kubernetes controller following the kube-runtime best practices.
+//! The controller synchronizes Kubernetes resources to the internal ConfigServer cache.
+//!
+//! ## Architecture Overview
+//!
+//! The controller follows a standard initialization and reconciliation pattern:
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────────────────┐
+//! │                         Initialization Phase                                 │
+//! ├─────────────────────────────────────────────────────────────────────────────┤
+//! │  Step 1: Create Store + Reflector                                           │
+//! │          - reflector::store() creates (Store, Writer) pair for each resource│
+//! │          - Store is the read-only cache, Writer is used by reflector        │
+//! │                                                                              │
+//! │  Step 2: Run Reflector                                                       │
+//! │          - tokio::spawn(reflector(writer, watcher(api, config)))            │
+//! │          - Reflector does initial LIST then continuous WATCH                 │
+//! │                                                                              │
+//! │  Step 3: Await Initial List Completion                                       │
+//! │          - store.wait_until_ready() blocks until initial LIST is done       │
+//! │          - All stores must be ready before proceeding                        │
+//! │                                                                              │
+//! │  Step 4: Snapshot Store                                                      │
+//! │          - store.state() returns Arc<Vec<Arc<K>>> snapshot                  │
+//! │          - This is a point-in-time view of all resources                     │
+//! │                                                                              │
+//! │  Step 5: Apply InitAdd                                                       │
+//! │          - Iterate snapshot and apply_change(ResourceChange::InitAdd, ...)  │
+//! │          - ConfigServer receives all existing resources                      │
+//! │                                                                              │
+//! │  Step 6: Mark cache_ready = true                                             │
+//! │          - set_cache_ready_by_kind("XXX") for each resource type            │
+//! │          - Downstream consumers can now trust the cache is complete          │
+//! └─────────────────────────────────────────────────────────────────────────────┘
+//!
+//! ┌─────────────────────────────────────────────────────────────────────────────┐
+//! │                           Runtime Phase                                      │
+//! ├─────────────────────────────────────────────────────────────────────────────┤
+//! │  Step 7: Start Reconcile Loop                                                │
+//! │          - Controller::new(api, config).run(reconcile, error_policy, ctx)   │
+//! │          - Each resource type has its own Controller running in parallel     │
+//! │                                                                              │
+//! │  Step 8: Runtime Reconcile with Guard                                        │
+//! │          - Check deletion_timestamp to determine if resource is deleted     │
+//! │          - Deleted: apply_change(ResourceChange::EventDelete, ...)          │
+//! │          - Updated: apply_change(ResourceChange::EventUpdate, ...)          │
+//! │          - Return Action::requeue() or Action::await_change()               │
+//! └─────────────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Key Design Decisions
+//!
+//! 1. **Separate Init and Runtime phases**: Initial sync uses `InitAdd` to batch-load
+//!    all resources, while runtime uses `EventUpdate`/`EventDelete` for incremental changes.
+//!
+//! 2. **Reflector Store for consistency**: The reflector maintains a consistent local cache
+//!    that survives reconnections and provides eventual consistency guarantees.
+//!
+//! 3. **Independent Controllers**: Each resource type runs in its own tokio task, providing
+//!    fault isolation - one failing controller won't affect others.
+//!
+//! 4. **Deletion Guard**: Runtime reconcile checks `deletion_timestamp` to properly handle
+//!    resource deletion events from the Kubernetes API.
 
 use anyhow::Result;
 use futures::StreamExt;
@@ -145,10 +205,17 @@ impl KubernetesController {
         let link_sys_api: Api<LinkSys> = self.create_namespaced_api();
         let edgion_gateway_configs_api: Api<EdgionGatewayConfig> = self.create_cluster_api();
 
-        // ==================== Phase 1: Create reflector stores ====================
-        tracing::info!(component = "k8s_controller", "Creating reflector stores for initial sync");
+        // ==================================================================================
+        // INITIALIZATION PHASE - Steps 1-2: Create Store + Reflector, Run Reflector
+        // ==================================================================================
+        // Step 1: Create (Store, Writer) pairs using reflector::store()
+        //         - Store: read-only local cache of K8s resources
+        //         - Writer: used by reflector to populate the Store
+        // Step 2: Spawn reflector tasks that perform initial LIST then continuous WATCH
+        // ==================================================================================
+        tracing::info!(component = "k8s_controller", "Step 1-2: Creating reflector stores and starting reflectors");
 
-        // Create store + writer pairs for each resource type
+        // Step 1: Create store + writer pairs for each resource type
         let (http_route_store, http_route_writer) = reflector::store();
         let (grpc_route_store, grpc_route_writer) = reflector::store();
         let (tcp_route_store, tcp_route_writer) = reflector::store();
@@ -169,7 +236,7 @@ impl KubernetesController {
         let (link_sys_store, link_sys_writer) = reflector::store();
         let (edgion_gateway_config_store, edgion_gateway_config_writer) = reflector::store();
 
-        // Start reflectors in background (they will LIST then WATCH)
+        // Step 2: Start reflectors in background (they will LIST then WATCH)
         let wc = watcher_config.clone();
         tokio::spawn(reflector(http_route_writer, watcher(http_route_api.clone(), wc.clone())).for_each(|_| futures::future::ready(())));
         tokio::spawn(reflector(grpc_route_writer, watcher(grpc_route_api.clone(), wc.clone())).for_each(|_| futures::future::ready(())));
@@ -191,8 +258,14 @@ impl KubernetesController {
         tokio::spawn(reflector(link_sys_writer, watcher(link_sys_api.clone(), wc.clone())).for_each(|_| futures::future::ready(())));
         tokio::spawn(reflector(edgion_gateway_config_writer, watcher(edgion_gateway_configs_api.clone(), wc.clone())).for_each(|_| futures::future::ready(())));
 
-        // ==================== Phase 2: Wait for all stores to be ready ====================
-        tracing::info!(component = "k8s_controller", "Waiting for all reflector stores to be ready (initial LIST complete)");
+        // ==================================================================================
+        // INITIALIZATION PHASE - Step 3: Await Initial List Completion
+        // ==================================================================================
+        // Step 3: Wait for all stores to be ready (initial LIST complete)
+        //         - store.wait_until_ready() blocks until reflector finishes first LIST
+        //         - All stores must be ready before we can snapshot their state
+        // ==================================================================================
+        tracing::info!(component = "k8s_controller", "Step 3: Waiting for all reflector stores to be ready (initial LIST complete)");
 
         tokio::try_join!(
             async { http_route_store.wait_until_ready().await.map_err(|e| anyhow::anyhow!("HTTPRoute store error: {}", e)) },
@@ -218,7 +291,13 @@ impl KubernetesController {
 
         tracing::info!(component = "k8s_controller", "All reflector stores ready, applying initial state");
 
-        // ==================== Phase 3: Apply initial state with InitAdd ====================
+        // ==================================================================================
+        // INITIALIZATION PHASE - Steps 4-6: Snapshot Store, Apply InitAdd, Mark Ready
+        // ==================================================================================
+        // Step 4: Snapshot Store - store.state() returns point-in-time view of all resources
+        // Step 5: Apply InitAdd - iterate snapshot and apply_change(ResourceChange::InitAdd)
+        // Step 6: Mark cache_ready = true - set_cache_ready_by_kind() for downstream consumers
+        // ==================================================================================
         self.apply_initial_state(
             &http_route_store,
             &grpc_route_store,
@@ -241,20 +320,30 @@ impl KubernetesController {
             &edgion_gateway_config_store,
         );
 
-        tracing::info!(component = "k8s_controller", "Initial state applied, starting event-driven controllers");
+        tracing::info!(component = "k8s_controller", "Step 4-6 complete: Initial state applied to ConfigServer");
 
-        // ==================== Phase 4: Start Controllers (event-driven) ====================
+        // ==================================================================================
+        // RUNTIME PHASE - Steps 7-8: Start Reconcile Loop, Runtime Reconcile with Guard
+        // ==================================================================================
+        // Step 7: Start reconcile loop - Controller::new(api, config).run(reconcile, error_policy, ctx)
+        //         - Each resource type has its own Controller running in parallel tokio tasks
+        //         - Controllers are event-driven, triggered by K8s watch events
+        // Step 8: Runtime reconcile with guard (see reconcilers/*.rs)
+        //         - Check deletion_timestamp to determine if resource is deleted
+        //         - Deleted: apply_change(ResourceChange::EventDelete)
+        //         - Updated: apply_change(ResourceChange::EventUpdate)
+        // ==================================================================================
         let ctx = Arc::new(ControllerContext {
             config_server: self.config_server.clone(),
             status_store: self.status_store.clone(),
             gateway_class_name: self.gateway_class_name.clone(),
         });
 
-        tracing::info!(component = "k8s_controller", "Starting all Controllers");
+        tracing::info!(component = "k8s_controller", "Step 7: Starting all event-driven Controllers");
 
         let mut handles = Vec::new();
 
-        // Spawn all controllers
+        // Step 7: Spawn all controllers (each runs independently in its own tokio task)
         handles.push(self.spawn_controller("HTTPRoute", http_route_api, watcher_config.clone(), ctx.clone(), reconcile_http_route));
         handles.push(self.spawn_controller("GRPCRoute", grpc_route_api, watcher_config.clone(), ctx.clone(), reconcile_grpc_route));
         handles.push(self.spawn_controller("TCPRoute", tcp_route_api, watcher_config.clone(), ctx.clone(), reconcile_tcp_route));
@@ -287,7 +376,12 @@ impl KubernetesController {
         Ok(())
     }
 
-    /// Spawn a controller for a specific resource type
+    /// Spawn a controller for a specific resource type (Step 7)
+    ///
+    /// Creates a new Controller that:
+    /// - Uses its own internal watcher (LIST + WATCH)
+    /// - Calls the reconcile function for each event
+    /// - The reconcile function implements Step 8 (runtime reconcile with guard)
     fn spawn_controller<K, ReconcileFn, ReconcileFut>(
         &self,
         kind: &'static str,
@@ -315,7 +409,12 @@ impl KubernetesController {
         })
     }
 
-    /// Apply initial state from reflector stores to ConfigServer
+    /// Apply initial state from reflector stores to ConfigServer (Steps 4-6)
+    ///
+    /// This method implements:
+    /// - Step 4: Snapshot Store - store.state() returns Arc<Vec<Arc<K>>> snapshot
+    /// - Step 5: Apply InitAdd - iterate and apply_change(ResourceChange::InitAdd, ...)
+    /// - Step 6: Mark cache_ready = true - set_cache_ready_by_kind() for each resource type
     fn apply_initial_state(
         &self,
         http_route_store: &Store<HTTPRoute>,

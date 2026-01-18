@@ -1,4 +1,11 @@
-//! Reconciler functions for each Kubernetes resource type
+//! Reconciler functions for each Kubernetes resource type (Step 8: Runtime Reconcile with Guard)
+//!
+//! Each reconcile function implements the runtime reconciliation logic:
+//! 1. Check `deletion_timestamp` to determine if resource is being deleted (guard)
+//! 2. If deleted: apply_change(ResourceChange::EventDelete) and return Action::await_change()
+//! 3. If updated: apply_change(ResourceChange::EventUpdate)
+//! 4. Optionally update K8s resource status
+//! 5. Return Action::requeue() for periodic re-sync or Action::await_change() for event-only
 
 pub mod backend_tls_policy;
 pub mod edgion_gateway_config;
