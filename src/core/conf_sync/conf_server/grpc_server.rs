@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
+use crate::core::conf_mgr::ConfCenter;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
@@ -8,16 +9,25 @@ use crate::core::conf_sync::proto::{
 };
 use crate::types::prelude_resources::*;
 
-/// Server wrapper for WatcherMgr
+/// Server wrapper for ConfigSync gRPC service
+///
+/// Holds a reference to ConfCenter and dynamically gets ConfigServer.
+/// When ConfigServer is None (during startup, relink, leadership loss),
+/// returns UNAVAILABLE status.
 pub struct ConfigSyncServer {
-    config_server: Arc<ConfigServer>,
+    conf_center: Arc<ConfCenter>,
 }
 
 impl ConfigSyncServer {
-    pub fn new(conf_server: Arc<ConfigServer>) -> Self {
-        Self {
-            config_server: conf_server,
-        }
+    pub fn new(conf_center: Arc<ConfCenter>) -> Self {
+        Self { conf_center }
+    }
+
+    /// Get ConfigServer from ConfCenter, returns UNAVAILABLE if not ready
+    fn get_config_server(&self) -> Result<Arc<ConfigServer>, Status> {
+        self.conf_center.config_server().ok_or_else(|| {
+            Status::unavailable("Server not ready - configuration sync in progress")
+        })
     }
 
     pub fn into_service(self) -> ConfigSyncService<ConfigSyncServer> {
@@ -55,15 +65,17 @@ impl ConfigSyncServer {
 #[tonic::async_trait]
 impl ConfigSync for ConfigSyncServer {
     async fn list(&self, request: Request<ListRequest>) -> Result<Response<ListResponse>, Status> {
+        // Get ConfigServer (may be unavailable during startup/relink)
+        let config_server = self.get_config_server()?;
+        
         let req = request.into_inner();
 
         // Convert incoming kind to ResourceKind
         let resource_kind =
             parse_resource_kind(req.kind).ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
-        // Get WatcherMgr and call list
-        let list_data = self
-            .config_server
+        // Call list on ConfigServer
+        let list_data = config_server
             .list(&resource_kind)
             .map_err(|e| Status::internal(format!("Failed to list resources: {}", e)))?;
 
@@ -77,6 +89,9 @@ impl ConfigSync for ConfigSyncServer {
     type WatchStream = tokio_stream::wrappers::ReceiverStream<Result<WatchResponse, Status>>;
 
     async fn watch(&self, request: Request<WatchRequest>) -> Result<Response<Self::WatchStream>, Status> {
+        // Get ConfigServer (may be unavailable during startup/relink)
+        let config_server = self.get_config_server()?;
+        
         let req = request.into_inner();
 
         // Convert incoming kind to ResourceKind
@@ -91,9 +106,8 @@ impl ConfigSync for ConfigSyncServer {
             req.key, resource_kind, client_id_log, client_name_log, req.from_version
         );
 
-        // Get WatcherMgr and call watch
-        let watch_result = self
-            .config_server
+        // Call watch on ConfigServer
+        let watch_result = config_server
             .watch(&resource_kind, req.client_id, req.client_name, req.from_version);
 
         let receiver = match watch_result {

@@ -47,7 +47,7 @@ async fn reload_all_resources(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<types::ApiResponse<String>>, StatusCode> {
     let writer = state.conf_center.writer();
-    let config_server = state.conf_center.config_server();
+    let config_server = state.config_server()?;
 
     load_all_resources(writer, config_server)
         .await

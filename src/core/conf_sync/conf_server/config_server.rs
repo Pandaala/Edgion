@@ -1,6 +1,5 @@
 use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
@@ -83,10 +82,6 @@ pub struct ConfigServer {
     /// Wrapped in RwLock to allow regeneration during relink
     server_id: RwLock<String>,
 
-    /// Global all_ready flag - shared from Controller level
-    /// Controlled externally by ConfCenter, checked here before list/watch
-    all_ready: Arc<AtomicBool>,
-
     // Base conf resources now use dedicated ServerCache (same as other resources)
     pub gateway_classes: ServerCache<GatewayClass>,
     pub gateways: ServerCache<Gateway>,
@@ -124,7 +119,7 @@ pub struct EventDataSimple {
 }
 
 impl ConfigServer {
-    pub fn new(conf_sync_config: &crate::core::cli::config::ConfSyncConfig, all_ready: Arc<AtomicBool>) -> Self {
+    pub fn new(conf_sync_config: &crate::core::cli::config::ConfSyncConfig) -> Self {
         // Generate server_id using millisecond timestamp
         let server_id = Self::generate_server_id();
 
@@ -136,7 +131,6 @@ impl ConfigServer {
 
         Self {
             server_id: RwLock::new(server_id),
-            all_ready,
             gateway_classes: ServerCache::new(conf_sync_config.gateway_classes_capacity),
             gateways: ServerCache::new(conf_sync_config.gateways_capacity),
             edgion_gateway_configs: ServerCache::new(conf_sync_config.edgion_gateway_configs_capacity),
@@ -195,10 +189,8 @@ impl ConfigServer {
     }
 
     pub fn list(&self, kind: &ResourceKind) -> Result<ListDataSimple, String> {
-        // Check if all caches are ready before serving data
-        if !self.is_all_ready() {
-            return Err(crate::types::WATCH_ERR_NOT_READY.to_string());
-        }
+        // Note: Ready check is now handled by ConfCenter (config_server is Option)
+        // If we're here, ConfCenter has already verified we're ready to serve
 
         let (data_json, sync_version) = match kind {
             ResourceKind::Unspecified => return Err("Resource kind unspecified".to_string()),
@@ -237,10 +229,8 @@ impl ConfigServer {
         client_name: String,
         from_version: u64,
     ) -> Result<mpsc::Receiver<EventDataSimple>, String> {
-        // Check if all caches are ready before serving data
-        if !self.is_all_ready() {
-            return Err(crate::types::WATCH_ERR_NOT_READY.to_string());
-        }
+        // Note: Ready check is now handled by ConfCenter (config_server is Option)
+        // If we're here, ConfCenter has already verified we're ready to serve
 
         let (tx, rx) = mpsc::channel(100);
         let server_id = self.server_id();
@@ -961,13 +951,6 @@ impl ConfigServer {
             not_ready.push("Secret");
         }
         not_ready
-    }
-
-    /// Check global all_ready state
-    /// Clients should check this before list/watch to ensure data consistency
-    /// Note: This flag is controlled externally by ConfCenter
-    pub fn is_all_ready(&self) -> bool {
-        self.all_ready.load(Ordering::SeqCst)
     }
 
     /// Set all caches to not ready state

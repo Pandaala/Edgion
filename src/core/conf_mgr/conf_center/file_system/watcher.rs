@@ -2,7 +2,9 @@
 //!
 //! Monitors configuration directory for file changes and notifies ConfigServer.
 //! Uses debouncing to handle rapid file change events.
+//! Supports graceful shutdown via ShutdownSignal.
 
+use crate::core::conf_mgr::conf_center::kubernetes::shutdown::ShutdownSignal;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{CacheEventDispatch, ConfigServer};
 use crate::types::prelude_resources::*;
@@ -39,7 +41,10 @@ impl FileWatcher {
     ///
     /// This method spawns a background task that monitors the configuration directory
     /// and applies changes to ConfigServer when files are modified.
-    pub async fn start(mut self) -> Result<()> {
+    ///
+    /// # Arguments
+    /// * `shutdown_signal` - Signal to trigger graceful shutdown
+    pub async fn start(mut self, mut shutdown_signal: ShutdownSignal) -> Result<()> {
         let conf_dir = self.conf_dir.clone();
 
         tracing::info!(
@@ -120,8 +125,24 @@ impl FileWatcher {
                         }
                     }
                 }
+                _ = shutdown_signal.wait() => {
+                    tracing::info!(
+                        component = "file_watcher",
+                        conf_dir = %conf_dir.display(),
+                        "Received shutdown signal, stopping file watcher"
+                    );
+                    break;
+                }
             }
         }
+
+        tracing::info!(
+            component = "file_watcher",
+            conf_dir = %conf_dir.display(),
+            "File watcher stopped"
+        );
+
+        Ok(())
     }
 
     /// Check if a path is a YAML file

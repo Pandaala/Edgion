@@ -58,7 +58,7 @@ pub async fn create_cluster(
     }
 
     let writer = state.writer();
-    let config_server = state.config_server();
+    let config_server = state.config_server()?;
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let metadata = crate::core::utils::extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
@@ -197,7 +197,7 @@ pub async fn delete_cluster(
     }
 
     let writer = state.writer();
-    let config_server = state.config_server();
+    let config_server = state.config_server()?;
 
     // Check if resource exists in ConfigServer
     let exists = {

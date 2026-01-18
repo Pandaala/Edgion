@@ -1,5 +1,6 @@
 use crate::core::conf_mgr::{ConfCenter, ConfWriter, SchemaValidator};
 use crate::core::conf_sync::ConfigServer;
+use axum::http::StatusCode;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -10,9 +11,14 @@ pub struct AdminState {
 }
 
 impl AdminState {
-    /// Get the ConfigServer from ConfCenter
-    pub fn config_server(&self) -> Arc<ConfigServer> {
-        self.conf_center.config_server()
+    /// Get the ConfigServer from ConfCenter (may be None if not ready)
+    ///
+    /// Returns Ok(Arc<ConfigServer>) if ready, Err(StatusCode) if not ready.
+    /// Callers should use this method and handle the error appropriately.
+    pub fn config_server(&self) -> Result<Arc<ConfigServer>, StatusCode> {
+        self.conf_center
+            .config_server()
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)
     }
 
     /// Get the ConfWriter from ConfCenter
@@ -25,11 +31,9 @@ impl AdminState {
         self.conf_center.is_k8s_mode()
     }
 
-    /// Check if the system is ready (all caches loaded)
-    /// Returns false during initialization, true after all caches are ready
-    #[allow(dead_code)]
-    pub fn is_all_ready(&self) -> bool {
-        self.conf_center.is_all_ready()
+    /// Check if the system is ready (ConfigServer exists)
+    pub fn is_ready(&self) -> bool {
+        self.conf_center.is_ready()
     }
 }
 

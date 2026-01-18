@@ -23,7 +23,7 @@ pub async fn list_all_namespaces(
     Path(kind_str): Path<String>,
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let config_server = state.config_server();
+    let config_server = state.config_server()?;
     let data = list_all_resources!(&config_server, kind);
     Ok(Json(ListResponse::success(data)))
 }
@@ -34,7 +34,7 @@ pub async fn list_namespaced(
     Path((kind_str, ns)): Path<(String, String)>,
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let config_server = state.config_server();
+    let config_server = state.config_server()?;
     let data = list_namespaced_resources!(&config_server, kind, ns);
     Ok(Json(ListResponse::success(data)))
 }
@@ -45,7 +45,7 @@ pub async fn get_namespaced(
     Path((kind_str, ns, name)): Path<(String, String, String)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let config_server = state.config_server();
+    let config_server = state.config_server()?;
     let resource = get_namespaced_resource!(&config_server, kind, ns, name);
     resource.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
@@ -76,7 +76,7 @@ pub async fn create_namespaced(
     }
 
     let writer = state.writer();
-    let config_server = state.config_server();
+    let config_server = state.config_server()?;
 
     let content = String::from_utf8(body.to_vec()).map_err(|e| {
         tracing::warn!("Failed to parse body as UTF-8: {}", e);
@@ -299,7 +299,7 @@ pub async fn update_namespaced(
     }
 
     let writer = state.writer();
-    let config_server = state.config_server();
+    let config_server = state.config_server()?;
 
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -488,7 +488,7 @@ pub async fn delete_namespaced(
     }
 
     let writer = state.writer();
-    let config_server = state.config_server();
+    let config_server = state.config_server()?;
 
     // Check if resource exists in ConfigServer before deleting
     match kind {

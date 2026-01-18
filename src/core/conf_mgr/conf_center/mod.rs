@@ -16,18 +16,18 @@
 //!     └── ResourceStores - reflector::Store for each resource type
 //! ```
 //!
-//! ## Lifecycle Management (link/unlink/relink)
+//! ## Lifecycle Management
 //!
-//! ConfCenter provides lifecycle methods to handle:
-//! - 410 Gone (resourceVersion expired, needs re-LIST)
-//! - Leader re-election (lost/regained leadership)
-//! - Any scenario requiring full state reset
+//! ConfCenter uses a unified start() method that manages the entire lifecycle:
+//! - K8s mode: Leader election -> Create ConfigServer -> Link -> Monitor relink/leadership
+//! - FileSystem mode: Create ConfigServer -> Link
 //!
-//! ```text
-//! link() -> running -> unlink() -> link() -> ...
-//!              │
-//!              └── relink() = unlink() + link()
-//! ```
+//! ConfigServer is Option<Arc<ConfigServer>>:
+//! - None: Not ready (during startup, relink, or leadership loss)
+//! - Some: Ready to serve requests
+//!
+//! gRPC and Admin services get ConfigServer dynamically via config_server() method.
+//! When ConfigServer is None, they return UNAVAILABLE/NOT_READY errors.
 
 mod config;
 pub mod file_system;
@@ -47,31 +47,35 @@ use crate::core::cli::config::ConfSyncConfig;
 use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;
 use kubernetes::shutdown::ShutdownHandle;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 /// ConfCenter - Unified configuration center
 ///
 /// Provides a unified interface for configuration management regardless of backend.
-/// Internally holds the ConfigServer instance and global ready state.
+/// Manages ConfigServer lifecycle internally - ConfigServer is Option<Arc<ConfigServer>>:
+/// - None: System not ready (during startup, relink, or leadership loss)
+/// - Some: System ready to serve requests
 ///
 /// ## Lifecycle
 ///
-/// ConfCenter supports link/unlink/relink lifecycle for handling:
-/// - 410 Gone errors (resourceVersion expired)
-/// - Leader re-election scenarios
-/// - Any situation requiring full state reset
+/// The start() method manages the entire lifecycle:
+/// 1. K8s mode: Wait for leadership -> Create ConfigServer -> Link -> Monitor
+/// 2. FileSystem mode: Create ConfigServer -> Link
+///
+/// gRPC and Admin services get ConfigServer via config_server() method.
+/// When None, they should return UNAVAILABLE errors.
 pub struct ConfCenter {
     config: ConfCenterConfig,
-    #[allow(dead_code)]
     conf_sync_config: ConfSyncConfig,
     writer: Arc<dyn ConfWriter>,
-    config_server: Arc<ConfigServer>,
-    /// Global all_ready flag - controlled at Controller level
-    /// When true, ConfigServer and Admin API can serve requests
-    all_ready: Arc<AtomicBool>,
+    
+    /// ConfigServer instance - Option to support lifecycle management
+    /// None: Not ready (startup, relink, leadership loss)
+    /// Some: Ready to serve requests
+    config_server: RwLock<Option<Arc<ConfigServer>>>,
+    
     /// Shutdown handle for stopping sync tasks
     shutdown_handle: Mutex<Option<ShutdownHandle>>,
     /// Handle to the running controller task (K8s mode)
@@ -83,16 +87,12 @@ pub struct ConfCenter {
 impl ConfCenter {
     /// Create a new ConfCenter based on configuration
     ///
-    /// This creates the ConfigServer internally based on the provided ConfSyncConfig.
-    /// The all_ready flag is passed from Controller level for global state management.
+    /// Note: ConfigServer is NOT created here. It will be created in start() method
+    /// after successful leader election (K8s mode) or immediately (FileSystem mode).
     pub async fn create(
         config: ConfCenterConfig,
         conf_sync_config: &ConfSyncConfig,
-        all_ready: Arc<AtomicBool>,
     ) -> Result<Self> {
-        // Create ConfigServer internally, passing the shared all_ready flag
-        let config_server = Arc::new(ConfigServer::new(conf_sync_config, all_ready.clone()));
-
         match &config {
             ConfCenterConfig::FileSystem { conf_dir, .. } => {
                 tracing::info!(
@@ -106,8 +106,7 @@ impl ConfCenter {
                     config,
                     conf_sync_config: conf_sync_config.clone(),
                     writer: Arc::new(writer),
-                    config_server,
-                    all_ready,
+                    config_server: RwLock::new(None),
                     shutdown_handle: Mutex::new(None),
                     controller_handle: Mutex::new(None),
                     exit_reason_rx: Mutex::new(None),
@@ -124,8 +123,7 @@ impl ConfCenter {
                     config,
                     conf_sync_config: conf_sync_config.clone(),
                     writer: Arc::new(writer),
-                    config_server,
-                    all_ready,
+                    config_server: RwLock::new(None),
                     shutdown_handle: Mutex::new(None),
                     controller_handle: Mutex::new(None),
                     exit_reason_rx: Mutex::new(None),
@@ -134,35 +132,158 @@ impl ConfCenter {
         }
     }
 
-    /// Start the configuration center (calls link internally)
+    /// Unified start method - manages the entire lifecycle
     ///
-    /// - FileSystem: Load all configs, optionally start file watcher
-    /// - Kubernetes: Start controller to watch resources
+    /// This method runs a loop that:
+    /// 1. K8s mode: Wait for leadership first (TODO: implement leader election)
+    /// 2. Create new ConfigServer
+    /// 3. Link (start controller/watcher, load resources)
+    /// 4. Wait for caches to be ready
+    /// 5. Set config_server = Some (services become available)
+    /// 6. Wait for exit signal (relink needed, leadership lost, etc.)
+    /// 7. Set config_server = None (services become unavailable)
+    /// 8. Loop back based on exit reason
+    ///
+    /// For FileSystem mode, this runs once and blocks on the watcher.
     pub async fn start(&self) -> Result<()> {
-        self.link().await
+        const MAX_RELINK_RETRIES: u32 = 10;
+        const RELINK_BACKOFF_BASE_SECS: u64 = 1;
+        const RELINK_BACKOFF_MAX_SECS: u64 = 60;
+        const CACHE_READY_TIMEOUT_SECS: u64 = 30;
+
+        let mut relink_count: u32 = 0;
+
+        loop {
+            tracing::info!(
+                component = "conf_center",
+                mode = if self.is_k8s_mode() { "kubernetes" } else { "file_system" },
+                relink_count = relink_count,
+                "ConfCenter start: beginning lifecycle iteration"
+            );
+
+            // TODO: K8s mode - wait for leadership here
+            // if self.is_k8s_mode() {
+            //     self.wait_for_leadership().await?;
+            // }
+
+            // 1. Create new ConfigServer
+            let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
+            
+            // 2. Link with the new ConfigServer
+            self.link_with_server(&config_server).await?;
+
+            // 3. Wait for caches to be ready
+            self.wait_caches_ready(&config_server, CACHE_READY_TIMEOUT_SECS).await;
+
+            // 4. Set config_server = Some (services become available)
+            self.set_config_server(Some(config_server.clone()));
+            tracing::info!(
+                component = "conf_center",
+                event = "config_server_ready",
+                "ConfigServer is now ready, services can process requests"
+            );
+
+            // 5. Wait for exit signal
+            let exit_reason = self.wait_for_exit().await;
+
+            match exit_reason {
+                Some(reason) => {
+                    tracing::info!(
+                        component = "conf_center",
+                        event = "exit_signal",
+                        reason = ?reason,
+                        relink_count = relink_count,
+                        "Received exit signal"
+                    );
+
+                    // 6. Set config_server = None (services become unavailable)
+                    self.set_config_server(None);
+
+                    if Self::needs_relink(&reason) {
+                        relink_count += 1;
+
+                        if relink_count > MAX_RELINK_RETRIES {
+                            tracing::error!(
+                                component = "conf_center",
+                                event = "max_relink_retries",
+                                relink_count = relink_count,
+                                "Maximum relink retries exceeded, stopping"
+                            );
+                            return Err(anyhow::anyhow!("Maximum relink retries exceeded"));
+                        }
+
+                        // Calculate backoff delay
+                        let backoff_secs = std::cmp::min(
+                            RELINK_BACKOFF_BASE_SECS * 2u64.pow(relink_count.saturating_sub(1)),
+                            RELINK_BACKOFF_MAX_SECS,
+                        );
+
+                        tracing::info!(
+                            component = "conf_center",
+                            event = "relink_scheduled",
+                            relink_count = relink_count,
+                            backoff_secs = backoff_secs,
+                            "Scheduling relink with backoff"
+                        );
+
+                        // Cleanup current state
+                        self.cleanup().await;
+
+                        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+
+                        // Reset relink_count on successful iteration
+                        // (will be set back to 0 after successful link)
+                    } else {
+                        // Normal exit - cleanup and return
+                        tracing::info!(
+                            component = "conf_center",
+                            event = "normal_exit",
+                            reason = ?reason,
+                            "Normal exit, stopping ConfCenter"
+                        );
+                        self.cleanup().await;
+                        return Ok(());
+                    }
+                }
+                None => {
+                    // FileSystem mode or no controller - just wait indefinitely
+                    if !self.is_k8s_mode() {
+                        tracing::info!(
+                            component = "conf_center",
+                            mode = "file_system",
+                            "FileSystem mode: blocking until shutdown"
+                        );
+                        // Block forever (or until shutdown signal)
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                        }
+                    }
+                    // K8s mode but no exit reason - shouldn't happen, break
+                    tracing::warn!(
+                        component = "conf_center",
+                        "No exit reason received, stopping"
+                    );
+                    self.cleanup().await;
+                    return Ok(());
+                }
+            }
+
+            // Reset relink count after successful relink
+            relink_count = 0;
+        }
     }
 
-    /// Link: Start configuration sync
+    /// Link with a specific ConfigServer instance
     ///
     /// This method:
-    /// 1. Clears old caches and regenerates server ID (if not first link)
+    /// 1. Creates shutdown handle
     /// 2. Starts the appropriate sync mechanism (FileSystem watcher or K8s controller)
-    /// 3. Waits for all caches to become ready (via external monitoring)
-    pub async fn link(&self) -> Result<()> {
+    async fn link_with_server(&self, config_server: &Arc<ConfigServer>) -> Result<()> {
         tracing::info!(
             component = "conf_center",
             mode = if self.is_k8s_mode() { "kubernetes" } else { "file_system" },
             "ConfCenter link: starting configuration sync"
         );
-
-        // If we already have a shutdown handle, this is a relink - reset ConfigServer first
-        {
-            let existing = self.shutdown_handle.lock().unwrap();
-            if existing.is_some() {
-                // This is a relink, reset ConfigServer
-                self.config_server.reset_for_relink();
-            }
-        }
 
         // Create new shutdown handle for this link cycle
         let shutdown_handle = ShutdownHandle::new();
@@ -183,9 +304,7 @@ impl ConfCenter {
                     "Loading all resources from file system"
                 );
                 
-                load_all_resources(self.writer.clone(), self.config_server.clone()).await?;
-
-                // Note: set_all_ready() will be called by init_loader via InitDone events
+                load_all_resources(self.writer.clone(), config_server.clone()).await?;
 
                 // Start file watcher if enabled
                 if *watch_enabled {
@@ -196,12 +315,13 @@ impl ConfCenter {
                         "Starting file watcher"
                     );
 
-                    let config_server = self.config_server.clone();
-                    let watcher = FileWatcher::new(conf_dir.clone(), config_server);
+                    let watcher_config_server = config_server.clone();
+                    let watcher = FileWatcher::new(conf_dir.clone(), watcher_config_server);
+                    let watcher_shutdown_signal = shutdown_handle.signal();
 
-                    // Spawn watcher in background
+                    // Spawn watcher in background with shutdown support
                     let handle = tokio::spawn(async move {
-                        if let Err(e) = watcher.start().await {
+                        if let Err(e) = watcher.start(watcher_shutdown_signal).await {
                             tracing::error!(
                                 component = "conf_center",
                                 mode = "file_system",
@@ -231,7 +351,7 @@ impl ConfCenter {
                 );
 
                 let controller = KubernetesController::new(
-                    self.config_server.clone(),
+                    config_server.clone(),
                     gateway_class.clone(),
                     watch_namespaces.clone(),
                     label_selector.clone(),
@@ -279,27 +399,71 @@ impl ConfCenter {
         }
     }
 
-    /// Unlink: Stop configuration sync and clear state
-    ///
-    /// This method:
-    /// 1. Sets all_ready to false
-    /// 2. Triggers shutdown signal to stop sync tasks
-    /// 3. Clears all caches
-    pub async fn unlink(&self) -> Result<()> {
+    /// Wait for all caches to be ready
+    async fn wait_caches_ready(&self, config_server: &Arc<ConfigServer>, timeout_secs: u64) {
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(timeout_secs);
+
+        loop {
+            if config_server.is_each_cache_ready() {
+                tracing::info!(
+                    component = "conf_center",
+                    event = "all_caches_ready",
+                    elapsed_ms = start.elapsed().as_millis(),
+                    "All caches are ready"
+                );
+                return;
+            }
+
+            if start.elapsed() > timeout {
+                let not_ready = config_server.not_ready_caches();
+                tracing::warn!(
+                    component = "conf_center",
+                    event = "wait_caches_timeout",
+                    timeout_secs = timeout_secs,
+                    not_ready = ?not_ready,
+                    "Timeout waiting for caches, proceeding anyway"
+                );
+                return;
+            }
+
+            let not_ready = config_server.not_ready_caches();
+            tracing::info!(
+                component = "conf_center",
+                event = "waiting_for_caches",
+                not_ready = ?not_ready,
+                elapsed_ms = start.elapsed().as_millis(),
+                "Waiting for caches to be ready..."
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+    }
+
+    /// Set the ConfigServer (Some = ready, None = not ready)
+    fn set_config_server(&self, server: Option<Arc<ConfigServer>>) {
+        let mut config_server = self.config_server.write().unwrap();
+        let was_some = config_server.is_some();
+        let is_some = server.is_some();
+        *config_server = server;
+        
+        tracing::info!(
+            component = "conf_center",
+            event = "config_server_changed",
+            was_ready = was_some,
+            is_ready = is_some,
+            "ConfigServer state changed"
+        );
+    }
+
+    /// Cleanup: Stop sync tasks and clear state
+    async fn cleanup(&self) {
         tracing::info!(
             component = "conf_center",
             mode = if self.is_k8s_mode() { "kubernetes" } else { "file_system" },
-            "ConfCenter unlink: stopping configuration sync"
+            "ConfCenter cleanup: stopping sync tasks"
         );
 
-        // 1. Set all_ready to false
-        self.all_ready.store(false, Ordering::SeqCst);
-        tracing::info!(
-            component = "conf_center",
-            "Set all_ready to false"
-        );
-
-        // 2. Trigger shutdown signal
+        // 1. Trigger shutdown signal
         {
             let handle = self.shutdown_handle.lock().unwrap();
             if let Some(ref shutdown) = *handle {
@@ -311,7 +475,7 @@ impl ConfCenter {
             }
         }
 
-        // 3. Wait for controller task to finish (with timeout)
+        // 2. Wait for controller task to finish (with timeout)
         let controller_handle = {
             let mut handle = self.controller_handle.lock().unwrap();
             handle.take()
@@ -334,37 +498,27 @@ impl ConfCenter {
             }
         }
 
-        // 4. Clear shutdown handle
+        // 3. Clear shutdown handle
         {
             let mut handle = self.shutdown_handle.lock().unwrap();
             *handle = None;
         }
 
+        // 4. Clear exit reason receiver
+        {
+            let mut rx = self.exit_reason_rx.lock().unwrap();
+            *rx = None;
+        }
+
         tracing::info!(
             component = "conf_center",
-            "ConfCenter unlink complete"
+            "ConfCenter cleanup complete"
         );
-
-        Ok(())
-    }
-
-    /// Relink: Stop and restart configuration sync
-    ///
-    /// This is equivalent to calling unlink() followed by link().
-    /// Used for handling 410 Gone or leader re-election.
-    pub async fn relink(&self) -> Result<()> {
-        tracing::info!(
-            component = "conf_center",
-            "ConfCenter relink: stopping and restarting configuration sync"
-        );
-
-        self.unlink().await?;
-        self.link().await
     }
 
     /// Wait for controller to exit and return the exit reason
     /// 
-    /// This method is used by the supervisor loop to detect when relink is needed.
+    /// This method is used by the lifecycle loop to detect when relink is needed.
     /// Only applicable for Kubernetes mode.
     /// 
     /// Returns:
@@ -381,15 +535,7 @@ impl ConfCenter {
         };
 
         match rx {
-            Some(ref mut receiver) => {
-                let reason = receiver.recv().await;
-                // Put the receiver back for potential future use
-                {
-                    let mut rx_guard = self.exit_reason_rx.lock().unwrap();
-                    *rx_guard = rx;
-                }
-                reason
-            }
+            Some(ref mut receiver) => receiver.recv().await,
             None => None,
         }
     }
@@ -407,9 +553,12 @@ impl ConfCenter {
         self.writer.clone()
     }
 
-    /// Get the ConfigServer
-    pub fn config_server(&self) -> Arc<ConfigServer> {
-        self.config_server.clone()
+    /// Get the ConfigServer (may be None if not ready)
+    ///
+    /// gRPC and Admin services should call this method to get the ConfigServer.
+    /// When None, they should return UNAVAILABLE/NOT_READY errors.
+    pub fn config_server(&self) -> Option<Arc<ConfigServer>> {
+        self.config_server.read().unwrap().clone()
     }
 
     /// Check if running in Kubernetes mode
@@ -422,19 +571,10 @@ impl ConfCenter {
         &self.config
     }
 
-    /// Check if the system is ready (all caches loaded)
-    pub fn is_all_ready(&self) -> bool {
-        self.all_ready.load(Ordering::SeqCst)
-    }
-
-    /// Set the system ready state
-    /// Called by Controller after all caches are verified ready
-    pub fn set_all_ready(&self) {
-        self.all_ready.store(true, Ordering::SeqCst);
-        tracing::info!(
-            component = "conf_center",
-            event = "all_ready",
-            "System all_ready state set to true"
-        );
+    /// Check if the system is ready
+    ///
+    /// Ready means ConfigServer exists and can serve requests.
+    pub fn is_ready(&self) -> bool {
+        self.config_server.read().unwrap().is_some()
     }
 }
