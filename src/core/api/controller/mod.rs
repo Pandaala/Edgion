@@ -116,15 +116,13 @@ pub fn create_admin_router(conf_center: Arc<ConfCenter>, schema_validator: Arc<S
         .with_state(admin_state)
 }
 
-/// Serve the admin API on the specified port
+/// Serve the admin API on the specified address
 pub async fn serve(
     conf_center: Arc<ConfCenter>,
     schema_validator: Arc<SchemaValidator>,
-    port: u16,
+    addr: std::net::SocketAddr,
 ) -> anyhow::Result<()> {
     let app = create_admin_router(conf_center, schema_validator);
-    let addr_str = format!("0.0.0.0:{}", port);
-    let addr: std::net::SocketAddr = addr_str.parse()?;
 
     tracing::info!(
         component = "unified_api",

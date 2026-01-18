@@ -57,6 +57,7 @@ use anyhow::Result;
 use kubernetes::shutdown::ShutdownHandle;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 /// ConfCenter - Unified configuration center
@@ -157,7 +158,7 @@ impl ConfCenter {
     /// 1. Create ConfigServer
     /// 2. Load resources + start FileWatcher
     /// 3. Set config_server = Some (services become available)
-    /// 4. Block until shutdown
+    /// 4. Wait for shutdown signal or watcher error
     async fn run_filesystem_lifecycle(&self) -> Result<()> {
         tracing::info!(
             component = "conf_center",
@@ -165,11 +166,27 @@ impl ConfCenter {
             "Starting FileSystem lifecycle"
         );
 
+        // Setup shutdown handling
+        let shutdown_handle = ShutdownHandle::new();
+        let mut shutdown_signal = shutdown_handle.signal();
+
+        // Spawn signal handler (listens for SIGTERM/SIGINT)
+        let signal_handle = shutdown_handle.clone();
+        tokio::spawn(async move {
+            signal_handle.wait_for_signals().await;
+        });
+
+        // Store shutdown handle for external shutdown requests
+        {
+            let mut handle = self.shutdown_handle.lock().unwrap();
+            *handle = Some(shutdown_handle);
+        }
+
         // 1. Create ConfigServer
         let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
 
         // 2. Load resources + start FileWatcher
-        self.start_filesystem_sync(&config_server).await?;
+        let watcher_error_rx = self.start_filesystem_sync(&config_server).await?;
 
         // 3. Wait for caches to be ready
         self.wait_caches_ready(&config_server, 30).await;
@@ -182,19 +199,66 @@ impl ConfCenter {
             "ConfigServer is ready, services can process requests"
         );
 
-        // 5. Block until shutdown
+        // 5. Wait for shutdown signal or watcher error
         tracing::info!(
             component = "conf_center",
             mode = "file_system",
-            "FileSystem mode: running until shutdown"
+            "FileSystem mode: running until shutdown signal"
         );
-        loop {
-            tokio::time::sleep(Duration::from_secs(3600)).await;
+
+        // Wait for either shutdown signal or watcher error
+        if let Some(mut error_rx) = watcher_error_rx {
+            tokio::select! {
+                _ = shutdown_signal.wait() => {
+                    tracing::info!(
+                        component = "conf_center",
+                        mode = "file_system",
+                        "Received shutdown signal"
+                    );
+                }
+                result = &mut error_rx => {
+                    if let Ok(error_msg) = result {
+                        tracing::error!(
+                            component = "conf_center",
+                            mode = "file_system",
+                            error = %error_msg,
+                            "File watcher stopped with error, system continues but won't detect file changes"
+                        );
+                        // Continue waiting for shutdown - watcher error is not fatal
+                        shutdown_signal.wait().await;
+                    }
+                }
+            }
+        } else {
+            // No watcher running, just wait for shutdown
+            shutdown_signal.wait().await;
         }
+
+        tracing::info!(
+            component = "conf_center",
+            mode = "file_system",
+            "Cleaning up"
+        );
+
+        // 6. Set config_server = None (services become unavailable)
+        self.set_config_server(None);
+
+        // 7. Stop watcher if running
+        if let Some(handle) = self.watcher_handle.lock().unwrap().take() {
+            handle.abort();
+        }
+
+        Ok(())
     }
 
     /// Start FileSystem sync: load resources and optionally start FileWatcher
-    async fn start_filesystem_sync(&self, config_server: &Arc<ConfigServer>) -> Result<()> {
+    ///
+    /// Returns an optional receiver for watcher errors.
+    /// Note: Assumes shutdown_handle is already set in self.shutdown_handle
+    async fn start_filesystem_sync(
+        &self,
+        config_server: &Arc<ConfigServer>,
+    ) -> Result<Option<oneshot::Receiver<String>>> {
         let ConfCenterConfig::FileSystem { conf_dir, watch_enabled } = &self.config else {
             return Err(anyhow::anyhow!("Not in FileSystem mode"));
         };
@@ -217,33 +281,44 @@ impl ConfCenter {
                 "Starting file watcher"
             );
 
-            let shutdown_handle = ShutdownHandle::new();
-            {
-                let mut handle = self.shutdown_handle.lock().unwrap();
-                *handle = Some(shutdown_handle.clone());
-            }
+            // Get shutdown signal from existing handle
+            let shutdown_signal = {
+                let handle = self.shutdown_handle.lock().unwrap();
+                handle.as_ref().map(|h| h.signal())
+            };
+
+            let Some(watcher_shutdown_signal) = shutdown_signal else {
+                return Err(anyhow::anyhow!("Shutdown handle not set"));
+            };
 
             let watcher_config_server = config_server.clone();
             let watcher = FileWatcher::new(conf_dir.clone(), watcher_config_server);
-            let watcher_shutdown_signal = shutdown_handle.signal();
+
+            // Create error channel
+            let (error_tx, error_rx) = oneshot::channel::<String>();
 
             // Spawn watcher in background
             let handle = tokio::spawn(async move {
                 if let Err(e) = watcher.start(watcher_shutdown_signal).await {
+                    let error_msg = e.to_string();
                     tracing::error!(
                         component = "conf_center",
                         mode = "file_system",
-                        error = %e,
+                        error = %error_msg,
                         "File watcher error"
                     );
+                    // Send error to main loop (ignore if receiver dropped)
+                    let _ = error_tx.send(error_msg);
                 }
             });
 
             let mut watcher_handle = self.watcher_handle.lock().unwrap();
             *watcher_handle = Some(handle);
+
+            return Ok(Some(error_rx));
         }
 
-        Ok(())
+        Ok(None)
     }
 
     // ==================== Kubernetes Mode ====================
@@ -252,9 +327,11 @@ impl ConfCenter {
     ///
     /// Loop:
     /// 1. Create ConfigServer
-    /// 2. Create and run Controller (includes leader election)
-    /// 3. Wait for caches ready, then set config_server = Some
-    /// 4. Wait for controller to exit
+    /// 2. Create Controller (includes leader election internally)
+    /// 3. Run controller in background
+    /// 4. Wait for caches ready OR controller exit (whichever first)
+    ///    - If caches ready first: set config_server = Some, then wait for exit
+    ///    - If controller exits first: skip setting config_server
     /// 5. Set config_server = None
     /// 6. Handle exit reason: shutdown or restart with backoff
     async fn run_k8s_lifecycle(&self) -> Result<()> {
@@ -296,35 +373,82 @@ impl ConfCenter {
                 }
             };
 
-            // 3. Wait for caches to be ready
-            self.wait_caches_ready(&config_server, 30).await;
+            // 3. Run controller in background and get exit reason via channel
+            let (exit_tx, mut exit_rx) = oneshot::channel::<ControllerExitReason>();
+            let controller_handle = tokio::spawn(async move {
+                let exit_reason = match controller.run().await {
+                    Ok(reason) => reason,
+                    Err(e) => {
+                        tracing::error!(
+                            component = "conf_center",
+                            mode = "kubernetes",
+                            error = %e,
+                            "Controller run error"
+                        );
+                        ControllerExitReason::AllControllersStopped
+                    }
+                };
+                // Send exit reason (ignore error if receiver dropped)
+                let _ = exit_tx.send(exit_reason);
+            });
 
-            // 4. Set config_server = Some (services become available)
-            self.set_config_server(Some(config_server));
-            tracing::info!(
-                component = "conf_center",
-                mode = "kubernetes",
-                "ConfigServer is ready, services can process requests"
-            );
-
-            // 5. Run controller (blocks until exit)
-            let exit_reason = match controller.run().await {
-                Ok(reason) => reason,
-                Err(e) => {
-                    tracing::error!(
+            // 4. Wait for caches ready OR controller exit (whichever comes first)
+            // This avoids waiting 30s timeout if controller exits early
+            let mut caches_ready = false;
+            let exit_reason = tokio::select! {
+                _ = self.wait_caches_ready(&config_server, 30) => {
+                    caches_ready = true;
+                    // Caches ready, set config_server
+                    self.set_config_server(Some(config_server));
+                    tracing::info!(
                         component = "conf_center",
                         mode = "kubernetes",
-                        error = %e,
-                        "Controller run error"
+                        "ConfigServer is ready, services can process requests"
                     );
-                    ControllerExitReason::AllControllersStopped
+
+                    // Now wait for controller to exit
+                    match exit_rx.await {
+                        Ok(reason) => reason,
+                        Err(_) => {
+                            tracing::error!(
+                                component = "conf_center",
+                                mode = "kubernetes",
+                                "Controller task ended unexpectedly"
+                            );
+                            ControllerExitReason::AllControllersStopped
+                        }
+                    }
+                }
+                result = &mut exit_rx => {
+                    // Controller exited before caches ready - don't set config_server
+                    tracing::warn!(
+                        component = "conf_center",
+                        mode = "kubernetes",
+                        "Controller exited before caches were ready"
+                    );
+                    match result {
+                        Ok(reason) => reason,
+                        Err(_) => {
+                            tracing::error!(
+                                component = "conf_center",
+                                mode = "kubernetes",
+                                "Controller task ended unexpectedly"
+                            );
+                            ControllerExitReason::AllControllersStopped
+                        }
+                    }
                 }
             };
 
-            // 6. Set config_server = None (services become unavailable)
-            self.set_config_server(None);
+            // Ensure controller task is done
+            let _ = controller_handle.await;
 
-            // 7. Handle exit reason
+            // 5. Set config_server = None (only if it was set)
+            if caches_ready {
+                self.set_config_server(None);
+            }
+
+            // 6. Handle exit reason
             match exit_reason {
                 ControllerExitReason::Shutdown => {
                     tracing::info!(

@@ -112,7 +112,7 @@ impl EdgionControllerCli {
         conf_center: Arc<ConfCenter>,
         schema_validator: Arc<SchemaValidator>,
         grpc_addr: SocketAddr,
-        admin_port: u16,
+        admin_addr: SocketAddr,
     ) -> Result<()> {
         // Create ConfigSyncServer with ConfCenter (not ConfigServer directly)
         // It will dynamically get ConfigServer when handling requests
@@ -122,14 +122,14 @@ impl EdgionControllerCli {
             component = COMPONENT_EDGION_CONTROLLER,
             event = "services_starting",
             grpc_addr = %grpc_addr,
-            admin_port = admin_port,
+            admin_addr = %admin_addr,
             "Starting gRPC and Admin API servers"
         );
 
         // Run both services concurrently
         let (sync_result, admin_result) = tokio::join!(
             sync_server.serve(grpc_addr),
-            serve_admin_api(conf_center.clone(), schema_validator, admin_port)
+            serve_admin_api(conf_center.clone(), schema_validator, admin_addr)
         );
 
         // Check results
@@ -211,8 +211,8 @@ impl EdgionControllerCli {
         // 6. Parse addresses and start services
         // Note: Services start immediately but return UNAVAILABLE until ConfigServer is ready
         let grpc_addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
-        let admin_port = 5800;
+        let admin_addr = utils::parse_listen_addr(Some(&config.admin_listen()), "0.0.0.0:8080")?;
 
-        Self::start_services(conf_center, schema_validator, grpc_addr, admin_port).await
+        Self::start_services(conf_center, schema_validator, grpc_addr, admin_addr).await
     }
 }
