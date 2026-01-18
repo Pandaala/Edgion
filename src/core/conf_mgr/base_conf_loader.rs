@@ -17,10 +17,11 @@ pub async fn load_base_conf_from_store(
     );
 
     // Step 1: List all resources from store
-    let all_resources = store
-        .list_all()
+    let result = store
+        .list_all(None)
         .await
         .context("Failed to list all resources from store")?;
+    let all_resources = result.items;
 
     // Step 2: Collect base configuration resources
     let mut gateway_classes: Vec<GatewayClass> = Vec::new();

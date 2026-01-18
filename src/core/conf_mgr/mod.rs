@@ -11,7 +11,7 @@ pub use schema_validator::SchemaValidator;
 // ConfCenter exports
 pub use conf_center::{
     load_all_resources, ConfCenter, ConfCenterConfig, ConfEntry, ConfWriter, ConfWriterError, FileSystemStatusStore,
-    FileSystemWriter, FileWatcher, KubernetesController, KubernetesStatusStore, KubernetesStore, KubernetesWriter,
+    FileSystemWriter, FileWatcher, KubernetesController, KubernetesStatusStore, KubernetesWriter, NamespaceWatchMode,
     StatusStore, StatusStoreError,
 };
 

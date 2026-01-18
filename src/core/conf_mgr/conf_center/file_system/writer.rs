@@ -3,7 +3,7 @@
 //! Implements the ConfWriter trait using local file system as the backend.
 //! Stores resources as YAML files with naming convention: Kind_namespace_name.yaml
 
-use crate::core::conf_mgr::conf_center::{ConfEntry, ConfWriter, ConfWriterError};
+use crate::core::conf_mgr::conf_center::{ConfEntry, ConfWriter, ConfWriterError, ListOptions, ListResult};
 use crate::core::utils::extract_resource_metadata;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -99,7 +99,8 @@ impl ConfWriter for FileSystemWriter {
         Ok(content)
     }
 
-    async fn list_all(&self) -> Result<Vec<ConfEntry>, ConfWriterError> {
+    async fn list_all(&self, _opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
+        // FileSystem mode: ignore pagination options, return all items
         let mut resources = Vec::new();
         let mut stack = vec![self.root.clone()];
 
@@ -155,7 +156,10 @@ impl ConfWriter for FileSystemWriter {
             "Loaded all resources from file system"
         );
 
-        Ok(resources)
+        Ok(ListResult {
+            items: resources,
+            continue_token: None, // FileSystem does not support pagination
+        })
     }
 
     async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
@@ -186,7 +190,8 @@ impl ConfWriter for FileSystemWriter {
         Ok(())
     }
 
-    async fn get_list_by_kind(&self, kind: &str) -> Result<Vec<ConfEntry>, ConfWriterError> {
+    async fn get_list_by_kind(&self, kind: &str, _opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
+        // FileSystem mode: ignore pagination options, return all items
         let mut resources = Vec::new();
         let prefix = format!("{}_", kind);
 
@@ -243,10 +248,19 @@ impl ConfWriter for FileSystemWriter {
             "Loaded resources by kind"
         );
 
-        Ok(resources)
+        Ok(ListResult {
+            items: resources,
+            continue_token: None, // FileSystem does not support pagination
+        })
     }
 
-    async fn get_list_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<Vec<ConfEntry>, ConfWriterError> {
+    async fn get_list_by_kind_ns(
+        &self,
+        kind: &str,
+        namespace: &str,
+        _opts: Option<ListOptions>,
+    ) -> Result<ListResult, ConfWriterError> {
+        // FileSystem mode: ignore pagination options, return all items
         let mut resources = Vec::new();
         let prefix = format!("{}_{}_", kind, namespace);
 
@@ -304,7 +318,10 @@ impl ConfWriter for FileSystemWriter {
             "Loaded resources by kind and namespace"
         );
 
-        Ok(resources)
+        Ok(ListResult {
+            items: resources,
+            continue_token: None, // FileSystem does not support pagination
+        })
     }
 
     async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfWriterError> {

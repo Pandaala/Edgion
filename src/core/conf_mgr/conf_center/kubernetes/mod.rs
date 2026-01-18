@@ -1,16 +1,23 @@
-//! Kubernetes based configuration center
+//! Kubernetes configuration center module
 //!
-//! Provides:
-//! - KubernetesWriter: ConfWriter implementation using K8s API
-//! - KubernetesStore: In-memory cache updated by Controller
-//! - KubernetesController: Watches K8s resources and updates cache/ConfigServer
+//! Uses kube-runtime Controller pattern for event-driven reconciliation.
 
+mod context;
 mod controller;
-mod reconciler;
-mod store;
+mod error;
+mod namespace;
+mod reconcilers;
 mod writer;
 
 pub use controller::KubernetesController;
-pub use reconciler::StatusReconciler;
-pub use store::KubernetesStore;
+pub use context::ControllerContext;
+pub use error::ReconcileError;
+pub use namespace::NamespaceWatchMode;
 pub use writer::KubernetesWriter;
+
+// Re-export status types from conf_center::status
+pub mod status {
+    pub use super::super::status::{KubernetesStatusStore, StatusStore, StatusStoreError};
+}
+
+pub use status::{KubernetesStatusStore, StatusStore, StatusStoreError};

@@ -2,7 +2,7 @@
 //!
 //! Unified configuration management supporting multiple backends:
 //! - FileSystem: Local YAML files with optional file watching
-//! - Kubernetes: K8s API with Controller-based resource watching
+//! - Kubernetes: K8s API with kube-runtime Controller-based resource watching
 //!
 //! Architecture:
 //! ```text
@@ -12,7 +12,8 @@
 //! │   └── FileWatcher - watch file changes, notify ConfigServer
 //! └── Kubernetes Mode
 //!     ├── KubernetesWriter (ConfWriter impl) - call K8s API
-//!     └── Controller - watch K8s resources, notify ConfigServer
+//!     ├── KubernetesController - kube-runtime Controller pattern
+//!     └── ResourceStores - reflector::Store for each resource type
 //! ```
 
 mod config;
@@ -25,9 +26,9 @@ pub mod traits;
 pub use config::ConfCenterConfig;
 pub use file_system::{FileSystemWriter, FileWatcher};
 pub use init_loader::load_all_resources;
-pub use kubernetes::{KubernetesController, KubernetesStore, KubernetesWriter};
-pub use status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, StatusStoreError};
-pub use traits::{ConfEntry, ConfWriter, ConfWriterError};
+pub use kubernetes::{KubernetesController, KubernetesStatusStore, KubernetesWriter, NamespaceWatchMode, StatusStore, StatusStoreError};
+pub use status::FileSystemStatusStore;
+pub use traits::{ConfEntry, ConfWriter, ConfWriterError, ListOptions, ListResult};
 
 use crate::core::cli::config::ConfSyncConfig;
 use crate::core::conf_sync::ConfigServer;
@@ -43,8 +44,6 @@ pub struct ConfCenter {
     config: ConfCenterConfig,
     writer: Arc<dyn ConfWriter>,
     config_server: Arc<ConfigServer>,
-    // K8s specific: store reference for controller
-    k8s_store: Option<Arc<kubernetes::KubernetesStore>>,
     /// Global all_ready flag - controlled at Controller level
     /// When true, ConfigServer and Admin API can serve requests
     all_ready: Arc<AtomicBool>,
@@ -76,7 +75,6 @@ impl ConfCenter {
                     config,
                     writer: Arc::new(writer),
                     config_server,
-                    k8s_store: None,
                     all_ready,
                 })
             }
@@ -86,12 +84,11 @@ impl ConfCenter {
                     mode = "kubernetes",
                     "Creating Kubernetes ConfCenter"
                 );
-                let (writer, store) = KubernetesWriter::new().await?;
+                let writer = KubernetesWriter::new().await?;
                 Ok(Self {
                     config,
                     writer: Arc::new(writer),
                     config_server,
-                    k8s_store: Some(store),
                     all_ready,
                 })
             }
@@ -154,17 +151,11 @@ impl ConfCenter {
                     mode = "kubernetes",
                     gateway_class = gateway_class,
                     namespaces = ?watch_namespaces,
-                    "Starting Kubernetes controller"
+                    "Starting Kubernetes controller with kube-runtime"
                 );
-
-                let store = self
-                    .k8s_store
-                    .as_ref()
-                    .expect("K8s store should be set in Kubernetes mode");
 
                 let controller = KubernetesController::new(
                     self.config_server.clone(),
-                    store.clone(),
                     gateway_class.clone(),
                     watch_namespaces.clone(),
                     label_selector.clone(),

@@ -108,10 +108,11 @@ pub async fn load_all_resources(writer: Arc<dyn ConfWriter>, config_server: Arc<
         "Loading all resources from conf center..."
     );
 
-    let all_resources = writer
-        .list_all()
+    let result = writer
+        .list_all(None)
         .await
         .context("Failed to list all resources from conf center")?;
+    let all_resources = result.items;
 
     let mut stats = LoadStats::new();
 

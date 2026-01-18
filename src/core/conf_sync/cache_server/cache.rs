@@ -70,6 +70,17 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         ListData::new(data, sync_version)
     }
 
+    /// Get a single resource by key
+    /// Key format: "namespace/name" for namespaced resources, or just "name" for cluster-scoped
+    /// Used by Worker to get "previous state" from conf_server cache
+    pub fn get_by_key(&self, key: &str) -> Option<T>
+    where
+        T: Clone,
+    {
+        let store_guard = self.store.read().unwrap();
+        store_guard.get_by_key(key)
+    }
+
     /// Start a watcher task that listens for notifications and sends data
     /// Only needs the store to access data
     pub fn start_watcher_task(store: Arc<RwLock<EventStore<T>>>, notify: Arc<Notify>, watcher: WatchClient<T>)

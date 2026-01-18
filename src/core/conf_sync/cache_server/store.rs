@@ -91,6 +91,15 @@ impl<T> EventStore<T> {
         let data = self.data.values().cloned().collect();
         (data, self.sync_version)
     }
+
+    /// Get a single resource by key
+    /// Key format: "namespace/name" for namespaced resources, or just "name" for cluster-scoped
+    pub fn get_by_key(&self, key: &str) -> Option<T>
+    where
+        T: Clone,
+    {
+        self.data.get(key).cloned()
+    }
 }
 
 impl<T: Clone> EventStore<T> {
