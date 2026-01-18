@@ -25,7 +25,7 @@ pub use controller::{KubernetesController, LeaderElectionMode};
 pub use context::ControllerContext;
 pub use error::ReconcileError;
 pub use leader_election::{LeaderElection, LeaderElectionConfig, LeaderHandle};
-pub use metrics::{controller_metrics, ControllerMetrics, InitSyncTimer, ReconcileTimer, ResourceMetrics};
+pub use metrics::{controller_metrics, ControllerMetrics, InitSyncTimer, ResourceMetrics};
 pub use namespace::NamespaceWatchMode;
 pub use resource_controller::{ResourceController, ResourceControllerBuilder};
 pub use shutdown::{ShutdownHandle, ShutdownSignal};

@@ -1,29 +1,22 @@
 //! Kubernetes Controller metrics
 //!
 //! Metrics for monitoring controller performance:
-//! - Reconciliation counts and errors
-//! - Reconciliation latency
 //! - Initial sync duration
 //! - Active controllers count
+//! - Leader election status
 
-use metrics::{counter, gauge, histogram, Counter, Gauge, Histogram};
+use metrics::{gauge, histogram, Gauge, Histogram};
 use std::sync::LazyLock;
 use std::time::Instant;
 
 /// Metric names as constants
 pub mod names {
-    /// Total reconciliations performed (with labels: kind, result)
-    pub const RECONCILE_TOTAL: &str = "edgion_controller_reconcile_total";
-    /// Reconciliation duration in seconds (with labels: kind)
-    pub const RECONCILE_DURATION: &str = "edgion_controller_reconcile_duration_seconds";
     /// Initial sync duration in seconds (with labels: kind)
     pub const INIT_SYNC_DURATION: &str = "edgion_controller_init_sync_duration_seconds";
     /// Number of active resource controllers
     pub const ACTIVE_CONTROLLERS: &str = "edgion_controller_active";
     /// Total resources watched (with labels: kind)
     pub const RESOURCES_WATCHED: &str = "edgion_controller_resources_watched";
-    /// Controller restarts (with labels: kind)
-    pub const CONTROLLER_RESTARTS: &str = "edgion_controller_restarts_total";
     /// Leader election status (1 = leader, 0 = standby)
     pub const LEADER_STATUS: &str = "edgion_controller_leader";
 }
@@ -68,43 +61,19 @@ impl ControllerMetrics {
     }
 }
 
-/// Per-resource-kind metrics
+/// Per-resource-kind metrics for init sync
 pub struct ResourceMetrics {
-    kind: &'static str,
-    reconcile_success: Counter,
-    reconcile_error: Counter,
-    reconcile_duration: Histogram,
     init_sync_duration: Histogram,
     resources_watched: Gauge,
-    restarts: Counter,
 }
 
 impl ResourceMetrics {
     /// Create metrics for a specific resource kind
     pub fn new(kind: &'static str) -> Self {
         Self {
-            kind,
-            reconcile_success: counter!(names::RECONCILE_TOTAL, "kind" => kind, "result" => "success"),
-            reconcile_error: counter!(names::RECONCILE_TOTAL, "kind" => kind, "result" => "error"),
-            reconcile_duration: histogram!(names::RECONCILE_DURATION, "kind" => kind),
             init_sync_duration: histogram!(names::INIT_SYNC_DURATION, "kind" => kind),
             resources_watched: gauge!(names::RESOURCES_WATCHED, "kind" => kind),
-            restarts: counter!(names::CONTROLLER_RESTARTS, "kind" => kind),
         }
-    }
-
-    /// Record a successful reconciliation with duration
-    #[inline]
-    pub fn reconcile_success(&self, duration_secs: f64) {
-        self.reconcile_success.increment(1);
-        self.reconcile_duration.record(duration_secs);
-    }
-
-    /// Record a failed reconciliation with duration
-    #[inline]
-    pub fn reconcile_error(&self, duration_secs: f64) {
-        self.reconcile_error.increment(1);
-        self.reconcile_duration.record(duration_secs);
     }
 
     /// Record initial sync duration
@@ -117,48 +86,6 @@ impl ResourceMetrics {
     #[inline]
     pub fn set_resources_watched(&self, count: usize) {
         self.resources_watched.set(count as f64);
-    }
-
-    /// Record a controller restart
-    #[inline]
-    pub fn controller_restart(&self) {
-        self.restarts.increment(1);
-    }
-
-    /// Get the kind this metrics is for
-    #[allow(dead_code)]
-    pub fn kind(&self) -> &'static str {
-        self.kind
-    }
-}
-
-/// RAII guard for measuring reconcile duration
-pub struct ReconcileTimer {
-    start: Instant,
-    metrics: ResourceMetrics,
-}
-
-impl ReconcileTimer {
-    /// Start a new reconcile timer
-    pub fn start(kind: &'static str) -> Self {
-        Self {
-            start: Instant::now(),
-            metrics: ResourceMetrics::new(kind),
-        }
-    }
-
-    /// Record success and return duration
-    pub fn success(self) -> f64 {
-        let duration = self.start.elapsed().as_secs_f64();
-        self.metrics.reconcile_success(duration);
-        duration
-    }
-
-    /// Record error and return duration
-    pub fn error(self) -> f64 {
-        let duration = self.start.elapsed().as_secs_f64();
-        self.metrics.reconcile_error(duration);
-        duration
     }
 }
 

@@ -288,12 +288,11 @@ impl LeaderHandle {
 
     /// Wait until this instance becomes leader
     ///
-    /// Returns `true` if leadership was acquired, `false` if cancelled via shutdown signal.
-    pub async fn wait_until_leader(&self) -> bool {
+    /// This will block indefinitely until leadership is acquired.
+    pub async fn wait_until_leader(&self) {
         while !self.is_leader() {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        true
     }
 
     /// Wait until this instance becomes leader, with cancellation support
