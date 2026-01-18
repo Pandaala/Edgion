@@ -12,22 +12,30 @@
 //! │   └── FileWatcher - watch file changes, notify ConfigServer
 //! └── Kubernetes Mode
 //!     ├── KubernetesWriter (ConfWriter impl) - call K8s API
-//!     ├── KubernetesController - kube-runtime Controller pattern
+//!     ├── KubernetesController - kube-runtime Controller pattern (includes leader election)
 //!     └── ResourceStores - reflector::Store for each resource type
 //! ```
 //!
 //! ## Lifecycle Management
 //!
-//! ConfCenter uses a unified start() method that manages the entire lifecycle:
-//! - K8s mode: Leader election -> Create ConfigServer -> Link -> Monitor relink/leadership
-//! - FileSystem mode: Create ConfigServer -> Link
+//! ConfCenter uses `start()` which dispatches to mode-specific lifecycle methods:
 //!
-//! ConfigServer is Option<Arc<ConfigServer>>:
-//! - None: Not ready (during startup, relink, or leadership loss)
+//! - **FileSystem mode**: Simple and direct
+//!   1. Create ConfigServer
+//!   2. Load resources + start FileWatcher
+//!   3. Block until shutdown
+//!
+//! - **K8s mode**: Clean loop with retry
+//!   1. Create ConfigServer
+//!   2. Create and run Controller (includes leader election)
+//!   3. On exit, restart with backoff if needed
+//!
+//! ConfigServer is `Option<Arc<ConfigServer>>`:
+//! - None: Not ready (startup, restart, leadership loss)
 //! - Some: Ready to serve requests
 //!
-//! gRPC and Admin services get ConfigServer dynamically via config_server() method.
-//! When ConfigServer is None, they return UNAVAILABLE/NOT_READY errors.
+//! gRPC and Admin services get ConfigServer via `config_server()` method.
+//! When None, they return UNAVAILABLE errors.
 
 mod config;
 pub mod file_system;
@@ -48,23 +56,23 @@ use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;
 use kubernetes::shutdown::ShutdownHandle;
 use std::sync::{Arc, Mutex, RwLock};
-use tokio::sync::mpsc;
+use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
 /// ConfCenter - Unified configuration center
 ///
 /// Provides a unified interface for configuration management regardless of backend.
-/// Manages ConfigServer lifecycle internally - ConfigServer is Option<Arc<ConfigServer>>:
-/// - None: System not ready (during startup, relink, or leadership loss)
+/// Manages ConfigServer lifecycle internally - ConfigServer is `Option<Arc<ConfigServer>>`:
+/// - None: System not ready (startup, restart, leadership loss)
 /// - Some: System ready to serve requests
 ///
 /// ## Lifecycle
 ///
-/// The start() method manages the entire lifecycle:
-/// 1. K8s mode: Wait for leadership -> Create ConfigServer -> Link -> Monitor
-/// 2. FileSystem mode: Create ConfigServer -> Link
+/// The `start()` method dispatches to mode-specific lifecycle methods:
+/// - FileSystem: Simple one-shot setup, then block
+/// - K8s: Loop with automatic restart on failure
 ///
-/// gRPC and Admin services get ConfigServer via config_server() method.
+/// gRPC and Admin services get ConfigServer via `config_server()` method.
 /// When None, they should return UNAVAILABLE errors.
 pub struct ConfCenter {
     config: ConfCenterConfig,
@@ -72,23 +80,20 @@ pub struct ConfCenter {
     writer: Arc<dyn ConfWriter>,
     
     /// ConfigServer instance - Option to support lifecycle management
-    /// None: Not ready (startup, relink, leadership loss)
+    /// None: Not ready (startup, restart, leadership loss)
     /// Some: Ready to serve requests
     config_server: RwLock<Option<Arc<ConfigServer>>>,
     
-    /// Shutdown handle for stopping sync tasks
+    /// Shutdown handle for stopping sync tasks (FileSystem mode)
     shutdown_handle: Mutex<Option<ShutdownHandle>>,
-    /// Handle to the running controller task (K8s mode)
-    controller_handle: Mutex<Option<JoinHandle<()>>>,
-    /// Channel to receive controller exit reason (K8s mode)
-    exit_reason_rx: Mutex<Option<mpsc::Receiver<ControllerExitReason>>>,
+    /// Handle to the running watcher task (FileSystem mode)
+    watcher_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl ConfCenter {
     /// Create a new ConfCenter based on configuration
     ///
-    /// Note: ConfigServer is NOT created here. It will be created in start() method
-    /// after successful leader election (K8s mode) or immediately (FileSystem mode).
+    /// Note: ConfigServer is NOT created here. It will be created in `start()` method.
     pub async fn create(
         config: ConfCenterConfig,
         conf_sync_config: &ConfSyncConfig,
@@ -108,8 +113,7 @@ impl ConfCenter {
                     writer: Arc::new(writer),
                     config_server: RwLock::new(None),
                     shutdown_handle: Mutex::new(None),
-                    controller_handle: Mutex::new(None),
-                    exit_reason_rx: Mutex::new(None),
+                    watcher_handle: Mutex::new(None),
                 })
             }
             ConfCenterConfig::Kubernetes { .. } => {
@@ -125,284 +129,280 @@ impl ConfCenter {
                     writer: Arc::new(writer),
                     config_server: RwLock::new(None),
                     shutdown_handle: Mutex::new(None),
-                    controller_handle: Mutex::new(None),
-                    exit_reason_rx: Mutex::new(None),
+                    watcher_handle: Mutex::new(None),
                 })
             }
         }
     }
 
-    /// Unified start method - manages the entire lifecycle
-    ///
-    /// This method runs a loop that:
-    /// 1. K8s mode: Wait for leadership first (TODO: implement leader election)
-    /// 2. Create new ConfigServer
-    /// 3. Link (start controller/watcher, load resources)
-    /// 4. Wait for caches to be ready
-    /// 5. Set config_server = Some (services become available)
-    /// 6. Wait for exit signal (relink needed, leadership lost, etc.)
-    /// 7. Set config_server = None (services become unavailable)
-    /// 8. Loop back based on exit reason
-    ///
-    /// For FileSystem mode, this runs once and blocks on the watcher.
-    pub async fn start(&self) -> Result<()> {
-        const MAX_RELINK_RETRIES: u32 = 10;
-        const RELINK_BACKOFF_BASE_SECS: u64 = 1;
-        const RELINK_BACKOFF_MAX_SECS: u64 = 60;
-        const CACHE_READY_TIMEOUT_SECS: u64 = 30;
+    // ==================== Lifecycle Management ====================
 
-        let mut relink_count: u32 = 0;
+    /// Start the configuration center
+    ///
+    /// Dispatches to mode-specific lifecycle methods:
+    /// - FileSystem: Simple one-shot setup, then block
+    /// - K8s: Loop with automatic restart on failure
+    pub async fn start(&self) -> Result<()> {
+        if self.is_k8s_mode() {
+            self.run_k8s_lifecycle().await
+        } else {
+            self.run_filesystem_lifecycle().await
+        }
+    }
+
+    // ==================== FileSystem Mode ====================
+
+    /// FileSystem mode lifecycle - simple and direct
+    ///
+    /// 1. Create ConfigServer
+    /// 2. Load resources + start FileWatcher
+    /// 3. Set config_server = Some (services become available)
+    /// 4. Block until shutdown
+    async fn run_filesystem_lifecycle(&self) -> Result<()> {
+        tracing::info!(
+            component = "conf_center",
+            mode = "file_system",
+            "Starting FileSystem lifecycle"
+        );
+
+        // 1. Create ConfigServer
+        let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
+
+        // 2. Load resources + start FileWatcher
+        self.start_filesystem_sync(&config_server).await?;
+
+        // 3. Wait for caches to be ready
+        self.wait_caches_ready(&config_server, 30).await;
+
+        // 4. Set config_server = Some (services become available)
+        self.set_config_server(Some(config_server));
+        tracing::info!(
+            component = "conf_center",
+            mode = "file_system",
+            "ConfigServer is ready, services can process requests"
+        );
+
+        // 5. Block until shutdown
+        tracing::info!(
+            component = "conf_center",
+            mode = "file_system",
+            "FileSystem mode: running until shutdown"
+        );
+        loop {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
+    }
+
+    /// Start FileSystem sync: load resources and optionally start FileWatcher
+    async fn start_filesystem_sync(&self, config_server: &Arc<ConfigServer>) -> Result<()> {
+        let ConfCenterConfig::FileSystem { conf_dir, watch_enabled } = &self.config else {
+            return Err(anyhow::anyhow!("Not in FileSystem mode"));
+        };
+
+        // Load all resources from file system
+        tracing::info!(
+            component = "conf_center",
+            mode = "file_system",
+            conf_dir = %conf_dir.display(),
+            "Loading all resources from file system"
+        );
+        load_all_resources(self.writer.clone(), config_server.clone()).await?;
+
+        // Start file watcher if enabled
+        if *watch_enabled {
+            tracing::info!(
+                component = "conf_center",
+                mode = "file_system",
+                conf_dir = %conf_dir.display(),
+                "Starting file watcher"
+            );
+
+            let shutdown_handle = ShutdownHandle::new();
+            {
+                let mut handle = self.shutdown_handle.lock().unwrap();
+                *handle = Some(shutdown_handle.clone());
+            }
+
+            let watcher_config_server = config_server.clone();
+            let watcher = FileWatcher::new(conf_dir.clone(), watcher_config_server);
+            let watcher_shutdown_signal = shutdown_handle.signal();
+
+            // Spawn watcher in background
+            let handle = tokio::spawn(async move {
+                if let Err(e) = watcher.start(watcher_shutdown_signal).await {
+                    tracing::error!(
+                        component = "conf_center",
+                        mode = "file_system",
+                        error = %e,
+                        "File watcher error"
+                    );
+                }
+            });
+
+            let mut watcher_handle = self.watcher_handle.lock().unwrap();
+            *watcher_handle = Some(handle);
+        }
+
+        Ok(())
+    }
+
+    // ==================== Kubernetes Mode ====================
+
+    /// K8s mode lifecycle - clean loop with automatic restart
+    ///
+    /// Loop:
+    /// 1. Create ConfigServer
+    /// 2. Create and run Controller (includes leader election)
+    /// 3. Wait for caches ready, then set config_server = Some
+    /// 4. Wait for controller to exit
+    /// 5. Set config_server = None
+    /// 6. Handle exit reason: shutdown or restart with backoff
+    async fn run_k8s_lifecycle(&self) -> Result<()> {
+        const MAX_CONSECUTIVE_FAILURES: u32 = 10;
+        const STABLE_RUN_DURATION: Duration = Duration::from_secs(300); // 5 minutes
+
+        let mut consecutive_failures: u32 = 0;
 
         loop {
             tracing::info!(
                 component = "conf_center",
-                mode = if self.is_k8s_mode() { "kubernetes" } else { "file_system" },
-                relink_count = relink_count,
-                "ConfCenter start: beginning lifecycle iteration"
+                mode = "kubernetes",
+                consecutive_failures = consecutive_failures,
+                "Starting K8s lifecycle iteration"
             );
 
-            // TODO: K8s mode - wait for leadership here
-            // if self.is_k8s_mode() {
-            //     self.wait_for_leadership().await?;
-            // }
+            let iteration_start = Instant::now();
 
-            // 1. Create new ConfigServer
+            // 1. Create ConfigServer
             let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
-            
-            // 2. Link with the new ConfigServer
-            self.link_with_server(&config_server).await?;
+
+            // 2. Create Controller (includes leader election internally)
+            let controller = match self.create_k8s_controller(&config_server).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(
+                        component = "conf_center",
+                        mode = "kubernetes",
+                        error = %e,
+                        "Failed to create K8s controller"
+                    );
+                    consecutive_failures += 1;
+                    if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
+                        return Err(anyhow::anyhow!("Max consecutive failures exceeded: {}", e));
+                    }
+                    let backoff = Duration::from_secs(1 << consecutive_failures.min(6));
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+            };
 
             // 3. Wait for caches to be ready
-            self.wait_caches_ready(&config_server, CACHE_READY_TIMEOUT_SECS).await;
+            self.wait_caches_ready(&config_server, 30).await;
 
             // 4. Set config_server = Some (services become available)
-            self.set_config_server(Some(config_server.clone()));
+            self.set_config_server(Some(config_server));
             tracing::info!(
                 component = "conf_center",
-                event = "config_server_ready",
-                "ConfigServer is now ready, services can process requests"
+                mode = "kubernetes",
+                "ConfigServer is ready, services can process requests"
             );
 
-            // 5. Wait for exit signal
-            let exit_reason = self.wait_for_exit().await;
+            // 5. Run controller (blocks until exit)
+            let exit_reason = match controller.run().await {
+                Ok(reason) => reason,
+                Err(e) => {
+                    tracing::error!(
+                        component = "conf_center",
+                        mode = "kubernetes",
+                        error = %e,
+                        "Controller run error"
+                    );
+                    ControllerExitReason::AllControllersStopped
+                }
+            };
 
+            // 6. Set config_server = None (services become unavailable)
+            self.set_config_server(None);
+
+            // 7. Handle exit reason
             match exit_reason {
-                Some(reason) => {
+                ControllerExitReason::Shutdown => {
                     tracing::info!(
                         component = "conf_center",
-                        event = "exit_signal",
-                        reason = ?reason,
-                        relink_count = relink_count,
-                        "Received exit signal"
+                        mode = "kubernetes",
+                        "Normal shutdown"
                     );
-
-                    // 6. Set config_server = None (services become unavailable)
-                    self.set_config_server(None);
-
-                    if Self::needs_relink(&reason) {
-                        relink_count += 1;
-
-                        if relink_count > MAX_RELINK_RETRIES {
-                            tracing::error!(
-                                component = "conf_center",
-                                event = "max_relink_retries",
-                                relink_count = relink_count,
-                                "Maximum relink retries exceeded, stopping"
-                            );
-                            return Err(anyhow::anyhow!("Maximum relink retries exceeded"));
-                        }
-
-                        // Calculate backoff delay
-                        let backoff_secs = std::cmp::min(
-                            RELINK_BACKOFF_BASE_SECS * 2u64.pow(relink_count.saturating_sub(1)),
-                            RELINK_BACKOFF_MAX_SECS,
-                        );
-
-                        tracing::info!(
-                            component = "conf_center",
-                            event = "relink_scheduled",
-                            relink_count = relink_count,
-                            backoff_secs = backoff_secs,
-                            "Scheduling relink with backoff"
-                        );
-
-                        // Cleanup current state
-                        self.cleanup().await;
-
-                        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-
-                        // Reset relink_count on successful iteration
-                        // (will be set back to 0 after successful link)
-                    } else {
-                        // Normal exit - cleanup and return
-                        tracing::info!(
-                            component = "conf_center",
-                            event = "normal_exit",
-                            reason = ?reason,
-                            "Normal exit, stopping ConfCenter"
-                        );
-                        self.cleanup().await;
-                        return Ok(());
-                    }
-                }
-                None => {
-                    // FileSystem mode or no controller - just wait indefinitely
-                    if !self.is_k8s_mode() {
-                        tracing::info!(
-                            component = "conf_center",
-                            mode = "file_system",
-                            "FileSystem mode: blocking until shutdown"
-                        );
-                        // Block forever (or until shutdown signal)
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-                        }
-                    }
-                    // K8s mode but no exit reason - shouldn't happen, break
-                    tracing::warn!(
-                        component = "conf_center",
-                        "No exit reason received, stopping"
-                    );
-                    self.cleanup().await;
                     return Ok(());
                 }
-            }
-
-            // Reset relink count after successful relink
-            relink_count = 0;
-        }
-    }
-
-    /// Link with a specific ConfigServer instance
-    ///
-    /// This method:
-    /// 1. Creates shutdown handle
-    /// 2. Starts the appropriate sync mechanism (FileSystem watcher or K8s controller)
-    async fn link_with_server(&self, config_server: &Arc<ConfigServer>) -> Result<()> {
-        tracing::info!(
-            component = "conf_center",
-            mode = if self.is_k8s_mode() { "kubernetes" } else { "file_system" },
-            "ConfCenter link: starting configuration sync"
-        );
-
-        // Create new shutdown handle for this link cycle
-        let shutdown_handle = ShutdownHandle::new();
-        {
-            let mut handle = self.shutdown_handle.lock().unwrap();
-            *handle = Some(shutdown_handle.clone());
-        }
-
-        match &self.config {
-            ConfCenterConfig::FileSystem {
-                conf_dir,
-                watch_enabled,
-            } => {
-                // Load all resources from file system
-                tracing::info!(
-                    component = "conf_center",
-                    mode = "file_system",
-                    "Loading all resources from file system"
-                );
-                
-                load_all_resources(self.writer.clone(), config_server.clone()).await?;
-
-                // Start file watcher if enabled
-                if *watch_enabled {
-                    tracing::info!(
+                reason => {
+                    tracing::warn!(
                         component = "conf_center",
-                        mode = "file_system",
-                        conf_dir = %conf_dir.display(),
-                        "Starting file watcher"
+                        mode = "kubernetes",
+                        exit_reason = ?reason,
+                        "Controller exited, will restart"
                     );
 
-                    let watcher_config_server = config_server.clone();
-                    let watcher = FileWatcher::new(conf_dir.clone(), watcher_config_server);
-                    let watcher_shutdown_signal = shutdown_handle.signal();
+                    // Reset counter if ran stably for long enough
+                    if iteration_start.elapsed() >= STABLE_RUN_DURATION {
+                        consecutive_failures = 0;
+                    }
 
-                    // Spawn watcher in background with shutdown support
-                    let handle = tokio::spawn(async move {
-                        if let Err(e) = watcher.start(watcher_shutdown_signal).await {
-                            tracing::error!(
-                                component = "conf_center",
-                                mode = "file_system",
-                                error = %e,
-                                "File watcher error"
-                            );
-                        }
-                    });
-
-                    let mut controller_handle = self.controller_handle.lock().unwrap();
-                    *controller_handle = Some(handle);
-                }
-
-                Ok(())
-            }
-            ConfCenterConfig::Kubernetes {
-                watch_namespaces,
-                label_selector,
-                gateway_class,
-            } => {
-                tracing::info!(
-                    component = "conf_center",
-                    mode = "kubernetes",
-                    gateway_class = gateway_class,
-                    namespaces = ?watch_namespaces,
-                    "Starting Kubernetes controller"
-                );
-
-                let controller = KubernetesController::new(
-                    config_server.clone(),
-                    gateway_class.clone(),
-                    watch_namespaces.clone(),
-                    label_selector.clone(),
-                )
-                .await?;
-
-                // Create channel for receiving exit reason
-                let (exit_tx, exit_rx) = mpsc::channel::<ControllerExitReason>(1);
-                {
-                    let mut rx = self.exit_reason_rx.lock().unwrap();
-                    *rx = Some(exit_rx);
-                }
-
-                // Spawn controller in background
-                let handle = tokio::spawn(async move {
-                    let exit_reason = match controller.run().await {
-                        Ok(reason) => {
-                            tracing::warn!(
-                                component = "conf_center",
-                                mode = "kubernetes",
-                                exit_reason = ?reason,
-                                "Kubernetes controller exited"
-                            );
+                    consecutive_failures += 1;
+                    if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
+                        return Err(anyhow::anyhow!(
+                            "Max consecutive failures exceeded after {:?}",
                             reason
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                component = "conf_center",
-                                mode = "kubernetes",
-                                error = %e,
-                                "Kubernetes controller error"
-                            );
-                            ControllerExitReason::AllControllersStopped
-                        }
-                    };
-                    // Send exit reason to supervisor
-                    let _ = exit_tx.send(exit_reason).await;
-                });
+                        ));
+                    }
 
-                let mut controller_handle = self.controller_handle.lock().unwrap();
-                *controller_handle = Some(handle);
-
-                Ok(())
+                    // Backoff before restart
+                    let backoff = Duration::from_secs(1 << consecutive_failures.min(6));
+                    tracing::info!(
+                        component = "conf_center",
+                        mode = "kubernetes",
+                        backoff_secs = backoff.as_secs(),
+                        consecutive_failures = consecutive_failures,
+                        "Waiting before restart"
+                    );
+                    tokio::time::sleep(backoff).await;
+                }
             }
         }
     }
+
+    /// Create K8s controller
+    async fn create_k8s_controller(&self, config_server: &Arc<ConfigServer>) -> Result<KubernetesController> {
+        let ConfCenterConfig::Kubernetes {
+            watch_namespaces,
+            label_selector,
+            gateway_class,
+        } = &self.config else {
+            return Err(anyhow::anyhow!("Not in Kubernetes mode"));
+        };
+
+        tracing::info!(
+            component = "conf_center",
+            mode = "kubernetes",
+            gateway_class = gateway_class,
+            namespaces = ?watch_namespaces,
+            "Creating Kubernetes controller"
+        );
+
+        KubernetesController::new(
+            config_server.clone(),
+            gateway_class.clone(),
+            watch_namespaces.clone(),
+            label_selector.clone(),
+        )
+        .await
+    }
+
+    // ==================== Helper Methods ====================
 
     /// Wait for all caches to be ready
     async fn wait_caches_ready(&self, config_server: &Arc<ConfigServer>, timeout_secs: u64) {
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(timeout_secs);
+        let start = Instant::now();
+        let timeout = Duration::from_secs(timeout_secs);
 
         loop {
             if config_server.is_each_cache_ready() {
@@ -428,125 +428,36 @@ impl ConfCenter {
             }
 
             let not_ready = config_server.not_ready_caches();
-            tracing::info!(
+            tracing::debug!(
                 component = "conf_center",
                 event = "waiting_for_caches",
                 not_ready = ?not_ready,
                 elapsed_ms = start.elapsed().as_millis(),
                 "Waiting for caches to be ready..."
             );
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
     /// Set the ConfigServer (Some = ready, None = not ready)
     fn set_config_server(&self, server: Option<Arc<ConfigServer>>) {
         let mut config_server = self.config_server.write().unwrap();
-        let was_some = config_server.is_some();
-        let is_some = server.is_some();
+        let was_ready = config_server.is_some();
+        let is_ready = server.is_some();
         *config_server = server;
-        
-        tracing::info!(
-            component = "conf_center",
-            event = "config_server_changed",
-            was_ready = was_some,
-            is_ready = is_some,
-            "ConfigServer state changed"
-        );
-    }
 
-    /// Cleanup: Stop sync tasks and clear state
-    async fn cleanup(&self) {
-        tracing::info!(
-            component = "conf_center",
-            mode = if self.is_k8s_mode() { "kubernetes" } else { "file_system" },
-            "ConfCenter cleanup: stopping sync tasks"
-        );
-
-        // 1. Trigger shutdown signal
-        {
-            let handle = self.shutdown_handle.lock().unwrap();
-            if let Some(ref shutdown) = *handle {
-                shutdown.shutdown();
-                tracing::info!(
-                    component = "conf_center",
-                    "Triggered shutdown signal"
-                );
-            }
-        }
-
-        // 2. Wait for controller task to finish (with timeout)
-        let controller_handle = {
-            let mut handle = self.controller_handle.lock().unwrap();
-            handle.take()
-        };
-        
-        if let Some(handle) = controller_handle {
-            match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
-                Ok(_) => {
-                    tracing::info!(
-                        component = "conf_center",
-                        "Controller task stopped"
-                    );
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        component = "conf_center",
-                        "Controller task did not stop within timeout, continuing"
-                    );
-                }
-            }
-        }
-
-        // 3. Clear shutdown handle
-        {
-            let mut handle = self.shutdown_handle.lock().unwrap();
-            *handle = None;
-        }
-
-        // 4. Clear exit reason receiver
-        {
-            let mut rx = self.exit_reason_rx.lock().unwrap();
-            *rx = None;
-        }
-
-        tracing::info!(
-            component = "conf_center",
-            "ConfCenter cleanup complete"
-        );
-    }
-
-    /// Wait for controller to exit and return the exit reason
-    /// 
-    /// This method is used by the lifecycle loop to detect when relink is needed.
-    /// Only applicable for Kubernetes mode.
-    /// 
-    /// Returns:
-    /// - Some(ControllerExitReason) - Controller exited with a reason
-    /// - None - Not in Kubernetes mode or no controller running
-    pub async fn wait_for_exit(&self) -> Option<ControllerExitReason> {
-        if !self.is_k8s_mode() {
-            return None;
-        }
-
-        let mut rx = {
-            let mut rx_guard = self.exit_reason_rx.lock().unwrap();
-            rx_guard.take()
-        };
-
-        match rx {
-            Some(ref mut receiver) => receiver.recv().await,
-            None => None,
+        if was_ready != is_ready {
+            tracing::info!(
+                component = "conf_center",
+                event = "config_server_state_changed",
+                was_ready = was_ready,
+                is_ready = is_ready,
+                "ConfigServer state changed"
+            );
         }
     }
 
-    /// Check if relink is needed based on exit reason
-    pub fn needs_relink(reason: &ControllerExitReason) -> bool {
-        matches!(
-            reason,
-            ControllerExitReason::RelinkRequested(_) | ControllerExitReason::LostLeadership
-        )
-    }
+    // ==================== Public API ====================
 
     /// Get the configuration writer
     pub fn writer(&self) -> Arc<dyn ConfWriter> {
