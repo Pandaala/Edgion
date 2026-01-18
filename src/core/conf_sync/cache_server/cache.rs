@@ -50,6 +50,24 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         *self.ready.read().unwrap()
     }
 
+    /// Set cache to not ready state
+    /// Used during relink to prevent serving stale data
+    pub fn set_not_ready(&self) {
+        *self.ready.write().unwrap() = false;
+    }
+
+    /// Clear all data from the cache
+    /// Used during relink to remove stale data
+    pub fn clear(&self)
+    where
+        T: Clone,
+    {
+        let mut store_guard = self.store.write().unwrap();
+        store_guard.clear();
+        // Notify watchers that data has changed (they will get error on next fetch)
+        self.notify.notify_waiters();
+    }
+
     /// List all data - returns all resources in the cache with resource version
     /// This is typically called by clients to get the full snapshot of data
     pub fn list(&self) -> ListData<T>

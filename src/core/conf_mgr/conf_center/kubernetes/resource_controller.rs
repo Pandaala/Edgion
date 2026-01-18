@@ -30,12 +30,27 @@ use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use super::metrics::{controller_metrics, InitSyncTimer};
 use super::namespace::NamespaceWatchMode;
 use super::shutdown::ShutdownSignal;
 use super::workqueue::Workqueue;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::ResourceChange;
+
+/// Signal sender for relink requests
+/// When a ResourceController detects 410 Gone (re-LIST needed),
+/// it sends a signal through this channel
+pub type RelinkSignalSender = mpsc::Sender<RelinkReason>;
+
+/// Reason for relink request
+#[derive(Debug, Clone)]
+pub enum RelinkReason {
+    /// Watcher received 410 Gone error
+    GoneError,
+    /// Watcher reconnected (detected by Event::Init after init_done)
+    WatcherReconnected,
+}
 
 /// Type alias for the apply function that handles InitAdd and runtime events
 pub type ApplyFn<K> = Arc<dyn Fn(&ConfigServer, ResourceChange, K) + Send + Sync>;
@@ -70,6 +85,9 @@ where
 
     // Graceful shutdown signal
     shutdown_signal: Option<ShutdownSignal>,
+    
+    /// Optional relink signal sender for notifying when 410 Gone is detected
+    relink_signal: Option<RelinkSignalSender>,
 }
 
 /// API scope for resource (namespaced or cluster-scoped)
@@ -107,6 +125,7 @@ where
         apply_fn: ApplyFn<K>,
         filter_fn: Option<FilterFn<K>>,
         shutdown_signal: Option<ShutdownSignal>,
+        relink_signal: Option<RelinkSignalSender>,
     ) -> Self {
         // Extract namespace filter from api_scope for MultipleNamespaces mode
         let namespace_filter = api_scope.namespace_filter();
@@ -121,6 +140,7 @@ where
             filter_fn,
             namespace_filter,
             shutdown_signal,
+            relink_signal,
         }
     }
 
@@ -228,64 +248,101 @@ where
                     match event {
                         Event::Init => {
                             // Start of init phase (LIST)
-                            tracing::debug!(
-                                component = "resource_controller",
-                                kind = kind,
-                                "Init phase started"
-                            );
+                            if init_done {
+                                // Watcher reconnecting - this happens on 410 Gone or network issues
+                                tracing::warn!(
+                                    component = "resource_controller",
+                                    kind = kind,
+                                    "Watcher reconnecting (possible 410 Gone), starting re-sync via LIST"
+                                );
+                                
+                                // Send relink signal if configured
+                                if let Some(ref signal) = self.relink_signal {
+                                    let _ = signal.try_send(RelinkReason::WatcherReconnected);
+                                    tracing::info!(
+                                        component = "resource_controller",
+                                        kind = kind,
+                                        "Sent relink signal due to watcher reconnection"
+                                    );
+                                }
+                            } else {
+                                // First connection
+                                tracing::debug!(
+                                    component = "resource_controller",
+                                    kind = kind,
+                                    "Init phase started"
+                                );
+                            }
                         }
                         Event::InitApply(obj) => {
-                            // Init phase - apply directly (store already updated by reflector)
+                            // Store already updated by reflector
                             if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
-                                (self.apply_fn)(
-                                    &self.config_server,
-                                    ResourceChange::InitAdd,
-                                    obj,
-                                );
-                                init_count += 1;
+                                if !init_done {
+                                    // First init - apply directly as InitAdd
+                                    (self.apply_fn)(
+                                        &self.config_server,
+                                        ResourceChange::InitAdd,
+                                        obj,
+                                    );
+                                    init_count += 1;
+                                } else {
+                                    // Watcher reconnected - enqueue for worker (like normal Apply)
+                                    let key = make_resource_key(&obj);
+                                    pending_deletes.remove(&key);
+                                    queue.enqueue(key).await;
+                                }
                             }
                         }
                         Event::InitDone => {
-                            // Init phase complete
-                            let init_duration = init_timer.take()
-                                .map(|t| t.complete(init_count))
-                                .unwrap_or(0.0);
-                            tracing::info!(
-                                component = "resource_controller",
-                                kind = kind,
-                                count = init_count,
-                                duration_secs = init_duration,
-                                "Init phase complete (Step 5: InitAdd applied)"
-                            );
+                            if !init_done {
+                                // First init complete
+                                let init_duration = init_timer.take()
+                                    .map(|t| t.complete(init_count))
+                                    .unwrap_or(0.0);
+                                tracing::info!(
+                                    component = "resource_controller",
+                                    kind = kind,
+                                    count = init_count,
+                                    duration_secs = init_duration,
+                                    "Init phase complete (Step 5: InitAdd applied)"
+                                );
 
-                            // Mark cache ready
-                            self.config_server.set_cache_ready_by_kind(kind);
-                            tracing::info!(
-                                component = "resource_controller",
-                                kind = kind,
-                                "Step 6: Cache marked ready, entering runtime phase"
-                            );
+                                // Mark cache ready
+                                self.config_server.set_cache_ready_by_kind(kind);
+                                tracing::info!(
+                                    component = "resource_controller",
+                                    kind = kind,
+                                    "Step 6: Cache marked ready, entering runtime phase"
+                                );
 
-                            init_done = true;
+                                init_done = true;
 
-                            // Spawn worker for runtime phase
-                            spawn_worker(
-                                queue.clone(),
-                                store.clone(),
-                                pending_deletes.clone(),
-                                self.config_server.clone(),
-                                self.apply_fn.clone(),
-                                self.filter_fn.clone(),
-                                self.namespace_filter.clone(),
-                                kind,
-                                self.shutdown_signal.clone(),
-                            );
+                                // Spawn worker for runtime phase (only once)
+                                spawn_worker(
+                                    queue.clone(),
+                                    store.clone(),
+                                    pending_deletes.clone(),
+                                    self.config_server.clone(),
+                                    self.apply_fn.clone(),
+                                    self.filter_fn.clone(),
+                                    self.namespace_filter.clone(),
+                                    kind,
+                                    self.shutdown_signal.clone(),
+                                );
 
-                            tracing::info!(
-                                component = "resource_controller",
-                                kind = kind,
-                                "Step 7-8: Worker started, processing runtime events via workqueue"
-                            );
+                                tracing::info!(
+                                    component = "resource_controller",
+                                    kind = kind,
+                                    "Step 7-8: Worker started, processing runtime events via workqueue"
+                                );
+                            } else {
+                                // Watcher reconnected - worker already running
+                                tracing::info!(
+                                    component = "resource_controller",
+                                    kind = kind,
+                                    "Watcher reconnected, re-sync complete, worker already running"
+                                );
+                            }
                         }
                         Event::Apply(obj) => {
                             if !init_done {
@@ -588,6 +645,7 @@ where
     apply_fn: Option<ApplyFn<K>>,
     filter_fn: Option<FilterFn<K>>,
     shutdown_signal: Option<ShutdownSignal>,
+    relink_signal: Option<RelinkSignalSender>,
     _marker: std::marker::PhantomData<K>,
 }
 
@@ -604,6 +662,7 @@ where
             apply_fn: None,
             filter_fn: None,
             shutdown_signal: None,
+            relink_signal: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -644,6 +703,12 @@ where
         self
     }
 
+    /// Set relink signal sender for 410 Gone detection
+    pub fn with_relink_signal(mut self, signal: RelinkSignalSender) -> Self {
+        self.relink_signal = Some(signal);
+        self
+    }
+
     /// Build the ResourceController
     pub fn build(
         self,
@@ -660,6 +725,7 @@ where
             self.apply_fn.expect("Apply function must be set"),
             self.filter_fn,
             self.shutdown_signal,
+            self.relink_signal,
         )
     }
 }

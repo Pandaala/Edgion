@@ -9,7 +9,7 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tracing_appender::non_blocking::WorkerGuard;
 
@@ -206,6 +206,111 @@ impl EdgionControllerCli {
         Ok(())
     }
 
+    /// Supervisor loop for handling relink scenarios
+    /// 
+    /// This loop monitors the Kubernetes controller and automatically
+    /// triggers relink when:
+    /// - 410 Gone is detected (resourceVersion expired)
+    /// - Leader election is lost (in HA mode)
+    async fn run_with_relink_loop(conf_center: Arc<ConfCenter>, all_ready: Arc<AtomicBool>) {
+        const MAX_RELINK_RETRIES: u32 = 10;
+        const RELINK_BACKOFF_BASE_SECS: u64 = 1;
+        const RELINK_BACKOFF_MAX_SECS: u64 = 60;
+
+        let mut relink_count: u32 = 0;
+
+        loop {
+            // Wait for controller to exit
+            let exit_reason = conf_center.wait_for_exit().await;
+
+            match exit_reason {
+                Some(reason) => {
+                    tracing::info!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        event = "controller_exit",
+                        reason = ?reason,
+                        relink_count = relink_count,
+                        "Controller exited"
+                    );
+
+                    if ConfCenter::needs_relink(&reason) {
+                        relink_count += 1;
+
+                        if relink_count > MAX_RELINK_RETRIES {
+                            tracing::error!(
+                                component = COMPONENT_EDGION_CONTROLLER,
+                                event = "max_relink_retries",
+                                relink_count = relink_count,
+                                "Maximum relink retries exceeded, stopping supervisor"
+                            );
+                            break;
+                        }
+
+                        // Calculate backoff delay with exponential backoff
+                        let backoff_secs = std::cmp::min(
+                            RELINK_BACKOFF_BASE_SECS * 2u64.pow(relink_count.saturating_sub(1)),
+                            RELINK_BACKOFF_MAX_SECS,
+                        );
+
+                        tracing::info!(
+                            component = COMPONENT_EDGION_CONTROLLER,
+                            event = "relink_scheduled",
+                            relink_count = relink_count,
+                            backoff_secs = backoff_secs,
+                            "Scheduling relink with backoff"
+                        );
+
+                        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+
+                        // Reset all_ready flag before relink
+                        all_ready.store(false, Ordering::SeqCst);
+
+                        // Perform relink
+                        match conf_center.relink().await {
+                            Ok(()) => {
+                                tracing::info!(
+                                    component = COMPONENT_EDGION_CONTROLLER,
+                                    event = "relink_success",
+                                    relink_count = relink_count,
+                                    "Relink successful"
+                                );
+                                // Reset retry count on successful relink
+                                // (or keep it to eventually stop on persistent issues)
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    component = COMPONENT_EDGION_CONTROLLER,
+                                    event = "relink_failed",
+                                    error = %e,
+                                    relink_count = relink_count,
+                                    "Relink failed"
+                                );
+                                // Continue to next iteration which will try again
+                            }
+                        }
+                    } else {
+                        // Normal exit (Shutdown, etc.) - stop the loop
+                        tracing::info!(
+                            component = COMPONENT_EDGION_CONTROLLER,
+                            event = "supervisor_stopping",
+                            reason = ?reason,
+                            "Supervisor loop stopping (normal exit)"
+                        );
+                        break;
+                    }
+                }
+                None => {
+                    // Not in K8s mode or no controller - just return
+                    tracing::debug!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        "No controller exit to wait for"
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
     /// Main entry point
     pub async fn run(&self) -> Result<()> {
         // Load and merge configuration
@@ -229,10 +334,10 @@ impl EdgionControllerCli {
         let all_ready = Arc::new(AtomicBool::new(false));
 
         // 4. Create ConfCenter (internally creates ConfigServer with shared all_ready)
-        let conf_center = Arc::new(ConfCenter::create(conf_center_config, &config.conf_sync, all_ready).await?);
+        let conf_center = Arc::new(ConfCenter::create(conf_center_config, &config.conf_sync, all_ready.clone()).await?);
 
-        // 5. Start ConfCenter (load resources + start watcher/controller)
-        conf_center.start().await?;
+        // 5. Link ConfCenter (load resources + start watcher/controller)
+        conf_center.link().await?;
 
         // 6. Load CRD schemas for validation
         let schema_validator = Self::load_schemas();
@@ -240,6 +345,15 @@ impl EdgionControllerCli {
         // 7. Parse addresses and start services
         let grpc_addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
         let admin_port = 5800;
+
+        // 8. Spawn supervisor loop for K8s mode (handles relink on 410 Gone / leadership loss)
+        if conf_center.is_k8s_mode() {
+            let supervisor_conf_center = conf_center.clone();
+            let supervisor_all_ready = all_ready.clone();
+            tokio::spawn(async move {
+                Self::run_with_relink_loop(supervisor_conf_center, supervisor_all_ready).await;
+            });
+        }
 
         Self::start_services(conf_center, schema_validator, grpc_addr, admin_port).await
     }

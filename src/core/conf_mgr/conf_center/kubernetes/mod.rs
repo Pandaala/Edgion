@@ -16,15 +16,15 @@ mod leader_election;
 mod metrics;
 mod namespace;
 mod resource_controller;
-mod shutdown;
+pub mod shutdown;
 mod workqueue;
 mod writer;
 
-pub use controller::{KubernetesController, LeaderElectionMode};
+pub use controller::{ControllerExitReason, KubernetesController, LeaderElectionMode};
 pub use leader_election::{LeaderElection, LeaderElectionConfig, LeaderHandle};
 pub use metrics::{controller_metrics, ControllerMetrics, InitSyncTimer, ResourceMetrics};
 pub use namespace::NamespaceWatchMode;
-pub use resource_controller::{ResourceController, ResourceControllerBuilder};
+pub use resource_controller::{RelinkReason, RelinkSignalSender, ResourceController, ResourceControllerBuilder};
 pub use shutdown::{ShutdownHandle, ShutdownSignal};
 pub use writer::KubernetesWriter;
 

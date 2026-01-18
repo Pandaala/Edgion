@@ -1,7 +1,7 @@
 use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
 use super::secret_ref::SecretRefManager;
@@ -80,7 +80,8 @@ pub enum ResourceItem {
 pub struct ConfigServer {
     /// Server instance ID, generated at startup (millisecond timestamp)
     /// Used by clients to detect server restarts/failovers
-    pub server_id: String,
+    /// Wrapped in RwLock to allow regeneration during relink
+    server_id: RwLock<String>,
 
     /// Global all_ready flag - shared from Controller level
     /// Controlled externally by ConfCenter, checked here before list/watch
@@ -125,13 +126,7 @@ pub struct EventDataSimple {
 impl ConfigServer {
     pub fn new(conf_sync_config: &crate::core::cli::config::ConfSyncConfig, all_ready: Arc<AtomicBool>) -> Self {
         // Generate server_id using millisecond timestamp
-        let server_id = format!(
-            "{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        );
+        let server_id = Self::generate_server_id();
 
         tracing::info!(
             component = "config_server",
@@ -140,7 +135,7 @@ impl ConfigServer {
         );
 
         Self {
-            server_id,
+            server_id: RwLock::new(server_id),
             all_ready,
             gateway_classes: ServerCache::new(conf_sync_config.gateway_classes_capacity),
             gateways: ServerCache::new(conf_sync_config.gateways_capacity),
@@ -163,6 +158,22 @@ impl ConfigServer {
             secrets: ServerCache::new(conf_sync_config.secrets_capacity),
             secret_ref_manager: Arc::new(SecretRefManager::new()),
         }
+    }
+
+    /// Generate a new server ID using millisecond timestamp
+    fn generate_server_id() -> String {
+        format!(
+            "{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        )
+    }
+
+    /// Get the current server ID
+    pub fn server_id(&self) -> String {
+        self.server_id.read().unwrap().clone()
     }
 
     /// Get SecretRefManager statistics for monitoring
@@ -215,7 +226,7 @@ impl ConfigServer {
         Ok(ListDataSimple {
             data: data_json,
             sync_version,
-            server_id: self.server_id.clone(),
+            server_id: self.server_id(),
         })
     }
 
@@ -232,7 +243,7 @@ impl ConfigServer {
         }
 
         let (tx, rx) = mpsc::channel(100);
-        let server_id = self.server_id.clone();
+        let server_id = self.server_id();
 
         println!(
             "[ConfigCenter::watch] kind={:?} client_id={} client_name={} from_version={}",
@@ -957,6 +968,94 @@ impl ConfigServer {
     /// Note: This flag is controlled externally by ConfCenter
     pub fn is_all_ready(&self) -> bool {
         self.all_ready.load(Ordering::SeqCst)
+    }
+
+    /// Set all caches to not ready state
+    /// Used during relink to prevent serving stale data
+    pub fn set_all_caches_not_ready(&self) {
+        self.gateway_classes.set_not_ready();
+        self.gateways.set_not_ready();
+        self.edgion_gateway_configs.set_not_ready();
+        self.routes.set_not_ready();
+        self.grpc_routes.set_not_ready();
+        self.tcp_routes.set_not_ready();
+        self.udp_routes.set_not_ready();
+        self.tls_routes.set_not_ready();
+        self.link_sys.set_not_ready();
+        self.services.set_not_ready();
+        self.endpoint_slices.set_not_ready();
+        self.endpoints.set_not_ready();
+        self.edgion_tls.set_not_ready();
+        self.edgion_plugins.set_not_ready();
+        self.edgion_stream_plugins.set_not_ready();
+        self.reference_grants.set_not_ready();
+        self.backend_tls_policies.set_not_ready();
+        self.plugin_metadata.set_not_ready();
+        self.secrets.set_not_ready();
+    }
+
+    /// Clear all cache data
+    /// Used during relink to remove stale data
+    pub fn clear_all_caches(&self) {
+        self.gateway_classes.clear();
+        self.gateways.clear();
+        self.edgion_gateway_configs.clear();
+        self.routes.clear();
+        self.grpc_routes.clear();
+        self.tcp_routes.clear();
+        self.udp_routes.clear();
+        self.tls_routes.clear();
+        self.link_sys.clear();
+        self.services.clear();
+        self.endpoint_slices.clear();
+        self.endpoints.clear();
+        self.edgion_tls.clear();
+        self.edgion_plugins.clear();
+        self.edgion_stream_plugins.clear();
+        self.reference_grants.clear();
+        self.backend_tls_policies.clear();
+        self.plugin_metadata.clear();
+        self.secrets.clear();
+        // Also clear secret reference manager
+        self.secret_ref_manager.clear();
+    }
+
+    /// Regenerate server ID
+    /// Used during relink to trigger clients to re-sync
+    pub fn regenerate_server_id(&self) {
+        let old_id = self.server_id();
+        let new_id = Self::generate_server_id();
+        tracing::info!(
+            component = "config_server",
+            old_server_id = %old_id,
+            new_server_id = %new_id,
+            "Regenerating server_id for relink"
+        );
+        *self.server_id.write().unwrap() = new_id;
+    }
+
+    /// Reset for relink: clear all caches and regenerate server ID
+    /// Called when 410 Gone or leader re-election requires full state reset
+    pub fn reset_for_relink(&self) {
+        tracing::info!(
+            component = "config_server",
+            "Resetting ConfigServer for relink"
+        );
+
+        // 1. Set all caches to not ready
+        self.set_all_caches_not_ready();
+
+        // 2. Clear all cache data
+        self.clear_all_caches();
+
+        // 3. Regenerate server ID (triggers client re-sync)
+        self.regenerate_server_id();
+
+        tracing::info!(
+            component = "config_server",
+            server_id = %self.server_id(),
+            "ConfigServer reset complete"
+        );
     }
 
     // Helper methods for base conf resources

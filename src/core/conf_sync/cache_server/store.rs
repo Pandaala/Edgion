@@ -39,6 +39,20 @@ impl<T> EventStore<T> {
         self.sync_version
     }
 
+    /// Clear all data and reset to initial state
+    /// Used during relink to clear stale data
+    pub fn clear(&mut self)
+    where
+        T: Clone,
+    {
+        self.cache = vec![None; self.capacity];
+        self.start_index = 0;
+        self.end_index = 0;
+        self.sync_version = 0;
+        self.expire_sync_version = 0;
+        self.data.clear();
+    }
+
     pub fn apply_event(&mut self, event_type: EventType, resource: T, sync_version: u64)
     where
         T: Clone + Resource,

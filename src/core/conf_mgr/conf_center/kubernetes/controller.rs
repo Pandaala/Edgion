@@ -53,10 +53,11 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::runtime::watcher;
 use kube::Client;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 use super::leader_election::{LeaderElection, LeaderElectionConfig};
 use super::namespace::NamespaceWatchMode;
-use super::resource_controller::ResourceControllerBuilder;
+use super::resource_controller::{RelinkReason, ResourceControllerBuilder};
 use super::shutdown::{ShutdownHandle, ShutdownSignal};
 use super::status::{KubernetesStatusStore, StatusStore};
 use crate::core::conf_sync::conf_server::ConfigServer;
@@ -64,13 +65,14 @@ use crate::core::conf_sync::CacheEventDispatch;
 use crate::types::prelude_resources::*;
 
 /// Macro to spawn a standard namespaced ResourceController
-/// Usage: spawn_namespaced!(self, handles, watcher_config, shutdown_signal, Type, "Kind", cache_field)
+/// Usage: spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, Type, "Kind", cache_field)
 macro_rules! spawn_namespaced {
-    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $type:ty, $kind:literal, $cache:ident) => {{
+    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $relink_tx:ident, $type:ty, $kind:literal, $cache:ident) => {{
         let rc = ResourceControllerBuilder::<$type>::new($kind)
             .namespaced($self.watch_mode.clone())
             .apply_with(|cs, change, r| cs.$cache.apply_change(change, r))
             .with_shutdown($shutdown.clone())
+            .with_relink_signal($relink_tx.clone())
             .build(
                 $self.client.clone(),
                 $self.config_server.clone(),
@@ -81,13 +83,14 @@ macro_rules! spawn_namespaced {
 }
 
 /// Macro to spawn a namespaced ResourceController with custom apply function
-/// Usage: spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, Type, "Kind", apply_fn)
+/// Usage: spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, relink_tx, Type, "Kind", apply_fn)
 macro_rules! spawn_namespaced_custom {
-    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $type:ty, $kind:literal, $apply:expr) => {{
+    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $relink_tx:ident, $type:ty, $kind:literal, $apply:expr) => {{
         let rc = ResourceControllerBuilder::<$type>::new($kind)
             .namespaced($self.watch_mode.clone())
             .apply_with($apply)
             .with_shutdown($shutdown.clone())
+            .with_relink_signal($relink_tx.clone())
             .build(
                 $self.client.clone(),
                 $self.config_server.clone(),
@@ -98,13 +101,14 @@ macro_rules! spawn_namespaced_custom {
 }
 
 /// Macro to spawn a cluster-scoped ResourceController
-/// Usage: spawn_cluster!(self, handles, watcher_config, shutdown_signal, Type, "Kind", cache_field)
+/// Usage: spawn_cluster!(self, handles, watcher_config, shutdown_signal, relink_tx, Type, "Kind", cache_field)
 macro_rules! spawn_cluster {
-    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $type:ty, $kind:literal, $cache:ident) => {{
+    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $relink_tx:ident, $type:ty, $kind:literal, $cache:ident) => {{
         let rc = ResourceControllerBuilder::<$type>::new($kind)
             .cluster_scoped()
             .apply_with(|cs, change, r| cs.$cache.apply_change(change, r))
             .with_shutdown($shutdown.clone())
+            .with_relink_signal($relink_tx.clone())
             .build(
                 $self.client.clone(),
                 $self.config_server.clone(),
@@ -211,7 +215,11 @@ impl KubernetesController {
     /// Also handles:
     /// - Graceful shutdown on SIGTERM/SIGINT
     /// - Optional leader election for HA deployments
-    pub async fn run(&self) -> Result<()> {
+    /// - 410 Gone detection and relink signaling
+    ///
+    /// Note: This method returns after controllers stop. If relink is needed,
+    /// the caller (ConfCenter) should call this again after resetting state.
+    pub async fn run(&self) -> Result<ControllerExitReason> {
         // Setup shutdown handling
         let shutdown_handle = ShutdownHandle::new();
         let shutdown_signal = shutdown_handle.signal();
@@ -260,7 +268,7 @@ impl KubernetesController {
                         component = "k8s_controller",
                         "Shutdown requested before acquiring leadership"
                     );
-                    return Ok(());
+                    return Ok(ControllerExitReason::Shutdown);
                 }
                 tracing::info!(
                     component = "k8s_controller",
@@ -270,6 +278,7 @@ impl KubernetesController {
                 // Monitor leadership loss and trigger shutdown if we lose it
                 let leader_handle_monitor = leader_handle.clone();
                 let shutdown_for_leader = shutdown_handle.clone();
+                let (leadership_lost_tx, mut leadership_lost_rx) = mpsc::channel::<()>(1);
                 tokio::spawn(async move {
                     // Poll for leadership loss
                     loop {
@@ -280,18 +289,32 @@ impl KubernetesController {
                                 "Lost leadership - triggering shutdown of all controllers"
                             );
                             shutdown_for_leader.shutdown();
+                            let _ = leadership_lost_tx.send(()).await;
                             break;
                         }
                     }
                 });
 
-                self.run_controllers(shutdown_signal).await
+                // Run controllers and wait for exit
+                tokio::select! {
+                    result = self.run_controllers(shutdown_signal) => {
+                        result
+                    }
+                    _ = leadership_lost_rx.recv() => {
+                        tracing::warn!(
+                            component = "k8s_controller",
+                            "Controllers stopping due to leadership loss"
+                        );
+                        Ok(ControllerExitReason::LostLeadership)
+                    }
+                }
             }
         }
     }
 
     /// Internal method to run all controllers
-    async fn run_controllers(&self, shutdown_signal: ShutdownSignal) -> Result<()> {
+    /// Returns when shutdown is triggered or a relink signal is received
+    async fn run_controllers(&self, shutdown_signal: ShutdownSignal) -> Result<ControllerExitReason> {
         tracing::info!(
             component = "k8s_controller",
             "Starting Kubernetes controller - spawning 19 independent ResourceControllers"
@@ -300,39 +323,45 @@ impl KubernetesController {
         let watcher_config = self.watcher_config();
         let mut handles = Vec::new();
 
+        // Create relink signal channel
+        // Any ResourceController can send a signal when 410 Gone is detected
+        let (relink_tx, mut relink_rx) = mpsc::channel::<RelinkReason>(10);
+
         // ==================== Standard Namespaced Resources (14) ====================
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, HTTPRoute, "HTTPRoute", routes);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, GRPCRoute, "GRPCRoute", grpc_routes);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, TCPRoute, "TCPRoute", tcp_routes);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, UDPRoute, "UDPRoute", udp_routes);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, TLSRoute, "TLSRoute", tls_routes);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, Service, "Service", services);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, Endpoints, "Endpoints", endpoints);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, EndpointSlice, "EndpointSlice", endpoint_slices);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, ReferenceGrant, "ReferenceGrant", reference_grants);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, EdgionPlugins, "EdgionPlugins", edgion_plugins);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, EdgionStreamPlugins, "EdgionStreamPlugins", edgion_stream_plugins);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, BackendTLSPolicy, "BackendTLSPolicy", backend_tls_policies);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, PluginMetaData, "PluginMetaData", plugin_metadata);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, LinkSys, "LinkSys", link_sys);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, HTTPRoute, "HTTPRoute", routes);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, GRPCRoute, "GRPCRoute", grpc_routes);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, TCPRoute, "TCPRoute", tcp_routes);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, UDPRoute, "UDPRoute", udp_routes);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, TLSRoute, "TLSRoute", tls_routes);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, Service, "Service", services);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, Endpoints, "Endpoints", endpoints);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, EndpointSlice, "EndpointSlice", endpoint_slices);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, ReferenceGrant, "ReferenceGrant", reference_grants);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, EdgionPlugins, "EdgionPlugins", edgion_plugins);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, EdgionStreamPlugins, "EdgionStreamPlugins", edgion_stream_plugins);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, BackendTLSPolicy, "BackendTLSPolicy", backend_tls_policies);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, PluginMetaData, "PluginMetaData", plugin_metadata);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, LinkSys, "LinkSys", link_sys);
 
         // ==================== Namespaced with Custom Apply (2) ====================
-        spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, Secret, "Secret",
+        spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, relink_tx, Secret, "Secret",
             |cs, change, r| cs.apply_secret_change(change, r));
 
         // EdgionTls - standard apply (watches removed, handled by apply logic)
-        spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, EdgionTls, "EdgionTls",
+        spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, relink_tx, EdgionTls, "EdgionTls",
             |cs, change, r| cs.apply_edgion_tls_change(change, r));
 
         // ==================== Gateway (with filter) ====================
         {
             let gateway_class = self.gateway_class_name.clone();
             let shutdown = shutdown_signal.clone();
+            let relink = relink_tx.clone();
             let rc = ResourceControllerBuilder::<Gateway>::new("Gateway")
                 .namespaced(self.watch_mode.clone())
                 .filter(move |g| g.spec.gateway_class_name == gateway_class)
                 .apply_with(|cs, change, r| cs.apply_gateway_change(change, r))
                 .with_shutdown(shutdown)
+                .with_relink_signal(relink)
                 .build(
                     self.client.clone(),
                     self.config_server.clone(),
@@ -342,8 +371,11 @@ impl KubernetesController {
         }
 
         // ==================== Cluster-Scoped Resources (2) ====================
-        spawn_cluster!(self, handles, watcher_config, shutdown_signal, GatewayClass, "GatewayClass", gateway_classes);
-        spawn_cluster!(self, handles, watcher_config, shutdown_signal, EdgionGatewayConfig, "EdgionGatewayConfig", edgion_gateway_configs);
+        spawn_cluster!(self, handles, watcher_config, shutdown_signal, relink_tx, GatewayClass, "GatewayClass", gateway_classes);
+        spawn_cluster!(self, handles, watcher_config, shutdown_signal, relink_tx, EdgionGatewayConfig, "EdgionGatewayConfig", edgion_gateway_configs);
+
+        // Drop our copy of the sender so we can detect when all controllers stop
+        drop(relink_tx);
 
         tracing::info!(
             component = "k8s_controller",
@@ -351,10 +383,51 @@ impl KubernetesController {
             "All ResourceControllers spawned - each running independently"
         );
 
-        // Wait for all controllers (they run until shutdown or program exit)
-        futures::future::join_all(handles).await;
+        // Wait for either:
+        // 1. A relink signal (410 Gone detected)
+        // 2. All controllers to stop
+        let exit_reason = tokio::select! {
+            reason = relink_rx.recv() => {
+                match reason {
+                    Some(r) => {
+                        tracing::warn!(
+                            component = "k8s_controller",
+                            reason = ?r,
+                            "Received relink signal from ResourceController"
+                        );
+                        ControllerExitReason::RelinkRequested(r)
+                    }
+                    None => {
+                        tracing::warn!(
+                            component = "k8s_controller",
+                            "Relink channel closed (all controllers stopped)"
+                        );
+                        ControllerExitReason::AllControllersStopped
+                    }
+                }
+            }
+            _ = futures::future::join_all(&mut handles) => {
+                tracing::warn!(
+                    component = "k8s_controller",
+                    "All controllers have stopped"
+                );
+                ControllerExitReason::AllControllersStopped
+            }
+        };
 
-        tracing::warn!(component = "k8s_controller", "All controllers have stopped");
-        Ok(())
+        Ok(exit_reason)
     }
+}
+
+/// Reason for controller exit
+#[derive(Debug)]
+pub enum ControllerExitReason {
+    /// Shutdown was requested
+    Shutdown,
+    /// A relink was requested (e.g., 410 Gone detected)
+    RelinkRequested(RelinkReason),
+    /// All controllers stopped (unexpected)
+    AllControllersStopped,
+    /// Lost leadership
+    LostLeadership,
 }

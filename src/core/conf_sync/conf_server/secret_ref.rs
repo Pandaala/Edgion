@@ -194,6 +194,23 @@ impl SecretRefManager {
             total_references: refs.values().map(|set| set.len()).sum(),
         }
     }
+
+    /// Clear all references
+    /// Used during relink to reset state
+    pub fn clear(&self) {
+        {
+            let mut refs = self.refs.write().unwrap();
+            refs.clear();
+        }
+        {
+            let mut deps = self.dependencies.write().unwrap();
+            deps.clear();
+        }
+        tracing::info!(
+            component = "secret_ref_manager",
+            "Cleared all secret references"
+        );
+    }
 }
 
 impl Default for SecretRefManager {
