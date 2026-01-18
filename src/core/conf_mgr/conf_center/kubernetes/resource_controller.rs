@@ -16,10 +16,11 @@
 //! - Each resource type runs completely independently
 //! - Single watcher connection per resource type (efficient)
 //! - Reflector ensures store is updated before events are processed (correct ordering)
-//! - Go operator-style workqueue with deduplication and retry
+//! - Go operator-style workqueue: ALL events enqueue key, worker decides update/delete
 //! - Graceful shutdown support via ShutdownSignal
 
 use anyhow::Result;
+use dashmap::DashMap;
 use futures::StreamExt;
 use kube::runtime::watcher::Event;
 use kube::runtime::reflector::{ObjectRef, Store};
@@ -44,9 +45,10 @@ pub type FilterFn<K> = Arc<dyn Fn(&K) -> bool + Send + Sync>;
 
 /// Generic ResourceController that encapsulates the complete 1-8 flow for a single resource type
 ///
-/// Uses a single watcher + reflector stream:
+/// Uses a single watcher + reflector stream with Go operator-style workqueue:
 /// - Init phase: InitApply events are applied directly as InitAdd
-/// - Runtime phase: Apply events are enqueued, Delete events are handled directly
+/// - Runtime phase: ALL events (Apply/Delete) enqueue key only, worker decides update/delete
+///   - Worker checks store: exists → EventUpdate, not exists → check pending_deletes → EventDelete
 pub struct ResourceController<K>
 where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
@@ -157,7 +159,7 @@ where
     /// 1. Create store and reflector
     /// 2. Process Init events (LIST phase) - apply InitAdd directly
     /// 3. Mark cache ready after InitDone
-    /// 4. Process runtime events (WATCH phase) - enqueue Apply, handle Delete directly
+    /// 4. Process runtime events (WATCH phase) - ALL events enqueue key, worker decides
     async fn run_with_api(self, api: Api<K>) -> Result<()> {
         let kind = self.kind;
 
@@ -167,7 +169,7 @@ where
         tracing::info!(
             component = "resource_controller",
             kind = kind,
-            "Starting independent ResourceController with single watcher"
+            "Starting independent ResourceController with Go operator-style workqueue"
         );
 
         // Step 1: Create Store
@@ -187,6 +189,10 @@ where
 
         // Create workqueue for runtime phase
         let queue = Arc::new(Workqueue::with_defaults(kind));
+
+        // Pending deletes: stores deleted objects temporarily for worker to process
+        // Key: "namespace/name" or "name", Value: the deleted object
+        let pending_deletes: Arc<DashMap<String, K>> = Arc::new(DashMap::new());
 
         // Track init phase
         let mut init_timer = Some(InitSyncTimer::start(kind));
@@ -266,6 +272,7 @@ where
                             spawn_worker(
                                 queue.clone(),
                                 store.clone(),
+                                pending_deletes.clone(),
                                 self.config_server.clone(),
                                 self.apply_fn.clone(),
                                 self.filter_fn.clone(),
@@ -277,7 +284,7 @@ where
                             tracing::info!(
                                 component = "resource_controller",
                                 kind = kind,
-                                "Step 7-8: Worker started, processing runtime events"
+                                "Step 7-8: Worker started, processing runtime events via workqueue"
                             );
                         }
                         Event::Apply(obj) => {
@@ -297,10 +304,12 @@ where
                                     init_count += 1;
                                 }
                             } else {
-                                // Runtime phase - enqueue for worker
+                                // Runtime phase - enqueue key for worker
                                 // Store is already updated by reflector
                                 if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
                                     let key = make_resource_key(&obj);
+                                    // Clear any stale pending delete for this key (object was recreated)
+                                    pending_deletes.remove(&key);
                                     queue.enqueue(key).await;
                                 }
                             }
@@ -314,23 +323,13 @@ where
                                     "Received Delete event during init phase, ignoring"
                                 );
                             } else {
-                                // Runtime phase - handle delete directly
+                                // Runtime phase - enqueue key for worker (Go operator style)
                                 // Store is already updated by reflector (object removed)
                                 if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
-                                    let name = obj.name_any();
-                                    let namespace = obj.namespace().unwrap_or_default();
-                                    tracing::info!(
-                                        component = "resource_controller",
-                                        kind = kind,
-                                        name = %name,
-                                        namespace = %namespace,
-                                        "Applying EventDelete"
-                                    );
-                                    (self.apply_fn)(
-                                        &self.config_server,
-                                        ResourceChange::EventDelete,
-                                        obj,
-                                    );
+                                    let key = make_resource_key(&obj);
+                                    // Store the deleted object for worker to use
+                                    pending_deletes.insert(key.clone(), obj);
+                                    queue.enqueue(key).await;
                                 }
                             }
                         }
@@ -369,10 +368,17 @@ where
 }
 
 /// Spawn worker task for processing workqueue items
+///
+/// Worker implements Go operator-style reconciliation:
+/// - Dequeue key from workqueue
+/// - Check store for current state
+/// - If exists → EventUpdate with latest object from store
+/// - If not exists → check pending_deletes → EventDelete with deleted object
 #[allow(clippy::too_many_arguments)]
 fn spawn_worker<K>(
     queue: Arc<Workqueue>,
     store: Store<K>,
+    pending_deletes: Arc<DashMap<String, K>>,
     config_server: Arc<ConfigServer>,
     apply_fn: ApplyFn<K>,
     filter_fn: Option<FilterFn<K>>,
@@ -407,6 +413,7 @@ where
                     process_work_item(
                         &work_item.key,
                         &store,
+                        &pending_deletes,
                         &namespace_filter,
                         &filter_fn,
                         &config_server,
@@ -434,10 +441,19 @@ where
     });
 }
 
-/// Process a work item from the queue
+/// Process a work item from the queue (Go operator-style reconciliation)
+///
+/// Decision logic:
+/// 1. Check store for current state
+/// 2. If object exists in store → EventUpdate (use latest from store)
+/// 3. If object not in store → check pending_deletes
+///    - If in pending_deletes → EventDelete (use the deleted object)
+///    - If not in pending_deletes → skip (already processed or never existed)
+#[allow(clippy::too_many_arguments)]
 fn process_work_item<K>(
     key: &str,
     store: &Store<K>,
+    pending_deletes: &DashMap<String, K>,
     namespace_filter: &Option<Vec<String>>,
     filter_fn: &Option<FilterFn<K>>,
     config_server: &ConfigServer,
@@ -454,7 +470,10 @@ where
     // Get current state from store (already updated by reflector)
     match store.get(&obj_ref) {
         Some(obj) => {
-            // Object exists in store -> Update
+            // Object exists in store → EventUpdate
+            // Clear any stale pending delete (object was recreated before we processed)
+            pending_deletes.remove(key);
+
             if !passes_filters(&*obj, namespace_filter, filter_fn) {
                 return;
             }
@@ -467,19 +486,34 @@ where
                 kind = kind,
                 name = %name,
                 namespace = %namespace,
-                "Applying EventUpdate from worker"
+                "Applying EventUpdate from worker (object exists in store)"
             );
             (apply_fn)(config_server, ResourceChange::EventUpdate, (*obj).clone());
         }
         None => {
-            // Object not in store -> Already deleted
-            // Delete is handled directly in the event loop
-            tracing::trace!(
-                component = "resource_controller",
-                kind = kind,
-                key = %key,
-                "Object not found in store, likely already deleted"
-            );
+            // Object not in store → check pending_deletes
+            if let Some((_, deleted_obj)) = pending_deletes.remove(key) {
+                // Found in pending_deletes → EventDelete
+                let name = deleted_obj.name_any();
+                let namespace = deleted_obj.namespace().unwrap_or_default();
+
+                tracing::debug!(
+                    component = "resource_controller",
+                    kind = kind,
+                    name = %name,
+                    namespace = %namespace,
+                    "Applying EventDelete from worker (object removed from store)"
+                );
+                (apply_fn)(config_server, ResourceChange::EventDelete, deleted_obj);
+            } else {
+                // Not in store and not in pending_deletes → already processed or never existed
+                tracing::trace!(
+                    component = "resource_controller",
+                    kind = kind,
+                    key = %key,
+                    "Object not found in store or pending_deletes, skipping (already processed)"
+                );
+            }
         }
     }
 }
@@ -496,8 +530,18 @@ where
     // Namespace filter for MultipleNamespaces mode
     let ns_ok = match namespace_filter {
         Some(allowed_ns) => {
-            let resource_ns = obj.namespace().unwrap_or_default();
-            allowed_ns.iter().any(|ns| ns == &resource_ns)
+            // For namespaced resources, namespace must exist
+            match obj.namespace() {
+                Some(resource_ns) => allowed_ns.iter().any(|ns| ns == &resource_ns),
+                None => {
+                    // Namespaced resource without namespace is invalid, skip it
+                    tracing::warn!(
+                        name = %obj.name_any(),
+                        "Namespaced resource missing namespace, skipping"
+                    );
+                    false
+                }
+            }
         }
         None => true,
     };
