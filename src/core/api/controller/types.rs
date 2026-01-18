@@ -16,9 +16,7 @@ impl AdminState {
     /// Returns Ok(Arc<ConfigServer>) if ready, Err(StatusCode) if not ready.
     /// Callers should use this method and handle the error appropriately.
     pub fn config_server(&self) -> Result<Arc<ConfigServer>, StatusCode> {
-        self.conf_center
-            .config_server()
-            .ok_or(StatusCode::SERVICE_UNAVAILABLE)
+        self.conf_center.config_server().ok_or(StatusCode::SERVICE_UNAVAILABLE)
     }
 
     /// Get the ConfWriter from ConfCenter
@@ -32,6 +30,7 @@ impl AdminState {
     }
 
     /// Check if the system is ready (ConfigServer exists)
+    #[allow(dead_code)]
     pub fn is_ready(&self) -> bool {
         self.conf_center.is_ready()
     }

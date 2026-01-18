@@ -49,7 +49,10 @@ pub mod traits;
 pub use config::ConfCenterConfig;
 pub use file_system::{FileSystemWriter, FileWatcher};
 pub use init_loader::load_all_resources;
-pub use kubernetes::{ControllerExitReason, KubernetesController, KubernetesStatusStore, KubernetesWriter, NamespaceWatchMode, RelinkReason, StatusStore, StatusStoreError};
+pub use kubernetes::{
+    ControllerExitReason, KubernetesController, KubernetesStatusStore, KubernetesWriter, NamespaceWatchMode,
+    RelinkReason, StatusStore, StatusStoreError,
+};
 pub use status::FileSystemStatusStore;
 pub use traits::{ConfEntry, ConfWriter, ConfWriterError, ListOptions, ListResult};
 
@@ -80,21 +83,20 @@ pub struct ConfCenter {
     config: ConfCenterConfig,
     conf_sync_config: ConfSyncConfig,
     writer: Arc<dyn ConfWriter>,
-    
+
     /// ConfigServer instance - Option to support lifecycle management
     /// None: Not ready (startup, restart, leadership loss)
     /// Some: Ready to serve requests
     config_server: RwLock<Option<Arc<ConfigServer>>>,
-    
+
     // ==================== FileSystem Mode Fields ====================
     /// Shutdown handle for stopping sync tasks
     shutdown_handle: Mutex<Option<ShutdownHandle>>,
     /// Handle to the running watcher task
     watcher_handle: Mutex<Option<JoinHandle<()>>>,
-    
     // ==================== Kubernetes Mode Fields ====================
     // (Currently managed internally by KubernetesController)
-    
+
     // ==================== Future: Etcd Mode Fields ====================
     // etcd_client: Mutex<Option<...>>,
     // etcd_watch_handle: Mutex<Option<...>>,
@@ -104,10 +106,7 @@ impl ConfCenter {
     /// Create a new ConfCenter based on configuration
     ///
     /// Note: ConfigServer is NOT created here. It will be created in `start()` method.
-    pub async fn create(
-        config: ConfCenterConfig,
-        conf_sync_config: &ConfSyncConfig,
-    ) -> Result<Self> {
+    pub async fn create(config: ConfCenterConfig, conf_sync_config: &ConfSyncConfig) -> Result<Self> {
         match &config {
             ConfCenterConfig::FileSystem { conf_dir, .. } => {
                 tracing::info!(

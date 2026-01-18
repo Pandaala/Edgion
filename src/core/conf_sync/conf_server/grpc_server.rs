@@ -24,10 +24,11 @@ impl ConfigSyncServer {
     }
 
     /// Get ConfigServer from ConfCenter, returns UNAVAILABLE if not ready
+    #[allow(clippy::result_large_err)]
     fn get_config_server(&self) -> Result<Arc<ConfigServer>, Status> {
-        self.conf_center.config_server().ok_or_else(|| {
-            Status::unavailable("Server not ready - configuration sync in progress")
-        })
+        self.conf_center
+            .config_server()
+            .ok_or_else(|| Status::unavailable("Server not ready - configuration sync in progress"))
     }
 
     pub fn into_service(self) -> ConfigSyncService<ConfigSyncServer> {
@@ -67,7 +68,7 @@ impl ConfigSync for ConfigSyncServer {
     async fn list(&self, request: Request<ListRequest>) -> Result<Response<ListResponse>, Status> {
         // Get ConfigServer (may be unavailable during startup/relink)
         let config_server = self.get_config_server()?;
-        
+
         let req = request.into_inner();
 
         // Convert incoming kind to ResourceKind
@@ -91,7 +92,7 @@ impl ConfigSync for ConfigSyncServer {
     async fn watch(&self, request: Request<WatchRequest>) -> Result<Response<Self::WatchStream>, Status> {
         // Get ConfigServer (may be unavailable during startup/relink)
         let config_server = self.get_config_server()?;
-        
+
         let req = request.into_inner();
 
         // Convert incoming kind to ResourceKind
@@ -107,8 +108,7 @@ impl ConfigSync for ConfigSyncServer {
         );
 
         // Call watch on ConfigServer
-        let watch_result = config_server
-            .watch(&resource_kind, req.client_id, req.client_name, req.from_version);
+        let watch_result = config_server.watch(&resource_kind, req.client_id, req.client_name, req.from_version);
 
         let receiver = match watch_result {
             Ok(receiver) => {

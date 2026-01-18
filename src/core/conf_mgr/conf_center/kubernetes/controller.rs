@@ -328,28 +328,170 @@ impl KubernetesController {
         let (relink_tx, mut relink_rx) = mpsc::channel::<RelinkReason>(10);
 
         // ==================== Standard Namespaced Resources (14) ====================
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, HTTPRoute, "HTTPRoute", routes);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, GRPCRoute, "GRPCRoute", grpc_routes);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, TCPRoute, "TCPRoute", tcp_routes);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, UDPRoute, "UDPRoute", udp_routes);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, TLSRoute, "TLSRoute", tls_routes);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, Service, "Service", services);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, Endpoints, "Endpoints", endpoints);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, EndpointSlice, "EndpointSlice", endpoint_slices);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, ReferenceGrant, "ReferenceGrant", reference_grants);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, EdgionPlugins, "EdgionPlugins", edgion_plugins);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, EdgionStreamPlugins, "EdgionStreamPlugins", edgion_stream_plugins);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, BackendTLSPolicy, "BackendTLSPolicy", backend_tls_policies);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, PluginMetaData, "PluginMetaData", plugin_metadata);
-        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, LinkSys, "LinkSys", link_sys);
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            HTTPRoute,
+            "HTTPRoute",
+            routes
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            GRPCRoute,
+            "GRPCRoute",
+            grpc_routes
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            TCPRoute,
+            "TCPRoute",
+            tcp_routes
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            UDPRoute,
+            "UDPRoute",
+            udp_routes
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            TLSRoute,
+            "TLSRoute",
+            tls_routes
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            Service,
+            "Service",
+            services
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            Endpoints,
+            "Endpoints",
+            endpoints
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            EndpointSlice,
+            "EndpointSlice",
+            endpoint_slices
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            ReferenceGrant,
+            "ReferenceGrant",
+            reference_grants
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            EdgionPlugins,
+            "EdgionPlugins",
+            edgion_plugins
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            EdgionStreamPlugins,
+            "EdgionStreamPlugins",
+            edgion_stream_plugins
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            BackendTLSPolicy,
+            "BackendTLSPolicy",
+            backend_tls_policies
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            PluginMetaData,
+            "PluginMetaData",
+            plugin_metadata
+        );
+        spawn_namespaced!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            LinkSys,
+            "LinkSys",
+            link_sys
+        );
 
         // ==================== Namespaced with Custom Apply (2) ====================
-        spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, relink_tx, Secret, "Secret",
-            |cs, change, r| cs.apply_secret_change(change, r));
+        spawn_namespaced_custom!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            Secret,
+            "Secret",
+            |cs, change, r| cs.apply_secret_change(change, r)
+        );
 
         // EdgionTls - standard apply (watches removed, handled by apply logic)
-        spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, relink_tx, EdgionTls, "EdgionTls",
-            |cs, change, r| cs.apply_edgion_tls_change(change, r));
+        spawn_namespaced_custom!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            EdgionTls,
+            "EdgionTls",
+            |cs, change, r| cs.apply_edgion_tls_change(change, r)
+        );
 
         // ==================== Gateway (with filter) ====================
         {
@@ -362,17 +504,31 @@ impl KubernetesController {
                 .apply_with(|cs, change, r| cs.apply_gateway_change(change, r))
                 .with_shutdown(shutdown)
                 .with_relink_signal(relink)
-                .build(
-                    self.client.clone(),
-                    self.config_server.clone(),
-                    watcher_config.clone(),
-                );
+                .build(self.client.clone(), self.config_server.clone(), watcher_config.clone());
             handles.push(tokio::spawn(async move { rc.run_namespaced().await }));
         }
 
         // ==================== Cluster-Scoped Resources (2) ====================
-        spawn_cluster!(self, handles, watcher_config, shutdown_signal, relink_tx, GatewayClass, "GatewayClass", gateway_classes);
-        spawn_cluster!(self, handles, watcher_config, shutdown_signal, relink_tx, EdgionGatewayConfig, "EdgionGatewayConfig", edgion_gateway_configs);
+        spawn_cluster!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            GatewayClass,
+            "GatewayClass",
+            gateway_classes
+        );
+        spawn_cluster!(
+            self,
+            handles,
+            watcher_config,
+            shutdown_signal,
+            relink_tx,
+            EdgionGatewayConfig,
+            "EdgionGatewayConfig",
+            edgion_gateway_configs
+        );
 
         // Drop our copy of the sender so we can detect when all controllers stop
         drop(relink_tx);

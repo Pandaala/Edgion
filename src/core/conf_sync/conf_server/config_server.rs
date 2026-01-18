@@ -1020,10 +1020,7 @@ impl ConfigServer {
     /// Reset for relink: clear all caches and regenerate server ID
     /// Called when 410 Gone or leader re-election requires full state reset
     pub fn reset_for_relink(&self) {
-        tracing::info!(
-            component = "config_server",
-            "Resetting ConfigServer for relink"
-        );
+        tracing::info!(component = "config_server", "Resetting ConfigServer for relink");
 
         // 1. Set all caches to not ready
         self.set_all_caches_not_ready();

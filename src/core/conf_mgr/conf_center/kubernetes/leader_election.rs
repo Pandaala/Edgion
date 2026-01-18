@@ -49,10 +49,10 @@ impl LeaderElectionConfig {
     /// Panics if neither `POD_NAME` nor `HOSTNAME` environment variable is set.
     pub fn new(lease_name: impl Into<String>, lease_namespace: impl Into<String>) -> Self {
         // Try to get pod name from environment
-        let identity = std::env::var("POD_NAME")
-            .or_else(|_| std::env::var("HOSTNAME"))
-            .expect("Leader election requires POD_NAME or HOSTNAME environment variable to be set. \
-                     In Kubernetes, use the Downward API to inject the pod name.");
+        let identity = std::env::var("POD_NAME").or_else(|_| std::env::var("HOSTNAME")).expect(
+            "Leader election requires POD_NAME or HOSTNAME environment variable to be set. \
+                     In Kubernetes, use the Downward API to inject the pod name.",
+        );
 
         Self {
             lease_name: lease_name.into(),
@@ -306,7 +306,7 @@ impl LeaderHandle {
             if self.is_leader() {
                 return true;
             }
-            
+
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {}
                 _ = shutdown.wait() => {
@@ -320,4 +320,3 @@ impl LeaderHandle {
         }
     }
 }
-

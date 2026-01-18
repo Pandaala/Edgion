@@ -5,8 +5,8 @@
 //! - Optionally watch for file changes
 //! - Handle graceful shutdown
 
-use super::{load_all_resources, ConfCenterConfig, ConfCenter, FileWatcher};
-use crate::core::conf_mgr::conf_center::kubernetes::shutdown::ShutdownHandle;
+use super::kubernetes::shutdown::ShutdownHandle;
+use super::{load_all_resources, ConfCenter, ConfCenterConfig, FileWatcher};
 use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;
 use std::sync::Arc;
@@ -94,11 +94,7 @@ impl ConfCenter {
             shutdown_signal.wait().await;
         }
 
-        tracing::info!(
-            component = "conf_center",
-            mode = "file_system",
-            "Cleaning up"
-        );
+        tracing::info!(component = "conf_center", mode = "file_system", "Cleaning up");
 
         // 6. Set config_server = None (services become unavailable)
         self.set_config_server(None);
@@ -119,7 +115,11 @@ impl ConfCenter {
         &self,
         config_server: &Arc<ConfigServer>,
     ) -> Result<Option<oneshot::Receiver<String>>> {
-        let ConfCenterConfig::FileSystem { conf_dir, watch_enabled } = &self.config else {
+        let ConfCenterConfig::FileSystem {
+            conf_dir,
+            watch_enabled,
+        } = &self.config
+        else {
             return Err(anyhow::anyhow!("Not in FileSystem mode"));
         };
 

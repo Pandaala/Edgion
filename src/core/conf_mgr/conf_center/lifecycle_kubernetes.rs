@@ -5,7 +5,7 @@
 //! - Watch K8s resources using kube-runtime Controller pattern
 //! - Automatic restart with exponential backoff on failure
 
-use super::{ConfCenterConfig, ConfCenter, ControllerExitReason, KubernetesController};
+use super::{ConfCenter, ConfCenterConfig, ControllerExitReason, KubernetesController};
 use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;
 use std::sync::Arc;
@@ -141,11 +141,7 @@ impl ConfCenter {
             // 6. Handle exit reason
             match exit_reason {
                 ControllerExitReason::Shutdown => {
-                    tracing::info!(
-                        component = "conf_center",
-                        mode = "kubernetes",
-                        "Normal shutdown"
-                    );
+                    tracing::info!(component = "conf_center", mode = "kubernetes", "Normal shutdown");
                     return Ok(());
                 }
                 reason => {
@@ -163,10 +159,7 @@ impl ConfCenter {
 
                     consecutive_failures += 1;
                     if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
-                        return Err(anyhow::anyhow!(
-                            "Max consecutive failures exceeded after {:?}",
-                            reason
-                        ));
+                        return Err(anyhow::anyhow!("Max consecutive failures exceeded after {:?}", reason));
                     }
 
                     // Backoff before restart
@@ -185,12 +178,16 @@ impl ConfCenter {
     }
 
     /// Create K8s controller
-    pub(super) async fn create_k8s_controller(&self, config_server: &Arc<ConfigServer>) -> Result<KubernetesController> {
+    pub(super) async fn create_k8s_controller(
+        &self,
+        config_server: &Arc<ConfigServer>,
+    ) -> Result<KubernetesController> {
         let ConfCenterConfig::Kubernetes {
             watch_namespaces,
             label_selector,
             gateway_class,
-        } = &self.config else {
+        } = &self.config
+        else {
             return Err(anyhow::anyhow!("Not in Kubernetes mode"));
         };
 

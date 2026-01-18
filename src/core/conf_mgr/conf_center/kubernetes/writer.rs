@@ -47,7 +47,11 @@ impl KubernetesWriter {
                 Scope::Namespaced,
             ),
             "GatewayClass" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "GatewayClass")),
+                ApiResource::from_gvk(&GroupVersionKind::gvk(
+                    "gateway.networking.k8s.io",
+                    "v1",
+                    "GatewayClass",
+                )),
                 Scope::Cluster,
             ),
             "HTTPRoute" => (
@@ -59,23 +63,43 @@ impl KubernetesWriter {
                 Scope::Namespaced,
             ),
             "TCPRoute" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha2", "TCPRoute")),
+                ApiResource::from_gvk(&GroupVersionKind::gvk(
+                    "gateway.networking.k8s.io",
+                    "v1alpha2",
+                    "TCPRoute",
+                )),
                 Scope::Namespaced,
             ),
             "UDPRoute" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha2", "UDPRoute")),
+                ApiResource::from_gvk(&GroupVersionKind::gvk(
+                    "gateway.networking.k8s.io",
+                    "v1alpha2",
+                    "UDPRoute",
+                )),
                 Scope::Namespaced,
             ),
             "TLSRoute" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha2", "TLSRoute")),
+                ApiResource::from_gvk(&GroupVersionKind::gvk(
+                    "gateway.networking.k8s.io",
+                    "v1alpha2",
+                    "TLSRoute",
+                )),
                 Scope::Namespaced,
             ),
             "ReferenceGrant" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1beta1", "ReferenceGrant")),
+                ApiResource::from_gvk(&GroupVersionKind::gvk(
+                    "gateway.networking.k8s.io",
+                    "v1beta1",
+                    "ReferenceGrant",
+                )),
                 Scope::Namespaced,
             ),
             "BackendTLSPolicy" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha3", "BackendTLSPolicy")),
+                ApiResource::from_gvk(&GroupVersionKind::gvk(
+                    "gateway.networking.k8s.io",
+                    "v1alpha3",
+                    "BackendTLSPolicy",
+                )),
                 Scope::Namespaced,
             ),
             // Core resources
@@ -135,11 +159,7 @@ impl KubernetesWriter {
     /// # Arguments
     /// * `kind` - Resource kind
     /// * `namespace` - For namespaced resources: Some(ns) = specific namespace, None = default namespace
-    fn dynamic_api(
-        &self,
-        kind: &str,
-        namespace: Option<&str>,
-    ) -> Result<Api<DynamicObject>, ConfWriterError> {
+    fn dynamic_api(&self, kind: &str, namespace: Option<&str>) -> Result<Api<DynamicObject>, ConfWriterError> {
         let (ar, scope) = self.resolve_api_resource(kind)?;
 
         let api: Api<DynamicObject> = match scope {
@@ -157,10 +177,7 @@ impl KubernetesWriter {
     ///
     /// For cluster-scoped resources, behaves the same as `dynamic_api`.
     /// For namespaced resources, uses `Api::all_with()` to list across all namespaces.
-    fn dynamic_api_all_namespaces(
-        &self,
-        kind: &str,
-    ) -> Result<Api<DynamicObject>, ConfWriterError> {
+    fn dynamic_api_all_namespaces(&self, kind: &str) -> Result<Api<DynamicObject>, ConfWriterError> {
         let (ar, _scope) = self.resolve_api_resource(kind)?;
         // Always use Api::all_with to list across all namespaces
         Ok(Api::all_with(self.client.clone(), &ar))
@@ -315,10 +332,7 @@ impl ConfWriter for KubernetesWriter {
             (all_items, None)
         };
 
-        Ok(ListResult {
-            items,
-            continue_token,
-        })
+        Ok(ListResult { items, continue_token })
     }
 
     async fn get_list_by_kind(&self, kind: &str, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {

@@ -55,7 +55,6 @@ impl ShutdownController {
     }
 }
 
-
 /// Shutdown handle that can be shared across threads
 #[derive(Clone)]
 pub struct ShutdownHandle {
@@ -137,7 +136,8 @@ impl ShutdownHandle {
             tracing::info!(
                 component = "k8s_controller",
                 signal = sig,
-                "Received {}, initiating graceful shutdown", sig
+                "Received {}, initiating graceful shutdown",
+                sig
             );
         }
 

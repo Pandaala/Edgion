@@ -206,10 +206,7 @@ impl SecretRefManager {
             let mut deps = self.dependencies.write().unwrap();
             deps.clear();
         }
-        tracing::info!(
-            component = "secret_ref_manager",
-            "Cleared all secret references"
-        );
+        tracing::info!(component = "secret_ref_manager", "Cleared all secret references");
     }
 }
 

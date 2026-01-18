@@ -19,11 +19,17 @@
 //! - Go operator-style workqueue: ALL events enqueue key, worker decides update/delete
 //! - Graceful shutdown support via ShutdownSignal
 
+use super::metrics::{controller_metrics, InitSyncTimer};
+use super::namespace::NamespaceWatchMode;
+use super::shutdown::ShutdownSignal;
+use super::workqueue::Workqueue;
+use crate::core::conf_sync::conf_server::ConfigServer;
+use crate::core::conf_sync::traits::ResourceChange;
 use anyhow::Result;
 use dashmap::DashMap;
 use futures::StreamExt;
-use kube::runtime::watcher::Event;
 use kube::runtime::reflector::{ObjectRef, Store};
+use kube::runtime::watcher::Event;
 use kube::runtime::{reflector, watcher};
 use kube::{Api, Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
@@ -31,12 +37,6 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use super::metrics::{controller_metrics, InitSyncTimer};
-use super::namespace::NamespaceWatchMode;
-use super::shutdown::ShutdownSignal;
-use super::workqueue::Workqueue;
-use crate::core::conf_sync::conf_server::ConfigServer;
-use crate::core::conf_sync::traits::ResourceChange;
 
 /// Signal sender for relink requests
 /// When a ResourceController detects 410 Gone (re-LIST needed),
@@ -85,7 +85,7 @@ where
 
     // Graceful shutdown signal
     shutdown_signal: Option<ShutdownSignal>,
-    
+
     /// Optional relink signal sender for notifying when 410 Gone is detected
     relink_signal: Option<RelinkSignalSender>,
 }
@@ -129,7 +129,7 @@ where
     ) -> Self {
         // Extract namespace filter from api_scope for MultipleNamespaces mode
         let namespace_filter = api_scope.namespace_filter();
-        
+
         Self {
             kind,
             client,
@@ -152,9 +152,7 @@ where
         let api = match &self.api_scope {
             ApiScope::Namespaced(watch_mode) => match watch_mode {
                 NamespaceWatchMode::AllNamespaces => Api::all(self.client.clone()),
-                NamespaceWatchMode::SingleNamespace(ns) => {
-                    Api::namespaced(self.client.clone(), ns)
-                }
+                NamespaceWatchMode::SingleNamespace(ns) => Api::namespaced(self.client.clone(), ns),
                 NamespaceWatchMode::MultipleNamespaces(_) => Api::all(self.client.clone()),
             },
             ApiScope::ClusterScoped => {
@@ -255,7 +253,7 @@ where
                                     kind = kind,
                                     "Watcher reconnecting (possible 410 Gone), starting re-sync via LIST"
                                 );
-                                
+
                                 // Send relink signal if configured
                                 if let Some(ref signal) = self.relink_signal {
                                     let _ = signal.try_send(RelinkReason::WatcherReconnected);
@@ -267,11 +265,7 @@ where
                                 }
                             } else {
                                 // First connection
-                                tracing::debug!(
-                                    component = "resource_controller",
-                                    kind = kind,
-                                    "Init phase started"
-                                );
+                                tracing::debug!(component = "resource_controller", kind = kind, "Init phase started");
                             }
                         }
                         Event::InitApply(obj) => {
@@ -279,11 +273,7 @@ where
                             if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
                                 if !init_done {
                                     // First init - apply directly as InitAdd
-                                    (self.apply_fn)(
-                                        &self.config_server,
-                                        ResourceChange::InitAdd,
-                                        obj,
-                                    );
+                                    (self.apply_fn)(&self.config_server, ResourceChange::InitAdd, obj);
                                     init_count += 1;
                                 } else {
                                     // Watcher reconnected - enqueue for worker (like normal Apply)
@@ -296,9 +286,7 @@ where
                         Event::InitDone => {
                             if !init_done {
                                 // First init complete
-                                let init_duration = init_timer.take()
-                                    .map(|t| t.complete(init_count))
-                                    .unwrap_or(0.0);
+                                let init_duration = init_timer.take().map(|t| t.complete(init_count)).unwrap_or(0.0);
                                 tracing::info!(
                                     component = "resource_controller",
                                     kind = kind,
@@ -353,11 +341,7 @@ where
                                     "Received Apply event during init phase, treating as InitAdd"
                                 );
                                 if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
-                                    (self.apply_fn)(
-                                        &self.config_server,
-                                        ResourceChange::InitAdd,
-                                        obj,
-                                    );
+                                    (self.apply_fn)(&self.config_server, ResourceChange::InitAdd, obj);
                                     init_count += 1;
                                 }
                             } else {
@@ -415,11 +399,7 @@ where
         // Record controller stopped
         controller_metrics().controller_stopped();
 
-        tracing::warn!(
-            component = "resource_controller",
-            kind = kind,
-            "Controller stopped"
-        );
+        tracing::warn!(component = "resource_controller", kind = kind, "Controller stopped");
         Ok(())
     }
 }
@@ -442,8 +422,7 @@ fn spawn_worker<K>(
     namespace_filter: Option<Vec<String>>,
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
-)
-where
+) where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
 {
@@ -490,11 +469,7 @@ where
             }
         }
 
-        tracing::info!(
-            component = "resource_controller",
-            kind = kind,
-            "Worker task ended"
-        );
+        tracing::info!(component = "resource_controller", kind = kind, "Worker task ended");
     });
 }
 
@@ -516,8 +491,7 @@ fn process_work_item<K>(
     config_server: &ConfigServer,
     apply_fn: &ApplyFn<K>,
     kind: &'static str,
-)
-where
+) where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
 {
@@ -576,11 +550,7 @@ where
 }
 
 /// Check if resource passes namespace and custom filters
-fn passes_filters<K>(
-    obj: &K,
-    namespace_filter: &Option<Vec<String>>,
-    filter_fn: &Option<FilterFn<K>>,
-) -> bool
+fn passes_filters<K>(obj: &K, namespace_filter: &Option<Vec<String>>, filter_fn: &Option<FilterFn<K>>) -> bool
 where
     K: Resource + Clone,
 {
