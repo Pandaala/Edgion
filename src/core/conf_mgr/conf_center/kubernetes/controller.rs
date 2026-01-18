@@ -115,18 +115,13 @@ macro_rules! spawn_cluster {
 }
 
 /// Leader election mode
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum LeaderElectionMode {
     /// No leader election - single instance mode
+    #[default]
     Disabled,
     /// Leader election enabled with configuration
     Enabled(LeaderElectionConfig),
-}
-
-impl Default for LeaderElectionMode {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 /// Kubernetes Controller that spawns independent ResourceControllers for each resource type

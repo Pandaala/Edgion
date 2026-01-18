@@ -369,6 +369,7 @@ where
 }
 
 /// Spawn worker task for processing workqueue items
+#[allow(clippy::too_many_arguments)]
 fn spawn_worker<K>(
     queue: Arc<Workqueue>,
     store: Store<K>,
@@ -502,7 +503,7 @@ where
     };
 
     // Custom filter
-    let filter_ok = filter_fn.as_ref().map_or(true, |f| f(obj));
+    let filter_ok = filter_fn.as_ref().is_none_or(|f| f(obj));
 
     ns_ok && filter_ok
 }
