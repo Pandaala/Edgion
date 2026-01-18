@@ -6,61 +6,55 @@
 //! ┌─────────────────────────────────────────────────────────────────────────────┐
 //! │                    ResourceController<K> Independent Flow                    │
 //! ├─────────────────────────────────────────────────────────────────────────────┤
-//! │  Step 1: Create Store + Reflector                                           │
-//! │  Step 2: Run Reflector (background)                                         │
-//! │  Step 3: Wait for this store ready (only waits for itself)                  │
-//! │  Step 4: Snapshot Store                                                      │
-//! │  Step 5: Apply InitAdd for each resource                                    │
-//! │  Step 6: Mark cache ready (InitDone)                                        │
-//! │  Step 7-8: Start Controller + Reconcile Loop (immediately, no waiting)      │
+//! │  Step 1: Create Store                                                       │
+//! │  Step 2-6: Reflector stream handles Init phase (LIST + InitAdd + Ready)     │
+//! │  Step 7-8: Reflector stream handles Runtime phase (WATCH + Workqueue)       │
 //! └─────────────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
 //! Key benefits:
 //! - Each resource type runs completely independently
-//! - No waiting for other resources to complete initialization
-//! - Fault isolation: one resource failing doesn't affect others
+//! - Single watcher connection per resource type (efficient)
+//! - Reflector ensures store is updated before events are processed (correct ordering)
+//! - Go operator-style workqueue with deduplication and retry
 //! - Graceful shutdown support via ShutdownSignal
-//! - Metrics for monitoring reconciliation performance
 
 use anyhow::Result;
 use futures::StreamExt;
-use kube::runtime::controller::Action;
-use kube::runtime::{reflector, watcher, Controller};
+use kube::runtime::watcher::Event;
+use kube::runtime::reflector::{ObjectRef, Store};
+use kube::runtime::{reflector, watcher};
 use kube::{Api, Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
-use std::future::Future;
 use std::hash::Hash;
 use std::sync::Arc;
-use super::context::ControllerContext;
-use super::error::{error_policy, ReconcileError};
 use super::metrics::{controller_metrics, InitSyncTimer};
 use super::namespace::NamespaceWatchMode;
 use super::shutdown::ShutdownSignal;
-use super::status::StatusStore;
+use super::workqueue::Workqueue;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::ResourceChange;
 
 /// Type alias for the apply function that handles InitAdd and runtime events
-pub type ApplyFn<K> = Box<dyn Fn(&ConfigServer, ResourceChange, K) + Send + Sync>;
+pub type ApplyFn<K> = Arc<dyn Fn(&ConfigServer, ResourceChange, K) + Send + Sync>;
 
 /// Type alias for the optional filter function
-pub type FilterFn<K> = Box<dyn Fn(&K) -> bool + Send + Sync>;
+pub type FilterFn<K> = Arc<dyn Fn(&K) -> bool + Send + Sync>;
 
 /// Generic ResourceController that encapsulates the complete 1-8 flow for a single resource type
-pub struct ResourceController<K, ReconcileFn, ReconcileFut>
+///
+/// Uses a single watcher + reflector stream:
+/// - Init phase: InitApply events are applied directly as InitAdd
+/// - Runtime phase: Apply events are enqueued, Delete events are handled directly
+pub struct ResourceController<K>
 where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
-    ReconcileFn: FnMut(Arc<K>, Arc<ControllerContext>) -> ReconcileFut + Send + 'static,
-    ReconcileFut: Future<Output = Result<Action, ReconcileError>> + Send + 'static,
 {
     kind: &'static str,
     client: Client,
     config_server: Arc<ConfigServer>,
-    status_store: Arc<dyn StatusStore>,
-    gateway_class_name: String,
     watcher_config: watcher::Config,
 
     // API creation based on scope
@@ -71,7 +65,6 @@ where
     filter_fn: Option<FilterFn<K>>,
     /// Namespace filter for MultipleNamespaces mode
     namespace_filter: Option<Vec<String>>,
-    reconcile_fn: ReconcileFn,
 
     // Graceful shutdown signal
     shutdown_signal: Option<ShutdownSignal>,
@@ -96,12 +89,10 @@ impl ApiScope {
     }
 }
 
-impl<K, ReconcileFn, ReconcileFut> ResourceController<K, ReconcileFn, ReconcileFut>
+impl<K> ResourceController<K>
 where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
-    ReconcileFn: FnMut(Arc<K>, Arc<ControllerContext>) -> ReconcileFut + Send + 'static,
-    ReconcileFut: Future<Output = Result<Action, ReconcileError>> + Send + 'static,
 {
     /// Create a new ResourceController
     #[allow(clippy::too_many_arguments)]
@@ -109,13 +100,10 @@ where
         kind: &'static str,
         client: Client,
         config_server: Arc<ConfigServer>,
-        status_store: Arc<dyn StatusStore>,
-        gateway_class_name: String,
         watcher_config: watcher::Config,
         api_scope: ApiScope,
         apply_fn: ApplyFn<K>,
         filter_fn: Option<FilterFn<K>>,
-        reconcile_fn: ReconcileFn,
         shutdown_signal: Option<ShutdownSignal>,
     ) -> Self {
         // Extract namespace filter from api_scope for MultipleNamespaces mode
@@ -125,14 +113,11 @@ where
             kind,
             client,
             config_server,
-            status_store,
-            gateway_class_name,
             watcher_config,
             api_scope,
             apply_fn,
             filter_fn,
             namespace_filter,
-            reconcile_fn,
             shutdown_signal,
         }
     }
@@ -167,6 +152,12 @@ where
     }
 
     /// Internal run implementation with provided API
+    ///
+    /// Uses a single watcher + reflector stream for both init and runtime phases:
+    /// 1. Create store and reflector
+    /// 2. Process Init events (LIST phase) - apply InitAdd directly
+    /// 3. Mark cache ready after InitDone
+    /// 4. Process runtime events (WATCH phase) - enqueue Apply, handle Delete directly
     async fn run_with_api(self, api: Api<K>) -> Result<()> {
         let kind = self.kind;
 
@@ -176,13 +167,10 @@ where
         tracing::info!(
             component = "resource_controller",
             kind = kind,
-            "Starting independent ResourceController"
+            "Starting independent ResourceController with single watcher"
         );
 
-        // ==================== Initialization Phase (Steps 1-6) ====================
-        let init_timer = InitSyncTimer::start(kind);
-
-        // Step 1: Create Store + Reflector
+        // Step 1: Create Store
         let (store, writer) = reflector::store();
         tracing::debug!(
             component = "resource_controller",
@@ -190,142 +178,182 @@ where
             "Step 1: Created reflector store"
         );
 
-        // Step 2: Run Reflector (background task - performs LIST then WATCH)
-        let watcher_stream = watcher(api.clone(), self.watcher_config.clone());
-        let reflector_kind = kind;
-        tokio::spawn(async move {
-            let stream = reflector(writer, watcher_stream);
-            futures::pin_mut!(stream);
-            while let Some(result) = stream.next().await {
-                if let Err(e) = result {
+        // Create single watcher + reflector stream
+        // This stream will:
+        // 1. Update store first (via writer)
+        // 2. Then yield the event for processing
+        let watcher_stream = watcher(api, self.watcher_config.clone());
+        let mut stream = Box::pin(reflector(writer, watcher_stream));
+
+        // Create workqueue for runtime phase
+        let queue = Arc::new(Workqueue::with_defaults(kind));
+
+        // Track init phase
+        let mut init_timer = Some(InitSyncTimer::start(kind));
+        let mut init_count = 0;
+        let mut init_done = false;
+
+        tracing::debug!(
+            component = "resource_controller",
+            kind = kind,
+            "Step 2: Starting reflector stream (Init phase)"
+        );
+
+        // Main event loop - handles both init and runtime phases
+        loop {
+            let event = if let Some(ref mut shutdown) = self.shutdown_signal.clone() {
+                tokio::select! {
+                    event = stream.next() => event,
+                    _ = shutdown.wait() => {
+                        tracing::info!(
+                            component = "resource_controller",
+                            kind = kind,
+                            "Received shutdown signal"
+                        );
+                        break;
+                    }
+                }
+            } else {
+                stream.next().await
+            };
+
+            match event {
+                Some(Ok(event)) => {
+                    match event {
+                        Event::Init => {
+                            // Start of init phase (LIST)
+                            tracing::debug!(
+                                component = "resource_controller",
+                                kind = kind,
+                                "Init phase started"
+                            );
+                        }
+                        Event::InitApply(obj) => {
+                            // Init phase - apply directly (store already updated by reflector)
+                            if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
+                                (self.apply_fn)(
+                                    &self.config_server,
+                                    ResourceChange::InitAdd,
+                                    obj,
+                                );
+                                init_count += 1;
+                            }
+                        }
+                        Event::InitDone => {
+                            // Init phase complete
+                            let init_duration = init_timer.take()
+                                .map(|t| t.complete(init_count))
+                                .unwrap_or(0.0);
+                            tracing::info!(
+                                component = "resource_controller",
+                                kind = kind,
+                                count = init_count,
+                                duration_secs = init_duration,
+                                "Init phase complete (Step 5: InitAdd applied)"
+                            );
+
+                            // Mark cache ready
+                            self.config_server.set_cache_ready_by_kind(kind);
+                            tracing::info!(
+                                component = "resource_controller",
+                                kind = kind,
+                                "Step 6: Cache marked ready, entering runtime phase"
+                            );
+
+                            init_done = true;
+
+                            // Spawn worker for runtime phase
+                            spawn_worker(
+                                queue.clone(),
+                                store.clone(),
+                                self.config_server.clone(),
+                                self.apply_fn.clone(),
+                                self.filter_fn.clone(),
+                                self.namespace_filter.clone(),
+                                kind,
+                                self.shutdown_signal.clone(),
+                            );
+
+                            tracing::info!(
+                                component = "resource_controller",
+                                kind = kind,
+                                "Step 7-8: Worker started, processing runtime events"
+                            );
+                        }
+                        Event::Apply(obj) => {
+                            if !init_done {
+                                // During init phase, this shouldn't happen but handle gracefully
+                                tracing::warn!(
+                                    component = "resource_controller",
+                                    kind = kind,
+                                    "Received Apply event during init phase, treating as InitAdd"
+                                );
+                                if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
+                                    (self.apply_fn)(
+                                        &self.config_server,
+                                        ResourceChange::InitAdd,
+                                        obj,
+                                    );
+                                    init_count += 1;
+                                }
+                            } else {
+                                // Runtime phase - enqueue for worker
+                                // Store is already updated by reflector
+                                if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
+                                    let key = make_resource_key(&obj);
+                                    queue.enqueue(key).await;
+                                }
+                            }
+                        }
+                        Event::Delete(obj) => {
+                            if !init_done {
+                                // During init phase, delete shouldn't happen
+                                tracing::warn!(
+                                    component = "resource_controller",
+                                    kind = kind,
+                                    "Received Delete event during init phase, ignoring"
+                                );
+                            } else {
+                                // Runtime phase - handle delete directly
+                                // Store is already updated by reflector (object removed)
+                                if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
+                                    let name = obj.name_any();
+                                    let namespace = obj.namespace().unwrap_or_default();
+                                    tracing::info!(
+                                        component = "resource_controller",
+                                        kind = kind,
+                                        name = %name,
+                                        namespace = %namespace,
+                                        "Applying EventDelete"
+                                    );
+                                    (self.apply_fn)(
+                                        &self.config_server,
+                                        ResourceChange::EventDelete,
+                                        obj,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(Err(e)) => {
                     tracing::error!(
                         component = "resource_controller",
-                        kind = reflector_kind,
+                        kind = kind,
                         error = %e,
-                        "Reflector stream error"
+                        "Watcher error"
                     );
+                    // Watcher will reconnect automatically
                 }
-            }
-            tracing::warn!(
-                component = "resource_controller",
-                kind = reflector_kind,
-                "Reflector stream ended unexpectedly"
-            );
-        });
-        tracing::debug!(
-            component = "resource_controller",
-            kind = kind,
-            "Step 2: Started reflector in background"
-        );
-
-        // Step 3: Wait for this store to be ready (only waits for itself, not other resources)
-        store
-            .wait_until_ready()
-            .await
-            .map_err(|e| anyhow::anyhow!("{} store error: {}", kind, e))?;
-        tracing::info!(
-            component = "resource_controller",
-            kind = kind,
-            "Step 3: Store ready (initial LIST complete)"
-        );
-
-        // Step 4: Snapshot Store
-        let snapshot = store.state();
-        let total_count = snapshot.len();
-        tracing::debug!(
-            component = "resource_controller",
-            kind = kind,
-            count = total_count,
-            "Step 4: Snapshot taken"
-        );
-
-        // Step 5: Apply InitAdd for each resource in snapshot
-        let mut applied_count = 0;
-        for resource in snapshot {
-            // Apply namespace filter for MultipleNamespaces mode
-            let ns_ok = match &self.namespace_filter {
-                Some(allowed_ns) => {
-                    let resource_ns = resource.namespace().unwrap_or_default();
-                    allowed_ns.iter().any(|ns| ns == &resource_ns)
-                }
-                None => true,
-            };
-            
-            // Apply custom filter if present
-            let filter_ok = self.filter_fn.as_ref().map_or(true, |f| f(&resource));
-
-            if ns_ok && filter_ok {
-                (self.apply_fn)(
-                    &self.config_server,
-                    ResourceChange::InitAdd,
-                    (*resource).clone(),
-                );
-                applied_count += 1;
-            }
-        }
-
-        // Record init sync completion with metrics
-        let init_duration = init_timer.complete(applied_count);
-        tracing::info!(
-            component = "resource_controller",
-            kind = kind,
-            total = total_count,
-            applied = applied_count,
-            duration_secs = init_duration,
-            "Step 5: InitAdd applied"
-        );
-
-        // Step 6: Mark cache ready (triggers InitDone -> cache.set_ready())
-        self.config_server.set_cache_ready_by_kind(kind);
-        tracing::info!(
-            component = "resource_controller",
-            kind = kind,
-            "Step 6: Cache marked ready, starting controller immediately"
-        );
-
-        // ==================== Runtime Phase (Steps 7-8) ====================
-        // Starts immediately after init - no waiting for other resources
-
-        // Step 7-8: Start Controller + Reconcile Loop
-        let ctx = Arc::new(ControllerContext {
-            config_server: self.config_server.clone(),
-            status_store: self.status_store.clone(),
-            gateway_class_name: self.gateway_class_name.clone(),
-        });
-
-        let controller_stream = Controller::new(api, self.watcher_config.clone())
-            .run(self.reconcile_fn, error_policy, ctx)
-            .for_each(|res| async move {
-                match res {
-                    Ok((obj, _action)) => {
-                        tracing::trace!(obj = ?obj, kind = kind, "Reconciled");
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, kind = kind, "Controller error");
-                    }
-                }
-            });
-
-        // Run with optional shutdown signal
-        if let Some(mut shutdown) = self.shutdown_signal {
-            tokio::select! {
-                _ = controller_stream => {
+                None => {
                     tracing::warn!(
                         component = "resource_controller",
                         kind = kind,
-                        "Controller stream ended unexpectedly"
+                        "Watcher stream ended unexpectedly"
                     );
-                }
-                _ = shutdown.wait() => {
-                    tracing::info!(
-                        component = "resource_controller",
-                        kind = kind,
-                        "Received shutdown signal, stopping controller"
-                    );
+                    break;
                 }
             }
-        } else {
-            controller_stream.await;
         }
 
         // Record controller stopped
@@ -337,6 +365,170 @@ where
             "Controller stopped"
         );
         Ok(())
+    }
+}
+
+/// Spawn worker task for processing workqueue items
+fn spawn_worker<K>(
+    queue: Arc<Workqueue>,
+    store: Store<K>,
+    config_server: Arc<ConfigServer>,
+    apply_fn: ApplyFn<K>,
+    filter_fn: Option<FilterFn<K>>,
+    namespace_filter: Option<Vec<String>>,
+    kind: &'static str,
+    shutdown_signal: Option<ShutdownSignal>,
+)
+where
+    K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
+    K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+{
+    tokio::spawn(async move {
+        loop {
+            let item = if let Some(ref mut shutdown) = shutdown_signal.clone() {
+                tokio::select! {
+                    item = queue.dequeue() => item,
+                    _ = shutdown.wait() => {
+                        tracing::info!(
+                            component = "resource_controller",
+                            kind = kind,
+                            "Worker received shutdown signal"
+                        );
+                        break;
+                    }
+                }
+            } else {
+                queue.dequeue().await
+            };
+
+            match item {
+                Some(work_item) => {
+                    process_work_item(
+                        &work_item.key,
+                        &store,
+                        &namespace_filter,
+                        &filter_fn,
+                        &config_server,
+                        &apply_fn,
+                        kind,
+                    );
+                    queue.done(&work_item.key);
+                }
+                None => {
+                    tracing::warn!(
+                        component = "resource_controller",
+                        kind = kind,
+                        "Workqueue closed, stopping worker"
+                    );
+                    break;
+                }
+            }
+        }
+
+        tracing::info!(
+            component = "resource_controller",
+            kind = kind,
+            "Worker task ended"
+        );
+    });
+}
+
+/// Process a work item from the queue
+fn process_work_item<K>(
+    key: &str,
+    store: &Store<K>,
+    namespace_filter: &Option<Vec<String>>,
+    filter_fn: &Option<FilterFn<K>>,
+    config_server: &ConfigServer,
+    apply_fn: &ApplyFn<K>,
+    kind: &'static str,
+)
+where
+    K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
+    K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+{
+    // Parse key to ObjectRef
+    let obj_ref = parse_resource_key::<K>(key);
+
+    // Get current state from store (already updated by reflector)
+    match store.get(&obj_ref) {
+        Some(obj) => {
+            // Object exists in store -> Update
+            if !passes_filters(&*obj, namespace_filter, filter_fn) {
+                return;
+            }
+
+            let name = obj.name_any();
+            let namespace = obj.namespace().unwrap_or_default();
+
+            tracing::debug!(
+                component = "resource_controller",
+                kind = kind,
+                name = %name,
+                namespace = %namespace,
+                "Applying EventUpdate from worker"
+            );
+            (apply_fn)(config_server, ResourceChange::EventUpdate, (*obj).clone());
+        }
+        None => {
+            // Object not in store -> Already deleted
+            // Delete is handled directly in the event loop
+            tracing::trace!(
+                component = "resource_controller",
+                kind = kind,
+                key = %key,
+                "Object not found in store, likely already deleted"
+            );
+        }
+    }
+}
+
+/// Check if resource passes namespace and custom filters
+fn passes_filters<K>(
+    obj: &K,
+    namespace_filter: &Option<Vec<String>>,
+    filter_fn: &Option<FilterFn<K>>,
+) -> bool
+where
+    K: Resource + Clone,
+{
+    // Namespace filter for MultipleNamespaces mode
+    let ns_ok = match namespace_filter {
+        Some(allowed_ns) => {
+            let resource_ns = obj.namespace().unwrap_or_default();
+            allowed_ns.iter().any(|ns| ns == &resource_ns)
+        }
+        None => true,
+    };
+
+    // Custom filter
+    let filter_ok = filter_fn.as_ref().map_or(true, |f| f(obj));
+
+    ns_ok && filter_ok
+}
+
+/// Create a resource key from object: "namespace/name" or "name" for cluster-scoped
+fn make_resource_key<K>(obj: &K) -> String
+where
+    K: Resource,
+{
+    let name = obj.name_any();
+    match obj.namespace() {
+        Some(ns) => format!("{}/{}", ns, name),
+        None => name,
+    }
+}
+
+/// Parse a resource key back to ObjectRef
+fn parse_resource_key<K>(key: &str) -> ObjectRef<K>
+where
+    K: Resource,
+    K::DynamicType: Default,
+{
+    if let Some((ns, name)) = key.split_once('/') {
+        ObjectRef::<K>::new(name).within(ns)
+    } else {
+        ObjectRef::<K>::new(key)
     }
 }
 
@@ -388,7 +580,7 @@ where
     where
         F: Fn(&ConfigServer, ResourceChange, K) + Send + Sync + 'static,
     {
-        self.apply_fn = Some(Box::new(f));
+        self.apply_fn = Some(Arc::new(f));
         self
     }
 
@@ -397,7 +589,7 @@ where
     where
         F: Fn(&K) -> bool + Send + Sync + 'static,
     {
-        self.filter_fn = Some(Box::new(f));
+        self.filter_fn = Some(Arc::new(f));
         self
     }
 
@@ -407,31 +599,21 @@ where
         self
     }
 
-    /// Build the ResourceController with a reconcile function
-    pub fn build<ReconcileFn, ReconcileFut>(
+    /// Build the ResourceController
+    pub fn build(
         self,
         client: Client,
         config_server: Arc<ConfigServer>,
-        status_store: Arc<dyn StatusStore>,
-        gateway_class_name: String,
         watcher_config: watcher::Config,
-        reconcile_fn: ReconcileFn,
-    ) -> ResourceController<K, ReconcileFn, ReconcileFut>
-    where
-        ReconcileFn: FnMut(Arc<K>, Arc<ControllerContext>) -> ReconcileFut + Send + 'static,
-        ReconcileFut: Future<Output = Result<Action, ReconcileError>> + Send + 'static,
-    {
+    ) -> ResourceController<K> {
         ResourceController::new(
             self.kind,
             client,
             config_server,
-            status_store,
-            gateway_class_name,
             watcher_config,
             self.api_scope.expect("API scope must be set"),
             self.apply_fn.expect("Apply function must be set"),
             self.filter_fn,
-            reconcile_fn,
             self.shutdown_signal,
         )
     }
