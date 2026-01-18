@@ -13,6 +13,7 @@ use super::super::context::ControllerContext;
 use super::super::error::ReconcileError;
 
 /// Reconcile Gateway
+/// Note: Gateway resources are pre-filtered by gateway_class_name in ResourceController
 pub async fn reconcile(
     gateway: Arc<Gateway>,
     ctx: Arc<ControllerContext>,
@@ -20,19 +21,6 @@ pub async fn reconcile(
     let name = gateway.name_any();
     let namespace = gateway.namespace().unwrap_or_default();
     let is_deleted = gateway.metadata.deletion_timestamp.is_some();
-
-    // Only process gateways for our gateway class
-    if gateway.spec.gateway_class_name != ctx.gateway_class_name {
-        tracing::trace!(
-            component = "k8s_controller",
-            kind = "Gateway",
-            name = %name,
-            gateway_class = %gateway.spec.gateway_class_name,
-            expected = %ctx.gateway_class_name,
-            "Skipping Gateway for different GatewayClass"
-        );
-        return Ok(Action::await_change());
-    }
 
     tracing::debug!(
         component = "k8s_controller",

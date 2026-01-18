@@ -38,6 +38,12 @@
 //!
 //! 4. **Progressive Ready**: Each resource marks its cache ready independently,
 //!    allowing downstream consumers to start using available data sooner.
+//!
+//! 5. **Graceful Shutdown**: Handles SIGTERM/SIGINT for clean shutdown.
+//!
+//! 6. **Leader Election**: Optional leader election for HA deployments.
+//!
+//! 7. **Metrics**: Prometheus metrics for reconciliation monitoring.
 
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
@@ -46,21 +52,24 @@ use kube::runtime::watcher;
 use kube::Client;
 use std::sync::Arc;
 
+use super::leader_election::{LeaderElection, LeaderElectionConfig};
 use super::namespace::NamespaceWatchMode;
 use super::reconcilers::*;
 use super::resource_controller::ResourceControllerBuilder;
+use super::shutdown::{ShutdownHandle, ShutdownSignal};
 use super::status::{KubernetesStatusStore, StatusStore};
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::CacheEventDispatch;
 use crate::types::prelude_resources::*;
 
 /// Macro to spawn a standard namespaced ResourceController
-/// Usage: spawn_namespaced!(Type, "Kind", cache_field, reconcile_fn)
+/// Usage: spawn_namespaced!(self, handles, watcher_config, shutdown_signal, Type, "Kind", cache_field, reconcile_fn)
 macro_rules! spawn_namespaced {
-    ($self:ident, $handles:ident, $watcher_config:ident, $type:ty, $kind:literal, $cache:ident, $reconcile:ident) => {{
+    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $type:ty, $kind:literal, $cache:ident, $reconcile:ident) => {{
         let rc = ResourceControllerBuilder::<$type>::new($kind)
             .namespaced($self.watch_mode.clone())
             .apply_with(|cs, change, r| cs.$cache.apply_change(change, r))
+            .with_shutdown($shutdown.clone())
             .build(
                 $self.client.clone(),
                 $self.config_server.clone(),
@@ -74,12 +83,13 @@ macro_rules! spawn_namespaced {
 }
 
 /// Macro to spawn a namespaced ResourceController with custom apply function
-/// Usage: spawn_namespaced_custom!(Type, "Kind", |cs, change, r| cs.apply_xxx(change, r), reconcile_fn)
+/// Usage: spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, Type, "Kind", apply_fn, reconcile_fn)
 macro_rules! spawn_namespaced_custom {
-    ($self:ident, $handles:ident, $watcher_config:ident, $type:ty, $kind:literal, $apply:expr, $reconcile:ident) => {{
+    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $type:ty, $kind:literal, $apply:expr, $reconcile:ident) => {{
         let rc = ResourceControllerBuilder::<$type>::new($kind)
             .namespaced($self.watch_mode.clone())
             .apply_with($apply)
+            .with_shutdown($shutdown.clone())
             .build(
                 $self.client.clone(),
                 $self.config_server.clone(),
@@ -93,12 +103,13 @@ macro_rules! spawn_namespaced_custom {
 }
 
 /// Macro to spawn a cluster-scoped ResourceController
-/// Usage: spawn_cluster!(Type, "Kind", cache_field, reconcile_fn)
+/// Usage: spawn_cluster!(self, handles, watcher_config, shutdown_signal, Type, "Kind", cache_field, reconcile_fn)
 macro_rules! spawn_cluster {
-    ($self:ident, $handles:ident, $watcher_config:ident, $type:ty, $kind:literal, $cache:ident, $reconcile:ident) => {{
+    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $type:ty, $kind:literal, $cache:ident, $reconcile:ident) => {{
         let rc = ResourceControllerBuilder::<$type>::new($kind)
             .cluster_scoped()
             .apply_with(|cs, change, r| cs.$cache.apply_change(change, r))
+            .with_shutdown($shutdown.clone())
             .build(
                 $self.client.clone(),
                 $self.config_server.clone(),
@@ -111,6 +122,21 @@ macro_rules! spawn_cluster {
     }};
 }
 
+/// Leader election mode
+#[derive(Clone, Debug)]
+pub enum LeaderElectionMode {
+    /// No leader election - single instance mode
+    Disabled,
+    /// Leader election enabled with configuration
+    Enabled(LeaderElectionConfig),
+}
+
+impl Default for LeaderElectionMode {
+    fn default() -> Self {
+        Self::Disabled
+    }
+}
+
 /// Kubernetes Controller that spawns independent ResourceControllers for each resource type
 pub struct KubernetesController {
     client: Client,
@@ -119,6 +145,7 @@ pub struct KubernetesController {
     gateway_class_name: String,
     watch_mode: NamespaceWatchMode,
     label_selector: Option<String>,
+    leader_election_mode: LeaderElectionMode,
 }
 
 impl KubernetesController {
@@ -128,6 +155,24 @@ impl KubernetesController {
         gateway_class_name: String,
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
+    ) -> Result<Self> {
+        Self::with_leader_election(
+            config_server,
+            gateway_class_name,
+            watch_namespaces,
+            label_selector,
+            LeaderElectionMode::Disabled,
+        )
+        .await
+    }
+
+    /// Create a new KubernetesController with leader election
+    pub async fn with_leader_election(
+        config_server: Arc<ConfigServer>,
+        gateway_class_name: String,
+        watch_namespaces: Vec<String>,
+        label_selector: Option<String>,
+        leader_election_mode: LeaderElectionMode,
     ) -> Result<Self> {
         let client = Client::try_default().await?;
         let status_store: Arc<dyn StatusStore> = Arc::new(KubernetesStatusStore::new(
@@ -142,6 +187,7 @@ impl KubernetesController {
             watch_mode = ?watch_mode,
             label_selector = ?label_selector,
             gateway_class_name = %gateway_class_name,
+            leader_election = ?leader_election_mode,
             "Creating Kubernetes controller with independent ResourceControllers"
         );
 
@@ -152,6 +198,7 @@ impl KubernetesController {
             gateway_class_name,
             watch_mode,
             label_selector,
+            leader_election_mode,
         })
     }
 
@@ -172,7 +219,85 @@ impl KubernetesController {
     /// - Applies InitAdd for its resources
     /// - Marks its cache ready
     /// - Immediately starts reconcile loop (no waiting for other resources)
+    ///
+    /// Also handles:
+    /// - Graceful shutdown on SIGTERM/SIGINT
+    /// - Optional leader election for HA deployments
     pub async fn run(&self) -> Result<()> {
+        // Setup shutdown handling
+        let shutdown_handle = ShutdownHandle::new();
+        let shutdown_signal = shutdown_handle.signal();
+
+        // Spawn signal handler
+        let signal_handle = shutdown_handle.clone();
+        tokio::spawn(async move {
+            signal_handle.wait_for_signals().await;
+        });
+
+        // Handle leader election if enabled
+        match &self.leader_election_mode {
+            LeaderElectionMode::Disabled => {
+                tracing::info!(
+                    component = "k8s_controller",
+                    "Leader election disabled - running as single instance"
+                );
+                self.run_controllers(shutdown_signal).await
+            }
+            LeaderElectionMode::Enabled(config) => {
+                tracing::info!(
+                    component = "k8s_controller",
+                    lease_name = %config.lease_name,
+                    lease_namespace = %config.lease_namespace,
+                    identity = %config.identity,
+                    "Leader election enabled - waiting for leadership"
+                );
+
+                let leader_election = LeaderElection::new(self.client.clone(), config.clone());
+                let leader_handle = leader_election.handle();
+
+                // Spawn leader election loop
+                let le = leader_election.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = le.run().await {
+                        tracing::error!(error = %e, "Leader election failed");
+                    }
+                });
+
+                // Wait until we become leader (with shutdown support)
+                if !leader_handle.wait_until_leader_with_shutdown(shutdown_signal.clone()).await {
+                    tracing::info!(
+                        component = "k8s_controller",
+                        "Shutdown requested before acquiring leadership"
+                    );
+                    return Ok(());
+                }
+                tracing::info!(component = "k8s_controller", "Acquired leadership, starting controllers");
+
+                // Monitor leadership loss and trigger shutdown if we lose it
+                let leader_handle_monitor = leader_handle.clone();
+                let shutdown_for_leader = shutdown_handle.clone();
+                tokio::spawn(async move {
+                    // Poll for leadership loss
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        if !leader_handle_monitor.is_leader() {
+                            tracing::warn!(
+                                component = "k8s_controller",
+                                "Lost leadership - triggering shutdown of all controllers"
+                            );
+                            shutdown_for_leader.shutdown();
+                            break;
+                        }
+                    }
+                });
+
+                self.run_controllers(shutdown_signal).await
+            }
+        }
+    }
+
+    /// Internal method to run all controllers
+    async fn run_controllers(&self, shutdown_signal: ShutdownSignal) -> Result<()> {
         tracing::info!(
             component = "k8s_controller",
             "Starting Kubernetes controller - spawning 19 independent ResourceControllers"
@@ -182,34 +307,36 @@ impl KubernetesController {
         let mut handles = Vec::new();
 
         // ==================== Standard Namespaced Resources (14) ====================
-        spawn_namespaced!(self, handles, watcher_config, HTTPRoute, "HTTPRoute", routes, reconcile_http_route);
-        spawn_namespaced!(self, handles, watcher_config, GRPCRoute, "GRPCRoute", grpc_routes, reconcile_grpc_route);
-        spawn_namespaced!(self, handles, watcher_config, TCPRoute, "TCPRoute", tcp_routes, reconcile_tcp_route);
-        spawn_namespaced!(self, handles, watcher_config, UDPRoute, "UDPRoute", udp_routes, reconcile_udp_route);
-        spawn_namespaced!(self, handles, watcher_config, TLSRoute, "TLSRoute", tls_routes, reconcile_tls_route);
-        spawn_namespaced!(self, handles, watcher_config, Service, "Service", services, reconcile_service);
-        spawn_namespaced!(self, handles, watcher_config, Endpoints, "Endpoints", endpoints, reconcile_endpoints);
-        spawn_namespaced!(self, handles, watcher_config, EndpointSlice, "EndpointSlice", endpoint_slices, reconcile_endpoint_slice);
-        spawn_namespaced!(self, handles, watcher_config, ReferenceGrant, "ReferenceGrant", reference_grants, reconcile_reference_grant);
-        spawn_namespaced!(self, handles, watcher_config, EdgionPlugins, "EdgionPlugins", edgion_plugins, reconcile_edgion_plugins);
-        spawn_namespaced!(self, handles, watcher_config, EdgionStreamPlugins, "EdgionStreamPlugins", edgion_stream_plugins, reconcile_edgion_stream_plugins);
-        spawn_namespaced!(self, handles, watcher_config, BackendTLSPolicy, "BackendTLSPolicy", backend_tls_policies, reconcile_backend_tls_policy);
-        spawn_namespaced!(self, handles, watcher_config, PluginMetaData, "PluginMetaData", plugin_metadata, reconcile_plugin_metadata);
-        spawn_namespaced!(self, handles, watcher_config, LinkSys, "LinkSys", link_sys, reconcile_link_sys);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, HTTPRoute, "HTTPRoute", routes, reconcile_http_route);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, GRPCRoute, "GRPCRoute", grpc_routes, reconcile_grpc_route);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, TCPRoute, "TCPRoute", tcp_routes, reconcile_tcp_route);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, UDPRoute, "UDPRoute", udp_routes, reconcile_udp_route);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, TLSRoute, "TLSRoute", tls_routes, reconcile_tls_route);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, Service, "Service", services, reconcile_service);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, Endpoints, "Endpoints", endpoints, reconcile_endpoints);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, EndpointSlice, "EndpointSlice", endpoint_slices, reconcile_endpoint_slice);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, ReferenceGrant, "ReferenceGrant", reference_grants, reconcile_reference_grant);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, EdgionPlugins, "EdgionPlugins", edgion_plugins, reconcile_edgion_plugins);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, EdgionStreamPlugins, "EdgionStreamPlugins", edgion_stream_plugins, reconcile_edgion_stream_plugins);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, BackendTLSPolicy, "BackendTLSPolicy", backend_tls_policies, reconcile_backend_tls_policy);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, PluginMetaData, "PluginMetaData", plugin_metadata, reconcile_plugin_metadata);
+        spawn_namespaced!(self, handles, watcher_config, shutdown_signal, LinkSys, "LinkSys", link_sys, reconcile_link_sys);
 
         // ==================== Namespaced with Custom Apply (2) ====================
-        spawn_namespaced_custom!(self, handles, watcher_config, Secret, "Secret",
+        spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, Secret, "Secret",
             |cs, change, r| cs.apply_secret_change(change, r), reconcile_secret);
-        spawn_namespaced_custom!(self, handles, watcher_config, EdgionTls, "EdgionTls",
+        spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, EdgionTls, "EdgionTls",
             |cs, change, r| cs.apply_edgion_tls_change(change, r), reconcile_edgion_tls);
 
         // ==================== Gateway (with filter) ====================
         {
             let gateway_class = self.gateway_class_name.clone();
+            let shutdown = shutdown_signal.clone();
             let rc = ResourceControllerBuilder::<Gateway>::new("Gateway")
                 .namespaced(self.watch_mode.clone())
                 .filter(move |g| g.spec.gateway_class_name == gateway_class)
                 .apply_with(|cs, change, r| cs.apply_gateway_change(change, r))
+                .with_shutdown(shutdown)
                 .build(
                     self.client.clone(),
                     self.config_server.clone(),
@@ -222,8 +349,8 @@ impl KubernetesController {
         }
 
         // ==================== Cluster-Scoped Resources (2) ====================
-        spawn_cluster!(self, handles, watcher_config, GatewayClass, "GatewayClass", gateway_classes, reconcile_gateway_class);
-        spawn_cluster!(self, handles, watcher_config, EdgionGatewayConfig, "EdgionGatewayConfig", edgion_gateway_configs, reconcile_edgion_gateway_config);
+        spawn_cluster!(self, handles, watcher_config, shutdown_signal, GatewayClass, "GatewayClass", gateway_classes, reconcile_gateway_class);
+        spawn_cluster!(self, handles, watcher_config, shutdown_signal, EdgionGatewayConfig, "EdgionGatewayConfig", edgion_gateway_configs, reconcile_edgion_gateway_config);
 
         tracing::info!(
             component = "k8s_controller",
@@ -231,7 +358,7 @@ impl KubernetesController {
             "All ResourceControllers spawned - each running independently"
         );
 
-        // Wait for all controllers (they run until program exit)
+        // Wait for all controllers (they run until shutdown or program exit)
         futures::future::join_all(handles).await;
 
         tracing::warn!(component = "k8s_controller", "All controllers have stopped");

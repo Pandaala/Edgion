@@ -20,21 +20,24 @@
 //! - Each resource type runs completely independently
 //! - No waiting for other resources to complete initialization
 //! - Fault isolation: one resource failing doesn't affect others
+//! - Graceful shutdown support via ShutdownSignal
+//! - Metrics for monitoring reconciliation performance
 
 use anyhow::Result;
 use futures::StreamExt;
 use kube::runtime::controller::Action;
 use kube::runtime::{reflector, watcher, Controller};
-use kube::{Api, Client, Resource};
+use kube::{Api, Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
 use std::sync::Arc;
-
 use super::context::ControllerContext;
 use super::error::{error_policy, ReconcileError};
+use super::metrics::{controller_metrics, InitSyncTimer};
 use super::namespace::NamespaceWatchMode;
+use super::shutdown::ShutdownSignal;
 use super::status::StatusStore;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::ResourceChange;
@@ -66,7 +69,12 @@ where
     // Difference handling via closures
     apply_fn: ApplyFn<K>,
     filter_fn: Option<FilterFn<K>>,
+    /// Namespace filter for MultipleNamespaces mode
+    namespace_filter: Option<Vec<String>>,
     reconcile_fn: ReconcileFn,
+
+    // Graceful shutdown signal
+    shutdown_signal: Option<ShutdownSignal>,
 }
 
 /// API scope for resource (namespaced or cluster-scoped)
@@ -76,6 +84,16 @@ pub enum ApiScope {
     Namespaced(NamespaceWatchMode),
     /// Cluster-scoped resource
     ClusterScoped,
+}
+
+impl ApiScope {
+    /// Get the namespace filter for MultipleNamespaces mode
+    pub fn namespace_filter(&self) -> Option<Vec<String>> {
+        match self {
+            ApiScope::Namespaced(NamespaceWatchMode::MultipleNamespaces(ns)) => Some(ns.clone()),
+            _ => None,
+        }
+    }
 }
 
 impl<K, ReconcileFn, ReconcileFut> ResourceController<K, ReconcileFn, ReconcileFut>
@@ -98,7 +116,11 @@ where
         apply_fn: ApplyFn<K>,
         filter_fn: Option<FilterFn<K>>,
         reconcile_fn: ReconcileFn,
+        shutdown_signal: Option<ShutdownSignal>,
     ) -> Self {
+        // Extract namespace filter from api_scope for MultipleNamespaces mode
+        let namespace_filter = api_scope.namespace_filter();
+        
         Self {
             kind,
             client,
@@ -109,7 +131,9 @@ where
             api_scope,
             apply_fn,
             filter_fn,
+            namespace_filter,
             reconcile_fn,
+            shutdown_signal,
         }
     }
 
@@ -126,7 +150,9 @@ where
                 }
                 NamespaceWatchMode::MultipleNamespaces(_) => Api::all(self.client.clone()),
             },
-            ApiScope::ClusterScoped => Api::all(self.client.clone()),
+            ApiScope::ClusterScoped => {
+                unreachable!("run_namespaced called with ClusterScoped scope - use run_cluster_scoped instead")
+            }
         };
         self.run_with_api(api).await
     }
@@ -144,6 +170,9 @@ where
     async fn run_with_api(self, api: Api<K>) -> Result<()> {
         let kind = self.kind;
 
+        // Record controller started
+        controller_metrics().controller_started();
+
         tracing::info!(
             component = "resource_controller",
             kind = kind,
@@ -151,6 +180,7 @@ where
         );
 
         // ==================== Initialization Phase (Steps 1-6) ====================
+        let init_timer = InitSyncTimer::start(kind);
 
         // Step 1: Create Store + Reflector
         let (store, writer) = reflector::store();
@@ -162,9 +192,26 @@ where
 
         // Step 2: Run Reflector (background task - performs LIST then WATCH)
         let watcher_stream = watcher(api.clone(), self.watcher_config.clone());
-        tokio::spawn(
-            reflector(writer, watcher_stream).for_each(|_| futures::future::ready(())),
-        );
+        let reflector_kind = kind;
+        tokio::spawn(async move {
+            let stream = reflector(writer, watcher_stream);
+            futures::pin_mut!(stream);
+            while let Some(result) = stream.next().await {
+                if let Err(e) = result {
+                    tracing::error!(
+                        component = "resource_controller",
+                        kind = reflector_kind,
+                        error = %e,
+                        "Reflector stream error"
+                    );
+                }
+            }
+            tracing::warn!(
+                component = "resource_controller",
+                kind = reflector_kind,
+                "Reflector stream ended unexpectedly"
+            );
+        });
         tracing::debug!(
             component = "resource_controller",
             kind = kind,
@@ -195,10 +242,19 @@ where
         // Step 5: Apply InitAdd for each resource in snapshot
         let mut applied_count = 0;
         for resource in snapshot {
-            // Apply filter if present
-            let should_apply = self.filter_fn.as_ref().map_or(true, |f| f(&resource));
+            // Apply namespace filter for MultipleNamespaces mode
+            let ns_ok = match &self.namespace_filter {
+                Some(allowed_ns) => {
+                    let resource_ns = resource.namespace().unwrap_or_default();
+                    allowed_ns.iter().any(|ns| ns == &resource_ns)
+                }
+                None => true,
+            };
+            
+            // Apply custom filter if present
+            let filter_ok = self.filter_fn.as_ref().map_or(true, |f| f(&resource));
 
-            if should_apply {
+            if ns_ok && filter_ok {
                 (self.apply_fn)(
                     &self.config_server,
                     ResourceChange::InitAdd,
@@ -207,11 +263,15 @@ where
                 applied_count += 1;
             }
         }
+
+        // Record init sync completion with metrics
+        let init_duration = init_timer.complete(applied_count);
         tracing::info!(
             component = "resource_controller",
             kind = kind,
             total = total_count,
             applied = applied_count,
+            duration_secs = init_duration,
             "Step 5: InitAdd applied"
         );
 
@@ -233,19 +293,43 @@ where
             gateway_class_name: self.gateway_class_name.clone(),
         });
 
-        Controller::new(api, self.watcher_config.clone())
+        let controller_stream = Controller::new(api, self.watcher_config.clone())
             .run(self.reconcile_fn, error_policy, ctx)
             .for_each(|res| async move {
                 match res {
                     Ok((obj, _action)) => {
-                        tracing::trace!(obj = ?obj, kind = kind, "Reconciled")
+                        tracing::trace!(obj = ?obj, kind = kind, "Reconciled");
                     }
                     Err(e) => {
-                        tracing::error!(error = %e, kind = kind, "Controller error")
+                        tracing::error!(error = %e, kind = kind, "Controller error");
                     }
                 }
-            })
-            .await;
+            });
+
+        // Run with optional shutdown signal
+        if let Some(mut shutdown) = self.shutdown_signal {
+            tokio::select! {
+                _ = controller_stream => {
+                    tracing::warn!(
+                        component = "resource_controller",
+                        kind = kind,
+                        "Controller stream ended unexpectedly"
+                    );
+                }
+                _ = shutdown.wait() => {
+                    tracing::info!(
+                        component = "resource_controller",
+                        kind = kind,
+                        "Received shutdown signal, stopping controller"
+                    );
+                }
+            }
+        } else {
+            controller_stream.await;
+        }
+
+        // Record controller stopped
+        controller_metrics().controller_stopped();
 
         tracing::warn!(
             component = "resource_controller",
@@ -266,6 +350,7 @@ where
     api_scope: Option<ApiScope>,
     apply_fn: Option<ApplyFn<K>>,
     filter_fn: Option<FilterFn<K>>,
+    shutdown_signal: Option<ShutdownSignal>,
     _marker: std::marker::PhantomData<K>,
 }
 
@@ -281,6 +366,7 @@ where
             api_scope: None,
             apply_fn: None,
             filter_fn: None,
+            shutdown_signal: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -315,6 +401,12 @@ where
         self
     }
 
+    /// Set shutdown signal for graceful shutdown
+    pub fn with_shutdown(mut self, signal: ShutdownSignal) -> Self {
+        self.shutdown_signal = Some(signal);
+        self
+    }
+
     /// Build the ResourceController with a reconcile function
     pub fn build<ReconcileFn, ReconcileFut>(
         self,
@@ -340,6 +432,7 @@ where
             self.apply_fn.expect("Apply function must be set"),
             self.filter_fn,
             reconcile_fn,
+            self.shutdown_signal,
         )
     }
 }

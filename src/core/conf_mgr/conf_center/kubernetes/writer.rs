@@ -7,8 +7,9 @@ use crate::core::conf_mgr::conf_center::{ConfEntry, ConfWriter, ConfWriterError,
 use anyhow::Result;
 use async_trait::async_trait;
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams};
-use kube::core::{DynamicObject, GroupVersionKind};
-use kube::{Api, Client, Discovery};
+use kube::core::{ApiResource, DynamicObject, GroupVersionKind};
+use kube::discovery::Scope;
+use kube::{Api, Client};
 
 /// Kubernetes API based configuration writer
 ///
@@ -35,29 +36,90 @@ impl KubernetesWriter {
         &self.client
     }
 
-    /// Resolve GVK for a resource kind
-    async fn resolve_gvk(&self, kind: &str) -> Result<GroupVersionKind, ConfWriterError> {
-        // Map common kinds to their GVK
-        let gvk = match kind {
-            "Gateway" => GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "Gateway"),
-            "GatewayClass" => GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "GatewayClass"),
-            "HTTPRoute" => GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "HTTPRoute"),
-            "GRPCRoute" => GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "GRPCRoute"),
-            "TCPRoute" => GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha2", "TCPRoute"),
-            "UDPRoute" => GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha2", "UDPRoute"),
-            "TLSRoute" => GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha2", "TLSRoute"),
-            "ReferenceGrant" => GroupVersionKind::gvk("gateway.networking.k8s.io", "v1beta1", "ReferenceGrant"),
-            "Secret" => GroupVersionKind::gvk("", "v1", "Secret"),
-            "Service" => GroupVersionKind::gvk("", "v1", "Service"),
-            "Endpoints" => GroupVersionKind::gvk("", "v1", "Endpoints"),
-            "EndpointSlice" => GroupVersionKind::gvk("discovery.k8s.io", "v1", "EndpointSlice"),
-            "EdgionTls" => GroupVersionKind::gvk("edgion.io", "v1", "EdgionTls"),
-            "EdgionGatewayConfig" => GroupVersionKind::gvk("edgion.io", "v1", "EdgionGatewayConfig"),
-            "EdgionPlugins" => GroupVersionKind::gvk("edgion.io", "v1", "EdgionPlugins"),
-            "EdgionStreamPlugins" => GroupVersionKind::gvk("edgion.io", "v1", "EdgionStreamPlugins"),
-            "BackendTLSPolicy" => GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha3", "BackendTLSPolicy"),
-            "PluginMetaData" => GroupVersionKind::gvk("edgion.io", "v1", "PluginMetaData"),
-            "LinkSys" => GroupVersionKind::gvk("edgion.io", "v1", "LinkSys"),
+    /// Resolve ApiResource and Scope for a resource kind (static mapping, no network call)
+    fn resolve_api_resource(&self, kind: &str) -> Result<(ApiResource, Scope), ConfWriterError> {
+        // Static mapping of resource kinds to their ApiResource and Scope
+        // This avoids expensive Discovery calls on every API operation
+        let (ar, scope) = match kind {
+            // Gateway API resources (namespaced)
+            "Gateway" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "Gateway")),
+                Scope::Namespaced,
+            ),
+            "GatewayClass" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "GatewayClass")),
+                Scope::Cluster,
+            ),
+            "HTTPRoute" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "HTTPRoute")),
+                Scope::Namespaced,
+            ),
+            "GRPCRoute" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "GRPCRoute")),
+                Scope::Namespaced,
+            ),
+            "TCPRoute" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha2", "TCPRoute")),
+                Scope::Namespaced,
+            ),
+            "UDPRoute" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha2", "UDPRoute")),
+                Scope::Namespaced,
+            ),
+            "TLSRoute" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha2", "TLSRoute")),
+                Scope::Namespaced,
+            ),
+            "ReferenceGrant" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1beta1", "ReferenceGrant")),
+                Scope::Namespaced,
+            ),
+            "BackendTLSPolicy" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1alpha3", "BackendTLSPolicy")),
+                Scope::Namespaced,
+            ),
+            // Core resources
+            "Secret" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Secret")),
+                Scope::Namespaced,
+            ),
+            "Service" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Service")),
+                Scope::Namespaced,
+            ),
+            "Endpoints" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Endpoints")),
+                Scope::Namespaced,
+            ),
+            "EndpointSlice" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("discovery.k8s.io", "v1", "EndpointSlice")),
+                Scope::Namespaced,
+            ),
+            // Edgion CRDs
+            "EdgionTls" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionTls")),
+                Scope::Namespaced,
+            ),
+            "EdgionGatewayConfig" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionGatewayConfig")),
+                Scope::Cluster,
+            ),
+            "EdgionPlugins" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionPlugins")),
+                Scope::Namespaced,
+            ),
+            "EdgionStreamPlugins" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionStreamPlugins")),
+                Scope::Namespaced,
+            ),
+            "PluginMetaData" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "PluginMetaData")),
+                Scope::Namespaced,
+            ),
+            "LinkSys" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "LinkSys")),
+                Scope::Namespaced,
+            ),
             _ => {
                 return Err(ConfWriterError::InternalError(format!(
                     "Unknown resource kind: {}",
@@ -65,65 +127,43 @@ impl KubernetesWriter {
                 )))
             }
         };
-        Ok(gvk)
+        Ok((ar, scope))
     }
 
-    /// Create a dynamic API for the given kind and namespace
+    /// Create a dynamic API for the given kind and namespace (no Discovery call)
     ///
     /// # Arguments
     /// * `kind` - Resource kind
     /// * `namespace` - For namespaced resources: Some(ns) = specific namespace, None = default namespace
-    async fn dynamic_api(
+    fn dynamic_api(
         &self,
         kind: &str,
         namespace: Option<&str>,
-    ) -> Result<(Api<DynamicObject>, GroupVersionKind), ConfWriterError> {
-        let gvk = self.resolve_gvk(kind).await?;
+    ) -> Result<Api<DynamicObject>, ConfWriterError> {
+        let (ar, scope) = self.resolve_api_resource(kind)?;
 
-        // Discover API resource
-        let discovery = Discovery::new(self.client.clone())
-            .run()
-            .await
-            .map_err(|e| ConfWriterError::KubeError(format!("Discovery failed: {}", e)))?;
-
-        let (ar, caps) = discovery
-            .resolve_gvk(&gvk)
-            .ok_or_else(|| ConfWriterError::KubeError(format!("GVK not found: {:?}", gvk)))?;
-
-        let api: Api<DynamicObject> = if caps.scope == kube::discovery::Scope::Namespaced {
-            let ns = namespace.unwrap_or("default");
-            Api::namespaced_with(self.client.clone(), ns, &ar)
-        } else {
-            Api::all_with(self.client.clone(), &ar)
+        let api: Api<DynamicObject> = match scope {
+            Scope::Namespaced => {
+                let ns = namespace.unwrap_or("default");
+                Api::namespaced_with(self.client.clone(), ns, &ar)
+            }
+            Scope::Cluster => Api::all_with(self.client.clone(), &ar),
         };
 
-        Ok((api, gvk))
+        Ok(api)
     }
 
-    /// Create a dynamic API that lists resources across ALL namespaces
+    /// Create a dynamic API that lists resources across ALL namespaces (no Discovery call)
     ///
     /// For cluster-scoped resources, behaves the same as `dynamic_api`.
     /// For namespaced resources, uses `Api::all_with()` to list across all namespaces.
-    async fn dynamic_api_all_namespaces(
+    fn dynamic_api_all_namespaces(
         &self,
         kind: &str,
-    ) -> Result<(Api<DynamicObject>, GroupVersionKind), ConfWriterError> {
-        let gvk = self.resolve_gvk(kind).await?;
-
-        // Discover API resource
-        let discovery = Discovery::new(self.client.clone())
-            .run()
-            .await
-            .map_err(|e| ConfWriterError::KubeError(format!("Discovery failed: {}", e)))?;
-
-        let (ar, _caps) = discovery
-            .resolve_gvk(&gvk)
-            .ok_or_else(|| ConfWriterError::KubeError(format!("GVK not found: {:?}", gvk)))?;
-
+    ) -> Result<Api<DynamicObject>, ConfWriterError> {
+        let (ar, _scope) = self.resolve_api_resource(kind)?;
         // Always use Api::all_with to list across all namespaces
-        let api: Api<DynamicObject> = Api::all_with(self.client.clone(), &ar);
-
-        Ok((api, gvk))
+        Ok(Api::all_with(self.client.clone(), &ar))
     }
 }
 
@@ -136,7 +176,7 @@ impl ConfWriter for KubernetesWriter {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
-        let (api, _gvk) = self.dynamic_api(kind, namespace).await?;
+        let api = self.dynamic_api(kind, namespace)?;
 
         // Parse content as DynamicObject
         let obj: DynamicObject = serde_yaml::from_str(&content)
@@ -161,7 +201,7 @@ impl ConfWriter for KubernetesWriter {
     }
 
     async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
-        let (api, _gvk) = self.dynamic_api(kind, namespace).await?;
+        let api = self.dynamic_api(kind, namespace)?;
 
         let obj = api.get(name).await.map_err(|e| match e {
             kube::Error::Api(ae) if ae.code == 404 => {
@@ -177,7 +217,7 @@ impl ConfWriter for KubernetesWriter {
     }
 
     async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
-        let (api, _gvk) = self.dynamic_api(kind, namespace).await?;
+        let api = self.dynamic_api(kind, namespace)?;
 
         let params = DeleteParams::default();
         api.delete(name, &params).await.map_err(|e| match e {
@@ -283,7 +323,7 @@ impl ConfWriter for KubernetesWriter {
 
     async fn get_list_by_kind(&self, kind: &str, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
         // Use dynamic_api_all_namespaces to list across ALL namespaces
-        let (api, _gvk) = self.dynamic_api_all_namespaces(kind).await?;
+        let api = self.dynamic_api_all_namespaces(kind)?;
 
         let mut lp = ListParams::default();
 
@@ -305,11 +345,23 @@ impl ConfWriter for KubernetesWriter {
         let items = list
             .items
             .into_iter()
-            .map(|obj| ConfEntry {
-                kind: kind.to_string(),
-                namespace: obj.metadata.namespace.clone(),
-                name: obj.metadata.name.clone().unwrap_or_default(),
-                content: serde_yaml::to_string(&obj).unwrap_or_default(),
+            .map(|obj| {
+                let content = serde_yaml::to_string(&obj).unwrap_or_else(|e| {
+                    tracing::error!(
+                        component = "kubernetes_writer",
+                        kind = kind,
+                        name = ?obj.metadata.name,
+                        error = %e,
+                        "Failed to serialize object to YAML"
+                    );
+                    String::new()
+                });
+                ConfEntry {
+                    kind: kind.to_string(),
+                    namespace: obj.metadata.namespace.clone(),
+                    name: obj.metadata.name.clone().unwrap_or_default(),
+                    content,
+                }
             })
             .collect();
 
@@ -332,7 +384,7 @@ impl ConfWriter for KubernetesWriter {
         namespace: &str,
         opts: Option<ListOptions>,
     ) -> Result<ListResult, ConfWriterError> {
-        let (api, _gvk) = self.dynamic_api(kind, Some(namespace)).await?;
+        let api = self.dynamic_api(kind, Some(namespace))?;
 
         let mut lp = ListParams::default();
 
@@ -354,11 +406,24 @@ impl ConfWriter for KubernetesWriter {
         let items = list
             .items
             .into_iter()
-            .map(|obj| ConfEntry {
-                kind: kind.to_string(),
-                namespace: Some(namespace.to_string()),
-                name: obj.metadata.name.clone().unwrap_or_default(),
-                content: serde_yaml::to_string(&obj).unwrap_or_default(),
+            .map(|obj| {
+                let content = serde_yaml::to_string(&obj).unwrap_or_else(|e| {
+                    tracing::error!(
+                        component = "kubernetes_writer",
+                        kind = kind,
+                        namespace = namespace,
+                        name = ?obj.metadata.name,
+                        error = %e,
+                        "Failed to serialize object to YAML"
+                    );
+                    String::new()
+                });
+                ConfEntry {
+                    kind: kind.to_string(),
+                    namespace: Some(namespace.to_string()),
+                    name: obj.metadata.name.clone().unwrap_or_default(),
+                    content,
+                }
             })
             .collect();
 
