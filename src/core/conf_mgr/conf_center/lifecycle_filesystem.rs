@@ -107,19 +107,15 @@ impl ConfCenter {
         Ok(())
     }
 
-    /// Start FileSystem sync: load resources and optionally start FileWatcher
+    /// Start FileSystem sync: load resources and start FileWatcher
     ///
-    /// Returns an optional receiver for watcher errors.
+    /// Returns a receiver for watcher errors.
     /// Note: Assumes shutdown_handle is already set in self.shutdown_handle
     pub(super) async fn start_filesystem_sync(
         &self,
         config_server: &Arc<ConfigServer>,
     ) -> Result<Option<oneshot::Receiver<String>>> {
-        let ConfCenterConfig::FileSystem {
-            conf_dir,
-            watch_enabled,
-        } = &self.config
-        else {
+        let ConfCenterConfig::FileSystem { conf_dir } = &self.config else {
             return Err(anyhow::anyhow!("Not in FileSystem mode"));
         };
 
@@ -132,52 +128,48 @@ impl ConfCenter {
         );
         load_all_resources(self.writer.clone(), config_server.clone()).await?;
 
-        // Start file watcher if enabled
-        if *watch_enabled {
-            tracing::info!(
-                component = "conf_center",
-                mode = "file_system",
-                conf_dir = %conf_dir.display(),
-                "Starting file watcher"
-            );
+        // Start file watcher (always enabled in FileSystem mode)
+        tracing::info!(
+            component = "conf_center",
+            mode = "file_system",
+            conf_dir = %conf_dir.display(),
+            "Starting file watcher"
+        );
 
-            // Get shutdown signal from existing handle
-            let shutdown_signal = {
-                let handle = self.shutdown_handle.lock().unwrap();
-                handle.as_ref().map(|h| h.signal())
-            };
+        // Get shutdown signal from existing handle
+        let shutdown_signal = {
+            let handle = self.shutdown_handle.lock().unwrap();
+            handle.as_ref().map(|h| h.signal())
+        };
 
-            let Some(watcher_shutdown_signal) = shutdown_signal else {
-                return Err(anyhow::anyhow!("Shutdown handle not set"));
-            };
+        let Some(watcher_shutdown_signal) = shutdown_signal else {
+            return Err(anyhow::anyhow!("Shutdown handle not set"));
+        };
 
-            let watcher_config_server = config_server.clone();
-            let watcher = FileWatcher::new(conf_dir.clone(), watcher_config_server);
+        let watcher_config_server = config_server.clone();
+        let watcher = FileWatcher::new(conf_dir.clone(), watcher_config_server);
 
-            // Create error channel
-            let (error_tx, error_rx) = oneshot::channel::<String>();
+        // Create error channel
+        let (error_tx, error_rx) = oneshot::channel::<String>();
 
-            // Spawn watcher in background
-            let handle = tokio::spawn(async move {
-                if let Err(e) = watcher.start(watcher_shutdown_signal).await {
-                    let error_msg = e.to_string();
-                    tracing::error!(
-                        component = "conf_center",
-                        mode = "file_system",
-                        error = %error_msg,
-                        "File watcher error"
-                    );
-                    // Send error to main loop (ignore if receiver dropped)
-                    let _ = error_tx.send(error_msg);
-                }
-            });
+        // Spawn watcher in background
+        let handle = tokio::spawn(async move {
+            if let Err(e) = watcher.start(watcher_shutdown_signal).await {
+                let error_msg = e.to_string();
+                tracing::error!(
+                    component = "conf_center",
+                    mode = "file_system",
+                    error = %error_msg,
+                    "File watcher error"
+                );
+                // Send error to main loop (ignore if receiver dropped)
+                let _ = error_tx.send(error_msg);
+            }
+        });
 
-            let mut watcher_handle = self.watcher_handle.lock().unwrap();
-            *watcher_handle = Some(handle);
+        let mut watcher_handle = self.watcher_handle.lock().unwrap();
+        *watcher_handle = Some(handle);
 
-            return Ok(Some(error_rx));
-        }
-
-        Ok(None)
+        Ok(Some(error_rx))
     }
 }

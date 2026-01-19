@@ -8,18 +8,16 @@ use std::path::PathBuf;
 /// Configuration for the Configuration Center
 ///
 /// Supports two backends:
-/// - FileSystem: Local YAML files with optional file watching
+/// - FileSystem: Local YAML files with file watching (always enabled)
 /// - Kubernetes: K8s API with resource watching via Controller
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ConfCenterConfig {
     /// File system based configuration center
+    /// File watching is always enabled in this mode
     FileSystem {
         /// Directory containing configuration YAML files
         conf_dir: PathBuf,
-        /// Enable file watching for hot-reload (default: false)
-        #[serde(default)]
-        watch_enabled: bool,
     },
     /// Kubernetes based configuration center
     Kubernetes {
@@ -79,7 +77,6 @@ impl Default for ConfCenterConfig {
     fn default() -> Self {
         Self::FileSystem {
             conf_dir: PathBuf::from("conf"),
-            watch_enabled: false,
         }
     }
 }
@@ -122,14 +119,6 @@ impl ConfCenterConfig {
         }
     }
 
-    /// Check if file watching is enabled (FileSystem mode only)
-    pub fn watch_enabled(&self) -> bool {
-        match self {
-            Self::FileSystem { watch_enabled, .. } => *watch_enabled,
-            Self::Kubernetes { .. } => false,
-        }
-    }
-
     /// Get metadata filter configuration (Kubernetes mode only)
     pub fn metadata_filter(&self) -> Option<&MetadataFilterConfig> {
         match self {
@@ -147,12 +136,10 @@ mod tests {
     fn test_file_system_config() {
         let config = ConfCenterConfig::FileSystem {
             conf_dir: PathBuf::from("/etc/edgion/conf"),
-            watch_enabled: true,
         };
 
         assert!(!config.is_k8s_mode());
         assert_eq!(config.conf_dir(), Some(&PathBuf::from("/etc/edgion/conf")));
-        assert!(config.watch_enabled());
         assert!(config.metadata_filter().is_none());
     }
 
@@ -183,7 +170,6 @@ mod tests {
         let yaml = r#"
 type: file_system
 conf_dir: /etc/edgion/conf
-watch_enabled: true
 "#;
         let config: ConfCenterConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(!config.is_k8s_mode());

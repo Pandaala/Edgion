@@ -53,18 +53,6 @@ pub struct EdgionControllerConfig {
     #[arg(skip)]
     #[serde(default)]
     pub conf_center: ConfCenterConfig,
-
-    /// Configuration directory path (for FileSystem mode)
-    /// This CLI argument overrides conf_center.conf_dir
-    #[arg(long = "conf-dir", value_name = "DIR")]
-    #[serde(skip)]
-    pub conf_dir_override: Option<PathBuf>,
-
-    /// Enable file watching for configuration hot-reload (FileSystem mode only)
-    /// When enabled, the controller will automatically detect file changes
-    #[arg(long = "watch-enabled")]
-    #[serde(skip)]
-    pub watch_enabled_override: Option<bool>,
 }
 
 /// Server configuration
@@ -380,29 +368,6 @@ impl EdgionControllerConfig {
             base.logging.json_format = cli.logging.json_format;
         }
 
-        // conf_dir_override: CLI --conf-dir overrides conf_center.conf_dir
-        // watch_enabled_override: CLI --watch-enabled overrides conf_center.watch_enabled
-        // When --conf-dir is specified, default to enabling watch_enabled for backward compatibility
-        if cli.conf_dir_override.is_some() || cli.watch_enabled_override.is_some() {
-            let conf_dir = cli
-                .conf_dir_override
-                .clone()
-                .or_else(|| base.conf_center.conf_dir().cloned())
-                .unwrap_or_else(|| PathBuf::from("conf"));
-            // When --conf-dir is specified without --watch-enabled, default to true for backward compatibility
-            let watch_enabled = cli.watch_enabled_override.unwrap_or_else(|| {
-                if cli.conf_dir_override.is_some() {
-                    true // Enable watch by default when using --conf-dir CLI arg
-                } else {
-                    base.conf_center.watch_enabled()
-                }
-            });
-
-            base.conf_center = ConfCenterConfig::FileSystem {
-                conf_dir,
-                watch_enabled,
-            };
-        }
     }
 
     /// Get grpc_listen with default fallback
