@@ -46,6 +46,15 @@ pub enum ConfWriterError {
     #[error("Configuration already exists: {0}")]
     AlreadyExists(String),
 
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+
+    #[error("Permission denied: {0}")]
+    PermissionDenied(String),
+
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("Parse error: {0}")]
     ParseError(String),
 
@@ -66,8 +75,35 @@ pub enum ConfWriterError {
 /// - Kubernetes: calls K8s API (similar to client-go)
 #[async_trait]
 pub trait ConfWriter: Send + Sync {
-    /// Set a single configuration (create or update)
+    /// Set a single configuration (create or update, implementation-specific)
+    ///
+    /// For FileSystem: always overwrites the file
+    /// For Kubernetes: uses server-side apply (patch)
     async fn set_one(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        content: String,
+    ) -> Result<(), ConfWriterError>;
+
+    /// Create a new resource (fails if already exists)
+    ///
+    /// For FileSystem: checks if file exists before writing
+    /// For Kubernetes: uses Api::create()
+    async fn create_one(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        content: String,
+    ) -> Result<(), ConfWriterError>;
+
+    /// Update an existing resource (fails if not exists)
+    ///
+    /// For FileSystem: checks if file exists before writing
+    /// For Kubernetes: uses Api::replace()
+    async fn update_one(
         &self,
         kind: &str,
         namespace: Option<&str>,

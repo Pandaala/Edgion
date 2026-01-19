@@ -182,6 +182,21 @@ impl KubernetesWriter {
         // Always use Api::all_with to list across all namespaces
         Ok(Api::all_with(self.client.clone(), &ar))
     }
+
+    /// Map kube::Error to ConfWriterError with appropriate error types
+    fn map_kube_error(&self, e: kube::Error) -> ConfWriterError {
+        match e {
+            kube::Error::Api(ref ae) => match ae.code {
+                400 => ConfWriterError::ValidationError(ae.message.clone()),
+                403 => ConfWriterError::PermissionDenied(ae.message.clone()),
+                404 => ConfWriterError::NotFound(ae.message.clone()),
+                409 => ConfWriterError::AlreadyExists(ae.message.clone()),
+                422 => ConfWriterError::ValidationError(ae.message.clone()),
+                _ => ConfWriterError::KubeError(format!("K8s API error ({}): {}", ae.code, ae.message)),
+            },
+            _ => ConfWriterError::KubeError(e.to_string()),
+        }
+    }
 }
 
 #[async_trait]
@@ -212,6 +227,74 @@ impl ConfWriter for KubernetesWriter {
             namespace = ?namespace,
             name = name,
             "Resource applied via K8s API"
+        );
+
+        Ok(())
+    }
+
+    async fn create_one(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        content: String,
+    ) -> Result<(), ConfWriterError> {
+        let api = self.dynamic_api(kind, namespace)?;
+
+        // Parse content as DynamicObject
+        let obj: DynamicObject = serde_yaml::from_str(&content)
+            .map_err(|e| ConfWriterError::ParseError(format!("Failed to parse YAML: {}", e)))?;
+
+        // Use K8s API create (fails if resource already exists with 409)
+        api.create(&Default::default(), &obj)
+            .await
+            .map_err(|e| self.map_kube_error(e))?;
+
+        tracing::info!(
+            component = "kubernetes_writer",
+            event = "resource_created",
+            kind = kind,
+            namespace = ?namespace,
+            name = name,
+            "Resource created via K8s API"
+        );
+
+        Ok(())
+    }
+
+    async fn update_one(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        content: String,
+    ) -> Result<(), ConfWriterError> {
+        let api = self.dynamic_api(kind, namespace)?;
+
+        // Parse content as DynamicObject
+        let mut obj: DynamicObject = serde_yaml::from_str(&content)
+            .map_err(|e| ConfWriterError::ParseError(format!("Failed to parse YAML: {}", e)))?;
+
+        // Get current resource to obtain resourceVersion (required for replace)
+        let current = api.get(name).await.map_err(|e| self.map_kube_error(e))?;
+
+        // Set resourceVersion from current object (required for optimistic concurrency)
+        if let Some(rv) = current.metadata.resource_version {
+            obj.metadata.resource_version = Some(rv);
+        }
+
+        // Use K8s API replace (fails if resource doesn't exist with 404)
+        api.replace(name, &Default::default(), &obj)
+            .await
+            .map_err(|e| self.map_kube_error(e))?;
+
+        tracing::info!(
+            component = "kubernetes_writer",
+            event = "resource_updated",
+            kind = kind,
+            namespace = ?namespace,
+            name = name,
+            "Resource updated via K8s API"
         );
 
         Ok(())

@@ -80,6 +80,76 @@ impl ConfWriter for FileSystemWriter {
         Ok(())
     }
 
+    async fn create_one(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        content: String,
+    ) -> Result<(), ConfWriterError> {
+        let path = build_resource_path(&self.root, kind, namespace, name);
+
+        // Check if file already exists
+        if path.exists() {
+            return Err(ConfWriterError::AlreadyExists(format!(
+                "{}/{}/{}",
+                kind,
+                namespace.unwrap_or("_"),
+                name
+            )));
+        }
+
+        // Delegate to set_one for actual write
+        self.set_one(kind, namespace, name, content).await?;
+
+        tracing::info!(
+            component = "file_system_writer",
+            event = "resource_created",
+            kind = kind,
+            namespace = ?namespace,
+            name = name,
+            path = ?path,
+            "Resource created on file system"
+        );
+
+        Ok(())
+    }
+
+    async fn update_one(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        content: String,
+    ) -> Result<(), ConfWriterError> {
+        let path = build_resource_path(&self.root, kind, namespace, name);
+
+        // Check if file exists
+        if !path.exists() {
+            return Err(ConfWriterError::NotFound(format!(
+                "{}/{}/{}",
+                kind,
+                namespace.unwrap_or("_"),
+                name
+            )));
+        }
+
+        // Delegate to set_one for actual write
+        self.set_one(kind, namespace, name, content).await?;
+
+        tracing::info!(
+            component = "file_system_writer",
+            event = "resource_updated",
+            kind = kind,
+            namespace = ?namespace,
+            name = name,
+            path = ?path,
+            "Resource updated on file system"
+        );
+
+        Ok(())
+    }
+
     async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
         let path = build_resource_path(&self.root, kind, namespace, name);
 

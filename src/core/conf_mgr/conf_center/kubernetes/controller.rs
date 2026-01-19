@@ -314,7 +314,7 @@ impl KubernetesController {
 
     /// Internal method to run all controllers
     /// Returns when shutdown is triggered or a relink signal is received
-    async fn run_controllers(&self, shutdown_signal: ShutdownSignal) -> Result<ControllerExitReason> {
+    async fn run_controllers(&self, mut shutdown_signal: ShutdownSignal) -> Result<ControllerExitReason> {
         tracing::info!(
             component = "k8s_controller",
             "Starting Kubernetes controller - spawning 19 independent ResourceControllers"
@@ -540,9 +540,17 @@ impl KubernetesController {
         );
 
         // Wait for either:
-        // 1. A relink signal (410 Gone detected)
-        // 2. All controllers to stop
+        // 1. Shutdown signal (Ctrl+C / SIGTERM)
+        // 2. A relink signal (410 Gone detected)
+        // 3. All controllers to stop
         let exit_reason = tokio::select! {
+            _ = shutdown_signal.wait() => {
+                tracing::info!(
+                    component = "k8s_controller",
+                    "Shutdown signal received in run_controllers"
+                );
+                ControllerExitReason::Shutdown
+            }
             reason = relink_rx.recv() => {
                 match reason {
                     Some(r) => {

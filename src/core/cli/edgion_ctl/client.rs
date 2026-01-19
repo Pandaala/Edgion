@@ -94,7 +94,11 @@ impl EdgionClient {
             self.build_url(&format!("/api/v1/cluster/{}", kind))
         };
 
-        let request = self.client.post(&url).header("Content-Type", "application/yaml").body(body);
+        let request = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/yaml")
+            .body(body);
         self.send_request(request, &url).await
     }
 
@@ -108,7 +112,11 @@ impl EdgionClient {
             self.build_url(&format!("/api/v1/cluster/{}/{}", kind, name))
         };
 
-        let request = self.client.put(&url).header("Content-Type", "application/yaml").body(body);
+        let request = self
+            .client
+            .put(&url)
+            .header("Content-Type", "application/yaml")
+            .body(body);
         self.send_request(request, &url).await
     }
 

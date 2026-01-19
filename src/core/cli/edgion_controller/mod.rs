@@ -70,33 +70,53 @@ impl EdgionControllerCli {
     }
 
     /// Load CRD schemas for validation
-    fn load_schemas() -> Arc<SchemaValidator> {
+    ///
+    /// In K8s mode: Skip schema loading, validation is handled by K8s API Server
+    /// In non-K8s mode: Load schemas from CRD files, exit if loading fails
+    fn load_schemas(k8s_mode: bool) -> Arc<SchemaValidator> {
+        if k8s_mode {
+            tracing::info!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                event = "skip_schema_loading",
+                "K8s mode: schema validation handled by K8s API Server"
+            );
+            return Arc::new(SchemaValidator::empty());
+        }
+
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
             event = "loading_schemas",
-            "Loading CRD schemas for validation"
+            "Non-K8s mode: loading CRD schemas for validation"
         );
 
-        let schema_validator = Arc::new(
-            SchemaValidator::from_crd_dir(Path::new("config/crd")).unwrap_or_else(|e| {
-                tracing::warn!(
-                    component = COMPONENT_EDGION_CONTROLLER,
-                    event = "schema_load_warning",
-                    error = %e,
-                    "Failed to load CRD schemas, validation will be skipped"
-                );
-                SchemaValidator::empty()
-            }),
-        );
+        let schema_validator = SchemaValidator::from_crd_dir(Path::new("config/crd")).unwrap_or_else(|e| {
+            tracing::error!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                event = "schema_load_failed",
+                error = %e,
+                "FATAL: Failed to load CRD schemas in non-K8s mode"
+            );
+            std::process::exit(1);
+        });
+
+        let count = schema_validator.schema_count();
+        if count == 0 {
+            tracing::error!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                event = "no_schemas_loaded",
+                "FATAL: No schemas loaded in non-K8s mode"
+            );
+            std::process::exit(1);
+        }
 
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
             event = "schemas_loaded",
-            schema_count = schema_validator.schema_count(),
-            "CRD schemas loaded"
+            schema_count = count,
+            "CRD schemas loaded successfully"
         );
 
-        schema_validator
+        Arc::new(schema_validator)
     }
 
     /// Start gRPC and Admin services
@@ -200,8 +220,8 @@ impl EdgionControllerCli {
             }
         });
 
-        // 5. Load CRD schemas for validation
-        let schema_validator = Self::load_schemas();
+        // 5. Load CRD schemas for validation (skip in K8s mode)
+        let schema_validator = Self::load_schemas(config.is_k8s_mode());
 
         // 6. Parse addresses and start services
         // Note: Services start immediately but return UNAVAILABLE until ConfigServer is ready

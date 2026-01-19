@@ -26,15 +26,9 @@ pub async fn get(
 /// Print connection hint when request fails
 fn print_connection_hint(client: &EdgionClient) {
     eprintln!();
-    eprintln!(
-        "Hint: edgion-ctl is trying to connect to: {}",
-        client.base_url()
-    );
+    eprintln!("Hint: edgion-ctl is trying to connect to: {}", client.base_url());
     eprintln!("      Use --server to specify a different address, e.g.:");
-    eprintln!(
-        "        ./edgion-ctl --server {} get httproute",
-        client.base_url()
-    );
+    eprintln!("        ./edgion-ctl --server {} get httproute", client.base_url());
 }
 
 /// Get a specific resource
@@ -78,10 +72,7 @@ async fn list_namespaced(client: &EdgionClient, kind: &str, namespace: &str, out
     let resp = match client.list_namespaced(kind, namespace).await {
         Ok(r) => r,
         Err(e) => {
-            print_error(&format!(
-                "Failed to list {} in namespace {}: {}",
-                kind, namespace, e
-            ));
+            print_error(&format!("Failed to list {} in namespace {}: {}", kind, namespace, e));
             print_connection_hint(client);
             anyhow::bail!("Request failed");
         }
