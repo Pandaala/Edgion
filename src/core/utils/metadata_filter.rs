@@ -65,14 +65,8 @@ mod tests {
             "kubectl.kubernetes.io/last-applied-configuration".to_string(),
             r#"{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"test"}}"#.to_string(),
         );
-        annotations.insert(
-            "meta.helm.sh/release-name".to_string(),
-            "my-release".to_string(),
-        );
-        annotations.insert(
-            "meta.helm.sh/release-namespace".to_string(),
-            "default".to_string(),
-        );
+        annotations.insert("meta.helm.sh/release-name".to_string(), "my-release".to_string());
+        annotations.insert("meta.helm.sh/release-namespace".to_string(), "default".to_string());
         annotations.insert("custom-annotation".to_string(), "keep-me".to_string());
 
         ConfigMap {

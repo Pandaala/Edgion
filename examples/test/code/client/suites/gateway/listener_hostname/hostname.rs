@@ -23,7 +23,7 @@ impl ListenerHostnameTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31240/health");
+                    let url = "http://127.0.0.1:31240/health".to_string();
 
                     let response = client.get(&url).header("Host", "api.example.com").send().await;
 
@@ -60,7 +60,7 @@ impl ListenerHostnameTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31240/health");
+                    let url = "http://127.0.0.1:31240/health".to_string();
 
                     let response = client.get(&url).header("Host", "other.example.com").send().await;
 
@@ -96,7 +96,7 @@ impl ListenerHostnameTestSuite {
                     let client = reqwest::Client::new();
 
                     // Test 1: api.wildcard.example.com should match
-                    let url1 = format!("http://127.0.0.1:31241/health");
+                    let url1 = "http://127.0.0.1:31241/health".to_string();
                     let response1 = client
                         .get(&url1)
                         .header("Host", "api.wildcard.example.com")
@@ -119,7 +119,7 @@ impl ListenerHostnameTestSuite {
                     }
 
                     // Test 2: www.wildcard.example.com should also match
-                    let url2 = format!("http://127.0.0.1:31241/health");
+                    let url2 = "http://127.0.0.1:31241/health".to_string();
                     let response2 = client
                         .get(&url2)
                         .header("Host", "www.wildcard.example.com")
@@ -156,7 +156,7 @@ impl ListenerHostnameTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31241/health");
+                    let url = "http://127.0.0.1:31241/health".to_string();
 
                     let response = client
                         .get(&url)
@@ -197,7 +197,7 @@ impl ListenerHostnameTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31242/health");
+                    let url = "http://127.0.0.1:31242/health".to_string();
 
                     let response = client.get(&url).header("Host", "any-domain.example.com").send().await;
 

@@ -20,7 +20,7 @@ impl AllowedRoutesAllNamespacesTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31211/health");
+                    let url = "http://127.0.0.1:31211/health".to_string();
 
                     let response = client.get(&url).header("Host", "all-same-ns.example.com").send().await;
 
@@ -57,7 +57,7 @@ impl AllowedRoutesAllNamespacesTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31211/health");
+                    let url = "http://127.0.0.1:31211/health".to_string();
 
                     let response = client.get(&url).header("Host", "all-cross-ns.example.com").send().await;
 

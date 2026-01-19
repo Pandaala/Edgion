@@ -23,7 +23,7 @@ impl CombinedScenariosTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31230/health");
+                    let url = "http://127.0.0.1:31230/health".to_string();
 
                     let response = client.get(&url).header("Host", "api.combined.example.com").send().await;
 
@@ -57,7 +57,7 @@ impl CombinedScenariosTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31230/health");
+                    let url = "http://127.0.0.1:31230/health".to_string();
 
                     let response = client.get(&url).header("Host", "www.combined.example.com").send().await;
 
@@ -91,7 +91,7 @@ impl CombinedScenariosTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31230/health");
+                    let url = "http://127.0.0.1:31230/health".to_string();
 
                     let response = client.get(&url).header("Host", "other.example.com").send().await;
 
@@ -125,7 +125,7 @@ impl CombinedScenariosTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31231/health");
+                    let url = "http://127.0.0.1:31231/health".to_string();
 
                     let response = client
                         .get(&url)
@@ -163,7 +163,7 @@ impl CombinedScenariosTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31231/health");
+                    let url = "http://127.0.0.1:31231/health".to_string();
 
                     let response = client
                         .get(&url)

@@ -503,7 +503,7 @@ mod tests {
         assert_eq!(static_exact_2seg.priority_weight, 2 * 4 + 3); // 11
         assert_eq!(param_exact_2seg.priority_weight, 2 * 4 + 2); // 10
         assert_eq!(static_prefix_2seg.priority_weight, 2 * 4 + 1); // 9
-        assert_eq!(param_prefix_2seg.priority_weight, 2 * 4 + 0); // 8
+        assert_eq!(param_prefix_2seg.priority_weight, (2 * 4)); // 8
     }
 
     #[test]

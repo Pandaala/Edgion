@@ -20,7 +20,7 @@ impl AllowedRoutesKindsTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31213/health");
+                    let url = "http://127.0.0.1:31213/health".to_string();
 
                     let response = client.get(&url).header("Host", "kinds-http.example.com").send().await;
 
@@ -65,7 +65,7 @@ impl AllowedRoutesKindsTestSuite {
                     // In a real scenario, this would fail at routing level
                     let client = reqwest::Client::builder().http2_prior_knowledge().build().unwrap();
 
-                    let url = format!("http://127.0.0.1:31213/test.TestService/SayHello");
+                    let url = "http://127.0.0.1:31213/test.TestService/SayHello".to_string();
 
                     let response = client
                         .post(&url)

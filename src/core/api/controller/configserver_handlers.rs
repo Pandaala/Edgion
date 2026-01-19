@@ -132,10 +132,7 @@ fn find_resource_alt<T: ResourceExt + serde::Serialize>(
 }
 
 /// Find a cluster-scoped resource by name only
-fn find_cluster_resource<T: ResourceExt + serde::Serialize>(
-    items: Vec<T>,
-    name: &str,
-) -> Option<serde_json::Value> {
+fn find_cluster_resource<T: ResourceExt + serde::Serialize>(items: Vec<T>, name: &str) -> Option<serde_json::Value> {
     items
         .into_iter()
         .find(|r| r.name_any() == name)
@@ -162,9 +159,7 @@ pub async fn get_resource(
     Query(query): Query<ResourceQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, StatusCode> {
     let Some(name) = query.name else {
-        return Ok(Json(ApiResponse::error(
-            "Missing required parameter: name".to_string(),
-        )));
+        return Ok(Json(ApiResponse::error("Missing required parameter: name".to_string())));
     };
 
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;

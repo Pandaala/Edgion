@@ -20,7 +20,7 @@ impl AllowedRoutesSameNamespaceTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31210/health");
+                    let url = "http://127.0.0.1:31210/health".to_string();
 
                     let response = client.get(&url).header("Host", "same-ns.example.com").send().await;
 
@@ -54,7 +54,7 @@ impl AllowedRoutesSameNamespaceTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::new();
-                    let url = format!("http://127.0.0.1:31210/health");
+                    let url = "http://127.0.0.1:31210/health".to_string();
 
                     let response = client.get(&url).header("Host", "diff-ns.example.com").send().await;
 

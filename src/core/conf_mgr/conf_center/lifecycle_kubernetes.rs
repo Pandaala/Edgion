@@ -60,11 +60,7 @@ impl ConfCenter {
     pub(super) async fn run_k8s_lifecycle(&self) -> Result<()> {
         // 1. Create K8s Client
         let client = Client::try_default().await?;
-        tracing::info!(
-            component = "conf_center",
-            mode = "kubernetes",
-            "K8s client initialized"
-        );
+        tracing::info!(component = "conf_center", mode = "kubernetes", "K8s client initialized");
 
         // 2. Initialize Leader Election
         let leader_config = self.create_leader_election_config()?;
@@ -118,18 +114,12 @@ impl ConfCenter {
             );
 
             // === Phase 2: Run main flow (only leader executes) ===
-            let exit_reason = self
-                .run_main_flow(&client, &leader_handle, &shutdown_handle)
-                .await;
+            let exit_reason = self.run_main_flow(&client, &leader_handle, &shutdown_handle).await;
 
             // === Phase 3: Handle exit reason ===
             match exit_reason {
                 MainFlowExit::Shutdown => {
-                    tracing::info!(
-                        component = "conf_center",
-                        mode = "kubernetes",
-                        "Normal shutdown"
-                    );
+                    tracing::info!(component = "conf_center", mode = "kubernetes", "Normal shutdown");
                     return Ok(());
                 }
                 MainFlowExit::LostLeadership => {
@@ -180,9 +170,7 @@ impl ConfCenter {
             let iteration_start = Instant::now();
 
             // Run one iteration of the main flow
-            let result = self
-                .run_iteration(client, leader_handle, shutdown_handle)
-                .await;
+            let result = self.run_iteration(client, leader_handle, shutdown_handle).await;
 
             match result {
                 IterationResult::Shutdown => {

@@ -32,6 +32,12 @@ pub struct EdgionControllerConfig {
     #[serde(skip)]
     pub config_file: Option<String>,
 
+    /// Configuration directory (FileSystem mode only)
+    /// CLI --conf-dir overrides conf_center.conf_dir in config file
+    #[arg(long, value_name = "DIR")]
+    #[serde(skip)]
+    pub conf_dir: Option<PathBuf>,
+
     #[command(flatten)]
     #[serde(default)]
     pub server: ServerConfig,
@@ -349,6 +355,13 @@ impl EdgionControllerConfig {
             base.work_dir = cli.work_dir.clone();
         }
 
+        // Configuration directory: CLI --conf-dir overrides conf_center.conf_dir
+        if let Some(conf_dir) = &cli.conf_dir {
+            base.conf_center = ConfCenterConfig::FileSystem {
+                conf_dir: conf_dir.clone(),
+            };
+        }
+
         // Server config
         if cli.server.grpc_listen.is_some() {
             base.server.grpc_listen = cli.server.grpc_listen.clone();
@@ -367,7 +380,6 @@ impl EdgionControllerConfig {
         if cli.logging.json_format.is_some() {
             base.logging.json_format = cli.logging.json_format;
         }
-
     }
 
     /// Get grpc_listen with default fallback
