@@ -1,5 +1,6 @@
 mod cluster_handlers;
 mod common;
+mod configserver_handlers;
 mod namespaced_handlers;
 mod types;
 
@@ -113,6 +114,15 @@ pub fn create_admin_router(conf_center: Arc<ConfCenter>, schema_validator: Arc<S
         )
         // Special operations
         .route("/api/v1/reload", post(reload_all_resources))
+        // ConfigServer endpoints (for edgion-ctl --target server)
+        .route(
+            "/configserver/{kind}/list",
+            get(configserver_handlers::list_resources),
+        )
+        .route(
+            "/configserver/{kind}",
+            get(configserver_handlers::get_resource),
+        )
         .with_state(admin_state)
 }
 

@@ -1,4 +1,3 @@
-pub mod base_conf_loader;
 pub mod conf_center;
 pub mod conf_mgr_trait;
 pub mod resource_check;
