@@ -90,12 +90,27 @@ buffer_size = 10000
 # type = "file_system"
 # conf_dir = "examples/test/conf"  # Directory containing YAML files
 #
-# Kubernetes mode example:
+# Kubernetes mode example (production):
 # [conf_center]
 # type = "kubernetes"
-# gateway_class = "edgion"
-# watch_namespaces = []  # Empty = all namespaces
-# label_selector = ""    # Optional: filter resources by label
+# gateway_class = "edgion"              # Required: GatewayClass name to manage
+# watch_namespaces = []                 # Empty = all namespaces, or ["ns1", "ns2"]
+# label_selector = ""                   # Optional: filter resources by label
+#
+# [conf_center.leader_election]
+# lease_name = "edgion-controller-leader"    # Lease resource name
+# lease_namespace = "edgion-system"          # Namespace for Lease (default: from POD_NAMESPACE env)
+# lease_duration_secs = 15                   # Lease validity period
+# renew_period_secs = 10                     # How often leader renews lease
+# retry_period_secs = 2                      # How often non-leaders retry
+#
+# [conf_center.metadata_filter]
+# blocked_annotations = [                    # Annotations to remove from resources
+#   "kubectl.kubernetes.io/last-applied-configuration",
+#   "meta.helm.sh/release-name",
+#   "meta.helm.sh/release-namespace"
+# ]
+# remove_managed_fields = true               # Remove managedFields to save memory
 # ============================================================================
 [conf_center]
 type = "file_system"

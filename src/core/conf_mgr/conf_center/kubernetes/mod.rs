@@ -20,7 +20,7 @@ pub mod shutdown;
 mod workqueue;
 mod writer;
 
-pub use controller::{ControllerExitReason, KubernetesController, LeaderElectionMode};
+pub use controller::{ControllerExitReason, KubernetesController};
 pub use leader_election::{LeaderElection, LeaderElectionConfig, LeaderHandle};
 pub use metrics::{controller_metrics, ControllerMetrics, InitSyncTimer, ResourceMetrics};
 pub use namespace::NamespaceWatchMode;

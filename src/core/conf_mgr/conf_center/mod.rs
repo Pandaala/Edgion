@@ -46,7 +46,7 @@ mod lifecycle_kubernetes;
 pub mod status;
 pub mod traits;
 
-pub use config::{ConfCenterConfig, MetadataFilterConfig};
+pub use config::{ConfCenterConfig, LeaderElectionConfig, MetadataFilterConfig};
 pub use file_system::{FileSystemWriter, FileWatcher};
 pub use init_loader::load_all_resources;
 pub use kubernetes::{

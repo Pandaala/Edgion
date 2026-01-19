@@ -55,10 +55,9 @@ use kube::Client;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use super::leader_election::{LeaderElection, LeaderElectionConfig};
 use super::namespace::NamespaceWatchMode;
 use super::resource_controller::{RelinkReason, ResourceControllerBuilder};
-use super::shutdown::{ShutdownHandle, ShutdownSignal};
+use super::shutdown::ShutdownSignal;
 use super::status::{KubernetesStatusStore, StatusStore};
 use crate::core::conf_mgr::MetadataFilterConfig;
 use crate::core::conf_sync::conf_server::ConfigServer;
@@ -139,17 +138,10 @@ macro_rules! spawn_cluster {
     }};
 }
 
-/// Leader election mode
-#[derive(Clone, Debug, Default)]
-pub enum LeaderElectionMode {
-    /// No leader election - single instance mode
-    #[default]
-    Disabled,
-    /// Leader election enabled with configuration
-    Enabled(LeaderElectionConfig),
-}
-
 /// Kubernetes Controller that spawns independent ResourceControllers for each resource type
+///
+/// Note: Leader election is handled externally by lifecycle_kubernetes.rs.
+/// This controller focuses solely on resource watching and synchronization.
 pub struct KubernetesController {
     client: Client,
     config_server: Arc<ConfigServer>,
@@ -158,7 +150,6 @@ pub struct KubernetesController {
     gateway_class_name: String,
     watch_mode: NamespaceWatchMode,
     label_selector: Option<String>,
-    leader_election_mode: LeaderElectionMode,
     /// Optional metadata filter configuration for reducing resource memory usage
     metadata_filter: Option<MetadataFilterConfig>,
 }
@@ -171,13 +162,12 @@ impl KubernetesController {
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
     ) -> Result<Self> {
-        Self::with_options(
+        Self::with_metadata_filter(
             config_server,
             gateway_class_name,
             watch_namespaces,
             label_selector,
-            LeaderElectionMode::Disabled,
-            None,
+            MetadataFilterConfig::default(),
         )
         .await
     }
@@ -189,45 +179,6 @@ impl KubernetesController {
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
         metadata_filter: MetadataFilterConfig,
-    ) -> Result<Self> {
-        Self::with_options(
-            config_server,
-            gateway_class_name,
-            watch_namespaces,
-            label_selector,
-            LeaderElectionMode::Disabled,
-            Some(metadata_filter),
-        )
-        .await
-    }
-
-    /// Create a new KubernetesController with leader election
-    pub async fn with_leader_election(
-        config_server: Arc<ConfigServer>,
-        gateway_class_name: String,
-        watch_namespaces: Vec<String>,
-        label_selector: Option<String>,
-        leader_election_mode: LeaderElectionMode,
-    ) -> Result<Self> {
-        Self::with_options(
-            config_server,
-            gateway_class_name,
-            watch_namespaces,
-            label_selector,
-            leader_election_mode,
-            None,
-        )
-        .await
-    }
-
-    /// Create a new KubernetesController with all options
-    pub async fn with_options(
-        config_server: Arc<ConfigServer>,
-        gateway_class_name: String,
-        watch_namespaces: Vec<String>,
-        label_selector: Option<String>,
-        leader_election_mode: LeaderElectionMode,
-        metadata_filter: Option<MetadataFilterConfig>,
     ) -> Result<Self> {
         let client = Client::try_default().await?;
         let status_store: Arc<dyn StatusStore> = Arc::new(KubernetesStatusStore::new(
@@ -242,9 +193,8 @@ impl KubernetesController {
             watch_mode = ?watch_mode,
             label_selector = ?label_selector,
             gateway_class_name = %gateway_class_name,
-            leader_election = ?leader_election_mode,
-            metadata_filter_enabled = metadata_filter.is_some(),
-            "Creating Kubernetes controller with independent ResourceControllers"
+            metadata_filter_enabled = true,
+            "Creating Kubernetes controller"
         );
 
         Ok(Self {
@@ -254,8 +204,7 @@ impl KubernetesController {
             gateway_class_name,
             watch_mode,
             label_selector,
-            leader_election_mode,
-            metadata_filter,
+            metadata_filter: Some(metadata_filter),
         })
     }
 
@@ -278,103 +227,14 @@ impl KubernetesController {
     /// - Immediately starts workqueue reconcile loop (no waiting for other resources)
     ///
     /// Also handles:
-    /// - Graceful shutdown on SIGTERM/SIGINT
-    /// - Optional leader election for HA deployments
+    /// - Graceful shutdown via provided ShutdownSignal
     /// - 410 Gone detection and relink signaling
     ///
-    /// Note: This method returns after controllers stop. If relink is needed,
-    /// the caller (ConfCenter) should call this again after resetting state.
-    pub async fn run(&self) -> Result<ControllerExitReason> {
-        // Setup shutdown handling
-        let shutdown_handle = ShutdownHandle::new();
-        let shutdown_signal = shutdown_handle.signal();
-
-        // Spawn signal handler
-        let signal_handle = shutdown_handle.clone();
-        tokio::spawn(async move {
-            signal_handle.wait_for_signals().await;
-        });
-
-        // Handle leader election if enabled
-        match &self.leader_election_mode {
-            LeaderElectionMode::Disabled => {
-                tracing::info!(
-                    component = "k8s_controller",
-                    "Leader election disabled - running as single instance"
-                );
-                self.run_controllers(shutdown_signal).await
-            }
-            LeaderElectionMode::Enabled(config) => {
-                tracing::info!(
-                    component = "k8s_controller",
-                    lease_name = %config.lease_name,
-                    lease_namespace = %config.lease_namespace,
-                    identity = %config.identity,
-                    "Leader election enabled - waiting for leadership"
-                );
-
-                let leader_election = LeaderElection::new(self.client.clone(), config.clone());
-                let leader_handle = leader_election.handle();
-
-                // Spawn leader election loop
-                let le = leader_election.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = le.run().await {
-                        tracing::error!(error = %e, "Leader election failed");
-                    }
-                });
-
-                // Wait until we become leader (with shutdown support)
-                if !leader_handle
-                    .wait_until_leader_with_shutdown(shutdown_signal.clone())
-                    .await
-                {
-                    tracing::info!(
-                        component = "k8s_controller",
-                        "Shutdown requested before acquiring leadership"
-                    );
-                    return Ok(ControllerExitReason::Shutdown);
-                }
-                tracing::info!(
-                    component = "k8s_controller",
-                    "Acquired leadership, starting controllers"
-                );
-
-                // Monitor leadership loss and trigger shutdown if we lose it
-                let leader_handle_monitor = leader_handle.clone();
-                let shutdown_for_leader = shutdown_handle.clone();
-                let (leadership_lost_tx, mut leadership_lost_rx) = mpsc::channel::<()>(1);
-                tokio::spawn(async move {
-                    // Poll for leadership loss
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        if !leader_handle_monitor.is_leader() {
-                            tracing::warn!(
-                                component = "k8s_controller",
-                                "Lost leadership - triggering shutdown of all controllers"
-                            );
-                            shutdown_for_leader.shutdown();
-                            let _ = leadership_lost_tx.send(()).await;
-                            break;
-                        }
-                    }
-                });
-
-                // Run controllers and wait for exit
-                tokio::select! {
-                    result = self.run_controllers(shutdown_signal) => {
-                        result
-                    }
-                    _ = leadership_lost_rx.recv() => {
-                        tracing::warn!(
-                            component = "k8s_controller",
-                            "Controllers stopping due to leadership loss"
-                        );
-                        Ok(ControllerExitReason::LostLeadership)
-                    }
-                }
-            }
-        }
+    /// Note: Leader election is handled by the caller (lifecycle_kubernetes.rs).
+    /// This method returns after controllers stop. If relink is needed,
+    /// the caller should call this again after resetting state.
+    pub async fn run(&self, shutdown_signal: ShutdownSignal) -> Result<ControllerExitReason> {
+        self.run_controllers(shutdown_signal).await
     }
 
     /// Internal method to run all controllers

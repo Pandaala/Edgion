@@ -32,7 +32,67 @@ pub enum ConfCenterConfig {
         /// Metadata filter configuration for reducing resource memory usage
         #[serde(default)]
         metadata_filter: MetadataFilterConfig,
+        /// Leader election configuration (always enabled in K8s mode)
+        #[serde(default)]
+        leader_election: LeaderElectionConfig,
     },
+}
+
+/// Leader election configuration for HA deployments
+///
+/// In K8s mode, leader election is always enabled to ensure only one
+/// controller instance is active at a time when running multiple replicas.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeaderElectionConfig {
+    /// Lease resource name for leader election
+    #[serde(default = "default_lease_name")]
+    pub lease_name: String,
+    /// Namespace where the Lease resource will be created
+    /// Defaults to the namespace from POD_NAMESPACE env var or "default"
+    #[serde(default = "default_lease_namespace")]
+    pub lease_namespace: String,
+    /// Lease duration in seconds (how long the lease is valid)
+    #[serde(default = "default_lease_duration_secs")]
+    pub lease_duration_secs: i32,
+    /// Renew period in seconds (how often the leader renews the lease)
+    #[serde(default = "default_renew_period_secs")]
+    pub renew_period_secs: u64,
+    /// Retry period in seconds (how often non-leaders try to acquire)
+    #[serde(default = "default_retry_period_secs")]
+    pub retry_period_secs: u64,
+}
+
+impl Default for LeaderElectionConfig {
+    fn default() -> Self {
+        Self {
+            lease_name: default_lease_name(),
+            lease_namespace: default_lease_namespace(),
+            lease_duration_secs: default_lease_duration_secs(),
+            renew_period_secs: default_renew_period_secs(),
+            retry_period_secs: default_retry_period_secs(),
+        }
+    }
+}
+
+fn default_lease_name() -> String {
+    "edgion-controller-leader".to_string()
+}
+
+fn default_lease_namespace() -> String {
+    // Try to get namespace from environment (set by K8s Downward API)
+    std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "default".to_string())
+}
+
+fn default_lease_duration_secs() -> i32 {
+    15
+}
+
+fn default_renew_period_secs() -> u64 {
+    10
+}
+
+fn default_retry_period_secs() -> u64 {
+    2
 }
 
 /// Metadata filter configuration for reducing K8s resource size in memory
@@ -126,6 +186,14 @@ impl ConfCenterConfig {
             Self::Kubernetes { metadata_filter, .. } => Some(metadata_filter),
         }
     }
+
+    /// Get leader election configuration (Kubernetes mode only)
+    pub fn leader_election(&self) -> Option<&LeaderElectionConfig> {
+        match self {
+            Self::FileSystem { .. } => None,
+            Self::Kubernetes { leader_election, .. } => Some(leader_election),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -150,6 +218,7 @@ mod tests {
             label_selector: Some("app=edgion".to_string()),
             gateway_class: "edgion".to_string(),
             metadata_filter: MetadataFilterConfig::default(),
+            leader_election: LeaderElectionConfig::default(),
         };
 
         assert!(config.is_k8s_mode());
@@ -163,6 +232,11 @@ mod tests {
         assert!(filter
             .blocked_annotations
             .contains(&"kubectl.kubernetes.io/last-applied-configuration".to_string()));
+
+        // Test leader election config
+        let le = config.leader_election().unwrap();
+        assert_eq!(le.lease_name, "edgion-controller-leader");
+        assert_eq!(le.lease_duration_secs, 15);
     }
 
     #[test]
