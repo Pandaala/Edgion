@@ -12,7 +12,7 @@ pub use schema_validator::SchemaValidator;
 pub use conf_center::{
     load_all_resources, ConfCenter, ConfCenterConfig, ConfEntry, ConfWriter, ConfWriterError, ControllerExitReason,
     FileSystemStatusStore, FileSystemWriter, FileWatcher, KubernetesController, KubernetesStatusStore,
-    KubernetesWriter, NamespaceWatchMode, RelinkReason, StatusStore, StatusStoreError,
+    KubernetesWriter, MetadataFilterConfig, NamespaceWatchMode, RelinkReason, StatusStore, StatusStoreError,
 };
 
 // Backward compatibility aliases (direct re-exports)

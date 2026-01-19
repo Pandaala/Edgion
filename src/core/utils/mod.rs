@@ -11,6 +11,9 @@ pub use duration::parse_duration;
 pub mod real_ip_extractor;
 pub use real_ip_extractor::{extract_ip_string, RealIpExtractor};
 
+pub mod metadata_filter;
+pub use metadata_filter::clean_metadata;
+
 /// Get the number of available CPU cores on the system
 ///
 /// Returns the number of logical CPU cores available to the current process.

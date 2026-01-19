@@ -186,6 +186,7 @@ impl ConfCenter {
             watch_namespaces,
             label_selector,
             gateway_class,
+            metadata_filter,
         } = &self.config
         else {
             return Err(anyhow::anyhow!("Not in Kubernetes mode"));
@@ -196,14 +197,18 @@ impl ConfCenter {
             mode = "kubernetes",
             gateway_class = gateway_class,
             namespaces = ?watch_namespaces,
-            "Creating Kubernetes controller"
+            metadata_filter_enabled = true,
+            blocked_annotations_count = metadata_filter.blocked_annotations.len(),
+            remove_managed_fields = metadata_filter.remove_managed_fields,
+            "Creating Kubernetes controller with metadata filter"
         );
 
-        KubernetesController::new(
+        KubernetesController::with_metadata_filter(
             config_server.clone(),
             gateway_class.clone(),
             watch_namespaces.clone(),
             label_selector.clone(),
+            metadata_filter.clone(),
         )
         .await
     }

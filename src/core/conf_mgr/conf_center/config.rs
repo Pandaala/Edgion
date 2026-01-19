@@ -31,7 +31,48 @@ pub enum ConfCenterConfig {
         label_selector: Option<String>,
         /// Gateway class name this controller manages
         gateway_class: String,
+        /// Metadata filter configuration for reducing resource memory usage
+        #[serde(default)]
+        metadata_filter: MetadataFilterConfig,
     },
+}
+
+/// Metadata filter configuration for reducing K8s resource size in memory
+///
+/// When loading resources from Kubernetes, certain metadata fields can be
+/// removed to reduce memory usage. These fields are typically not needed
+/// for the controller's operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetadataFilterConfig {
+    /// Annotations to remove from resources (blacklist)
+    /// Default includes kubectl last-applied-configuration and helm metadata
+    #[serde(default = "default_blocked_annotations")]
+    pub blocked_annotations: Vec<String>,
+    /// Whether to remove managedFields from resources
+    /// managedFields can be large and is not needed for most operations
+    #[serde(default = "default_remove_managed_fields")]
+    pub remove_managed_fields: bool,
+}
+
+impl Default for MetadataFilterConfig {
+    fn default() -> Self {
+        Self {
+            blocked_annotations: default_blocked_annotations(),
+            remove_managed_fields: default_remove_managed_fields(),
+        }
+    }
+}
+
+fn default_blocked_annotations() -> Vec<String> {
+    vec![
+        "kubectl.kubernetes.io/last-applied-configuration".to_string(),
+        "meta.helm.sh/release-name".to_string(),
+        "meta.helm.sh/release-namespace".to_string(),
+    ]
+}
+
+fn default_remove_managed_fields() -> bool {
+    true
 }
 
 impl Default for ConfCenterConfig {
@@ -88,6 +129,14 @@ impl ConfCenterConfig {
             Self::Kubernetes { .. } => false,
         }
     }
+
+    /// Get metadata filter configuration (Kubernetes mode only)
+    pub fn metadata_filter(&self) -> Option<&MetadataFilterConfig> {
+        match self {
+            Self::FileSystem { .. } => None,
+            Self::Kubernetes { metadata_filter, .. } => Some(metadata_filter),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +153,7 @@ mod tests {
         assert!(!config.is_k8s_mode());
         assert_eq!(config.conf_dir(), Some(&PathBuf::from("/etc/edgion/conf")));
         assert!(config.watch_enabled());
+        assert!(config.metadata_filter().is_none());
     }
 
     #[test]
@@ -112,12 +162,20 @@ mod tests {
             watch_namespaces: vec!["default".to_string(), "prod".to_string()],
             label_selector: Some("app=edgion".to_string()),
             gateway_class: "edgion".to_string(),
+            metadata_filter: MetadataFilterConfig::default(),
         };
 
         assert!(config.is_k8s_mode());
         assert_eq!(config.watch_namespaces(), &["default", "prod"]);
         assert_eq!(config.label_selector(), Some("app=edgion"));
         assert_eq!(config.gateway_class(), Some("edgion"));
+
+        // Test metadata filter
+        let filter = config.metadata_filter().unwrap();
+        assert!(filter.remove_managed_fields);
+        assert!(filter
+            .blocked_annotations
+            .contains(&"kubectl.kubernetes.io/last-applied-configuration".to_string()));
     }
 
     #[test]
@@ -143,5 +201,42 @@ gateway_class: edgion
 "#;
         let config: ConfCenterConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.is_k8s_mode());
+        // Default metadata filter should be applied
+        let filter = config.metadata_filter().unwrap();
+        assert!(filter.remove_managed_fields);
+    }
+
+    #[test]
+    fn test_deserialize_kubernetes_with_metadata_filter() {
+        let yaml = r#"
+type: kubernetes
+gateway_class: edgion
+metadata_filter:
+  blocked_annotations:
+    - "custom.annotation/to-remove"
+  remove_managed_fields: false
+"#;
+        let config: ConfCenterConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.is_k8s_mode());
+        let filter = config.metadata_filter().unwrap();
+        assert!(!filter.remove_managed_fields);
+        assert_eq!(filter.blocked_annotations.len(), 1);
+        assert_eq!(filter.blocked_annotations[0], "custom.annotation/to-remove");
+    }
+
+    #[test]
+    fn test_metadata_filter_config_default() {
+        let filter = MetadataFilterConfig::default();
+        assert!(filter.remove_managed_fields);
+        assert_eq!(filter.blocked_annotations.len(), 3);
+        assert!(filter
+            .blocked_annotations
+            .contains(&"kubectl.kubernetes.io/last-applied-configuration".to_string()));
+        assert!(filter
+            .blocked_annotations
+            .contains(&"meta.helm.sh/release-name".to_string()));
+        assert!(filter
+            .blocked_annotations
+            .contains(&"meta.helm.sh/release-namespace".to_string()));
     }
 }

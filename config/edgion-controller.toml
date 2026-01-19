@@ -86,6 +86,30 @@ watch_namespaces = []
 # Example: label_selector = "app.kubernetes.io/managed-by=edgion"
 # label_selector = ""
 
+# ============================================================================
+# Metadata Filter Configuration (K8s Mode Only)
+# ============================================================================
+# When loading resources from Kubernetes, certain metadata fields can be
+# removed to significantly reduce memory usage. These fields are typically
+# not needed for the controller's operation.
+#
+# Typical memory savings per resource:
+#   - kubectl.kubernetes.io/last-applied-configuration: ~KB (full JSON backup)
+#   - metadata.managedFields: ~100B-KB (field management history)
+#   - meta.helm.sh/release-*: ~10B each (Helm metadata)
+#
+# For a typical HTTPRoute, this can reduce size from ~4KB to ~800B (~80% savings).
+# ============================================================================
+
+# Uncomment to customize metadata filtering (these are the defaults):
+# [conf_center.metadata_filter]
+# blocked_annotations = [
+#     "kubectl.kubernetes.io/last-applied-configuration",
+#     "meta.helm.sh/release-name",
+#     "meta.helm.sh/release-namespace",
+# ]
+# remove_managed_fields = true
+
 [logging]
 # 日志文件存储目录
 log_dir = "logs"

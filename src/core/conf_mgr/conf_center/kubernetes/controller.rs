@@ -60,17 +60,25 @@ use super::namespace::NamespaceWatchMode;
 use super::resource_controller::{RelinkReason, ResourceControllerBuilder};
 use super::shutdown::{ShutdownHandle, ShutdownSignal};
 use super::status::{KubernetesStatusStore, StatusStore};
+use crate::core::conf_mgr::MetadataFilterConfig;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::CacheEventDispatch;
+use crate::core::utils::clean_metadata;
 use crate::types::prelude_resources::*;
 
 /// Macro to spawn a standard namespaced ResourceController
 /// Usage: spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, Type, "Kind", cache_field)
 macro_rules! spawn_namespaced {
     ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $relink_tx:ident, $type:ty, $kind:literal, $cache:ident) => {{
+        let filter_config = $self.metadata_filter.clone();
         let rc = ResourceControllerBuilder::<$type>::new($kind)
             .namespaced($self.watch_mode.clone())
-            .apply_with(|cs, change, r| cs.$cache.apply_change(change, r))
+            .apply_with(move |cs, change, mut r| {
+                if let Some(ref config) = filter_config {
+                    clean_metadata(&mut r, config);
+                }
+                cs.$cache.apply_change(change, r)
+            })
             .with_shutdown($shutdown.clone())
             .with_relink_signal($relink_tx.clone())
             .build(
@@ -86,9 +94,16 @@ macro_rules! spawn_namespaced {
 /// Usage: spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, relink_tx, Type, "Kind", apply_fn)
 macro_rules! spawn_namespaced_custom {
     ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $relink_tx:ident, $type:ty, $kind:literal, $apply:expr) => {{
+        let filter_config = $self.metadata_filter.clone();
+        let apply_fn: fn(&ConfigServer, crate::core::conf_sync::traits::ResourceChange, $type) = $apply;
         let rc = ResourceControllerBuilder::<$type>::new($kind)
             .namespaced($self.watch_mode.clone())
-            .apply_with($apply)
+            .apply_with(move |cs, change, mut r| {
+                if let Some(ref config) = filter_config {
+                    clean_metadata(&mut r, config);
+                }
+                apply_fn(cs, change, r)
+            })
             .with_shutdown($shutdown.clone())
             .with_relink_signal($relink_tx.clone())
             .build(
@@ -104,9 +119,15 @@ macro_rules! spawn_namespaced_custom {
 /// Usage: spawn_cluster!(self, handles, watcher_config, shutdown_signal, relink_tx, Type, "Kind", cache_field)
 macro_rules! spawn_cluster {
     ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $relink_tx:ident, $type:ty, $kind:literal, $cache:ident) => {{
+        let filter_config = $self.metadata_filter.clone();
         let rc = ResourceControllerBuilder::<$type>::new($kind)
             .cluster_scoped()
-            .apply_with(|cs, change, r| cs.$cache.apply_change(change, r))
+            .apply_with(move |cs, change, mut r| {
+                if let Some(ref config) = filter_config {
+                    clean_metadata(&mut r, config);
+                }
+                cs.$cache.apply_change(change, r)
+            })
             .with_shutdown($shutdown.clone())
             .with_relink_signal($relink_tx.clone())
             .build(
@@ -138,6 +159,8 @@ pub struct KubernetesController {
     watch_mode: NamespaceWatchMode,
     label_selector: Option<String>,
     leader_election_mode: LeaderElectionMode,
+    /// Optional metadata filter configuration for reducing resource memory usage
+    metadata_filter: Option<MetadataFilterConfig>,
 }
 
 impl KubernetesController {
@@ -148,12 +171,32 @@ impl KubernetesController {
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
     ) -> Result<Self> {
-        Self::with_leader_election(
+        Self::with_options(
             config_server,
             gateway_class_name,
             watch_namespaces,
             label_selector,
             LeaderElectionMode::Disabled,
+            None,
+        )
+        .await
+    }
+
+    /// Create a new KubernetesController with metadata filter
+    pub async fn with_metadata_filter(
+        config_server: Arc<ConfigServer>,
+        gateway_class_name: String,
+        watch_namespaces: Vec<String>,
+        label_selector: Option<String>,
+        metadata_filter: MetadataFilterConfig,
+    ) -> Result<Self> {
+        Self::with_options(
+            config_server,
+            gateway_class_name,
+            watch_namespaces,
+            label_selector,
+            LeaderElectionMode::Disabled,
+            Some(metadata_filter),
         )
         .await
     }
@@ -165,6 +208,26 @@ impl KubernetesController {
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
         leader_election_mode: LeaderElectionMode,
+    ) -> Result<Self> {
+        Self::with_options(
+            config_server,
+            gateway_class_name,
+            watch_namespaces,
+            label_selector,
+            leader_election_mode,
+            None,
+        )
+        .await
+    }
+
+    /// Create a new KubernetesController with all options
+    pub async fn with_options(
+        config_server: Arc<ConfigServer>,
+        gateway_class_name: String,
+        watch_namespaces: Vec<String>,
+        label_selector: Option<String>,
+        leader_election_mode: LeaderElectionMode,
+        metadata_filter: Option<MetadataFilterConfig>,
     ) -> Result<Self> {
         let client = Client::try_default().await?;
         let status_store: Arc<dyn StatusStore> = Arc::new(KubernetesStatusStore::new(
@@ -180,6 +243,7 @@ impl KubernetesController {
             label_selector = ?label_selector,
             gateway_class_name = %gateway_class_name,
             leader_election = ?leader_election_mode,
+            metadata_filter_enabled = metadata_filter.is_some(),
             "Creating Kubernetes controller with independent ResourceControllers"
         );
 
@@ -191,6 +255,7 @@ impl KubernetesController {
             watch_mode,
             label_selector,
             leader_election_mode,
+            metadata_filter,
         })
     }
 
@@ -498,10 +563,16 @@ impl KubernetesController {
             let gateway_class = self.gateway_class_name.clone();
             let shutdown = shutdown_signal.clone();
             let relink = relink_tx.clone();
+            let filter_config = self.metadata_filter.clone();
             let rc = ResourceControllerBuilder::<Gateway>::new("Gateway")
                 .namespaced(self.watch_mode.clone())
                 .filter(move |g| g.spec.gateway_class_name == gateway_class)
-                .apply_with(|cs, change, r| cs.apply_gateway_change(change, r))
+                .apply_with(move |cs, change, mut r| {
+                    if let Some(ref config) = filter_config {
+                        clean_metadata(&mut r, config);
+                    }
+                    cs.apply_gateway_change(change, r)
+                })
                 .with_shutdown(shutdown)
                 .with_relink_signal(relink)
                 .build(self.client.clone(), self.config_server.clone(), watcher_config.clone());
