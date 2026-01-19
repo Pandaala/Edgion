@@ -36,7 +36,9 @@ use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 /// Signal sender for relink requests
 /// When a ResourceController detects 410 Gone (re-LIST needed),
@@ -217,6 +219,9 @@ where
         let mut init_count = 0;
         let mut init_done = false;
 
+        // Worker handle for graceful shutdown
+        let mut worker_handle: Option<JoinHandle<()>> = None;
+
         tracing::debug!(
             component = "resource_controller",
             kind = kind,
@@ -305,8 +310,8 @@ where
 
                                 init_done = true;
 
-                                // Spawn worker for runtime phase (only once)
-                                spawn_worker(
+                                // Spawn worker for runtime phase (only once) and save handle
+                                worker_handle = Some(spawn_worker(
                                     queue.clone(),
                                     store.clone(),
                                     pending_deletes.clone(),
@@ -316,7 +321,7 @@ where
                                     self.namespace_filter.clone(),
                                     kind,
                                     self.shutdown_signal.clone(),
-                                );
+                                ));
 
                                 tracing::info!(
                                     component = "resource_controller",
@@ -396,6 +401,40 @@ where
             }
         }
 
+        // Wait for worker task to finish gracefully (with timeout)
+        if let Some(handle) = worker_handle {
+            tracing::info!(
+                component = "resource_controller",
+                kind = kind,
+                "Waiting for worker task to finish..."
+            );
+
+            match tokio::time::timeout(Duration::from_secs(5), handle).await {
+                Ok(Ok(())) => {
+                    tracing::info!(
+                        component = "resource_controller",
+                        kind = kind,
+                        "Worker task finished gracefully"
+                    );
+                }
+                Ok(Err(e)) => {
+                    tracing::error!(
+                        component = "resource_controller",
+                        kind = kind,
+                        error = %e,
+                        "Worker task panicked"
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        component = "resource_controller",
+                        kind = kind,
+                        "Worker task did not finish within 5 seconds, aborting"
+                    );
+                }
+            }
+        }
+
         // Record controller stopped
         controller_metrics().controller_stopped();
 
@@ -411,6 +450,8 @@ where
 /// - Check store for current state
 /// - If exists → EventUpdate with latest object from store
 /// - If not exists → check pending_deletes → EventDelete with deleted object
+///
+/// Returns JoinHandle for graceful shutdown
 #[allow(clippy::too_many_arguments)]
 fn spawn_worker<K>(
     queue: Arc<Workqueue>,
@@ -422,7 +463,8 @@ fn spawn_worker<K>(
     namespace_filter: Option<Vec<String>>,
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
-) where
+) -> JoinHandle<()>
+where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
 {
@@ -470,7 +512,7 @@ fn spawn_worker<K>(
         }
 
         tracing::info!(component = "resource_controller", kind = kind, "Worker task ended");
-    });
+    })
 }
 
 /// Process a work item from the queue (Go operator-style reconciliation)

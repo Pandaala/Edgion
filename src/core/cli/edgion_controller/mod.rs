@@ -33,10 +33,6 @@ impl EdgionControllerCli {
     /// Initialize environment: work_dir, logging
     /// Returns log_guard
     async fn init_environment(&self, config: &EdgionControllerConfig) -> Result<WorkerGuard> {
-        // Determine k8s_mode from config
-        let k8s_mode = config.is_k8s_mode();
-        utils::set_k8s_mode(k8s_mode);
-
         // Determine work_dir (priority: CLI > ENV > Config > Default)
         let work_dir_path = self
             .config
@@ -64,7 +60,6 @@ impl EdgionControllerCli {
             event = "system_start",
             version = VERSION,
             allocator = crate::allocator_name(),
-            k8s_mode = k8s_mode,
             grpc_addr = %config.grpc_listen(),
             admin_addr = %config.admin_listen(),
             log_level = %config.log_level(),

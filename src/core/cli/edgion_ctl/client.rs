@@ -4,6 +4,9 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// Default server address for edgion-ctl
+const DEFAULT_SERVER: &str = "http://localhost:5800";
+
 /// EdgionClient for interacting with the Controller API
 pub struct EdgionClient {
     client: Client,
@@ -17,17 +20,14 @@ impl EdgionClient {
     /// Tries Unix Socket first, falls back to HTTP
     pub fn new(server: Option<String>, socket: Option<PathBuf>) -> Result<Self> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(5))
             .pool_max_idle_per_host(0) // Disable connection pooling
             .build()
             .context("Failed to create HTTP client")?;
 
         // Determine base URL
-        let base_url = if let Some(url) = server {
-            url
-        } else {
-            "http://localhost:8080".to_string()
-        };
+        let base_url = server.unwrap_or_else(|| DEFAULT_SERVER.to_string());
 
         Ok(Self {
             client,
@@ -36,23 +36,38 @@ impl EdgionClient {
         })
     }
 
+    /// Get the base URL for connection hints
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// Build full URL for API endpoint
     fn build_url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
+    }
+
+    /// Send HTTP request with detailed error handling
+    async fn send_request(&self, request: reqwest::RequestBuilder, url: &str) -> Result<Response> {
+        request.send().await.map_err(|e| {
+            let error_msg = format_request_error(url, &e);
+            anyhow::anyhow!("{}", error_msg)
+        })
     }
 
     /// GET request - list all resources of a kind (cross-namespace)
     /// Uses K8s-style API: /api/v1/namespaced/{kind}
     pub async fn list_all(&self, kind: &str) -> Result<Response> {
         let url = self.build_url(&format!("/api/v1/namespaced/{}", kind));
-        self.client.get(&url).send().await.context("Failed to send GET request")
+        let request = self.client.get(&url);
+        self.send_request(request, &url).await
     }
 
     /// GET request - list resources in a namespace
     /// Uses K8s-style API: /api/v1/namespaced/{kind}/{namespace}
     pub async fn list_namespaced(&self, kind: &str, namespace: &str) -> Result<Response> {
         let url = self.build_url(&format!("/api/v1/namespaced/{}/{}", kind, namespace));
-        self.client.get(&url).send().await.context("Failed to send GET request")
+        let request = self.client.get(&url);
+        self.send_request(request, &url).await
     }
 
     /// GET request - get a specific resource
@@ -65,7 +80,8 @@ impl EdgionClient {
             self.build_url(&format!("/api/v1/cluster/{}/{}", kind, name))
         };
 
-        self.client.get(&url).send().await.context("Failed to send GET request")
+        let request = self.client.get(&url);
+        self.send_request(request, &url).await
     }
 
     /// POST request - create a resource
@@ -78,13 +94,8 @@ impl EdgionClient {
             self.build_url(&format!("/api/v1/cluster/{}", kind))
         };
 
-        self.client
-            .post(&url)
-            .header("Content-Type", "application/yaml")
-            .body(body)
-            .send()
-            .await
-            .context("Failed to send POST request")
+        let request = self.client.post(&url).header("Content-Type", "application/yaml").body(body);
+        self.send_request(request, &url).await
     }
 
     /// PUT request - update a resource
@@ -97,13 +108,8 @@ impl EdgionClient {
             self.build_url(&format!("/api/v1/cluster/{}/{}", kind, name))
         };
 
-        self.client
-            .put(&url)
-            .header("Content-Type", "application/yaml")
-            .body(body)
-            .send()
-            .await
-            .context("Failed to send PUT request")
+        let request = self.client.put(&url).header("Content-Type", "application/yaml").body(body);
+        self.send_request(request, &url).await
     }
 
     /// DELETE request - delete a resource
@@ -116,22 +122,57 @@ impl EdgionClient {
             self.build_url(&format!("/api/v1/cluster/{}/{}", kind, name))
         };
 
-        self.client
-            .delete(&url)
-            .send()
-            .await
-            .context("Failed to send DELETE request")
+        let request = self.client.delete(&url);
+        self.send_request(request, &url).await
     }
 
     /// POST request - reload all resources
     pub async fn reload(&self) -> Result<Response> {
         let url = self.build_url("/api/v1/reload");
-        self.client
-            .post(&url)
-            .send()
-            .await
-            .context("Failed to send reload request")
+        let request = self.client.post(&url);
+        self.send_request(request, &url).await
     }
+}
+
+/// Format network error with detailed diagnostics
+fn format_request_error(url: &str, error: &reqwest::Error) -> String {
+    let mut msg = format!("Request to {} failed\n", url);
+
+    // Determine error type and provide specific hints
+    let error_string = error.to_string().to_lowercase();
+    let hint = if error_string.contains("connection refused") {
+        Some("Connection refused - controller is likely not running on this address")
+    } else if error.is_timeout() {
+        Some("Request timed out - server may be overloaded or unresponsive")
+    } else if error.is_connect() {
+        if error_string.contains("dns") || error_string.contains("resolve") {
+            Some("DNS resolution failed - check if the hostname is correct")
+        } else if error_string.contains("no route") || error_string.contains("network is unreachable") {
+            Some("No route to host - check network configuration")
+        } else {
+            Some("Connection failed - check if the server address is correct")
+        }
+    } else if error.is_request() {
+        Some("Request error - check the request parameters")
+    } else {
+        None
+    };
+
+    // Add connection failure section
+    msg.push_str("\nConnection failed:\n");
+    msg.push_str("  - Is the controller running?\n");
+    msg.push_str("  - Check if the server address is correct\n");
+    msg.push_str(&format!("  - Try: curl -v {}\n", url));
+
+    // Add error details
+    msg.push_str(&format!("\nDetails: {}\n", error));
+
+    // Add hint if available
+    if let Some(h) = hint {
+        msg.push_str(&format!("\nHint: {}", h));
+    }
+
+    msg
 }
 
 /// Handle API response and extract success/error message
