@@ -193,14 +193,32 @@ impl ConfCenter {
                     self.set_config_server(None);
                     return MainFlowExit::LostLeadership;
                 }
-                IterationResult::NeedRestart(reason) => {
+                IterationResult::RelinkRequested(reason) => {
+                    // 410 GONE - normal reconnection, don't count as failure
+                    self.set_config_server(None);
+
+                    tracing::info!(
+                        component = "conf_center",
+                        mode = "kubernetes",
+                        reason = reason,
+                        "Relink requested (410 GONE), restarting immediately"
+                    );
+
+                    // Reset failure counter since this is not a real failure
+                    consecutive_failures = 0;
+
+                    // Small delay to avoid tight loop
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                IterationResult::Error(reason) => {
+                    // Real error - count as failure and apply backoff
                     self.set_config_server(None);
 
                     tracing::warn!(
                         component = "conf_center",
                         mode = "kubernetes",
                         reason = reason,
-                        "Iteration ended, will restart"
+                        "Iteration failed, will restart with backoff"
                     );
 
                     // Reset failure counter if ran stably for long enough
@@ -254,7 +272,7 @@ impl ConfCenter {
         let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
 
         // Step 2: Create KubernetesController
-        let controller = match self.create_k8s_controller(client, &config_server).await {
+        let controller = match self.create_k8s_controller(client, &config_server) {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!(
@@ -263,7 +281,7 @@ impl ConfCenter {
                     error = %e,
                     "Failed to create K8s controller"
                 );
-                return IterationResult::NeedRestart("controller_creation_failed".to_string());
+                return IterationResult::Error(format!("controller_creation_failed: {}", e));
             }
         };
 
@@ -379,10 +397,12 @@ impl ConfCenter {
             ControllerExitReason::Shutdown => IterationResult::Shutdown,
             ControllerExitReason::LostLeadership => IterationResult::LostLeadership,
             ControllerExitReason::RelinkRequested(reason) => {
-                IterationResult::NeedRestart(format!("relink_requested: {:?}", reason))
+                // 410 GONE is a normal reconnection, not a failure
+                IterationResult::RelinkRequested(format!("{:?}", reason))
             }
             ControllerExitReason::AllControllersStopped => {
-                IterationResult::NeedRestart("all_controllers_stopped".to_string())
+                // This is an actual error
+                IterationResult::Error("all_controllers_stopped".to_string())
             }
         }
     }
@@ -399,11 +419,9 @@ impl ConfCenter {
 
         // Create K8s leader election config
         let config = K8sLeaderElectionConfig::new(&le_config.lease_name, &le_config.lease_namespace)
-            .with_lease_duration_secs(le_config.lease_duration_secs);
-
-        // Note: renew_period_secs and retry_period_secs are also available in le_config
-        // but K8sLeaderElectionConfig doesn't have setters for them currently
-        // They use defaults from the kubernetes module
+            .with_lease_duration_secs(le_config.lease_duration_secs)
+            .with_renew_period_secs(le_config.renew_period_secs)
+            .with_retry_period_secs(le_config.retry_period_secs);
 
         tracing::info!(
             component = "conf_center",
@@ -418,9 +436,9 @@ impl ConfCenter {
     }
 
     /// Create K8s controller
-    async fn create_k8s_controller(
+    fn create_k8s_controller(
         &self,
-        _client: &Client,
+        client: &Client,
         config_server: &Arc<ConfigServer>,
     ) -> Result<KubernetesController> {
         let ConfCenterConfig::Kubernetes {
@@ -446,13 +464,13 @@ impl ConfCenter {
         );
 
         KubernetesController::with_metadata_filter(
+            client.clone(),
             config_server.clone(),
             gateway_class.clone(),
             watch_namespaces.clone(),
             label_selector.clone(),
             metadata_filter.clone(),
         )
-        .await
     }
 }
 
@@ -462,8 +480,10 @@ enum IterationResult {
     Shutdown,
     /// Lost leadership
     LostLeadership,
-    /// Need to restart (with reason)
-    NeedRestart(String),
+    /// 410 GONE - need to restart but don't count as failure
+    RelinkRequested(String),
+    /// Real error - count as failure and apply backoff
+    Error(String),
 }
 
 /// Wait until leadership is lost

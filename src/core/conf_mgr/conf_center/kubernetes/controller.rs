@@ -41,7 +41,8 @@
 //!
 //! 5. **Graceful Shutdown**: Handles SIGTERM/SIGINT for clean shutdown.
 //!
-//! 6. **Leader Election**: Optional leader election for HA deployments.
+//! 6. **Leader Election**: Managed externally by lifecycle_kubernetes.rs.
+//!    This controller focuses solely on resource watching and synchronization.
 //!
 //! 7. **Metrics**: Prometheus metrics for reconciliation monitoring.
 //!
@@ -156,31 +157,37 @@ pub struct KubernetesController {
 
 impl KubernetesController {
     /// Create a new KubernetesController
+    ///
+    /// Note: Prefer using `with_metadata_filter` with an existing Client
+    /// to avoid creating multiple Client instances.
     pub async fn new(
         config_server: Arc<ConfigServer>,
         gateway_class_name: String,
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
     ) -> Result<Self> {
+        let client = Client::try_default().await?;
         Self::with_metadata_filter(
+            client,
             config_server,
             gateway_class_name,
             watch_namespaces,
             label_selector,
             MetadataFilterConfig::default(),
         )
-        .await
     }
 
     /// Create a new KubernetesController with metadata filter
-    pub async fn with_metadata_filter(
+    ///
+    /// Accepts an external Client to enable Client reuse across components.
+    pub fn with_metadata_filter(
+        client: Client,
         config_server: Arc<ConfigServer>,
         gateway_class_name: String,
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
         metadata_filter: MetadataFilterConfig,
     ) -> Result<Self> {
-        let client = Client::try_default().await?;
         let status_store: Arc<dyn StatusStore> = Arc::new(KubernetesStatusStore::new(
             client.clone(),
             "edgion-controller".to_string(),

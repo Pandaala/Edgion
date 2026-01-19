@@ -75,6 +75,18 @@ impl LeaderElectionConfig {
         self.lease_duration_secs = secs;
         self
     }
+
+    /// Set the renew period (how often the leader renews the lease)
+    pub fn with_renew_period_secs(mut self, secs: u64) -> Self {
+        self.renew_period_secs = secs;
+        self
+    }
+
+    /// Set the retry period (how often non-leaders retry acquiring the lease)
+    pub fn with_retry_period_secs(mut self, secs: u64) -> Self {
+        self.retry_period_secs = secs;
+        self
+    }
 }
 
 /// Leader election state
