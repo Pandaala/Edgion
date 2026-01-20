@@ -334,10 +334,9 @@ pub async fn load_all_resources(writer: Arc<dyn ConfWriter>, config_server: Arc<
                     name = %name,
                     "Skipping resource: could not determine kind from content"
                 );
-            }
-            // NOTE: No catch-all `Some(_)` here intentionally!
-            // If you add a new ResourceKind variant and see a compile error here,
-            // you need to add a handler for the new resource type above.
+            } // NOTE: No catch-all `Some(_)` here intentionally!
+              // If you add a new ResourceKind variant and see a compile error here,
+              // you need to add a handler for the new resource type above.
         }
     }
 

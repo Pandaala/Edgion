@@ -51,11 +51,11 @@ impl TestContext {
         let mut client_builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .danger_accept_invalid_certs(true)
-            .no_proxy();  // Disable proxy to connect directly to Gateway
+            .no_proxy(); // Disable proxy to connect directly to Gateway
 
         // Add DNS resolution for hosts to support proper SNI
         // This maps hostnames to 127.0.0.1 so the client sends correct SNI
-        // 
+        //
         // NOTE: reqwest's resolve() only replaces the IP address, the port from URL is still used.
         // So we only need to map the hostname to 127.0.0.1, the port in SocketAddr is informational.
         if let Some(ref host) = http_host {

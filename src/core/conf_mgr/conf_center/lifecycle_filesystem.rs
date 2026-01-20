@@ -22,10 +22,7 @@ impl ConfCenter {
     /// 2. Load resources + start FileWatcher
     /// 3. Set config_server = Some (services become available)
     /// 4. Wait for shutdown signal or watcher error
-    pub(super) async fn run_filesystem_lifecycle_with_shutdown(
-        &self,
-        shutdown_handle: ShutdownHandle,
-    ) -> Result<()> {
+    pub(super) async fn run_filesystem_lifecycle_with_shutdown(&self, shutdown_handle: ShutdownHandle) -> Result<()> {
         tracing::info!(
             component = "conf_center",
             mode = "file_system",

@@ -277,11 +277,11 @@ impl ConfCenter {
         let controller_handle = tokio::spawn(async move {
             let exit_reason = controller.run(shutdown_signal).await.unwrap_or_else(|e| {
                 tracing::error!(
-                        component = "conf_center",
-                        mode = "kubernetes",
-                        error = %e,
-                        "Controller run error"
-                    );
+                    component = "conf_center",
+                    mode = "kubernetes",
+                    error = %e,
+                    "Controller run error"
+                );
                 ControllerExitReason::AllControllersStopped
             });
             let _ = exit_tx.send(exit_reason);
