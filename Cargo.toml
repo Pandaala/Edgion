@@ -145,7 +145,7 @@ boring-sys = { version = "4", optional = true }
 
 # Metrics
 metrics = "0.24"
-metrics-exporter-prometheus = "0.15"
+metrics-exporter-prometheus = "0.18"
 
 # CLI
 clap = { version = "4.0", features = ["derive"] }
