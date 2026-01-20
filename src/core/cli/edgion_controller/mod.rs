@@ -192,19 +192,17 @@ impl EdgionControllerCli {
         // 1. Initialize environment (work_dir, logging)
         let _log_guard = self.init_environment(&config).await?;
 
-        // 2. Get ConfCenterConfig directly from config
-        let conf_center_config = config.conf_center.clone();
-
+        // 2. Log ConfCenter configuration
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
             event = "conf_center_config",
             k8s_mode = config.is_k8s_mode(),
-            config = ?conf_center_config,
+            config = ?config.conf_center,
             "ConfCenter configuration"
         );
 
         // 3. Create ConfCenter (ConfigServer is None initially)
-        let conf_center = Arc::new(ConfCenter::create(conf_center_config, &config.conf_sync).await?);
+        let conf_center = Arc::new(ConfCenter::create(&config).await?);
 
         // 4. Spawn ConfCenter.start() in background
         // This manages the entire lifecycle: leader election, link, relink

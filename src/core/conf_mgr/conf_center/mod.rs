@@ -56,7 +56,7 @@ pub use kubernetes::{
 pub use status::FileSystemStatusStore;
 pub use traits::{ConfEntry, ConfWriter, ConfWriterError, ListOptions, ListResult};
 
-use crate::core::cli::config::ConfSyncConfig;
+use crate::core::cli::config::{ConfSyncConfig, EdgionControllerConfig};
 use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;
 use kubernetes::shutdown::ShutdownHandle;
@@ -106,8 +106,11 @@ impl ConfCenter {
     /// Create a new ConfCenter based on configuration
     ///
     /// Note: ConfigServer is NOT created here. It will be created in `start()` method.
-    pub async fn create(config: ConfCenterConfig, conf_sync_config: &ConfSyncConfig) -> Result<Self> {
-        match &config {
+    pub async fn create(config: &EdgionControllerConfig) -> Result<Self> {
+        let conf_center_config = config.conf_center.clone();
+        let conf_sync_config = config.conf_sync.clone();
+
+        match &conf_center_config {
             ConfCenterConfig::FileSystem { conf_dir, .. } => {
                 tracing::info!(
                     component = "conf_center",
@@ -117,8 +120,8 @@ impl ConfCenter {
                 );
                 let writer = FileSystemWriter::new(conf_dir);
                 Ok(Self {
-                    config,
-                    conf_sync_config: conf_sync_config.clone(),
+                    config: conf_center_config,
+                    conf_sync_config,
                     writer: Arc::new(writer),
                     config_server: RwLock::new(None),
                     shutdown_handle: Mutex::new(None),
@@ -133,8 +136,8 @@ impl ConfCenter {
                 );
                 let writer = KubernetesWriter::new().await?;
                 Ok(Self {
-                    config,
-                    conf_sync_config: conf_sync_config.clone(),
+                    config: conf_center_config,
+                    conf_sync_config,
                     writer: Arc::new(writer),
                     config_server: RwLock::new(None),
                     shutdown_handle: Mutex::new(None),

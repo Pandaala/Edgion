@@ -1,7 +1,10 @@
 use crate::core::conf_sync::cache_client::cache_data::CacheData;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
-use crate::types::{ResourceMeta, WATCH_ERR_NOT_READY, WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
+use crate::types::{
+    ResourceMeta, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_TOO_OLD_VERSION,
+    WATCH_ERR_VERSION_UNEXPECTED,
+};
 use kube::{Resource, ResourceExt};
 use rand::Rng;
 use std::sync::{Arc, RwLock};
@@ -62,10 +65,12 @@ where
         gateway_class_key: &str,
         cache_data: &Arc<RwLock<CacheData<T>>>,
         log_context: &str,
+        expected_server_id: &str,
     ) -> Result<ListResult, tonic::Status> {
         let list_request = tonic::Request::new(crate::core::conf_sync::proto::ListRequest {
             key: gateway_class_key.to_string(),
             kind: T::resource_kind() as i32,
+            expected_server_id: expected_server_id.to_string(),
         });
 
         let response = client.list(list_request).await?;
@@ -158,8 +163,9 @@ where
                 };
 
                 // Perform list_and_reset to get latest sync version and server_id
+                // First list doesn't need to validate server_id (pass empty string)
                 let (from_version, current_server_id) =
-                    match Self::list_and_reset(client, "", &cache_data, "watch relist").await {
+                    match Self::list_and_reset(client, "", &cache_data, "watch relist", "").await {
                         Ok(list_result) => {
                             // Reset backoff on success
                             backoff_secs = BACKOFF_INIT_SECS;
@@ -190,6 +196,8 @@ where
                             let error_message = e.message();
                             if error_message.contains(WATCH_ERR_NOT_READY) {
                                 tracing::warn!(kind = T::kind_name(), error = %e, "Server not ready, will retry");
+                            } else if error_message.contains(WATCH_ERR_SERVER_ID_MISMATCH) {
+                                tracing::warn!(kind = T::kind_name(), error = %e, "Server ID mismatch, will relist");
                             } else {
                                 tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
                             }
@@ -220,6 +228,7 @@ where
                         client_id: client_id.as_ref().clone(),
                         client_name: client_name.as_ref().clone(),
                         from_version,
+                        expected_server_id: current_server_id.clone(),
                     });
 
                     let mut stream = match client.watch(request).await {
@@ -327,6 +336,7 @@ where
                                 if error_message.contains(WATCH_ERR_VERSION_UNEXPECTED)
                                     || error_message.contains(WATCH_ERR_TOO_OLD_VERSION)
                                     || error_message.contains(WATCH_ERR_NOT_READY)
+                                    || error_message.contains(WATCH_ERR_SERVER_ID_MISMATCH)
                                 {
                                     tracing::warn!(kind = T::kind_name(), error = %e, "Watch stream recoverable error, will retry");
                                 } else {

@@ -8,6 +8,7 @@ use crate::core::conf_sync::proto::{
     ListRequest, ListResponse, WatchRequest, WatchResponse,
 };
 use crate::types::prelude_resources::*;
+use crate::types::WATCH_ERR_SERVER_ID_MISMATCH;
 
 /// Server wrapper for ConfigSync gRPC service
 ///
@@ -71,6 +72,20 @@ impl ConfigSync for ConfigSyncServer {
 
         let req = request.into_inner();
 
+        // Validate expected_server_id if provided
+        if !req.expected_server_id.is_empty() {
+            let current_server_id = config_server.server_id();
+            if req.expected_server_id != current_server_id {
+                tracing::warn!(
+                    component = "grpc_server",
+                    expected = %req.expected_server_id,
+                    actual = %current_server_id,
+                    "Server ID mismatch in list request"
+                );
+                return Err(Status::failed_precondition(WATCH_ERR_SERVER_ID_MISMATCH));
+            }
+        }
+
         // Convert incoming kind to ResourceKind
         let resource_kind =
             parse_resource_kind(req.kind).ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
@@ -94,6 +109,21 @@ impl ConfigSync for ConfigSyncServer {
         let config_server = self.get_config_server()?;
 
         let req = request.into_inner();
+
+        // Validate expected_server_id if provided
+        if !req.expected_server_id.is_empty() {
+            let current_server_id = config_server.server_id();
+            if req.expected_server_id != current_server_id {
+                tracing::warn!(
+                    component = "grpc_server",
+                    expected = %req.expected_server_id,
+                    actual = %current_server_id,
+                    client_id = %req.client_id,
+                    "Server ID mismatch in watch request"
+                );
+                return Err(Status::failed_precondition(WATCH_ERR_SERVER_ID_MISMATCH));
+            }
+        }
 
         // Convert incoming kind to ResourceKind
         let resource_kind =

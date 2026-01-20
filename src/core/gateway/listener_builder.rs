@@ -149,8 +149,9 @@ pub fn add_http_listener(
     };
 
     // Create preflight handler from gateway config
-    let preflight_handler =
-        crate::core::gateway::PreflightHandler::new(context.edgion_gateway_config.spec.preflight_policy.clone());
+    let preflight_handler = crate::core::routes::http_routes::proxy_http::PreflightHandler::new(
+        context.edgion_gateway_config.spec.preflight_policy.clone(),
+    );
 
     // Pre-build GatewayInfo for route matching (avoids per-request allocation)
     // Note: Listener config (hostname, allowedRoutes) is queried dynamically

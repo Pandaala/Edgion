@@ -34,6 +34,7 @@ enum ResourceKind {
 message ListRequest {
     string key = 1;
     ResourceKind kind = 2;
+    string expected_server_id = 3;  // Expected server ID for server instance validation
 }
 
 // List response
@@ -50,6 +51,7 @@ message WatchRequest {
     string client_id = 3;
     string client_name = 4;
     uint64 from_version = 5;
+    string expected_server_id = 6;  // Expected server ID for server instance validation
 }
 
 // Watch response
