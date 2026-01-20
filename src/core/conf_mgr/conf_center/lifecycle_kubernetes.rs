@@ -19,12 +19,10 @@
 //!     │
 //!     └── Main Flow (only leader executes)
 //!         │
-//!         ├── 1. Create ConfigServer
-//!         ├── 2. Create KubernetesController
-//!         ├── 3. Run Controller (spawns 19 ResourceControllers)
-//!         ├── 4. Wait for caches ready OR controller exit
-//!         ├── 5. Set config_server = Some (services become available)
-//!         ├── 6. Wait for exit signal
+//!         ├── 1. Start K8s Controller (creates ConfigServer, Controller, spawns run task)
+//!         ├── 2. Wait for caches ready OR controller exit
+//!         ├── 3. Set config_server = Some (services become available)
+//!         ├── 4. Wait for exit signal
 //!         │
 //!         └── Handle Exit Reason
 //!             ├── Shutdown → Exit program
@@ -43,6 +41,7 @@ use kube::Client;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 /// Exit reason from main flow
 enum MainFlowExit {
@@ -241,53 +240,32 @@ impl ConfCenter {
     /// Run a single iteration of the main flow
     ///
     /// Steps:
-    /// 1. Create ConfigServer
-    /// 2. Create KubernetesController
-    /// 3. Run controller in background
-    /// 4. Wait for caches ready OR controller exit
-    /// 5. Set config_server = Some
-    /// 6. Wait for exit signal
+    /// 1. Start K8s controller (creates ConfigServer, Controller, and spawns run task)
+    /// 2. Wait for caches ready OR controller exit
+    /// 3. Set config_server = Some
+    /// 4. Wait for exit signal
     async fn run_iteration(
         &self,
         client: &Client,
         leader_handle: &LeaderHandle,
         shutdown_handle: &ShutdownHandle,
     ) -> IterationResult {
-        // Step 1: Create ConfigServer
-        let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
+        // Step 1: Start K8s controller
+        let (config_server, mut exit_rx, controller_handle) =
+            match self.start_k8s_controller(client, shutdown_handle) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!(
+                        component = "conf_center",
+                        mode = "kubernetes",
+                        error = %e,
+                        "Failed to start K8s controller"
+                    );
+                    return IterationResult::Error(format!("controller_start_failed: {}", e));
+                }
+            };
 
-        // Step 2: Create KubernetesController
-        let controller = match self.create_k8s_controller(client, &config_server) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!(
-                    component = "conf_center",
-                    mode = "kubernetes",
-                    error = %e,
-                    "Failed to create K8s controller"
-                );
-                return IterationResult::Error(format!("controller_creation_failed: {}", e));
-            }
-        };
-
-        // Step 3: Run controller in background
-        let (exit_tx, mut exit_rx) = oneshot::channel::<ControllerExitReason>();
-        let shutdown_signal = shutdown_handle.signal();
-
-        let controller_handle = tokio::spawn(async move {
-            let exit_reason = controller.run(shutdown_signal).await.unwrap_or_else(|e| {
-                tracing::error!(
-                    component = "conf_center",
-                    mode = "kubernetes",
-                    error = %e,
-                    "Controller run error"
-                );
-                ControllerExitReason::AllControllersStopped
-            });
-            let _ = exit_tx.send(exit_reason);
-        });
-
-        // Step 4: Wait for caches ready OR controller exit (whichever first)
+        // Step 2: Wait for caches ready OR controller exit (whichever first)
         let mut caches_ready = false;
         let exit_reason = tokio::select! {
             // Check for leadership loss
@@ -306,7 +284,7 @@ impl ConfCenter {
             _ = self.wait_caches_ready(&config_server, 30) => {
                 caches_ready = true;
 
-                // Step 5: Set config_server = Some (services become available)
+                // Step 3: Set config_server = Some (services become available)
                 self.set_config_server(Some(config_server));
                 tracing::info!(
                     component = "conf_center",
@@ -314,7 +292,7 @@ impl ConfCenter {
                     "ConfigServer is ready, gRPC and Admin API can serve requests"
                 );
 
-                // Step 6: Wait for exit signal
+                // Step 4: Wait for exit signal
                 tokio::select! {
                     // Check for leadership loss
                     _ = wait_for_leadership_loss(leader_handle) => {
@@ -409,6 +387,52 @@ impl ConfCenter {
         );
 
         Ok(config)
+    }
+
+    /// Start K8s controller
+    ///
+    /// This method encapsulates the creation and startup of ConfigServer and KubernetesController:
+    /// 1. Create ConfigServer
+    /// 2. Create KubernetesController
+    /// 3. Spawn controller.run in background
+    ///
+    /// Returns:
+    /// - `config_server`: For cache readiness checking and service availability
+    /// - `exit_rx`: To receive controller exit reason
+    /// - `controller_handle`: To abort or await the controller task
+    fn start_k8s_controller(
+        &self,
+        client: &Client,
+        shutdown_handle: &ShutdownHandle,
+    ) -> Result<(
+        Arc<ConfigServer>,
+        oneshot::Receiver<ControllerExitReason>,
+        JoinHandle<()>,
+    )> {
+        // Step 1: Create ConfigServer
+        let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
+
+        // Step 2: Create KubernetesController
+        let controller = self.create_k8s_controller(client, &config_server)?;
+
+        // Step 3: Spawn controller.run in background
+        let (exit_tx, exit_rx) = oneshot::channel::<ControllerExitReason>();
+        let shutdown_signal = shutdown_handle.signal();
+
+        let controller_handle = tokio::spawn(async move {
+            let exit_reason = controller.run(shutdown_signal).await.unwrap_or_else(|e| {
+                tracing::error!(
+                    component = "conf_center",
+                    mode = "kubernetes",
+                    error = %e,
+                    "Controller run error"
+                );
+                ControllerExitReason::AllControllersStopped
+            });
+            let _ = exit_tx.send(exit_reason);
+        });
+
+        Ok((config_server, exit_rx, controller_handle))
     }
 
     /// Create K8s controller
