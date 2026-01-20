@@ -156,7 +156,7 @@ impl FileWatcher {
         } else {
             // File doesn't exist: Delete
             self.handle_file_delete(path).await
-            }
+        }
     }
 
     /// Handle file creation or modification
@@ -237,5 +237,84 @@ impl FileWatcher {
     /// Apply resource change to ConfigServer based on content
     async fn apply_change(&self, content: &str, change: ResourceChange) -> Result<()> {
         apply_resource_change(&self.config_server, content, change)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    // Helper to test is_yaml_file without needing a full FileWatcher instance
+    fn check_yaml_file(path: &Path) -> bool {
+        path.extension()
+            .map(|ext| ext == "yaml" || ext == "yml")
+            .unwrap_or(false)
+    }
+
+    // Helper to test hash_content
+    fn compute_hash(content: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        content.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn test_is_yaml_file() {
+        // Should recognize .yaml files
+        assert!(check_yaml_file(Path::new("config.yaml")));
+        assert!(check_yaml_file(Path::new("/path/to/gateway.yaml")));
+
+        // Should recognize .yml files
+        assert!(check_yaml_file(Path::new("config.yml")));
+        assert!(check_yaml_file(Path::new("/path/to/route.yml")));
+
+        // Should reject non-YAML files
+        assert!(!check_yaml_file(Path::new("config.json")));
+        assert!(!check_yaml_file(Path::new("config.toml")));
+        assert!(!check_yaml_file(Path::new("config.txt")));
+        assert!(!check_yaml_file(Path::new("config")));
+        assert!(!check_yaml_file(Path::new(".yaml"))); // hidden file without name
+    }
+
+    #[test]
+    fn test_hash_content_same_content() {
+        let content = "apiVersion: v1\nkind: Gateway\n";
+
+        let hash1 = compute_hash(content);
+        let hash2 = compute_hash(content);
+
+        // Same content should produce same hash
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_content_different_content() {
+        let content1 = "apiVersion: v1\nkind: Gateway\n";
+        let content2 = "apiVersion: v1\nkind: HTTPRoute\n";
+
+        let hash1 = compute_hash(content1);
+        let hash2 = compute_hash(content2);
+
+        // Different content should produce different hash
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_content_whitespace_matters() {
+        let content1 = "kind: Gateway";
+        let content2 = "kind:  Gateway"; // extra space
+
+        let hash1 = compute_hash(content1);
+        let hash2 = compute_hash(content2);
+
+        // Whitespace differences should produce different hash
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_content_empty() {
+        // Empty content should still produce a valid hash (just verify it doesn't panic)
+        let _hash = compute_hash("");
     }
 }

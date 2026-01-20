@@ -89,9 +89,9 @@ impl EdgionClient {
     pub async fn list_namespaced(&self, kind: &str, namespace: &str) -> Result<Response> {
         match self.target {
             TargetType::Center => {
-        let url = self.build_url(&format!("/api/v1/namespaced/{}/{}", kind, namespace));
-        let request = self.client.get(&url);
-        self.send_request(request, &url).await
+                let url = self.build_url(&format!("/api/v1/namespaced/{}/{}", kind, namespace));
+                let request = self.client.get(&url);
+                self.send_request(request, &url).await
             }
             // For server/client, we fetch all and filter on client side
             // This is handled in get.rs, but we provide a fallback here
@@ -104,9 +104,9 @@ impl EdgionClient {
         let url = match self.target {
             TargetType::Center => {
                 if let Some(ns) = namespace {
-            self.build_url(&format!("/api/v1/namespaced/{}/{}/{}", kind, ns, name))
-        } else {
-            self.build_url(&format!("/api/v1/cluster/{}/{}", kind, name))
+                    self.build_url(&format!("/api/v1/namespaced/{}/{}/{}", kind, ns, name))
+                } else {
+                    self.build_url(&format!("/api/v1/cluster/{}/{}", kind, name))
                 }
             }
             TargetType::Server => {

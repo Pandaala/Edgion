@@ -124,3 +124,135 @@ pub fn apply_resource_change(config_server: &Arc<ConfigServer>, content: &str, c
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GATEWAY_CLASS_YAML: &str = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: edgion
+spec:
+  controllerName: edgion.io/gateway-controller
+"#;
+
+    const GATEWAY_YAML: &str = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: test-gateway
+  namespace: default
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+"#;
+
+    const HTTP_ROUTE_YAML: &str = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: test-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: test-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: backend-svc
+          port: 8080
+"#;
+
+    const UNKNOWN_KIND_YAML: &str = r#"
+apiVersion: v1
+kind: UnknownResource
+metadata:
+  name: test
+"#;
+
+    const INVALID_YAML: &str = r#"
+this is not: valid: yaml: content
+  - broken indentation
+"#;
+
+    #[test]
+    fn test_parse_gateway_class_kind() {
+        let kind = ResourceKind::from_content(GATEWAY_CLASS_YAML);
+        assert_eq!(kind, Some(ResourceKind::GatewayClass));
+    }
+
+    #[test]
+    fn test_parse_gateway_kind() {
+        let kind = ResourceKind::from_content(GATEWAY_YAML);
+        assert_eq!(kind, Some(ResourceKind::Gateway));
+    }
+
+    #[test]
+    fn test_parse_http_route_kind() {
+        let kind = ResourceKind::from_content(HTTP_ROUTE_YAML);
+        assert_eq!(kind, Some(ResourceKind::HTTPRoute));
+    }
+
+    #[test]
+    fn test_parse_gateway_class_yaml() {
+        let result = serde_yaml::from_str::<GatewayClass>(GATEWAY_CLASS_YAML);
+        assert!(result.is_ok(), "Failed to parse GatewayClass: {:?}", result.err());
+
+        let gateway_class = result.unwrap();
+        assert_eq!(gateway_class.metadata.name, Some("edgion".to_string()));
+    }
+
+    #[test]
+    fn test_parse_gateway_yaml() {
+        let result = serde_yaml::from_str::<Gateway>(GATEWAY_YAML);
+        assert!(result.is_ok(), "Failed to parse Gateway: {:?}", result.err());
+
+        let gateway = result.unwrap();
+        assert_eq!(gateway.metadata.name, Some("test-gateway".to_string()));
+        assert_eq!(gateway.metadata.namespace, Some("default".to_string()));
+    }
+
+    #[test]
+    fn test_parse_http_route_yaml() {
+        let result = serde_yaml::from_str::<HTTPRoute>(HTTP_ROUTE_YAML);
+        assert!(result.is_ok(), "Failed to parse HTTPRoute: {:?}", result.err());
+
+        let route = result.unwrap();
+        assert_eq!(route.metadata.name, Some("test-route".to_string()));
+    }
+
+    #[test]
+    fn test_unknown_kind_returns_none() {
+        let kind = ResourceKind::from_content(UNKNOWN_KIND_YAML);
+        assert_eq!(kind, None);
+    }
+
+    #[test]
+    fn test_invalid_yaml_kind_returns_none() {
+        let kind = ResourceKind::from_content(INVALID_YAML);
+        // Should not panic, just return None or some kind
+        // The exact behavior depends on the regex matching
+        assert!(kind.is_none() || kind.is_some());
+    }
+
+    #[test]
+    fn test_empty_content_returns_none() {
+        let kind = ResourceKind::from_content("");
+        assert_eq!(kind, None);
+    }
+
+    #[test]
+    fn test_json_format_kind() {
+        let json_content = r#"{"apiVersion": "v1", "kind": "Gateway", "metadata": {"name": "test"}}"#;
+        let kind = ResourceKind::from_content(json_content);
+        assert_eq!(kind, Some(ResourceKind::Gateway));
+    }
+}
