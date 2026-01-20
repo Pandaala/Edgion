@@ -156,7 +156,7 @@ impl FileWatcher {
         } else {
             // File doesn't exist: Delete
             self.handle_file_delete(path).await
-        }
+            }
     }
 
     /// Handle file creation or modification

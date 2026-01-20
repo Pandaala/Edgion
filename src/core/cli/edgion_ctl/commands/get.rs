@@ -135,23 +135,23 @@ async fn list_namespaced(client: &EdgionClient, kind: &str, namespace: &str, out
     match client.target() {
         TargetType::Center => {
             // Center target: use server-side filtering
-            let resp = match client.list_namespaced(kind, namespace).await {
-                Ok(r) => r,
-                Err(e) => {
-                    print_error(&format!("Failed to list {} in namespace {}: {}", kind, namespace, e));
-                    print_connection_hint(client);
-                    anyhow::bail!("Request failed");
-                }
-            };
+    let resp = match client.list_namespaced(kind, namespace).await {
+        Ok(r) => r,
+        Err(e) => {
+            print_error(&format!("Failed to list {} in namespace {}: {}", kind, namespace, e));
+            print_connection_hint(client);
+            anyhow::bail!("Request failed");
+        }
+    };
 
-            if !resp.status().is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                print_error(&format!("Failed to list resources: {}", body));
-                anyhow::bail!("Request failed");
-            }
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        print_error(&format!("Failed to list resources: {}", body));
+        anyhow::bail!("Request failed");
+    }
 
-            let data = parse_json_response(resp).await?;
-            print_resource_list(&data, output)?;
+    let data = parse_json_response(resp).await?;
+    print_resource_list(&data, output)?;
         }
         TargetType::Server | TargetType::Client => {
             // Server/Client targets: fetch all and filter on client side
