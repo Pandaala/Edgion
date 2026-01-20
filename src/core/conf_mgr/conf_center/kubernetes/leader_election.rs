@@ -289,19 +289,28 @@ impl LeaderElection {
             spec.and_then(|s| s.lease_transitions).unwrap_or(0) + 1
         };
 
-        let patch = serde_json::json!({
-            "spec": {
-                "holderIdentity": self.config.identity,
-                "leaseDurationSeconds": self.config.lease_duration_secs,
-                "renewTime": MicroTime(Utc::now()),
-                "leaseTransitions": transitions,
-            }
-        });
+        // Build a complete Lease object for type-safe patching
+        let updated_lease = Lease {
+            metadata: kube::api::ObjectMeta {
+                name: Some(self.config.lease_name.clone()),
+                namespace: Some(self.config.lease_namespace.clone()),
+                ..Default::default()
+            },
+            spec: Some(k8s_openapi::api::coordination::v1::LeaseSpec {
+                holder_identity: Some(self.config.identity.clone()),
+                lease_duration_seconds: Some(self.config.lease_duration_secs),
+                renew_time: Some(MicroTime(Utc::now())),
+                lease_transitions: Some(transitions),
+                // Preserve acquire_time from existing lease
+                acquire_time: spec.and_then(|s| s.acquire_time.clone()),
+                ..Default::default()
+            }),
+        };
 
         api.patch(
             &self.config.lease_name,
             &PatchParams::apply("edgion-controller").force(),
-            &Patch::Apply(&patch),
+            &Patch::Apply(&updated_lease),
         )
         .await?;
 
