@@ -170,10 +170,10 @@ htpasswd-verify = "0.3.0"
 cookie = "0.18.1"
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-build = "0.14"
 
 [dev-dependencies]
 tempfile = "3"
 tokio-tungstenite = "0.24"
 base64 = "0.22"
-tonic-build = "0.12"
+tonic-build = "0.14"
