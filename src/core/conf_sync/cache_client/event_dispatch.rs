@@ -138,7 +138,7 @@ where
             loop {
                 // === Backoff before list ===
                 // Add jitter (0-3s) to spread requests and prevent relist storms
-                let jitter_ms = rand::thread_rng().gen_range(0..3000);
+                let jitter_ms = rand::rng().random_range(0..3000);
                 let wait_duration =
                     std::time::Duration::from_secs(backoff_secs) + std::time::Duration::from_millis(jitter_ms);
                 tracing::info!(
