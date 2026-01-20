@@ -4,16 +4,13 @@
 //! Uses debouncing to handle rapid file change events.
 //! Supports graceful shutdown via ShutdownSignal.
 
+use super::resource_applier::apply_resource_change;
 use crate::core::conf_mgr::conf_center::kubernetes::shutdown::ShutdownSignal;
 use crate::core::conf_sync::traits::ResourceChange;
-use crate::core::conf_sync::{CacheEventDispatch, ConfigServer};
-use crate::types::prelude_resources::*;
-use crate::types::ResourceKind;
+use crate::core::conf_sync::ConfigServer;
 use anyhow::{Context, Result};
-use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
-use k8s_openapi::api::discovery::v1::EndpointSlice;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,12 +60,12 @@ impl FileWatcher {
             let mut watcher = RecommendedWatcher::new(
                 move |res: Result<Event, notify::Error>| {
                     if let Ok(event) = res {
-                        // Filter only relevant events
+                        // Filter events: exclude Access (read-only), include all others
                         match event.kind {
-                            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+                            EventKind::Access(_) => {} // Ignore read-only access events
+                            _ => {
                                 let _ = tx_clone.blocking_send(event);
                             }
-                            _ => {}
                         }
                     }
                 },
@@ -93,33 +90,32 @@ impl FileWatcher {
         // Keep watcher alive
         let _watcher = watcher_handle.await??;
 
-        // Process events with debouncing
-        let mut pending_events: HashMap<PathBuf, EventKind> = HashMap::new();
-        let debounce_duration = Duration::from_millis(500);
+        // Process events with debouncing (1s interval for deduplication)
+        let mut pending_paths: HashSet<PathBuf> = HashSet::new();
+        let debounce_duration = Duration::from_secs(1);
         let mut debounce_timer = tokio::time::interval(debounce_duration);
 
         loop {
             tokio::select! {
                 Some(event) = rx.recv() => {
-                    // Accumulate events for debouncing
+                    // Accumulate paths for debouncing (HashSet auto-deduplicates)
                     for path in event.paths {
                         // Only process YAML files
                         if self.is_yaml_file(&path) {
-                            pending_events.insert(path, event.kind);
+                            pending_paths.insert(path);
                         }
                     }
                 }
                 _ = debounce_timer.tick() => {
-                    // Process all pending events
-                    if !pending_events.is_empty() {
-                        let events: Vec<_> = pending_events.drain().collect();
-                        for (path, kind) in events {
-                            if let Err(e) = self.handle_file_event(&path, kind).await {
+                    // Process all pending paths
+                    if !pending_paths.is_empty() {
+                        for path in pending_paths.drain() {
+                            if let Err(e) = self.process_path(&path).await {
                                 tracing::error!(
                                     component = "file_watcher",
                                     path = %path.display(),
                                     error = %e,
-                                    "Failed to handle file event"
+                                    "Failed to process path"
                                 );
                             }
                         }
@@ -152,26 +148,15 @@ impl FileWatcher {
             .unwrap_or(false)
     }
 
-    /// Handle a file event
-    async fn handle_file_event(&mut self, path: &Path, kind: EventKind) -> Result<()> {
-        tracing::debug!(
-            component = "file_watcher",
-            path = %path.display(),
-            event = ?kind,
-            "Handling file event"
-        );
-
-        match kind {
-            EventKind::Create(_) | EventKind::Modify(_) => {
-                self.handle_file_change(path).await?;
-            }
-            EventKind::Remove(_) => {
-                self.handle_file_delete(path).await?;
-            }
-            _ => {}
+    /// Process a changed path - check existence to determine operation
+    async fn process_path(&mut self, path: &Path) -> Result<()> {
+        if path.exists() {
+            // File exists: Add or Update
+            self.handle_file_change(path).await
+        } else {
+            // File doesn't exist: Delete
+            self.handle_file_delete(path).await
         }
-
-        Ok(())
     }
 
     /// Handle file creation or modification
@@ -204,7 +189,7 @@ impl FileWatcher {
         };
 
         // Apply to ConfigServer
-        self.apply_resource_change(&content, change).await?;
+        self.apply_change(&content, change).await?;
 
         tracing::info!(
             component = "file_watcher",
@@ -250,114 +235,7 @@ impl FileWatcher {
     }
 
     /// Apply resource change to ConfigServer based on content
-    async fn apply_resource_change(&self, content: &str, change: ResourceChange) -> Result<()> {
-        let kind = ResourceKind::from_content(content);
-
-        match kind {
-            Some(ResourceKind::GatewayClass) => {
-                if let Ok(resource) = serde_yaml::from_str::<GatewayClass>(content) {
-                    self.config_server.gateway_classes.apply_change(change, resource);
-                }
-            }
-            Some(ResourceKind::Gateway) => {
-                if let Ok(resource) = serde_yaml::from_str::<Gateway>(content) {
-                    self.config_server.apply_gateway_change(change, resource);
-                }
-            }
-            Some(ResourceKind::EdgionGatewayConfig) => {
-                if let Ok(resource) = serde_yaml::from_str::<EdgionGatewayConfig>(content) {
-                    self.config_server.edgion_gateway_configs.apply_change(change, resource);
-                }
-            }
-            Some(ResourceKind::HTTPRoute) => {
-                if let Ok(resource) = serde_yaml::from_str::<HTTPRoute>(content) {
-                    self.config_server.apply_http_route_change(change, resource);
-                }
-            }
-            Some(ResourceKind::GRPCRoute) => {
-                if let Ok(resource) = serde_yaml::from_str::<GRPCRoute>(content) {
-                    self.config_server.apply_grpc_route_change(change, resource);
-                }
-            }
-            Some(ResourceKind::TCPRoute) => {
-                if let Ok(resource) = serde_yaml::from_str::<TCPRoute>(content) {
-                    self.config_server.apply_tcp_route_change(change, resource);
-                }
-            }
-            Some(ResourceKind::UDPRoute) => {
-                if let Ok(resource) = serde_yaml::from_str::<UDPRoute>(content) {
-                    self.config_server.apply_udp_route_change(change, resource);
-                }
-            }
-            Some(ResourceKind::TLSRoute) => {
-                if let Ok(resource) = serde_yaml::from_str::<TLSRoute>(content) {
-                    self.config_server.apply_tls_route_change(change, resource);
-                }
-            }
-            Some(ResourceKind::Service) => {
-                if let Ok(resource) = serde_yaml::from_str::<Service>(content) {
-                    self.config_server.apply_service_change(change, resource);
-                }
-            }
-            Some(ResourceKind::Endpoint) => {
-                if let Ok(resource) = serde_yaml::from_str::<Endpoints>(content) {
-                    self.config_server.apply_endpoint_change(change, resource);
-                }
-            }
-            Some(ResourceKind::EndpointSlice) => {
-                if let Ok(resource) = serde_yaml::from_str::<EndpointSlice>(content) {
-                    self.config_server.apply_endpoint_slice_change(change, resource);
-                }
-            }
-            Some(ResourceKind::ReferenceGrant) => {
-                if let Ok(resource) = serde_yaml::from_str::<ReferenceGrant>(content) {
-                    self.config_server.reference_grants.apply_change(change, resource);
-                }
-            }
-            Some(ResourceKind::BackendTLSPolicy) => {
-                if let Ok(resource) = serde_yaml::from_str::<BackendTLSPolicy>(content) {
-                    self.config_server.backend_tls_policies.apply_change(change, resource);
-                }
-            }
-            Some(ResourceKind::EdgionTls) => {
-                if let Ok(resource) = serde_yaml::from_str::<EdgionTls>(content) {
-                    self.config_server.apply_edgion_tls_change(change, resource);
-                }
-            }
-            Some(ResourceKind::Secret) => {
-                if let Ok(resource) = serde_yaml::from_str::<Secret>(content) {
-                    self.config_server.apply_secret_change(change, resource);
-                }
-            }
-            Some(ResourceKind::EdgionPlugins) => {
-                if let Ok(resource) = serde_yaml::from_str::<EdgionPlugins>(content) {
-                    self.config_server.apply_edgion_plugins_change(change, resource);
-                }
-            }
-            Some(ResourceKind::EdgionStreamPlugins) => {
-                if let Ok(resource) = serde_yaml::from_str::<EdgionStreamPlugins>(content) {
-                    self.config_server.edgion_stream_plugins.apply_change(change, resource);
-                }
-            }
-            Some(ResourceKind::PluginMetaData) => {
-                if let Ok(resource) = serde_yaml::from_str::<PluginMetaData>(content) {
-                    self.config_server.apply_plugin_metadata_change(change, resource);
-                }
-            }
-            Some(ResourceKind::LinkSys) => {
-                if let Ok(resource) = serde_yaml::from_str::<LinkSys>(content) {
-                    self.config_server.apply_link_sys_change(change, resource);
-                }
-            }
-            _ => {
-                tracing::debug!(
-                    component = "file_watcher",
-                    kind = ?kind,
-                    "Skipping unknown resource type"
-                );
-            }
-        }
-
-        Ok(())
+    async fn apply_change(&self, content: &str, change: ResourceChange) -> Result<()> {
+        apply_resource_change(&self.config_server, content, change)
     }
 }
