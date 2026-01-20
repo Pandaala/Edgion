@@ -1,6 +1,6 @@
 //! Kubernetes mode lifecycle implementation
 //!
-//! This module manages the complete lifecycle for Kubernetes mode:
+//! This module manages the complete lifecycle for Kubernetes mode using event-driven architecture.
 //!
 //! ## Architecture
 //!
@@ -17,18 +17,23 @@
 //!     ├── Wait for Leadership
 //!     │   └── Block until this instance becomes leader
 //!     │
-//!     └── Main Flow (only leader executes)
+//!     └── Main Flow (event-driven, only leader executes)
 //!         │
-//!         ├── 1. Start K8s Controller (creates ConfigServer, Controller, spawns run task)
-//!         ├── 2. Wait for caches ready OR controller exit
-//!         ├── 3. Set config_server = Some (services become available)
-//!         ├── 4. Wait for exit signal
+//!         ├── Start Event Watchers (returns config_server + watcher handles)
+//!         │   ├── Controller task → ControllerExit event
+//!         │   ├── Caches watcher → CachesReady event
+//!         │   └── Leadership watcher → LeadershipLost event
+//!         │
+//!         ├── Event Loop (simple match on event_rx.recv())
+//!         │   ├── CachesReady → set_config_server(Some)
+//!         │   ├── LeadershipLost → Break, return LostLeadership
+//!         │   └── ControllerExit → Break, handle exit reason
 //!         │
 //!         └── Handle Exit Reason
 //!             ├── Shutdown → Exit program
 //!             ├── LostLeadership → Back to "Wait for Leadership"
-//!             ├── RelinkRequested (410 GONE) → Retry main flow
-//!             └── Error → Retry with backoff
+//!             ├── RelinkRequested (410 GONE) → Retry immediately
+//!             └── AllControllersStopped → Retry with backoff
 //! ```
 
 use super::kubernetes::{
@@ -40,7 +45,7 @@ use anyhow::Result;
 use kube::Client;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::oneshot;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 /// Exit reason from main flow
@@ -49,6 +54,38 @@ enum MainFlowExit {
     Shutdown,
     /// Lost leadership, need to wait for re-election
     LostLeadership,
+}
+
+/// Lifecycle event for event-driven architecture
+enum LifecycleEvent {
+    /// Caches are ready
+    CachesReady,
+    /// Caches ready timeout - not all caches ready within timeout
+    CachesTimeout,
+    /// Lost leadership
+    LeadershipLost,
+    /// Controller exited
+    ControllerExit(ControllerExitReason),
+}
+
+/// Handles for all watcher tasks
+struct WatcherHandles {
+    controller: JoinHandle<()>,
+    caches: JoinHandle<()>,
+    leader: JoinHandle<()>,
+}
+
+impl WatcherHandles {
+    /// Abort all watcher tasks and wait for them to finish
+    async fn abort_and_wait(self) {
+        self.controller.abort();
+        self.caches.abort();
+        self.leader.abort();
+        
+        let _ = self.controller.await;
+        let _ = self.caches.await;
+        let _ = self.leader.await;
+    }
 }
 
 impl ConfCenter {
@@ -133,11 +170,10 @@ impl ConfCenter {
 
     /// Main flow - runs only when this instance is the leader
     ///
-    /// This method contains the main control loop that:
-    /// 1. Creates ConfigServer
-    /// 2. Creates and runs KubernetesController
-    /// 3. Handles errors and 410 GONE with automatic retry
-    /// 4. Returns when shutdown or leadership is lost
+    /// Event-driven architecture:
+    /// 1. Start all event watcher tasks (controller, caches, leadership)
+    /// 2. Process events in a simple match loop
+    /// 3. Handle retry logic for errors and 410 GONE
     async fn run_main_flow(
         &self,
         client: &Client,
@@ -160,49 +196,121 @@ impl ConfCenter {
                 component = "conf_center",
                 mode = "kubernetes",
                 consecutive_failures = consecutive_failures,
-                "Starting main flow iteration"
+                "Starting event watchers"
             );
 
+            // Create event channel
+            let (event_tx, mut event_rx) = mpsc::channel::<LifecycleEvent>(32);
+
+            // Start all event watcher tasks
+            let (watchers, config_server) = match self.start_event_watchers(client, shutdown_handle, leader_handle, event_tx) {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::error!(
+                        component = "conf_center",
+                        mode = "kubernetes",
+                        error = %e,
+                        "Failed to start event watchers"
+                    );
+                    consecutive_failures += 1;
+                    if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
+                        tracing::error!(
+                            component = "conf_center",
+                            mode = "kubernetes",
+                            consecutive_failures = consecutive_failures,
+                            "Max consecutive failures exceeded, giving up"
+                        );
+                        return MainFlowExit::Shutdown;
+                    }
+                    tokio::time::sleep(Self::backoff(consecutive_failures)).await;
+                    continue;
+                }
+            };
+
             let iteration_start = Instant::now();
+            let mut caches_ready = false;
 
-            // Run one iteration of the main flow
-            let result = self.run_iteration(client, leader_handle, shutdown_handle).await;
+            // Event-driven main loop - no select, just simple match
+            let exit_reason = loop {
+                match event_rx.recv().await {
+                    Some(LifecycleEvent::CachesReady) => {
+                        caches_ready = true;
+                        self.set_config_server(Some(config_server.clone()));
+                        tracing::info!(
+                            component = "conf_center",
+                            mode = "kubernetes",
+                            "ConfigServer is ready, gRPC and Admin API can serve requests"
+                        );
+                    }
+                    Some(LifecycleEvent::CachesTimeout) => {
+                        tracing::error!(
+                            component = "conf_center",
+                            mode = "kubernetes",
+                            "Caches timeout, treating as controller failure"
+                        );
+                        break ControllerExitReason::AllControllersStopped;
+                    }
+                    Some(LifecycleEvent::LeadershipLost) => {
+                        tracing::warn!(
+                            component = "conf_center",
+                            mode = "kubernetes",
+                            "Lost leadership"
+                        );
+                        break ControllerExitReason::LostLeadership;
+                    }
+                    Some(LifecycleEvent::ControllerExit(reason)) => {
+                        tracing::info!(
+                            component = "conf_center",
+                            mode = "kubernetes",
+                            reason = ?reason,
+                            "Controller exited"
+                        );
+                        break reason;
+                    }
+                    None => {
+                        tracing::error!(
+                            component = "conf_center",
+                            mode = "kubernetes",
+                            "Event channel closed unexpectedly"
+                        );
+                        break ControllerExitReason::AllControllersStopped;
+                    }
+                }
+            };
 
-            match result {
-                IterationResult::Shutdown => {
-                    self.set_config_server(None);
+            // Cleanup: abort and wait for all watcher tasks
+            watchers.abort_and_wait().await;
+
+            // Clear config_server if it was set
+            if caches_ready {
+                self.set_config_server(None);
+            }
+
+            // Handle exit reason
+            match exit_reason {
+                ControllerExitReason::Shutdown => {
                     return MainFlowExit::Shutdown;
                 }
-                IterationResult::LostLeadership => {
-                    self.set_config_server(None);
+                ControllerExitReason::LostLeadership => {
                     return MainFlowExit::LostLeadership;
                 }
-                IterationResult::RelinkRequested(reason) => {
+                ControllerExitReason::RelinkRequested(reason) => {
                     // 410 GONE - normal reconnection, don't count as failure
-                    self.set_config_server(None);
-
                     tracing::info!(
                         component = "conf_center",
                         mode = "kubernetes",
-                        reason = reason,
+                        reason = ?reason,
                         "Relink requested (410 GONE), restarting immediately"
                     );
-
-                    // Reset failure counter since this is not a real failure
                     consecutive_failures = 0;
-
-                    // Small delay to avoid tight loop
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-                IterationResult::Error(reason) => {
+                ControllerExitReason::AllControllersStopped => {
                     // Real error - count as failure and apply backoff
-                    self.set_config_server(None);
-
                     tracing::warn!(
                         component = "conf_center",
                         mode = "kubernetes",
-                        reason = reason,
-                        "Iteration failed, will restart with backoff"
+                        "All controllers stopped, will restart with backoff"
                     );
 
                     // Reset failure counter if ran stably for long enough
@@ -218,145 +326,18 @@ impl ConfCenter {
                             consecutive_failures = consecutive_failures,
                             "Max consecutive failures exceeded, giving up"
                         );
-                        // Return shutdown to exit the program
                         return MainFlowExit::Shutdown;
                     }
 
-                    // Exponential backoff before restart
-                    let backoff = Duration::from_secs(1 << consecutive_failures.min(6));
                     tracing::info!(
                         component = "conf_center",
                         mode = "kubernetes",
-                        backoff_secs = backoff.as_secs(),
+                        backoff_secs = Self::backoff(consecutive_failures).as_secs(),
                         consecutive_failures = consecutive_failures,
                         "Waiting before restart"
                     );
-                    tokio::time::sleep(backoff).await;
+                    tokio::time::sleep(Self::backoff(consecutive_failures)).await;
                 }
-            }
-        }
-    }
-
-    /// Run a single iteration of the main flow
-    ///
-    /// Steps:
-    /// 1. Start K8s controller (creates ConfigServer, Controller, and spawns run task)
-    /// 2. Wait for caches ready OR controller exit
-    /// 3. Set config_server = Some
-    /// 4. Wait for exit signal
-    async fn run_iteration(
-        &self,
-        client: &Client,
-        leader_handle: &LeaderHandle,
-        shutdown_handle: &ShutdownHandle,
-    ) -> IterationResult {
-        // Step 1: Start K8s controller
-        let (config_server, mut exit_rx, controller_handle) =
-            match self.start_k8s_controller(client, shutdown_handle) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::error!(
-                        component = "conf_center",
-                        mode = "kubernetes",
-                        error = %e,
-                        "Failed to start K8s controller"
-                    );
-                    return IterationResult::Error(format!("controller_start_failed: {}", e));
-                }
-            };
-
-        // Step 2: Wait for caches ready OR controller exit (whichever first)
-        let mut caches_ready = false;
-        let exit_reason = tokio::select! {
-            // Check for leadership loss
-            _ = wait_for_leadership_loss(leader_handle) => {
-                tracing::warn!(
-                    component = "conf_center",
-                    mode = "kubernetes",
-                    "Lost leadership during cache initialization"
-                );
-                // Abort controller
-                controller_handle.abort();
-                return IterationResult::LostLeadership;
-            }
-
-            // Wait for caches to be ready
-            _ = self.wait_caches_ready(&config_server, 30) => {
-                caches_ready = true;
-
-                // Step 3: Set config_server = Some (services become available)
-                self.set_config_server(Some(config_server));
-                tracing::info!(
-                    component = "conf_center",
-                    mode = "kubernetes",
-                    "ConfigServer is ready, gRPC and Admin API can serve requests"
-                );
-
-                // Step 4: Wait for exit signal
-                tokio::select! {
-                    // Check for leadership loss
-                    _ = wait_for_leadership_loss(leader_handle) => {
-                        tracing::warn!(
-                            component = "conf_center",
-                            mode = "kubernetes",
-                            "Lost leadership during normal operation"
-                        );
-                        // Abort controller
-                        controller_handle.abort();
-                        return IterationResult::LostLeadership;
-                    }
-
-                    // Wait for controller exit
-                    result = &mut exit_rx => {
-                        result.unwrap_or_else(|_| {
-                                tracing::error!(
-                                    component = "conf_center",
-                                    mode = "kubernetes",
-                                    "Controller task ended unexpectedly (channel closed)"
-                                );
-                                ControllerExitReason::AllControllersStopped
-                            })
-                    }
-                }
-            }
-
-            // Controller exited before caches ready
-            result = &mut exit_rx => {
-                tracing::warn!(
-                    component = "conf_center",
-                    mode = "kubernetes",
-                    "Controller exited before caches were ready"
-                );
-                result.unwrap_or_else(|_| {
-                        tracing::error!(
-                            component = "conf_center",
-                            mode = "kubernetes",
-                            "Controller task ended unexpectedly (channel closed)"
-                        );
-                        ControllerExitReason::AllControllersStopped
-                    })
-            }
-        };
-
-        // Ensure controller task is cleaned up
-        let _ = controller_handle.await;
-
-        // Clear config_server if it was set
-        if caches_ready {
-            self.set_config_server(None);
-        }
-
-        // Convert ControllerExitReason to IterationResult
-        match exit_reason {
-            ControllerExitReason::Shutdown => IterationResult::Shutdown,
-            ControllerExitReason::LostLeadership => IterationResult::LostLeadership,
-            ControllerExitReason::RelinkRequested(reason) => {
-                // 410 GONE is a normal reconnection, not a failure
-                IterationResult::RelinkRequested(format!("{:?}", reason))
-            }
-            ControllerExitReason::AllControllersStopped => {
-                // This is an actual error
-                IterationResult::Error("all_controllers_stopped".to_string())
             }
         }
     }
@@ -387,52 +368,6 @@ impl ConfCenter {
         );
 
         Ok(config)
-    }
-
-    /// Start K8s controller
-    ///
-    /// This method encapsulates the creation and startup of ConfigServer and KubernetesController:
-    /// 1. Create ConfigServer
-    /// 2. Create KubernetesController
-    /// 3. Spawn controller.run in background
-    ///
-    /// Returns:
-    /// - `config_server`: For cache readiness checking and service availability
-    /// - `exit_rx`: To receive controller exit reason
-    /// - `controller_handle`: To abort or await the controller task
-    fn start_k8s_controller(
-        &self,
-        client: &Client,
-        shutdown_handle: &ShutdownHandle,
-    ) -> Result<(
-        Arc<ConfigServer>,
-        oneshot::Receiver<ControllerExitReason>,
-        JoinHandle<()>,
-    )> {
-        // Step 1: Create ConfigServer
-        let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
-
-        // Step 2: Create KubernetesController
-        let controller = self.create_k8s_controller(client, &config_server)?;
-
-        // Step 3: Spawn controller.run in background
-        let (exit_tx, exit_rx) = oneshot::channel::<ControllerExitReason>();
-        let shutdown_signal = shutdown_handle.signal();
-
-        let controller_handle = tokio::spawn(async move {
-            let exit_reason = controller.run(shutdown_signal).await.unwrap_or_else(|e| {
-                tracing::error!(
-                    component = "conf_center",
-                    mode = "kubernetes",
-                    error = %e,
-                    "Controller run error"
-                );
-                ControllerExitReason::AllControllersStopped
-            });
-            let _ = exit_tx.send(exit_reason);
-        });
-
-        Ok((config_server, exit_rx, controller_handle))
     }
 
     /// Create K8s controller
@@ -472,26 +407,94 @@ impl ConfCenter {
             metadata_filter.clone(),
         )
     }
-}
 
-/// Result of a single iteration
-enum IterationResult {
-    /// Normal shutdown requested
-    Shutdown,
-    /// Lost leadership
-    LostLeadership,
-    /// 410 GONE - need to restart but don't count as failure
-    RelinkRequested(String),
-    /// Real error - count as failure and apply backoff
-    Error(String),
-}
+    /// Start all event watcher tasks
+    ///
+    /// This method creates ConfigServer, Controller, and spawns all event watcher tasks:
+    /// 1. Controller task - runs controller.run() and sends ControllerExit event
+    /// 2. Caches watcher task - monitors cache readiness and sends CachesReady event
+    /// 3. Leadership watcher task - monitors leadership and sends LeadershipLost event
+    ///
+    /// Returns:
+    /// - `WatcherHandles`: Handles to abort/await all watcher tasks
+    /// - `Arc<ConfigServer>`: The config server for setting service availability
+    fn start_event_watchers(
+        &self,
+        client: &Client,
+        shutdown_handle: &ShutdownHandle,
+        leader_handle: &LeaderHandle,
+        event_tx: mpsc::Sender<LifecycleEvent>,
+    ) -> Result<(WatcherHandles, Arc<ConfigServer>)> {
+        // 1. Create ConfigServer and Controller
+        let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
+        let controller = self.create_k8s_controller(client, &config_server)?;
 
-/// Wait until leadership is lost
-async fn wait_for_leadership_loss(leader_handle: &LeaderHandle) {
-    loop {
-        if !leader_handle.is_leader() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // 2. Spawn controller.run task
+        let shutdown_signal = shutdown_handle.signal();
+        let tx = event_tx.clone();
+        let controller_handle = tokio::spawn(async move {
+            let reason = controller.run(shutdown_signal).await.unwrap_or_else(|e| {
+                tracing::error!(
+                    component = "conf_center",
+                    mode = "kubernetes",
+                    error = %e,
+                    "Controller run error"
+                );
+                ControllerExitReason::AllControllersStopped
+            });
+            let _ = tx.send(LifecycleEvent::ControllerExit(reason)).await;
+        });
+
+        // 3. Spawn caches ready watcher task
+        let cs = config_server.clone();
+        let tx = event_tx.clone();
+        let caches_handle = tokio::spawn(async move {
+            const CACHE_READY_TIMEOUT_SECS: u64 = 30;
+            let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
+            let start = Instant::now();
+
+            while !cs.is_each_cache_ready() && start.elapsed() < timeout {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+
+            if cs.is_each_cache_ready() {
+                let _ = tx.send(LifecycleEvent::CachesReady).await;
+            } else {
+                let not_ready = cs.not_ready_caches();
+                tracing::warn!(
+                    component = "conf_center",
+                    mode = "kubernetes",
+                    timeout_secs = CACHE_READY_TIMEOUT_SECS,
+                    not_ready = ?not_ready,
+                    "Timeout waiting for caches"
+                );
+                let _ = tx.send(LifecycleEvent::CachesTimeout).await;
+            }
+        });
+
+        // 4. Spawn leadership loss watcher task
+        let lh = leader_handle.clone();
+        let tx = event_tx;
+        let leader_watcher_handle = tokio::spawn(async move {
+            while lh.is_leader() {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            let _ = tx.send(LifecycleEvent::LeadershipLost).await;
+        });
+
+        Ok((
+            WatcherHandles {
+                controller: controller_handle,
+                caches: caches_handle,
+                leader: leader_watcher_handle,
+            },
+            config_server,
+        ))
+    }
+
+    /// Calculate exponential backoff duration
+    fn backoff(failures: u32) -> Duration {
+        Duration::from_secs(1 << failures.min(6))
     }
 }
+
