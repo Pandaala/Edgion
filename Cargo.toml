@@ -156,9 +156,7 @@ http = "1.4.0"
 mockall = "0.14.0"
 
 # Test client dependencies
-# Note: reqwest 0.13 uses rustls+aws-lc-rs which is incompatible with BoringSSL cipher suites
-# Staying on 0.12 for compatibility with pingora's BoringSSL backend
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2"] }
 console = "0.16"
 colored = "2.2"
 
