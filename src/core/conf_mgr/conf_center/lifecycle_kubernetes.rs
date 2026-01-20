@@ -81,7 +81,7 @@ impl WatcherHandles {
         self.controller.abort();
         self.caches.abort();
         self.leader.abort();
-        
+
         let _ = self.controller.await;
         let _ = self.caches.await;
         let _ = self.leader.await;
@@ -203,29 +203,30 @@ impl ConfCenter {
             let (event_tx, mut event_rx) = mpsc::channel::<LifecycleEvent>(32);
 
             // Start all event watcher tasks
-            let (watchers, config_server) = match self.start_event_watchers(client, shutdown_handle, leader_handle, event_tx) {
-                Ok(result) => result,
-                Err(e) => {
-                    tracing::error!(
-                        component = "conf_center",
-                        mode = "kubernetes",
-                        error = %e,
-                        "Failed to start event watchers"
-                    );
-                    consecutive_failures += 1;
-                    if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
+            let (watchers, config_server) =
+                match self.start_event_watchers(client, shutdown_handle, leader_handle, event_tx) {
+                    Ok(result) => result,
+                    Err(e) => {
                         tracing::error!(
                             component = "conf_center",
                             mode = "kubernetes",
-                            consecutive_failures = consecutive_failures,
-                            "Max consecutive failures exceeded, giving up"
+                            error = %e,
+                            "Failed to start event watchers"
                         );
-                        return MainFlowExit::Shutdown;
+                        consecutive_failures += 1;
+                        if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
+                            tracing::error!(
+                                component = "conf_center",
+                                mode = "kubernetes",
+                                consecutive_failures = consecutive_failures,
+                                "Max consecutive failures exceeded, giving up"
+                            );
+                            return MainFlowExit::Shutdown;
+                        }
+                        tokio::time::sleep(Self::backoff(consecutive_failures)).await;
+                        continue;
                     }
-                    tokio::time::sleep(Self::backoff(consecutive_failures)).await;
-                    continue;
-                }
-            };
+                };
 
             let iteration_start = Instant::now();
             let mut caches_ready = false;
@@ -251,11 +252,7 @@ impl ConfCenter {
                         break ControllerExitReason::AllControllersStopped;
                     }
                     Some(LifecycleEvent::LeadershipLost) => {
-                        tracing::warn!(
-                            component = "conf_center",
-                            mode = "kubernetes",
-                            "Lost leadership"
-                        );
+                        tracing::warn!(component = "conf_center", mode = "kubernetes", "Lost leadership");
                         break ControllerExitReason::LostLeadership;
                     }
                     Some(LifecycleEvent::ControllerExit(reason)) => {
@@ -497,4 +494,3 @@ impl ConfCenter {
         Duration::from_secs(1 << failures.min(6))
     }
 }
-
