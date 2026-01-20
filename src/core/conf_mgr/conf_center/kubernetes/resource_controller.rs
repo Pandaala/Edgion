@@ -26,7 +26,6 @@ use super::workqueue::Workqueue;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::ResourceChange;
 use anyhow::Result;
-use dashmap::DashMap;
 use futures::StreamExt;
 use kube::runtime::reflector::{ObjectRef, Store};
 use kube::runtime::watcher::Event;
@@ -60,12 +59,16 @@ pub type ApplyFn<K> = Arc<dyn Fn(&ConfigServer, ResourceChange, K) + Send + Sync
 /// Type alias for the optional filter function
 pub type FilterFn<K> = Arc<dyn Fn(&K) -> bool + Send + Sync>;
 
+/// Type alias for the get function that retrieves object from ConfigServer cache
+/// Used by worker to get deleted object for EventDelete (replaces pending_deletes)
+pub type GetFn<K> = Arc<dyn Fn(&ConfigServer, &str) -> Option<K> + Send + Sync>;
+
 /// Generic ResourceController that encapsulates the complete 1-8 flow for a single resource type
 ///
 /// Uses a single watcher + reflector stream with Go operator-style workqueue:
 /// - Init phase: InitApply events are applied directly as InitAdd
 /// - Runtime phase: ALL events (Apply/Delete) enqueue key only, worker decides update/delete
-///   - Worker checks store: exists → EventUpdate, not exists → check pending_deletes → EventDelete
+///   - Worker checks store vs ConfigServer cache: store has → EventUpdate, cache has but store doesn't → EventDelete
 pub struct ResourceController<K>
 where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
@@ -81,6 +84,8 @@ where
 
     // Difference handling via closures
     apply_fn: ApplyFn<K>,
+    /// Get function to retrieve object from ConfigServer cache (for delete detection)
+    get_fn: GetFn<K>,
     filter_fn: Option<FilterFn<K>>,
     /// Namespace filter for MultipleNamespaces mode
     namespace_filter: Option<Vec<String>>,
@@ -125,6 +130,7 @@ where
         watcher_config: watcher::Config,
         api_scope: ApiScope,
         apply_fn: ApplyFn<K>,
+        get_fn: GetFn<K>,
         filter_fn: Option<FilterFn<K>>,
         shutdown_signal: Option<ShutdownSignal>,
         relink_signal: Option<RelinkSignalSender>,
@@ -139,6 +145,7 @@ where
             watcher_config,
             api_scope,
             apply_fn,
+            get_fn,
             filter_fn,
             namespace_filter,
             shutdown_signal,
@@ -210,10 +217,6 @@ where
         // Create workqueue for runtime phase
         let queue = Arc::new(Workqueue::with_defaults(kind));
 
-        // Pending deletes: stores deleted objects temporarily for worker to process
-        // Key: "namespace/name" or "name", Value: the deleted object
-        let pending_deletes: Arc<DashMap<String, K>> = Arc::new(DashMap::new());
-
         // Track init phase
         let mut init_timer = Some(InitSyncTimer::start(kind));
         let mut init_count = 0;
@@ -253,10 +256,11 @@ where
                             // Start of init phase (LIST)
                             if init_done {
                                 // Watcher reconnecting - this happens on 410 Gone or network issues
+                                // Exit and let upper layer rebuild everything (clean state)
                                 tracing::warn!(
                                     component = "resource_controller",
                                     kind = kind,
-                                    "Watcher reconnecting (possible 410 Gone), starting re-sync via LIST"
+                                    "Watcher reconnecting (possible 410 Gone), requesting full rebuild"
                                 );
 
                                 // Send relink signal if configured
@@ -265,9 +269,11 @@ where
                                     tracing::info!(
                                         component = "resource_controller",
                                         kind = kind,
-                                        "Sent relink signal due to watcher reconnection"
+                                        "Sent relink signal due to watcher reconnection, exiting"
                                     );
                                 }
+                                // Exit to let upper layer rebuild
+                                break;
                             } else {
                                 // First connection
                                 tracing::debug!(component = "resource_controller", kind = kind, "Init phase started");
@@ -275,67 +281,51 @@ where
                         }
                         Event::InitApply(obj) => {
                             // Store already updated by reflector
+                            // Init phase: apply directly as InitAdd (no workqueue)
                             if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
-                                // Init phase always applies directly (both first init and re-sync)
-                                // Clear any stale pending delete for this key (only needed after first init)
-                                if init_done {
-                                    let key = make_resource_key(&obj);
-                                    pending_deletes.remove(&key);
-                                }
                                 (self.apply_fn)(&self.config_server, ResourceChange::InitAdd, obj);
-                                if !init_done {
-                                    init_count += 1;
-                                }
+                                init_count += 1;
                             }
                         }
                         Event::InitDone => {
-                            if !init_done {
-                                // First init complete
-                                let init_duration = init_timer.take().map(|t| t.complete(init_count)).unwrap_or(0.0);
-                                tracing::info!(
-                                    component = "resource_controller",
-                                    kind = kind,
-                                    count = init_count,
-                                    duration_secs = init_duration,
-                                    "Init phase complete (Step 5: InitAdd applied)"
-                                );
+                            // First init complete (init_done should always be false here due to break on reconnect)
+                            let init_duration = init_timer.take().map(|t| t.complete(init_count)).unwrap_or(0.0);
+                            tracing::info!(
+                                component = "resource_controller",
+                                kind = kind,
+                                count = init_count,
+                                duration_secs = init_duration,
+                                "Init phase complete (Step 5: InitAdd applied)"
+                            );
 
-                                // Mark cache ready
-                                self.config_server.set_cache_ready_by_kind(kind);
-                                tracing::info!(
-                                    component = "resource_controller",
-                                    kind = kind,
-                                    "Step 6: Cache marked ready, entering runtime phase"
-                                );
+                            // Mark cache ready
+                            self.config_server.set_cache_ready_by_kind(kind);
+                            tracing::info!(
+                                component = "resource_controller",
+                                kind = kind,
+                                "Step 6: Cache marked ready, entering runtime phase"
+                            );
 
-                                init_done = true;
+                            init_done = true;
 
-                                // Spawn worker for runtime phase (only once) and save handle
-                                worker_handle = Some(spawn_worker(
-                                    queue.clone(),
-                                    store.clone(),
-                                    pending_deletes.clone(),
-                                    self.config_server.clone(),
-                                    self.apply_fn.clone(),
-                                    self.filter_fn.clone(),
-                                    self.namespace_filter.clone(),
-                                    kind,
-                                    self.shutdown_signal.clone(),
-                                ));
+                            // Spawn worker for runtime phase (only once) and save handle
+                            worker_handle = Some(spawn_worker(
+                                queue.clone(),
+                                store.clone(),
+                                self.config_server.clone(),
+                                self.apply_fn.clone(),
+                                self.get_fn.clone(),
+                                self.filter_fn.clone(),
+                                self.namespace_filter.clone(),
+                                kind,
+                                self.shutdown_signal.clone(),
+                            ));
 
-                                tracing::info!(
-                                    component = "resource_controller",
-                                    kind = kind,
-                                    "Step 7-8: Worker started, processing runtime events via workqueue"
-                                );
-                            } else {
-                                // Watcher reconnected - worker already running
-                                tracing::info!(
-                                    component = "resource_controller",
-                                    kind = kind,
-                                    "Watcher reconnected, re-sync complete, worker already running"
-                                );
-                            }
+                            tracing::info!(
+                                component = "resource_controller",
+                                kind = kind,
+                                "Step 7-8: Worker started, processing runtime events via workqueue"
+                            );
                         }
                         Event::Apply(obj) => {
                             if !init_done {
@@ -350,12 +340,10 @@ where
                                     init_count += 1;
                                 }
                             } else {
-                                // Runtime phase - enqueue key for worker
+                                // Runtime phase - enqueue key for worker (Go operator style)
                                 // Store is already updated by reflector
                                 if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
                                     let key = make_resource_key(&obj);
-                                    // Clear any stale pending delete for this key (object was recreated)
-                                    pending_deletes.remove(&key);
                                     queue.enqueue(key).await;
                                 }
                             }
@@ -371,10 +359,9 @@ where
                             } else {
                                 // Runtime phase - enqueue key for worker (Go operator style)
                                 // Store is already updated by reflector (object removed)
+                                // Worker will get the object from ConfigServer cache for delete
                                 if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
                                     let key = make_resource_key(&obj);
-                                    // Store the deleted object for worker to use
-                                    pending_deletes.insert(key.clone(), obj);
                                     queue.enqueue(key).await;
                                 }
                             }
@@ -447,18 +434,19 @@ where
 ///
 /// Worker implements Go operator-style reconciliation:
 /// - Dequeue key from workqueue
-/// - Check store for current state
-/// - If exists → EventUpdate with latest object from store
-/// - If not exists → check pending_deletes → EventDelete with deleted object
+/// - Check store (K8s state) vs ConfigServer cache (our state)
+/// - If store has object → EventUpdate with latest object from store
+/// - If store doesn't have but cache has → EventDelete with object from cache
+/// - If neither has → skip (already processed)
 ///
 /// Returns JoinHandle for graceful shutdown
 #[allow(clippy::too_many_arguments)]
 fn spawn_worker<K>(
     queue: Arc<Workqueue>,
     store: Store<K>,
-    pending_deletes: Arc<DashMap<String, K>>,
     config_server: Arc<ConfigServer>,
     apply_fn: ApplyFn<K>,
+    get_fn: GetFn<K>,
     filter_fn: Option<FilterFn<K>>,
     namespace_filter: Option<Vec<String>>,
     kind: &'static str,
@@ -491,11 +479,11 @@ where
                     process_work_item(
                         &work_item.key,
                         &store,
-                        &pending_deletes,
-                        &namespace_filter,
-                        &filter_fn,
                         &config_server,
                         &apply_fn,
+                        &get_fn,
+                        &namespace_filter,
+                        &filter_fn,
                         kind,
                     );
                     queue.done(&work_item.key);
@@ -518,20 +506,21 @@ where
 /// Process a work item from the queue (Go operator-style reconciliation)
 ///
 /// Decision logic:
-/// 1. Check store for current state
-/// 2. If object exists in store → EventUpdate (use latest from store)
-/// 3. If object not in store → check pending_deletes
-///    - If in pending_deletes → EventDelete (use the deleted object)
-///    - If not in pending_deletes → skip (already processed or never existed)
+/// 1. Check store for K8s current state
+/// 2. Check ConfigServer cache for our current state
+/// 3. Compare to determine action:
+///    - store has object → EventUpdate (use latest from store)
+///    - store doesn't have but cache has → EventDelete (use object from cache)
+///    - neither has → skip (already processed)
 #[allow(clippy::too_many_arguments)]
 fn process_work_item<K>(
     key: &str,
     store: &Store<K>,
-    pending_deletes: &DashMap<String, K>,
-    namespace_filter: &Option<Vec<String>>,
-    filter_fn: &Option<FilterFn<K>>,
     config_server: &ConfigServer,
     apply_fn: &ApplyFn<K>,
+    get_fn: &GetFn<K>,
+    namespace_filter: &Option<Vec<String>>,
+    filter_fn: &Option<FilterFn<K>>,
     kind: &'static str,
 ) where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
@@ -540,13 +529,15 @@ fn process_work_item<K>(
     // Parse key to ObjectRef
     let obj_ref = parse_resource_key::<K>(key);
 
-    // Get current state from store (already updated by reflector)
-    match store.get(&obj_ref) {
-        Some(obj) => {
-            // Object exists in store → EventUpdate
-            // Clear any stale pending delete (object was recreated before we processed)
-            pending_deletes.remove(key);
+    // Get current state from store (K8s state, already updated by reflector)
+    let store_obj = store.get(&obj_ref);
 
+    // Get current state from ConfigServer cache (our state)
+    let cache_obj = get_fn(config_server, key);
+
+    match (store_obj, cache_obj) {
+        (Some(obj), _) => {
+            // Object exists in store → EventUpdate (use latest from store)
             if !passes_filters(&*obj, namespace_filter, filter_fn) {
                 return;
             }
@@ -563,30 +554,28 @@ fn process_work_item<K>(
             );
             (apply_fn)(config_server, ResourceChange::EventUpdate, (*obj).clone());
         }
-        None => {
-            // Object not in store → check pending_deletes
-            if let Some((_, deleted_obj)) = pending_deletes.remove(key) {
-                // Found in pending_deletes → EventDelete
-                let name = deleted_obj.name_any();
-                let namespace = deleted_obj.namespace().unwrap_or_default();
+        (None, Some(cached_obj)) => {
+            // Object not in store but exists in cache → EventDelete
+            let name = cached_obj.name_any();
+            let namespace = cached_obj.namespace().unwrap_or_default();
 
-                tracing::debug!(
-                    component = "resource_controller",
-                    kind = kind,
-                    name = %name,
-                    namespace = %namespace,
-                    "Applying EventDelete from worker (object removed from store)"
-                );
-                (apply_fn)(config_server, ResourceChange::EventDelete, deleted_obj);
-            } else {
-                // Not in store and not in pending_deletes → already processed or never existed
-                tracing::trace!(
-                    component = "resource_controller",
-                    kind = kind,
-                    key = %key,
-                    "Object not found in store or pending_deletes, skipping (already processed)"
-                );
-            }
+            tracing::debug!(
+                component = "resource_controller",
+                kind = kind,
+                name = %name,
+                namespace = %namespace,
+                "Applying EventDelete from worker (object removed from store, using cache)"
+            );
+            (apply_fn)(config_server, ResourceChange::EventDelete, cached_obj);
+        }
+        (None, None) => {
+            // Not in store and not in cache → already processed or never existed
+            tracing::trace!(
+                component = "resource_controller",
+                kind = kind,
+                key = %key,
+                "Object not found in store or cache, skipping (already processed)"
+            );
         }
     }
 }
@@ -655,6 +644,7 @@ where
     kind: &'static str,
     api_scope: Option<ApiScope>,
     apply_fn: Option<ApplyFn<K>>,
+    get_fn: Option<GetFn<K>>,
     filter_fn: Option<FilterFn<K>>,
     shutdown_signal: Option<ShutdownSignal>,
     relink_signal: Option<RelinkSignalSender>,
@@ -672,6 +662,7 @@ where
             kind,
             api_scope: None,
             apply_fn: None,
+            get_fn: None,
             filter_fn: None,
             shutdown_signal: None,
             relink_signal: None,
@@ -697,6 +688,16 @@ where
         F: Fn(&ConfigServer, ResourceChange, K) + Send + Sync + 'static,
     {
         self.apply_fn = Some(Arc::new(f));
+        self
+    }
+
+    /// Set the get function for retrieving objects from ConfigServer cache
+    /// Used by worker to get deleted objects for EventDelete
+    pub fn get_with<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&ConfigServer, &str) -> Option<K> + Send + Sync + 'static,
+    {
+        self.get_fn = Some(Arc::new(f));
         self
     }
 
@@ -735,6 +736,7 @@ where
             watcher_config,
             self.api_scope.expect("API scope must be set"),
             self.apply_fn.expect("Apply function must be set"),
+            self.get_fn.expect("Get function must be set"),
             self.filter_fn,
             self.shutdown_signal,
             self.relink_signal,

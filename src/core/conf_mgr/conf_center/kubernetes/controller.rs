@@ -79,6 +79,7 @@ macro_rules! spawn_namespaced {
                 }
                 cs.$cache.apply_change(change, r)
             })
+            .get_with(|cs, key| cs.$cache.get_by_key(key))
             .with_shutdown($shutdown.clone())
             .with_relink_signal($relink_tx.clone())
             .build(
@@ -91,11 +92,12 @@ macro_rules! spawn_namespaced {
 }
 
 /// Macro to spawn a namespaced ResourceController with custom apply function
-/// Usage: spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, relink_tx, Type, "Kind", apply_fn)
+/// Usage: spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, relink_tx, Type, "Kind", apply_fn, get_fn)
 macro_rules! spawn_namespaced_custom {
-    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $relink_tx:ident, $type:ty, $kind:literal, $apply:expr) => {{
+    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $relink_tx:ident, $type:ty, $kind:literal, $apply:expr, $get:expr) => {{
         let filter_config = $self.metadata_filter.clone();
         let apply_fn: fn(&ConfigServer, crate::core::conf_sync::traits::ResourceChange, $type) = $apply;
+        let get_fn: fn(&ConfigServer, &str) -> Option<$type> = $get;
         let rc = ResourceControllerBuilder::<$type>::new($kind)
             .namespaced($self.watch_mode.clone())
             .apply_with(move |cs, change, mut r| {
@@ -104,6 +106,7 @@ macro_rules! spawn_namespaced_custom {
                 }
                 apply_fn(cs, change, r)
             })
+            .get_with(move |cs, key| get_fn(cs, key))
             .with_shutdown($shutdown.clone())
             .with_relink_signal($relink_tx.clone())
             .build(
@@ -128,6 +131,7 @@ macro_rules! spawn_cluster {
                 }
                 cs.$cache.apply_change(change, r)
             })
+            .get_with(|cs, key| cs.$cache.get_by_key(key))
             .with_shutdown($shutdown.clone())
             .with_relink_signal($relink_tx.clone())
             .build(
@@ -410,7 +414,8 @@ impl KubernetesController {
             relink_tx,
             Secret,
             "Secret",
-            |cs, change, r| cs.apply_secret_change(change, r)
+            |cs, change, r| cs.apply_secret_change(change, r),
+            |cs, key| cs.secrets.get_by_key(key)
         );
 
         // EdgionTls - standard apply (watches removed, handled by apply logic)
@@ -422,7 +427,8 @@ impl KubernetesController {
             relink_tx,
             EdgionTls,
             "EdgionTls",
-            |cs, change, r| cs.apply_edgion_tls_change(change, r)
+            |cs, change, r| cs.apply_edgion_tls_change(change, r),
+            |cs, key| cs.edgion_tls.get_by_key(key)
         );
 
         // ==================== Gateway (with filter) ====================
@@ -440,6 +446,7 @@ impl KubernetesController {
                     }
                     cs.apply_gateway_change(change, r)
                 })
+                .get_with(|cs, key| cs.gateways.get_by_key(key))
                 .with_shutdown(shutdown)
                 .with_relink_signal(relink)
                 .build(self.client.clone(), self.config_server.clone(), watcher_config.clone());
