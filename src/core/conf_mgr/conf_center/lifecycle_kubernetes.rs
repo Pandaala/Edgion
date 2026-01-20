@@ -53,11 +53,14 @@ enum MainFlowExit {
 }
 
 impl ConfCenter {
-    /// K8s mode lifecycle - leader election + main flow with automatic restart
+    /// K8s mode lifecycle with external shutdown handle
     ///
     /// This is the top-level lifecycle method for Kubernetes mode.
     /// It handles leader election and delegates to main flow when leadership is acquired.
-    pub(super) async fn run_k8s_lifecycle(&self) -> Result<()> {
+    ///
+    /// The shutdown_handle is provided by the caller (main program) to enable
+    /// coordinated graceful shutdown across all components.
+    pub(super) async fn run_k8s_lifecycle_with_shutdown(&self, shutdown_handle: ShutdownHandle) -> Result<()> {
         // 1. Create K8s Client
         let client = Client::try_default().await?;
         tracing::info!(component = "conf_center", mode = "kubernetes", "K8s client initialized");
@@ -67,10 +70,11 @@ impl ConfCenter {
         let leader_election = LeaderElection::new(client.clone(), leader_config);
         let leader_handle = leader_election.handle();
 
-        // 3. Spawn leader election background task
+        // 3. Spawn leader election background task with shutdown signal
         let le = leader_election.clone();
+        let le_shutdown = shutdown_handle.signal();
         tokio::spawn(async move {
-            if let Err(e) = le.run().await {
+            if let Err(e) = le.run(Some(le_shutdown)).await {
                 tracing::error!(
                     component = "conf_center",
                     error = %e,
@@ -79,14 +83,7 @@ impl ConfCenter {
             }
         });
 
-        // 4. Create global shutdown handle for signal handling
-        let shutdown_handle = ShutdownHandle::new();
-        let signal_shutdown = shutdown_handle.clone();
-        tokio::spawn(async move {
-            signal_shutdown.wait_for_signals().await;
-        });
-
-        // 5. Main lifecycle loop
+        // 4. Main lifecycle loop
         loop {
             // === Phase 1: Wait for leadership ===
             tracing::info!(

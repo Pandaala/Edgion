@@ -44,6 +44,30 @@ impl ConfigSyncServer {
         server.await
     }
 
+    /// Start the gRPC server with graceful shutdown support
+    pub async fn serve_with_shutdown(
+        self,
+        addr: std::net::SocketAddr,
+        shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> Result<(), tonic::transport::Error> {
+        let service = self.into_service();
+
+        tracing::info!(
+            component = "grpc_server",
+            addr = %addr,
+            "Starting gRPC server with graceful shutdown support"
+        );
+
+        let result = tonic::transport::Server::builder()
+            .add_service(service)
+            .serve_with_shutdown(addr, shutdown_signal)
+            .await;
+
+        tracing::info!(component = "grpc_server", "gRPC server stopped");
+
+        result
+    }
+
     /// Start the gRPC conf_server with reflection support
     pub async fn serve_with_reflection(
         self,

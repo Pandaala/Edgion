@@ -149,17 +149,39 @@ impl ConfCenter {
 
     // ==================== Lifecycle Management ====================
 
-    /// Start the configuration center
+    /// Start the configuration center with an external shutdown handle
+    ///
+    /// This is the preferred method when the caller manages signal handling.
+    /// The shutdown handle will be used to coordinate graceful shutdown.
+    ///
+    /// Dispatches to mode-specific lifecycle methods:
+    /// - FileSystem: `run_filesystem_lifecycle_with_shutdown()` in `lifecycle_filesystem.rs`
+    /// - K8s: `run_k8s_lifecycle_with_shutdown()` in `lifecycle_kubernetes.rs`
+    pub async fn start_with_shutdown(&self, shutdown_handle: ShutdownHandle) -> Result<()> {
+        if self.is_k8s_mode() {
+            self.run_k8s_lifecycle_with_shutdown(shutdown_handle).await
+        } else {
+            self.run_filesystem_lifecycle_with_shutdown(shutdown_handle).await
+        }
+    }
+
+    /// Start the configuration center (creates its own shutdown handler)
+    ///
+    /// This method creates its own ShutdownHandle and signal listener.
+    /// Use `start_with_shutdown()` if the caller manages signal handling.
     ///
     /// Dispatches to mode-specific lifecycle methods:
     /// - FileSystem: `run_filesystem_lifecycle()` in `lifecycle_filesystem.rs`
     /// - K8s: `run_k8s_lifecycle()` in `lifecycle_kubernetes.rs`
     pub async fn start(&self) -> Result<()> {
-        if self.is_k8s_mode() {
-            self.run_k8s_lifecycle().await
-        } else {
-            self.run_filesystem_lifecycle().await
-        }
+        // Create shutdown handle and start signal listener
+        let shutdown_handle = ShutdownHandle::new();
+        let signal_shutdown = shutdown_handle.clone();
+        tokio::spawn(async move {
+            signal_shutdown.wait_for_signals().await;
+        });
+
+        self.start_with_shutdown(shutdown_handle).await
     }
 
     // ==================== Helper Methods ====================

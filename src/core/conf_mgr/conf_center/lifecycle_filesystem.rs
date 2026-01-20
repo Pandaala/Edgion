@@ -13,30 +13,28 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 
 impl ConfCenter {
-    /// FileSystem mode lifecycle - simple and direct
+    /// FileSystem mode lifecycle with external shutdown handle
+    ///
+    /// The shutdown_handle is provided by the caller (main program) to enable
+    /// coordinated graceful shutdown across all components.
     ///
     /// 1. Create ConfigServer
     /// 2. Load resources + start FileWatcher
     /// 3. Set config_server = Some (services become available)
     /// 4. Wait for shutdown signal or watcher error
-    pub(super) async fn run_filesystem_lifecycle(&self) -> Result<()> {
+    pub(super) async fn run_filesystem_lifecycle_with_shutdown(
+        &self,
+        shutdown_handle: ShutdownHandle,
+    ) -> Result<()> {
         tracing::info!(
             component = "conf_center",
             mode = "file_system",
             "Starting FileSystem lifecycle"
         );
 
-        // Setup shutdown handling
-        let shutdown_handle = ShutdownHandle::new();
         let mut shutdown_signal = shutdown_handle.signal();
 
-        // Spawn signal handler (listens for SIGTERM/SIGINT)
-        let signal_handle = shutdown_handle.clone();
-        tokio::spawn(async move {
-            signal_handle.wait_for_signals().await;
-        });
-
-        // Store shutdown handle for external shutdown requests
+        // Store shutdown handle for external shutdown requests and FileWatcher
         {
             let mut handle = self.shutdown_handle.lock().unwrap();
             *handle = Some(shutdown_handle);

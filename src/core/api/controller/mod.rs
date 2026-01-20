@@ -140,3 +140,27 @@ pub async fn serve(
 
     Ok(())
 }
+
+/// Serve the admin API with graceful shutdown support
+pub async fn serve_with_shutdown(
+    conf_center: Arc<ConfCenter>,
+    schema_validator: Arc<SchemaValidator>,
+    addr: std::net::SocketAddr,
+    shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let app = create_admin_router(conf_center, schema_validator);
+
+    tracing::info!(
+        component = "admin_api",
+        addr = %addr,
+        "Starting Admin API server with graceful shutdown support"
+    );
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
+
+    tracing::info!(component = "admin_api", "Admin API server stopped");
+    Ok(())
+}

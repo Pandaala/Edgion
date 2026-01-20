@@ -123,7 +123,10 @@ impl LeaderElection {
     ///
     /// This should be spawned as a background task. It will continuously
     /// try to acquire or renew the lease.
-    pub async fn run(&self) -> Result<()> {
+    ///
+    /// If `shutdown_signal` is provided, the loop will exit gracefully when
+    /// shutdown is requested, allowing other pods to acquire leadership faster.
+    pub async fn run(&self, mut shutdown_signal: Option<super::shutdown::ShutdownSignal>) -> Result<()> {
         let lease_api: Api<Lease> = Api::namespaced(self.client.clone(), &self.config.lease_namespace);
 
         tracing::info!(
@@ -144,7 +147,27 @@ impl LeaderElection {
             } else {
                 Duration::from_secs(self.config.retry_period_secs)
             };
-            tokio::time::sleep(sleep_duration).await;
+
+            // Check for shutdown signal during sleep
+            if let Some(ref mut signal) = shutdown_signal {
+                tokio::select! {
+                    _ = tokio::time::sleep(sleep_duration) => {}
+                    _ = signal.wait() => {
+                        tracing::info!(
+                            component = "leader_election",
+                            identity = %self.config.identity,
+                            "Shutdown signal received, stopping leader election"
+                        );
+                        // Release leadership so other pods can take over faster
+                        if self.is_leader.swap(false, Ordering::Relaxed) {
+                            controller_metrics().set_leader(false);
+                        }
+                        return Ok(());
+                    }
+                }
+            } else {
+                tokio::time::sleep(sleep_duration).await;
+            }
 
             match self.try_acquire_or_renew(&lease_api).await {
                 Ok(true) => {
