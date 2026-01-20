@@ -276,15 +276,15 @@ where
                         Event::InitApply(obj) => {
                             // Store already updated by reflector
                             if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
-                                if !init_done {
-                                    // First init - apply directly as InitAdd
-                                    (self.apply_fn)(&self.config_server, ResourceChange::InitAdd, obj);
-                                    init_count += 1;
-                                } else {
-                                    // Watcher reconnected - enqueue for worker (like normal Apply)
+                                // Init phase always applies directly (both first init and re-sync)
+                                // Clear any stale pending delete for this key (only needed after first init)
+                                if init_done {
                                     let key = make_resource_key(&obj);
                                     pending_deletes.remove(&key);
-                                    queue.enqueue(key).await;
+                                }
+                                (self.apply_fn)(&self.config_server, ResourceChange::InitAdd, obj);
+                                if !init_done {
+                                    init_count += 1;
                                 }
                             }
                         }
