@@ -275,18 +275,15 @@ impl ConfCenter {
         let shutdown_signal = shutdown_handle.signal();
 
         let controller_handle = tokio::spawn(async move {
-            let exit_reason = match controller.run(shutdown_signal).await {
-                Ok(reason) => reason,
-                Err(e) => {
-                    tracing::error!(
+            let exit_reason = controller.run(shutdown_signal).await.unwrap_or_else(|e| {
+                tracing::error!(
                         component = "conf_center",
                         mode = "kubernetes",
                         error = %e,
                         "Controller run error"
                     );
-                    ControllerExitReason::AllControllersStopped
-                }
-            };
+                ControllerExitReason::AllControllersStopped
+            });
             let _ = exit_tx.send(exit_reason);
         });
 
@@ -333,17 +330,14 @@ impl ConfCenter {
 
                     // Wait for controller exit
                     result = &mut exit_rx => {
-                        match result {
-                            Ok(reason) => reason,
-                            Err(_) => {
+                        result.unwrap_or_else(|_| {
                                 tracing::error!(
                                     component = "conf_center",
                                     mode = "kubernetes",
                                     "Controller task ended unexpectedly (channel closed)"
                                 );
                                 ControllerExitReason::AllControllersStopped
-                            }
-                        }
+                            })
                     }
                 }
             }
@@ -355,17 +349,14 @@ impl ConfCenter {
                     mode = "kubernetes",
                     "Controller exited before caches were ready"
                 );
-                match result {
-                    Ok(reason) => reason,
-                    Err(_) => {
+                result.unwrap_or_else(|_| {
                         tracing::error!(
                             component = "conf_center",
                             mode = "kubernetes",
                             "Controller task ended unexpectedly (channel closed)"
                         );
                         ControllerExitReason::AllControllersStopped
-                    }
-                }
+                    })
             }
         };
 
