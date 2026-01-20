@@ -8,4 +8,3 @@ pub mod listener_builder;
 pub mod server_header;
 
 pub use err_resp::{end_response_400, end_response_404, end_response_500, end_response_503};
-// pub use server_header::ServerHeaderOpts; // Commented out - unused

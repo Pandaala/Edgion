@@ -47,19 +47,21 @@ impl TestContext {
         access_log_path: PathBuf,
     ) -> Self {
         // Configure HTTP client to accept self-signed certificates for HTTPS testing
+        // IMPORTANT: Disable system proxy to ensure direct connections to localhost
         let mut client_builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
-            .danger_accept_invalid_certs(true);
+            .danger_accept_invalid_certs(true)
+            .no_proxy();  // Disable proxy to connect directly to Gateway
 
-        // Add DNS resolution for HTTPS hosts to support proper SNI
+        // Add DNS resolution for hosts to support proper SNI
         // This maps hostnames to 127.0.0.1 so the client sends correct SNI
+        // 
+        // NOTE: reqwest's resolve() only replaces the IP address, the port from URL is still used.
+        // So we only need to map the hostname to 127.0.0.1, the port in SocketAddr is informational.
         if let Some(ref host) = http_host {
-            // Resolve HTTP host for HTTPS connections
+            // Use a common port (the actual port comes from the URL)
             let addr: std::net::SocketAddr = format!("127.0.0.1:{}", https_port).parse().unwrap();
             client_builder = client_builder.resolve(host, addr);
-            // Also resolve for regular HTTP port
-            let http_addr: std::net::SocketAddr = format!("127.0.0.1:{}", http_port).parse().unwrap();
-            client_builder = client_builder.resolve(host, http_addr);
         }
         if let Some(ref host) = grpc_host {
             // Resolve gRPC host for gRPC-TLS connections

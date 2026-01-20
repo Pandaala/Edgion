@@ -24,7 +24,7 @@ impl InitialPhaseTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     // 尝试访问 hostname 不匹配的路由
                     let resp = client
@@ -62,7 +62,7 @@ impl InitialPhaseTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     // GET 请求应该成功（需要带正确的 Host header）
                     let resp = client

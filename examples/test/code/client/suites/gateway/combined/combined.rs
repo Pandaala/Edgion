@@ -22,7 +22,7 @@ impl CombinedScenariosTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31230/health".to_string();
 
                     let response = client.get(&url).header("Host", "api.combined.example.com").send().await;
@@ -56,7 +56,7 @@ impl CombinedScenariosTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31230/health".to_string();
 
                     let response = client.get(&url).header("Host", "www.combined.example.com").send().await;
@@ -90,7 +90,7 @@ impl CombinedScenariosTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31230/health".to_string();
 
                     let response = client.get(&url).header("Host", "other.example.com").send().await;
@@ -124,7 +124,7 @@ impl CombinedScenariosTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31231/health".to_string();
 
                     let response = client
@@ -162,7 +162,7 @@ impl CombinedScenariosTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31231/health".to_string();
 
                     let response = client

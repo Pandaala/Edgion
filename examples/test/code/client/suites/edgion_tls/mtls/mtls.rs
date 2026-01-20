@@ -49,6 +49,7 @@ fn create_client_with_sni(hostname: &str, ip: &str, port: u16) -> Result<reqwest
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .danger_accept_invalid_certs(true) // Accept self-signed server certs
+        .no_proxy() // Disable proxy for local testing
         .resolve(hostname, format!("{}:{}", ip, port).parse().unwrap()) // Set SNI via DNS resolution
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))
@@ -67,6 +68,7 @@ fn create_mtls_client(
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .danger_accept_invalid_certs(true) // Accept self-signed server certs
+        .no_proxy() // Disable proxy for local testing
         .identity(identity)
         .resolve(hostname, format!("{}:{}", ip, port).parse().unwrap()) // Set SNI via DNS resolution
         .build()

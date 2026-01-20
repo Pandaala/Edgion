@@ -24,7 +24,7 @@ impl UpdatePhaseTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     // 同样的请求，现在应该成功（或 502 backend 不可用）
                     let resp = client
@@ -69,7 +69,7 @@ impl UpdatePhaseTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     // GET 应该失败 (404)（需要带正确的 Host header）
                     let get_resp = client

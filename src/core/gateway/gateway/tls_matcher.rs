@@ -263,7 +263,6 @@ mod tests {
     use super::*;
     use crate::types::resources::gateway::{GatewaySpec, GatewayTLSConfig, Listener};
     use kube::api::ObjectMeta;
-
     fn create_test_gateway(name: &str, namespace: &str, listeners: Vec<Listener>) -> Gateway {
         Gateway {
             metadata: ObjectMeta {

@@ -22,7 +22,7 @@ impl ListenerHostnameTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31240/health".to_string();
 
                     let response = client.get(&url).header("Host", "api.example.com").send().await;
@@ -59,7 +59,7 @@ impl ListenerHostnameTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31240/health".to_string();
 
                     let response = client.get(&url).header("Host", "other.example.com").send().await;
@@ -93,7 +93,7 @@ impl ListenerHostnameTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     // Test 1: api.wildcard.example.com should match
                     let url1 = "http://127.0.0.1:31241/health".to_string();
@@ -155,7 +155,7 @@ impl ListenerHostnameTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31241/health".to_string();
 
                     let response = client
@@ -196,7 +196,7 @@ impl ListenerHostnameTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31242/health".to_string();
 
                     let response = client.get(&url).header("Host", "any-domain.example.com").send().await;

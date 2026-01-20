@@ -19,7 +19,7 @@ impl AllowedRoutesSameNamespaceTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31210/health".to_string();
 
                     let response = client.get(&url).header("Host", "same-ns.example.com").send().await;
@@ -53,7 +53,7 @@ impl AllowedRoutesSameNamespaceTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31210/health".to_string();
 
                     let response = client.get(&url).header("Host", "diff-ns.example.com").send().await;

@@ -19,7 +19,8 @@ impl AllowedRoutesKindsTestSuite {
             |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    // Use no_proxy to bypass system proxy for local testing
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = "http://127.0.0.1:31213/health".to_string();
 
                     let response = client.get(&url).header("Host", "kinds-http.example.com").send().await;
@@ -63,7 +64,12 @@ impl AllowedRoutesKindsTestSuite {
                     // Use gRPC client to test
                     // Since we don't have a dedicated gRPC client here, we'll use HTTP/2
                     // In a real scenario, this would fail at routing level
-                    let client = reqwest::Client::builder().http2_prior_knowledge().build().unwrap();
+                    // Use no_proxy to bypass system proxy for local testing
+                    let client = reqwest::Client::builder()
+                        .http2_prior_knowledge()
+                        .no_proxy()
+                        .build()
+                        .unwrap();
 
                     let url = "http://127.0.0.1:31213/test.TestService/SayHello".to_string();
 

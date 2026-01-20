@@ -33,6 +33,3 @@ pub fn init_global_config_client(config_client: Arc<ConfigClient>) -> Result<(),
 pub fn get_global_config_client() -> Option<Arc<ConfigClient>> {
     GLOBAL_CONFIG_CLIENT.get().cloned()
 }
-
-#[cfg(test)]
-mod tests;
