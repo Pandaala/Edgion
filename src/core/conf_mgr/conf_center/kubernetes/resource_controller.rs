@@ -18,13 +18,16 @@
 //! - Reflector ensures store is updated before events are processed (correct ordering)
 //! - Go operator-style workqueue: ALL events enqueue key, worker decides update/delete
 //! - Graceful shutdown support via ShutdownSignal
+//! - Unified `process_resource` function for both Init and Runtime phases
 
 use super::metrics::{controller_metrics, InitSyncTimer};
 use super::namespace::NamespaceWatchMode;
+use super::resource_processor::{
+    make_resource_key, ProcessConfig, ProcessContext, ProcessResult, RequeueRegistry, ResourceProcessor,
+};
 use super::shutdown::ShutdownSignal;
 use super::workqueue::Workqueue;
 use crate::core::conf_sync::conf_server::ConfigServer;
-use crate::core::conf_sync::traits::ResourceChange;
 use anyhow::Result;
 use futures::StreamExt;
 use kube::runtime::reflector::{ObjectRef, Store};
@@ -53,26 +56,38 @@ pub enum RelinkReason {
     WatcherReconnected,
 }
 
+// ============================================================================
+// Legacy types (kept for backward compatibility, will be deprecated)
+// ============================================================================
+
 /// Type alias for the apply function that handles InitAdd and runtime events
-pub type ApplyFn<K> = Arc<dyn Fn(&ConfigServer, ResourceChange, K) + Send + Sync>;
+#[allow(dead_code)]
+pub type ApplyFn<K> = Arc<dyn Fn(&ConfigServer, crate::core::conf_sync::traits::ResourceChange, K) + Send + Sync>;
 
 /// Type alias for the optional filter function
+#[allow(dead_code)]
 pub type FilterFn<K> = Arc<dyn Fn(&K) -> bool + Send + Sync>;
 
 /// Type alias for the get function that retrieves object from ConfigServer cache
 /// Used by worker to get deleted object for EventDelete (replaces pending_deletes)
+#[allow(dead_code)]
 pub type GetFn<K> = Arc<dyn Fn(&ConfigServer, &str) -> Option<K> + Send + Sync>;
+
+// ============================================================================
+// ResourceController with Processor support
+// ============================================================================
 
 /// Generic ResourceController that encapsulates the complete 1-8 flow for a single resource type
 ///
 /// Uses a single watcher + reflector stream with Go operator-style workqueue:
-/// - Init phase: InitApply events are applied directly as InitAdd
+/// - Init phase: InitApply events are processed directly (no workqueue)
 /// - Runtime phase: ALL events (Apply/Delete) enqueue key only, worker decides update/delete
-///   - Worker checks store vs ConfigServer cache: store has → EventUpdate, cache has but store doesn't → EventDelete
-pub struct ResourceController<K>
+///   - Worker checks store vs ConfigServer cache: store has → process, cache has but store doesn't → delete
+pub struct ResourceController<K, P>
 where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+    P: ResourceProcessor<K> + 'static,
 {
     kind: &'static str,
     client: Client,
@@ -82,11 +97,15 @@ where
     // API creation based on scope
     api_scope: ApiScope,
 
-    // Difference handling via closures
-    apply_fn: ApplyFn<K>,
-    /// Get function to retrieve object from ConfigServer cache (for delete detection)
-    get_fn: GetFn<K>,
-    filter_fn: Option<FilterFn<K>>,
+    // Resource processor
+    processor: Arc<P>,
+
+    // Processing configuration
+    process_config: ProcessConfig,
+
+    // RequeueRegistry for cross-resource requeue
+    requeue_registry: Arc<RequeueRegistry>,
+
     /// Namespace filter for MultipleNamespaces mode
     namespace_filter: Option<Vec<String>>,
 
@@ -95,6 +114,9 @@ where
 
     /// Optional relink signal sender for notifying when 410 Gone is detected
     relink_signal: Option<RelinkSignalSender>,
+
+    /// Phantom data for type parameter K
+    _marker: std::marker::PhantomData<K>,
 }
 
 /// API scope for resource (namespaced or cluster-scoped)
@@ -116,12 +138,13 @@ impl ApiScope {
     }
 }
 
-impl<K> ResourceController<K>
+impl<K, P> ResourceController<K, P>
 where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+    P: ResourceProcessor<K> + 'static,
 {
-    /// Create a new ResourceController
+    /// Create a new ResourceController with Processor
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         kind: &'static str,
@@ -129,9 +152,9 @@ where
         config_server: Arc<ConfigServer>,
         watcher_config: watcher::Config,
         api_scope: ApiScope,
-        apply_fn: ApplyFn<K>,
-        get_fn: GetFn<K>,
-        filter_fn: Option<FilterFn<K>>,
+        processor: P,
+        process_config: ProcessConfig,
+        requeue_registry: Arc<RequeueRegistry>,
         shutdown_signal: Option<ShutdownSignal>,
         relink_signal: Option<RelinkSignalSender>,
     ) -> Self {
@@ -144,12 +167,13 @@ where
             config_server,
             watcher_config,
             api_scope,
-            apply_fn,
-            get_fn,
-            filter_fn,
+            processor: Arc::new(processor),
+            process_config,
+            requeue_registry,
             namespace_filter,
             shutdown_signal,
             relink_signal,
+            _marker: std::marker::PhantomData,
         }
     }
 
@@ -184,9 +208,9 @@ where
     ///
     /// Uses a single watcher + reflector stream for both init and runtime phases:
     /// 1. Create store and reflector
-    /// 2. Process Init events (LIST phase) - apply InitAdd directly
+    /// 2. Process Init events (LIST phase) - process directly (unified logic)
     /// 3. Mark cache ready after InitDone
-    /// 4. Process runtime events (WATCH phase) - ALL events enqueue key, worker decides
+    /// 4. Process runtime events (WATCH phase) - enqueue key, worker processes
     async fn run_with_api(self, api: Api<K>) -> Result<()> {
         let kind = self.kind;
 
@@ -208,9 +232,6 @@ where
         );
 
         // Create single watcher + reflector stream
-        // This stream will:
-        // 1. Update store first (via writer)
-        // 2. Then yield the event for processing
         let watcher_stream = watcher(api, self.watcher_config.clone());
         let mut stream = Box::pin(reflector(writer, watcher_stream));
 
@@ -255,15 +276,13 @@ where
                         Event::Init => {
                             // Start of init phase (LIST)
                             if init_done {
-                                // Watcher reconnecting - this happens on 410 Gone or network issues
-                                // Exit and let upper layer rebuild everything (clean state)
+                                // Watcher reconnecting - exit and let upper layer rebuild
                                 tracing::warn!(
                                     component = "resource_controller",
                                     kind = kind,
                                     "Watcher reconnecting (possible 410 Gone), requesting full rebuild"
                                 );
 
-                                // Send relink signal if configured
                                 if let Some(ref signal) = self.relink_signal {
                                     let _ = signal.try_send(RelinkReason::WatcherReconnected);
                                     tracing::info!(
@@ -272,30 +291,32 @@ where
                                         "Sent relink signal due to watcher reconnection, exiting"
                                     );
                                 }
-                                // Exit to let upper layer rebuild
                                 break;
                             } else {
-                                // First connection
                                 tracing::debug!(component = "resource_controller", kind = kind, "Init phase started");
                             }
                         }
                         Event::InitApply(obj) => {
-                            // Store already updated by reflector
-                            // Init phase: apply directly as InitAdd (no workqueue)
-                            if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
-                                (self.apply_fn)(&self.config_server, ResourceChange::InitAdd, obj);
+                            // Init phase: process directly using unified process_resource
+                            let ctx = ProcessContext::new(
+                                &self.config_server,
+                                self.process_config.metadata_filter.as_ref(),
+                                self.namespace_filter.as_ref(),
+                                &self.requeue_registry,
+                            );
+
+                            if process_resource(obj, &*self.processor, &ctx, true, kind) {
                                 init_count += 1;
                             }
                         }
                         Event::InitDone => {
-                            // First init complete (init_done should always be false here due to break on reconnect)
                             let init_duration = init_timer.take().map(|t| t.complete(init_count)).unwrap_or(0.0);
                             tracing::info!(
                                 component = "resource_controller",
                                 kind = kind,
                                 count = init_count,
                                 duration_secs = init_duration,
-                                "Init phase complete (Step 5: InitAdd applied)"
+                                "Init phase complete (Step 5: Resources processed)"
                             );
 
                             // Mark cache ready
@@ -308,15 +329,15 @@ where
 
                             init_done = true;
 
-                            // Spawn worker for runtime phase (only once) and save handle
+                            // Spawn worker for runtime phase
                             worker_handle = Some(spawn_worker(
                                 queue.clone(),
                                 store.clone(),
                                 self.config_server.clone(),
-                                self.apply_fn.clone(),
-                                self.get_fn.clone(),
-                                self.filter_fn.clone(),
+                                self.processor.clone(),
+                                self.process_config.clone(),
                                 self.namespace_filter.clone(),
+                                self.requeue_registry.clone(),
                                 kind,
                                 self.shutdown_signal.clone(),
                             ));
@@ -329,20 +350,25 @@ where
                         }
                         Event::Apply(obj) => {
                             if !init_done {
-                                // During init phase, this shouldn't happen but handle gracefully
+                                // During init phase, treat as InitApply
                                 tracing::warn!(
                                     component = "resource_controller",
                                     kind = kind,
-                                    "Received Apply event during init phase, treating as InitAdd"
+                                    "Received Apply event during init phase, treating as InitApply"
                                 );
-                                if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
-                                    (self.apply_fn)(&self.config_server, ResourceChange::InitAdd, obj);
+                                let ctx = ProcessContext::new(
+                                    &self.config_server,
+                                    self.process_config.metadata_filter.as_ref(),
+                                    self.namespace_filter.as_ref(),
+                                    &self.requeue_registry,
+                                );
+
+                                if process_resource(obj, &*self.processor, &ctx, true, kind) {
                                     init_count += 1;
                                 }
                             } else {
-                                // Runtime phase - enqueue key for worker (Go operator style)
-                                // Store is already updated by reflector
-                                if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
+                                // Runtime phase - enqueue key for worker
+                                if self.processor.filter(&obj) && passes_namespace_filter(&obj, &self.namespace_filter) {
                                     let key = make_resource_key(&obj);
                                     queue.enqueue(key).await;
                                 }
@@ -350,17 +376,14 @@ where
                         }
                         Event::Delete(obj) => {
                             if !init_done {
-                                // During init phase, delete shouldn't happen
                                 tracing::warn!(
                                     component = "resource_controller",
                                     kind = kind,
                                     "Received Delete event during init phase, ignoring"
                                 );
                             } else {
-                                // Runtime phase - enqueue key for worker (Go operator style)
-                                // Store is already updated by reflector (object removed)
-                                // Worker will get the object from ConfigServer cache for delete
-                                if passes_filters(&obj, &self.namespace_filter, &self.filter_fn) {
+                                // Runtime phase - enqueue key for worker
+                                if self.processor.filter(&obj) && passes_namespace_filter(&obj, &self.namespace_filter) {
                                     let key = make_resource_key(&obj);
                                     queue.enqueue(key).await;
                                 }
@@ -375,7 +398,6 @@ where
                         error = %e,
                         "Watcher error"
                     );
-                    // Watcher will reconnect automatically
                 }
                 None => {
                     tracing::warn!(
@@ -388,7 +410,7 @@ where
             }
         }
 
-        // Wait for worker task to finish gracefully (with timeout)
+        // Wait for worker task to finish gracefully
         if let Some(handle) = worker_handle {
             tracing::info!(
                 component = "resource_controller",
@@ -422,40 +444,129 @@ where
             }
         }
 
-        // Record controller stopped
         controller_metrics().controller_stopped();
-
         tracing::warn!(component = "resource_controller", kind = kind, "Controller stopped");
         Ok(())
     }
 }
+
+// ============================================================================
+// Unified process_resource function
+// ============================================================================
+
+/// Unified resource processing function for both Init and Runtime phases
+///
+/// Returns true if the resource was processed (not filtered out)
+fn process_resource<K, P>(obj: K, processor: &P, ctx: &ProcessContext, is_init: bool, kind: &'static str) -> bool
+where
+    K: Resource + Clone + Send + Sync + 'static,
+    P: ResourceProcessor<K>,
+{
+    // 1. Check namespace filter
+    if let Some(allowed_ns) = ctx.namespace_filter {
+        if let Some(ns) = obj.meta().namespace.as_deref() {
+            if !allowed_ns.iter().any(|n| n == ns) {
+                tracing::trace!(
+                    kind, 
+                    name = %obj.meta().name.as_deref().unwrap_or(""),
+                    namespace = ns, 
+                    "Skipped by namespace filter"
+                );
+                return false;
+            }
+        }
+    }
+
+    // 2. Check processor filter
+    if !processor.filter(&obj) {
+        tracing::trace!(
+            kind,
+            name = %obj.meta().name.as_deref().unwrap_or(""),
+            namespace = %obj.meta().namespace.as_deref().unwrap_or(""),
+            "Skipped by processor filter"
+        );
+        return false;
+    }
+
+    // 3. Clean metadata
+    let mut obj = obj;
+    processor.clean_metadata(&mut obj, ctx);
+
+    // 4. Resource parse/preprocess
+    match processor.parse(obj, ctx) {
+        ProcessResult::Continue(parsed_obj) => {
+            // 5. Call on_change (e.g., Secret's cascading requeue)
+            processor.on_change(&parsed_obj, ctx);
+
+            let phase = if is_init { "init" } else { "runtime" };
+            tracing::debug!(
+                kind,
+                name = %parsed_obj.meta().name.as_deref().unwrap_or(""),
+                namespace = %parsed_obj.meta().namespace.as_deref().unwrap_or(""),
+                phase,
+                "Resource processed and saving"
+            );
+
+            // 6. Save to cache
+            processor.save(ctx.config_server, parsed_obj);
+            true
+        }
+        ProcessResult::Skip { reason } => {
+            tracing::debug!(kind, reason, "Resource skipped after parse");
+            false
+        }
+    }
+}
+
+/// Process resource deletion
+fn process_resource_delete<K, P>(cached_obj: K, processor: &P, ctx: &ProcessContext, kind: &'static str)
+where
+    K: Resource + Clone + Send + Sync + 'static,
+    P: ResourceProcessor<K>,
+{
+    let key = make_resource_key(&cached_obj);
+
+    // 1. Execute delete cleanup (e.g., clear SecretRefManager references)
+    processor.on_delete(&cached_obj, ctx);
+
+    // 2. Remove from cache
+    processor.remove(ctx.config_server, &key);
+
+    tracing::debug!(kind, key = %key, "Resource deleted from cache");
+}
+
+// ============================================================================
+// Worker functions
+// ============================================================================
 
 /// Spawn worker task for processing workqueue items
 ///
 /// Worker implements Go operator-style reconciliation:
 /// - Dequeue key from workqueue
 /// - Check store (K8s state) vs ConfigServer cache (our state)
-/// - If store has object → EventUpdate with latest object from store
-/// - If store doesn't have but cache has → EventDelete with object from cache
-/// - If neither has → skip (already processed)
-///
-/// Returns JoinHandle for graceful shutdown
+/// - If store has object → process with unified logic
+/// - If store doesn't have but cache has → delete
+/// - If neither has → skip
 #[allow(clippy::too_many_arguments)]
-fn spawn_worker<K>(
+fn spawn_worker<K, P>(
     queue: Arc<Workqueue>,
     store: Store<K>,
     config_server: Arc<ConfigServer>,
-    apply_fn: ApplyFn<K>,
-    get_fn: GetFn<K>,
-    filter_fn: Option<FilterFn<K>>,
+    processor: Arc<P>,
+    process_config: ProcessConfig,
     namespace_filter: Option<Vec<String>>,
+    requeue_registry: Arc<RequeueRegistry>,
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
 ) -> JoinHandle<()>
 where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+    P: ResourceProcessor<K> + 'static,
 {
+    // Register workqueue to RequeueRegistry for cross-resource requeue
+    requeue_registry.register(kind, queue.clone());
+
     tokio::spawn(async move {
         loop {
             let item = if let Some(ref mut shutdown) = shutdown_signal.clone() {
@@ -476,16 +587,15 @@ where
 
             match item {
                 Some(work_item) => {
-                    process_work_item(
-                        &work_item.key,
-                        &store,
+                    // Create ProcessContext for this work item
+                    let ctx = ProcessContext::new(
                         &config_server,
-                        &apply_fn,
-                        &get_fn,
-                        &namespace_filter,
-                        &filter_fn,
-                        kind,
+                        process_config.metadata_filter.as_ref(),
+                        namespace_filter.as_ref(),
+                        &requeue_registry,
                     );
+
+                    process_work_item(&work_item.key, &store, &*processor, &ctx, kind);
                     queue.done(&work_item.key);
                 }
                 None => {
@@ -504,72 +614,32 @@ where
 }
 
 /// Process a work item from the queue (Go operator-style reconciliation)
-///
-/// Decision logic:
-/// 1. Check store for K8s current state
-/// 2. Check ConfigServer cache for our current state
-/// 3. Compare to determine action:
-///    - store has object → EventUpdate (use latest from store)
-///    - store doesn't have but cache has → EventDelete (use object from cache)
-///    - neither has → skip (already processed)
-#[allow(clippy::too_many_arguments)]
-fn process_work_item<K>(
-    key: &str,
-    store: &Store<K>,
-    config_server: &ConfigServer,
-    apply_fn: &ApplyFn<K>,
-    get_fn: &GetFn<K>,
-    namespace_filter: &Option<Vec<String>>,
-    filter_fn: &Option<FilterFn<K>>,
-    kind: &'static str,
-) where
+fn process_work_item<K, P>(key: &str, store: &Store<K>, processor: &P, ctx: &ProcessContext, kind: &'static str)
+where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+    P: ResourceProcessor<K>,
 {
     // Parse key to ObjectRef
     let obj_ref = parse_resource_key::<K>(key);
 
-    // Get current state from store (K8s state, already updated by reflector)
+    // Get current state from store (K8s state)
     let store_obj = store.get(&obj_ref);
 
     // Get current state from ConfigServer cache (our state)
-    let cache_obj = get_fn(config_server, key);
+    let cache_obj = processor.get(ctx.config_server, key);
 
     match (store_obj, cache_obj) {
         (Some(obj), _) => {
-            // Object exists in store → EventUpdate (use latest from store)
-            if !passes_filters(&*obj, namespace_filter, filter_fn) {
-                return;
-            }
-
-            let name = obj.name_any();
-            let namespace = obj.namespace().unwrap_or_default();
-
-            tracing::debug!(
-                component = "resource_controller",
-                kind = kind,
-                name = %name,
-                namespace = %namespace,
-                "Applying EventUpdate from worker (object exists in store)"
-            );
-            (apply_fn)(config_server, ResourceChange::EventUpdate, (*obj).clone());
+            // Object exists in store → process
+            process_resource((*obj).clone(), processor, ctx, false, kind);
         }
         (None, Some(cached_obj)) => {
-            // Object not in store but exists in cache → EventDelete
-            let name = cached_obj.name_any();
-            let namespace = cached_obj.namespace().unwrap_or_default();
-
-            tracing::debug!(
-                component = "resource_controller",
-                kind = kind,
-                name = %name,
-                namespace = %namespace,
-                "Applying EventDelete from worker (object removed from store, using cache)"
-            );
-            (apply_fn)(config_server, ResourceChange::EventDelete, cached_obj);
+            // Object not in store but exists in cache → Delete
+            process_resource_delete(cached_obj, processor, ctx, kind);
         }
         (None, None) => {
-            // Not in store and not in cache → already processed or never existed
+            // Not in store and not in cache → already processed
             tracing::trace!(
                 component = "resource_controller",
                 kind = kind,
@@ -580,45 +650,23 @@ fn process_work_item<K>(
     }
 }
 
-/// Check if resource passes namespace and custom filters
-fn passes_filters<K>(obj: &K, namespace_filter: &Option<Vec<String>>, filter_fn: &Option<FilterFn<K>>) -> bool
+/// Check if resource passes namespace filter
+fn passes_namespace_filter<K>(obj: &K, namespace_filter: &Option<Vec<String>>) -> bool
 where
     K: Resource + Clone,
 {
-    // Namespace filter for MultipleNamespaces mode
-    let ns_ok = match namespace_filter {
-        Some(allowed_ns) => {
-            // For namespaced resources, namespace must exist
-            match obj.namespace() {
-                Some(resource_ns) => allowed_ns.iter().any(|ns| ns == &resource_ns),
-                None => {
-                    // Namespaced resource without namespace is invalid, skip it
-                    tracing::warn!(
-                        name = %obj.name_any(),
-                        "Namespaced resource missing namespace, skipping"
-                    );
-                    false
-                }
+    match namespace_filter {
+        Some(allowed_ns) => match obj.namespace() {
+            Some(resource_ns) => allowed_ns.iter().any(|ns| ns == &resource_ns),
+            None => {
+                tracing::warn!(
+                    name = %obj.name_any(),
+                    "Namespaced resource missing namespace, skipping"
+                );
+                false
             }
-        }
+        },
         None => true,
-    };
-
-    // Custom filter
-    let filter_ok = filter_fn.as_ref().is_none_or(|f| f(obj));
-
-    ns_ok && filter_ok
-}
-
-/// Create a resource key from object: "namespace/name" or "name" for cluster-scoped
-fn make_resource_key<K>(obj: &K) -> String
-where
-    K: Resource,
-{
-    let name = obj.name_any();
-    match obj.namespace() {
-        Some(ns) => format!("{}/{}", ns, name),
-        None => name,
     }
 }
 
@@ -635,23 +683,27 @@ where
     }
 }
 
-/// Builder for ResourceController - provides a fluent API for configuration
-pub struct ResourceControllerBuilder<K>
+// ============================================================================
+// Builder
+// ============================================================================
+
+/// Builder for ResourceController with Processor support
+pub struct ResourceControllerBuilder<K, P = ()>
 where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
 {
     kind: &'static str,
     api_scope: Option<ApiScope>,
-    apply_fn: Option<ApplyFn<K>>,
-    get_fn: Option<GetFn<K>>,
-    filter_fn: Option<FilterFn<K>>,
+    processor: Option<P>,
+    process_config: Option<ProcessConfig>,
+    requeue_registry: Option<Arc<RequeueRegistry>>,
     shutdown_signal: Option<ShutdownSignal>,
     relink_signal: Option<RelinkSignalSender>,
     _marker: std::marker::PhantomData<K>,
 }
 
-impl<K> ResourceControllerBuilder<K>
+impl<K> ResourceControllerBuilder<K, ()>
 where
     K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
@@ -661,15 +713,21 @@ where
         Self {
             kind,
             api_scope: None,
-            apply_fn: None,
-            get_fn: None,
-            filter_fn: None,
+            processor: None,
+            process_config: None,
+            requeue_registry: None,
             shutdown_signal: None,
             relink_signal: None,
             _marker: std::marker::PhantomData,
         }
     }
+}
 
+impl<K, P> ResourceControllerBuilder<K, P>
+where
+    K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
+    K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+{
     /// Set namespaced scope with watch mode
     pub fn namespaced(mut self, watch_mode: NamespaceWatchMode) -> Self {
         self.api_scope = Some(ApiScope::Namespaced(watch_mode));
@@ -679,34 +737,6 @@ where
     /// Set cluster-scoped
     pub fn cluster_scoped(mut self) -> Self {
         self.api_scope = Some(ApiScope::ClusterScoped);
-        self
-    }
-
-    /// Set the apply function for InitAdd and runtime events
-    pub fn apply_with<F>(mut self, f: F) -> Self
-    where
-        F: Fn(&ConfigServer, ResourceChange, K) + Send + Sync + 'static,
-    {
-        self.apply_fn = Some(Arc::new(f));
-        self
-    }
-
-    /// Set the get function for retrieving objects from ConfigServer cache
-    /// Used by worker to get deleted objects for EventDelete
-    pub fn get_with<F>(mut self, f: F) -> Self
-    where
-        F: Fn(&ConfigServer, &str) -> Option<K> + Send + Sync + 'static,
-    {
-        self.get_fn = Some(Arc::new(f));
-        self
-    }
-
-    /// Set optional filter function (e.g., for filtering by gateway class)
-    pub fn filter<F>(mut self, f: F) -> Self
-    where
-        F: Fn(&K) -> bool + Send + Sync + 'static,
-    {
-        self.filter_fn = Some(Arc::new(f));
         self
     }
 
@@ -722,22 +752,56 @@ where
         self
     }
 
+    /// Set the resource processor
+    pub fn with_processor<P2: ResourceProcessor<K>>(self, processor: P2) -> ResourceControllerBuilder<K, P2> {
+        ResourceControllerBuilder {
+            kind: self.kind,
+            api_scope: self.api_scope,
+            processor: Some(processor),
+            process_config: self.process_config,
+            requeue_registry: self.requeue_registry,
+            shutdown_signal: self.shutdown_signal,
+            relink_signal: self.relink_signal,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Set the processing configuration
+    pub fn with_process_config(mut self, config: ProcessConfig) -> Self {
+        self.process_config = Some(config);
+        self
+    }
+
+    /// Set the RequeueRegistry for cross-resource requeue
+    pub fn with_requeue_registry(mut self, registry: Arc<RequeueRegistry>) -> Self {
+        self.requeue_registry = Some(registry);
+        self
+    }
+}
+
+impl<K, P> ResourceControllerBuilder<K, P>
+where
+    K: Resource + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
+    K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+    P: ResourceProcessor<K> + 'static,
+{
     /// Build the ResourceController
     pub fn build(
         self,
         client: Client,
         config_server: Arc<ConfigServer>,
         watcher_config: watcher::Config,
-    ) -> ResourceController<K> {
+    ) -> ResourceController<K, P> {
         ResourceController::new(
             self.kind,
             client,
             config_server,
             watcher_config,
             self.api_scope.expect("API scope must be set"),
-            self.apply_fn.expect("Apply function must be set"),
-            self.get_fn.expect("Get function must be set"),
-            self.filter_fn,
+            self.processor.expect("Processor must be set"),
+            self.process_config.unwrap_or_default(),
+            self.requeue_registry
+                .expect("RequeueRegistry must be set"),
             self.shutdown_signal,
             self.relink_signal,
         )

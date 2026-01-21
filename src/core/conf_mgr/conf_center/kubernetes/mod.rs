@@ -16,6 +16,7 @@ mod leader_election;
 mod metrics;
 mod namespace;
 mod resource_controller;
+pub mod resource_processor;
 pub mod shutdown;
 mod workqueue;
 mod writer;

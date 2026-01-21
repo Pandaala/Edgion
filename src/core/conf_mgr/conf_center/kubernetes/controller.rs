@@ -47,100 +47,110 @@
 //! 7. **Metrics**: Prometheus metrics for reconciliation monitoring.
 //!
 //! 8. **Workqueue**: Go operator-style deduplication and retry with backoff.
+//!
+//! 9. **ResourceProcessor**: Each resource has its own Processor implementing
+//!    the unified processing logic (filter, parse, save, on_change, etc.).
 
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::runtime::watcher;
-use kube::Client;
+use kube::{Client, Resource};
+use serde::de::DeserializeOwned;
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use super::namespace::NamespaceWatchMode;
-use super::resource_controller::{RelinkReason, ResourceControllerBuilder};
+use super::resource_controller::{RelinkReason, RelinkSignalSender, ResourceControllerBuilder};
+use super::resource_processor::{
+    BackendTlsPolicyProcessor, EdgionGatewayConfigProcessor, EdgionPluginsProcessor,
+    EdgionStreamPluginsProcessor, EdgionTlsProcessor, EndpointSliceProcessor, EndpointsProcessor,
+    GatewayClassProcessor, GatewayProcessor, GrpcRouteProcessor, HttpRouteProcessor, LinkSysProcessor,
+    PluginMetadataProcessor, ProcessConfig, ReferenceGrantProcessor, RequeueRegistry, ResourceProcessor,
+    SecretProcessor, ServiceProcessor, TcpRouteProcessor, TlsRouteProcessor, UdpRouteProcessor,
+};
 use super::shutdown::ShutdownSignal;
 use super::status::{KubernetesStatusStore, StatusStore};
 use crate::core::conf_mgr::MetadataFilterConfig;
 use crate::core::conf_sync::conf_server::ConfigServer;
-use crate::core::conf_sync::CacheEventDispatch;
-use crate::core::utils::clean_metadata;
 use crate::types::prelude_resources::*;
 
-/// Macro to spawn a standard namespaced ResourceController
-/// Usage: spawn_namespaced!(self, handles, watcher_config, shutdown_signal, relink_tx, Type, "Kind", cache_field)
-macro_rules! spawn_namespaced {
-    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $relink_tx:ident, $type:ty, $kind:literal, $cache:ident) => {{
-        let filter_config = $self.metadata_filter.clone();
-        let rc = ResourceControllerBuilder::<$type>::new($kind)
-            .namespaced($self.watch_mode.clone())
-            .apply_with(move |cs, change, mut r| {
-                if let Some(ref config) = filter_config {
-                    clean_metadata(&mut r, config);
-                }
-                cs.$cache.apply_change(change, r)
-            })
-            .get_with(|cs, key| cs.$cache.get_by_key(key))
-            .with_shutdown($shutdown.clone())
-            .with_relink_signal($relink_tx.clone())
-            .build(
-                $self.client.clone(),
-                $self.config_server.clone(),
-                $watcher_config.clone(),
-            );
-        $handles.push(tokio::spawn(async move { rc.run_namespaced().await }));
-    }};
+/// Context for spawn functions
+struct SpawnContext {
+    watcher_config: watcher::Config,
+    shutdown: ShutdownSignal,
+    relink_tx: RelinkSignalSender,
+    requeue_registry: Arc<RequeueRegistry>,
+    process_config: ProcessConfig,
 }
 
-/// Macro to spawn a namespaced ResourceController with custom apply function
-/// Usage: spawn_namespaced_custom!(self, handles, watcher_config, shutdown_signal, relink_tx, Type, "Kind", apply_fn, get_fn)
-macro_rules! spawn_namespaced_custom {
-    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $relink_tx:ident, $type:ty, $kind:literal, $apply:expr, $get:expr) => {{
-        let filter_config = $self.metadata_filter.clone();
-        let apply_fn: fn(&ConfigServer, crate::core::conf_sync::traits::ResourceChange, $type) = $apply;
-        let get_fn: fn(&ConfigServer, &str) -> Option<$type> = $get;
-        let rc = ResourceControllerBuilder::<$type>::new($kind)
-            .namespaced($self.watch_mode.clone())
-            .apply_with(move |cs, change, mut r| {
-                if let Some(ref config) = filter_config {
-                    clean_metadata(&mut r, config);
-                }
-                apply_fn(cs, change, r)
-            })
-            .get_with(move |cs, key| get_fn(cs, key))
-            .with_shutdown($shutdown.clone())
-            .with_relink_signal($relink_tx.clone())
-            .build(
-                $self.client.clone(),
-                $self.config_server.clone(),
-                $watcher_config.clone(),
-            );
-        $handles.push(tokio::spawn(async move { rc.run_namespaced().await }));
-    }};
+/// Spawn a namespaced ResourceController with the given processor
+fn spawn<K, P>(
+    controller: &KubernetesController,
+    processor: P,
+    ctx: &SpawnContext,
+) -> JoinHandle<Result<()>>
+where
+    K: Resource<Scope = kube::core::NamespaceResourceScope>
+        + Clone
+        + Send
+        + Sync
+        + Debug
+        + DeserializeOwned
+        + 'static,
+    K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+    P: ResourceProcessor<K> + 'static,
+{
+    let rc = ResourceControllerBuilder::<K>::new(processor.kind())
+        .namespaced(controller.watch_mode.clone())
+        .with_processor(processor)
+        .with_process_config(ctx.process_config.clone())
+        .with_requeue_registry(ctx.requeue_registry.clone())
+        .with_shutdown(ctx.shutdown.clone())
+        .with_relink_signal(ctx.relink_tx.clone())
+        .build(
+            controller.client.clone(),
+            controller.config_server.clone(),
+            ctx.watcher_config.clone(),
+        );
+
+    tokio::spawn(async move { rc.run_namespaced().await })
 }
 
-/// Macro to spawn a cluster-scoped ResourceController
-/// Usage: spawn_cluster!(self, handles, watcher_config, shutdown_signal, relink_tx, Type, "Kind", cache_field)
-macro_rules! spawn_cluster {
-    ($self:ident, $handles:ident, $watcher_config:ident, $shutdown:ident, $relink_tx:ident, $type:ty, $kind:literal, $cache:ident) => {{
-        let filter_config = $self.metadata_filter.clone();
-        let rc = ResourceControllerBuilder::<$type>::new($kind)
-            .cluster_scoped()
-            .apply_with(move |cs, change, mut r| {
-                if let Some(ref config) = filter_config {
-                    clean_metadata(&mut r, config);
-                }
-                cs.$cache.apply_change(change, r)
-            })
-            .get_with(|cs, key| cs.$cache.get_by_key(key))
-            .with_shutdown($shutdown.clone())
-            .with_relink_signal($relink_tx.clone())
-            .build(
-                $self.client.clone(),
-                $self.config_server.clone(),
-                $watcher_config.clone(),
-            );
-        $handles.push(tokio::spawn(async move { rc.run_cluster_scoped().await }));
-    }};
+/// Spawn a cluster-scoped ResourceController with the given processor
+fn spawn_cluster<K, P>(
+    controller: &KubernetesController,
+    processor: P,
+    ctx: &SpawnContext,
+) -> JoinHandle<Result<()>>
+where
+    K: Resource<Scope = kube::core::ClusterResourceScope>
+        + Clone
+        + Send
+        + Sync
+        + Debug
+        + DeserializeOwned
+        + 'static,
+    K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+    P: ResourceProcessor<K> + 'static,
+{
+    let rc = ResourceControllerBuilder::<K>::new(processor.kind())
+        .cluster_scoped()
+        .with_processor(processor)
+        .with_process_config(ctx.process_config.clone())
+        .with_requeue_registry(ctx.requeue_registry.clone())
+        .with_shutdown(ctx.shutdown.clone())
+        .with_relink_signal(ctx.relink_tx.clone())
+        .build(
+            controller.client.clone(),
+            controller.config_server.clone(),
+            ctx.watcher_config.clone(),
+        );
+
+    tokio::spawn(async move { rc.run_cluster_scoped().await })
 }
 
 /// Kubernetes Controller that spawns independent ResourceControllers for each resource type
@@ -192,10 +202,8 @@ impl KubernetesController {
         label_selector: Option<String>,
         metadata_filter: MetadataFilterConfig,
     ) -> Result<Self> {
-        let status_store: Arc<dyn StatusStore> = Arc::new(KubernetesStatusStore::new(
-            client.clone(),
-            "edgion-controller".to_string(),
-        ));
+        let status_store: Arc<dyn StatusStore> =
+            Arc::new(KubernetesStatusStore::new(client.clone(), "edgion-controller".to_string()));
 
         let watch_mode = NamespaceWatchMode::from_namespaces(watch_namespaces);
 
@@ -250,237 +258,78 @@ impl KubernetesController {
 
     /// Internal method to run all controllers
     /// Returns when shutdown is triggered or a relink signal is received
+    #[allow(clippy::vec_init_then_push)]
     async fn run_controllers(&self, mut shutdown_signal: ShutdownSignal) -> Result<ControllerExitReason> {
         tracing::info!(
             component = "k8s_controller",
             "Starting Kubernetes controller - spawning 19 independent ResourceControllers"
         );
 
-        let watcher_config = self.watcher_config();
-        let mut handles = Vec::new();
-
         // Create relink signal channel
-        // Any ResourceController can send a signal when 410 Gone is detected
         let (relink_tx, mut relink_rx) = mpsc::channel::<RelinkReason>(10);
 
-        // ==================== Standard Namespaced Resources (14) ====================
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            HTTPRoute,
-            "HTTPRoute",
-            routes
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            GRPCRoute,
-            "GRPCRoute",
-            grpc_routes
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            TCPRoute,
-            "TCPRoute",
-            tcp_routes
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            UDPRoute,
-            "UDPRoute",
-            udp_routes
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            TLSRoute,
-            "TLSRoute",
-            tls_routes
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            Service,
-            "Service",
-            services
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            Endpoints,
-            "Endpoints",
-            endpoints
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            EndpointSlice,
-            "EndpointSlice",
-            endpoint_slices
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            ReferenceGrant,
-            "ReferenceGrant",
-            reference_grants
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            EdgionPlugins,
-            "EdgionPlugins",
-            edgion_plugins
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            EdgionStreamPlugins,
-            "EdgionStreamPlugins",
-            edgion_stream_plugins
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            BackendTLSPolicy,
-            "BackendTLSPolicy",
-            backend_tls_policies
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            PluginMetaData,
-            "PluginMetaData",
-            plugin_metadata
-        );
-        spawn_namespaced!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            LinkSys,
-            "LinkSys",
-            link_sys
-        );
+        // Create global RequeueRegistry (shared by all ResourceControllers)
+        let requeue_registry = Arc::new(RequeueRegistry::new());
 
-        // ==================== Namespaced with Custom Apply (2) ====================
-        spawn_namespaced_custom!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            Secret,
-            "Secret",
-            |cs, change, r| cs.apply_secret_change(change, r),
-            |cs, key| cs.secrets.get_by_key(key)
-        );
+        // Create SpawnContext
+        let ctx = SpawnContext {
+            watcher_config: self.watcher_config(),
+            shutdown: shutdown_signal.clone(),
+            relink_tx: relink_tx.clone(),
+            requeue_registry: requeue_registry.clone(),
+            process_config: ProcessConfig {
+                metadata_filter: self.metadata_filter.clone(),
+            },
+        };
 
-        // EdgionTls - standard apply (watches removed, handled by apply logic)
-        spawn_namespaced_custom!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            EdgionTls,
-            "EdgionTls",
-            |cs, change, r| cs.apply_edgion_tls_change(change, r),
-            |cs, key| cs.edgion_tls.get_by_key(key)
-        );
+        let mut h = Vec::new();
 
-        // ==================== Gateway (with filter) ====================
-        {
-            let gateway_class = self.gateway_class_name.clone();
-            let shutdown = shutdown_signal.clone();
-            let relink = relink_tx.clone();
-            let filter_config = self.metadata_filter.clone();
-            let rc = ResourceControllerBuilder::<Gateway>::new("Gateway")
-                .namespaced(self.watch_mode.clone())
-                .filter(move |g| g.spec.gateway_class_name == gateway_class)
-                .apply_with(move |cs, change, mut r| {
-                    if let Some(ref config) = filter_config {
-                        clean_metadata(&mut r, config);
-                    }
-                    cs.apply_gateway_change(change, r)
-                })
-                .get_with(|cs, key| cs.gateways.get_by_key(key))
-                .with_shutdown(shutdown)
-                .with_relink_signal(relink)
-                .build(self.client.clone(), self.config_server.clone(), watcher_config.clone());
-            handles.push(tokio::spawn(async move { rc.run_namespaced().await }));
-        }
+        // ==================== Namespaced Resources (17) ====================
+        // Route resources
+        h.push(spawn::<HTTPRoute, _>(self, HttpRouteProcessor::new(), &ctx));
+        h.push(spawn::<GRPCRoute, _>(self, GrpcRouteProcessor::new(), &ctx));
+        h.push(spawn::<TCPRoute, _>(self, TcpRouteProcessor::new(), &ctx));
+        h.push(spawn::<UDPRoute, _>(self, UdpRouteProcessor::new(), &ctx));
+        h.push(spawn::<TLSRoute, _>(self, TlsRouteProcessor::new(), &ctx));
+
+        // Backend resources
+        h.push(spawn::<Service, _>(self, ServiceProcessor::new(), &ctx));
+        h.push(spawn::<Endpoints, _>(self, EndpointsProcessor::new(), &ctx));
+        h.push(spawn::<EndpointSlice, _>(self, EndpointSliceProcessor::new(), &ctx));
+
+        // TLS related (special processing)
+        h.push(spawn::<Secret, _>(self, SecretProcessor::new(), &ctx));
+        h.push(spawn::<EdgionTls, _>(self, EdgionTlsProcessor::new(), &ctx));
+        h.push(spawn::<BackendTLSPolicy, _>(self, BackendTlsPolicyProcessor::new(), &ctx));
+
+        // Gateway (special processing: filter by gateway_class)
+        h.push(spawn::<Gateway, _>(
+            self,
+            GatewayProcessor::new(self.gateway_class_name.clone()),
+            &ctx,
+        ));
+
+        // Other namespaced resources
+        h.push(spawn::<ReferenceGrant, _>(self, ReferenceGrantProcessor::new(), &ctx));
+        h.push(spawn::<EdgionPlugins, _>(self, EdgionPluginsProcessor::new(), &ctx));
+        h.push(spawn::<EdgionStreamPlugins, _>(self, EdgionStreamPluginsProcessor::new(), &ctx));
+        h.push(spawn::<PluginMetaData, _>(self, PluginMetadataProcessor::new(), &ctx));
+        h.push(spawn::<LinkSys, _>(self, LinkSysProcessor::new(), &ctx));
 
         // ==================== Cluster-Scoped Resources (2) ====================
-        spawn_cluster!(
+        h.push(spawn_cluster::<GatewayClass, _>(self, GatewayClassProcessor::new(), &ctx));
+        h.push(spawn_cluster::<EdgionGatewayConfig, _>(
             self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            GatewayClass,
-            "GatewayClass",
-            gateway_classes
-        );
-        spawn_cluster!(
-            self,
-            handles,
-            watcher_config,
-            shutdown_signal,
-            relink_tx,
-            EdgionGatewayConfig,
-            "EdgionGatewayConfig",
-            edgion_gateway_configs
-        );
+            EdgionGatewayConfigProcessor::new(),
+            &ctx,
+        ));
 
         // Drop our copy of the sender so we can detect when all controllers stop
         drop(relink_tx);
 
         tracing::info!(
             component = "k8s_controller",
-            count = handles.len(),
+            count = h.len(),
             "All ResourceControllers spawned - each running independently"
         );
 
@@ -515,7 +364,7 @@ impl KubernetesController {
                     }
                 }
             }
-            _ = futures::future::join_all(&mut handles) => {
+            _ = futures::future::join_all(&mut h) => {
                 tracing::warn!(
                     component = "k8s_controller",
                     "All controllers have stopped"
