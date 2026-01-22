@@ -3,7 +3,14 @@
 //! Provides:
 //! - FileSystemWriter: reading/writing local YAML files (used by Admin API)
 //! - FileSystemSyncController: unified sync controller (init + runtime)
-//! - FileResourceTracker: tracks file-resource mappings for deletion support
+//!
+//! File naming convention:
+//! - With namespace: `{Kind}_{namespace}_{name}.yaml`
+//! - Cluster-scoped: `{Kind}__{name}.yaml` (double underscore)
+//!
+//! This naming convention enables:
+//! - Resource identity parsing from filename (no tracking state needed)
+//! - Unique filenames (no collision between different resources)
 //!
 //! Deprecated (kept for compatibility):
 //! - FileWatcher: legacy file watcher (superseded by FileSystemSyncController)
@@ -11,12 +18,10 @@
 
 mod resource_applier;
 pub mod sync_controller;
-pub mod tracker;
 mod watcher;
 mod writer;
 
 pub use sync_controller::FileSystemSyncController;
-pub use tracker::FileResourceTracker;
 pub use writer::FileSystemWriter;
 
 // Legacy exports (deprecated, kept for compatibility)

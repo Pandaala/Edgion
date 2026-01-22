@@ -70,7 +70,7 @@ pub async fn create_cluster(
             validate_resource(&state.schema_validator, kind, &gc, is_k8s)?;
             let json_content = serde_json::to_string(&gc).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, None, &name, json_content)
+                .create_one(kind.as_str(), None, &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -79,7 +79,7 @@ pub async fn create_cluster(
             validate_resource(&state.schema_validator, kind, &cfg, is_k8s)?;
             let json_content = serde_json::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, None, &name, json_content)
+                .create_one(kind.as_str(), None, &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -123,7 +123,7 @@ pub async fn update_cluster(
             validate_resource(&state.schema_validator, kind, &gc, is_k8s)?;
             let json_content = serde_json::to_string(&gc).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, None, &name, json_content)
+                .update_one(kind.as_str(), None, &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -132,7 +132,7 @@ pub async fn update_cluster(
             validate_resource(&state.schema_validator, kind, &cfg, is_k8s)?;
             let json_content = serde_json::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, None, &name, json_content)
+                .update_one(kind.as_str(), None, &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -167,7 +167,7 @@ pub async fn delete_cluster(
 
     // Delete from backend - delete_one will return NotFound if resource doesn't exist
     writer
-        .delete_one(&kind_str, None, &name)
+        .delete_one(kind.as_str(), None, &name)
         .await
         .map_err(map_writer_error)?;
 

@@ -7,8 +7,11 @@
 //! This mirrors the K8s mode's flow:
 //! - K8s: InitApply → direct process, Apply/Delete → workqueue
 //! - FileSystem: scan → direct process, file changes → workqueue
+//!
+//! File naming convention:
+//! - With namespace: `{Kind}_{namespace}_{name}.yaml`
+//! - Cluster-scoped: `{Kind}__{name}.yaml` (double underscore)
 
-use super::tracker::FileResourceTracker;
 use crate::core::conf_mgr::conf_center::sync_runtime::{
     process_resource, process_resource_delete, BackendTlsPolicyProcessor, EdgionGatewayConfigProcessor,
     EdgionPluginsProcessor, EdgionStreamPluginsProcessor, EdgionTlsProcessor, EndpointSliceProcessor,
@@ -28,9 +31,8 @@ use kube::Resource;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -39,10 +41,12 @@ use tokio::task::JoinHandle;
 ///
 /// Manages resource synchronization from local YAML files to ConfigServer.
 /// Uses the same ResourceProcessor-based flow as K8s mode.
+///
+/// Key simplification: Uses file naming convention `Kind_namespace_name.yaml`
+/// to determine resource identity, eliminating the need for tracking state.
 pub struct FileSystemSyncController {
     conf_dir: PathBuf,
     config_server: Arc<ConfigServer>,
-    tracker: Arc<RwLock<FileResourceTracker>>,
     requeue_registry: Arc<RequeueRegistry>,
     /// Workqueue per resource kind
     workqueues: HashMap<&'static str, Arc<Workqueue>>,
@@ -67,7 +71,6 @@ impl FileSystemSyncController {
         Self {
             conf_dir,
             config_server,
-            tracker: Arc::new(RwLock::new(FileResourceTracker::new())),
             requeue_registry,
             workqueues,
             process_config: ProcessConfig::default(),
@@ -168,8 +171,6 @@ impl FileSystemSyncController {
             .await
             .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-        let hash = compute_hash(&content);
-
         // Determine resource kind from content
         let kind = ResourceKind::from_content(&content);
         let Some(kind) = kind else {
@@ -190,20 +191,7 @@ impl FileSystemSyncController {
         );
 
         // Process based on kind
-        let result = self.process_by_kind(&content, kind, &ctx, true)?;
-
-        if result {
-            // Track the file-resource mapping
-            // We need to extract the key from the parsed resource
-            if let Some(key) = extract_resource_key(&content, kind) {
-                self.tracker
-                    .write()
-                    .unwrap()
-                    .track(path.to_path_buf(), kind.as_str(), &key, hash);
-            }
-        }
-
-        Ok(result)
+        self.process_by_kind(&content, kind, &ctx, true)
     }
 
     /// Runtime phase: watch for file changes
@@ -299,81 +287,44 @@ impl FileSystemSyncController {
     }
 
     /// Handle a file event (create/modify/delete)
+    ///
+    /// Uses filename convention to determine resource identity:
+    /// - `Kind_namespace_name.yaml` → key = "namespace/name"
+    /// - `Kind__name.yaml` → key = "name" (cluster-scoped)
     async fn handle_file_event(&self, path: &Path) -> Result<()> {
-        if path.exists() {
-            // File exists: Created or Modified
-            let content = tokio::fs::read_to_string(path)
-                .await
-                .with_context(|| format!("Failed to read file: {}", path.display()))?;
+        // Parse resource info from filename
+        let Some((kind, namespace, name)) = parse_resource_filename(path) else {
+            tracing::trace!(
+                component = "fs_sync_controller",
+                path = %path.display(),
+                "Skipping file: not a valid resource filename"
+            );
+            return Ok(());
+        };
 
-            let new_hash = compute_hash(&content);
-            let old_hash = self.tracker.read().unwrap().get_hash(path);
+        // Build resource key
+        let key = match namespace {
+            Some(ns) => format!("{}/{}", ns, name),
+            None => name.to_string(),
+        };
 
-            // Skip if content hasn't changed
-            if old_hash == Some(new_hash) {
-                tracing::trace!(
-                    component = "fs_sync_controller",
-                    path = %path.display(),
-                    "File content unchanged, skipping"
-                );
-                return Ok(());
-            }
-
-            // Determine resource kind
-            let kind = ResourceKind::from_content(&content);
-            let Some(kind) = kind else {
-                tracing::debug!(
-                    component = "fs_sync_controller",
-                    path = %path.display(),
-                    "Skipping file: could not determine resource kind"
-                );
-                return Ok(());
-            };
-
-            // Extract resource key
-            let Some(key) = extract_resource_key(&content, kind) else {
-                tracing::warn!(
-                    component = "fs_sync_controller",
-                    path = %path.display(),
-                    "Could not extract resource key"
-                );
-                return Ok(());
-            };
-
-            let kind_str = kind.as_str();
-
-            // Update tracker
-            self.tracker
-                .write()
-                .unwrap()
-                .track(path.to_path_buf(), kind_str, &key, new_hash);
-
-            // Enqueue to workqueue
-            if let Some(queue) = self.workqueues.get(kind_str) {
-                queue.enqueue(key).await;
-                tracing::debug!(
-                    component = "fs_sync_controller",
-                    path = %path.display(),
-                    kind = %kind_str,
-                    "Enqueued file change"
-                );
-            }
+        // Enqueue to workqueue - worker will determine if it's create/update/delete
+        if let Some(queue) = self.workqueues.get(kind) {
+            queue.enqueue(key.clone()).await;
+            tracing::debug!(
+                component = "fs_sync_controller",
+                path = %path.display(),
+                kind = kind,
+                key = %key,
+                exists = path.exists(),
+                "Enqueued file event"
+            );
         } else {
-            // File deleted
-            let info = self.tracker.write().unwrap().untrack(path);
-            if let Some((kind, key)) = info {
-                // Enqueue for deletion processing
-                if let Some(queue) = self.workqueues.get(kind.as_str()) {
-                    queue.enqueue(key.clone()).await;
-                    tracing::debug!(
-                        component = "fs_sync_controller",
-                        path = %path.display(),
-                        kind = %kind,
-                        key = %key,
-                        "Enqueued file deletion"
-                    );
-                }
-            }
+            tracing::trace!(
+                component = "fs_sync_controller",
+                kind = kind,
+                "No workqueue for kind, skipping"
+            );
         }
 
         Ok(())
@@ -402,7 +353,7 @@ impl FileSystemSyncController {
         mut shutdown_signal: ShutdownSignal,
     ) -> Option<JoinHandle<()>> {
         let config_server = self.config_server.clone();
-        let tracker = self.tracker.clone();
+        let conf_dir = self.conf_dir.clone();
         let requeue_registry = self.requeue_registry.clone();
         let process_config = self.process_config.clone();
 
@@ -424,8 +375,8 @@ impl FileSystemSyncController {
                 process_work_item(
                     kind,
                     &key,
+                    &conf_dir,
                     &config_server,
-                    &tracker,
                     &requeue_registry,
                     &process_config,
                 );
@@ -532,33 +483,51 @@ fn is_yaml_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Compute content hash
-fn compute_hash(content: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    content.hash(&mut hasher);
-    hasher.finish()
+/// Parse resource info from filename
+///
+/// Filename format (matches FileSystemWriter):
+/// - With namespace: `{Kind}_{namespace}_{name}.yaml`
+/// - Cluster-scoped: `{Kind}__{name}.yaml` (double underscore)
+///
+/// Returns: (kind, namespace, name)
+fn parse_resource_filename(path: &Path) -> Option<(&str, Option<&str>, &str)> {
+    let filename = path.file_stem()?.to_str()?;
+
+    // Split into at most 3 parts by underscore
+    let parts: Vec<&str> = filename.splitn(3, '_').collect();
+
+    if parts.len() == 3 {
+        let kind = parts[0];
+        let namespace = if parts[1].is_empty() {
+            None // Double underscore means cluster-scoped
+        } else {
+            Some(parts[1])
+        };
+        let name = parts[2];
+        Some((kind, namespace, name))
+    } else {
+        None
+    }
 }
 
-/// Extract resource key from YAML content
-fn extract_resource_key(content: &str, _kind: ResourceKind) -> Option<String> {
-    // Parse just the metadata to get namespace/name
-    #[derive(serde::Deserialize)]
-    struct MinimalMeta {
-        metadata: MetaFields,
-    }
-    #[derive(serde::Deserialize)]
-    struct MetaFields {
-        namespace: Option<String>,
-        name: Option<String>,
-    }
+/// Build file path from kind and key
+///
+/// Key format:
+/// - Namespaced: "namespace/name"
+/// - Cluster-scoped: "name"
+fn build_path_from_key(conf_dir: &Path, kind: &str, key: &str) -> PathBuf {
+    let (namespace, name) = if let Some(pos) = key.find('/') {
+        (Some(&key[..pos]), &key[pos + 1..])
+    } else {
+        (None, key)
+    };
 
-    let meta: MinimalMeta = serde_yaml::from_str(content).ok()?;
-    let name = meta.metadata.name?;
+    let filename = match namespace {
+        Some(ns) => format!("{}_{}_{}.yaml", kind, ns, name),
+        None => format!("{}__{}.yaml", kind, name),
+    };
 
-    Some(match meta.metadata.namespace {
-        Some(ns) => format!("{}/{}", ns, name),
-        None => name,
-    })
+    conf_dir.join(filename)
 }
 
 /// Process a typed resource from YAML content
@@ -579,12 +548,14 @@ where
 
 /// Process a work item from workqueue (runtime phase)
 ///
-/// Similar to K8s mode's process_work_item, but uses tracker instead of Store
+/// Similar to K8s mode's process_work_item:
+/// - File exists → read and process (create/update)
+/// - File doesn't exist → get from cache and delete
 fn process_work_item(
     kind: &'static str,
     key: &str,
+    conf_dir: &Path,
     config_server: &ConfigServer,
-    tracker: &RwLock<FileResourceTracker>,
     requeue_registry: &RequeueRegistry,
     process_config: &ProcessConfig,
 ) {
@@ -595,16 +566,13 @@ fn process_work_item(
         requeue_registry,
     );
 
-    // Check if resource is still tracked (file exists)
-    let path = {
-        let tracker_guard = tracker.read().unwrap();
-        tracker_guard.get_path_by_key(kind, key).cloned()
-    };
+    // Build path from kind and key
+    let path = build_path_from_key(conf_dir, kind, key);
 
     match kind {
         "GatewayClass" => process_work_item_typed::<GatewayClass, _>(
             key,
-            path.as_deref(),
+            &path,
             &GatewayClassProcessor::new(),
             &ctx,
             config_server,
@@ -612,7 +580,7 @@ fn process_work_item(
         ),
         "Gateway" => process_work_item_typed::<Gateway, _>(
             key,
-            path.as_deref(),
+            &path,
             &GatewayProcessor::new(None),
             &ctx,
             config_server,
@@ -620,7 +588,7 @@ fn process_work_item(
         ),
         "HTTPRoute" => process_work_item_typed::<HTTPRoute, _>(
             key,
-            path.as_deref(),
+            &path,
             &HttpRouteProcessor::new(),
             &ctx,
             config_server,
@@ -628,7 +596,7 @@ fn process_work_item(
         ),
         "GRPCRoute" => process_work_item_typed::<GRPCRoute, _>(
             key,
-            path.as_deref(),
+            &path,
             &GrpcRouteProcessor::new(),
             &ctx,
             config_server,
@@ -636,7 +604,7 @@ fn process_work_item(
         ),
         "TCPRoute" => process_work_item_typed::<TCPRoute, _>(
             key,
-            path.as_deref(),
+            &path,
             &TcpRouteProcessor::new(),
             &ctx,
             config_server,
@@ -644,7 +612,7 @@ fn process_work_item(
         ),
         "UDPRoute" => process_work_item_typed::<UDPRoute, _>(
             key,
-            path.as_deref(),
+            &path,
             &UdpRouteProcessor::new(),
             &ctx,
             config_server,
@@ -652,7 +620,7 @@ fn process_work_item(
         ),
         "TLSRoute" => process_work_item_typed::<TLSRoute, _>(
             key,
-            path.as_deref(),
+            &path,
             &TlsRouteProcessor::new(),
             &ctx,
             config_server,
@@ -660,7 +628,7 @@ fn process_work_item(
         ),
         "Service" => process_work_item_typed::<Service, _>(
             key,
-            path.as_deref(),
+            &path,
             &ServiceProcessor::new(),
             &ctx,
             config_server,
@@ -668,7 +636,7 @@ fn process_work_item(
         ),
         "Endpoint" => process_work_item_typed::<Endpoints, _>(
             key,
-            path.as_deref(),
+            &path,
             &EndpointsProcessor::new(),
             &ctx,
             config_server,
@@ -676,7 +644,7 @@ fn process_work_item(
         ),
         "EndpointSlice" => process_work_item_typed::<EndpointSlice, _>(
             key,
-            path.as_deref(),
+            &path,
             &EndpointSliceProcessor::new(),
             &ctx,
             config_server,
@@ -684,7 +652,7 @@ fn process_work_item(
         ),
         "Secret" => process_work_item_typed::<Secret, _>(
             key,
-            path.as_deref(),
+            &path,
             &SecretProcessor::new(),
             &ctx,
             config_server,
@@ -692,7 +660,7 @@ fn process_work_item(
         ),
         "ReferenceGrant" => process_work_item_typed::<ReferenceGrant, _>(
             key,
-            path.as_deref(),
+            &path,
             &ReferenceGrantProcessor::new(),
             &ctx,
             config_server,
@@ -700,7 +668,7 @@ fn process_work_item(
         ),
         "BackendTLSPolicy" => process_work_item_typed::<BackendTLSPolicy, _>(
             key,
-            path.as_deref(),
+            &path,
             &BackendTlsPolicyProcessor::new(),
             &ctx,
             config_server,
@@ -708,7 +676,7 @@ fn process_work_item(
         ),
         "EdgionGatewayConfig" => process_work_item_typed::<EdgionGatewayConfig, _>(
             key,
-            path.as_deref(),
+            &path,
             &EdgionGatewayConfigProcessor::new(),
             &ctx,
             config_server,
@@ -716,7 +684,7 @@ fn process_work_item(
         ),
         "EdgionTls" => process_work_item_typed::<EdgionTls, _>(
             key,
-            path.as_deref(),
+            &path,
             &EdgionTlsProcessor::new(),
             &ctx,
             config_server,
@@ -724,7 +692,7 @@ fn process_work_item(
         ),
         "EdgionPlugins" => process_work_item_typed::<EdgionPlugins, _>(
             key,
-            path.as_deref(),
+            &path,
             &EdgionPluginsProcessor::new(),
             &ctx,
             config_server,
@@ -732,7 +700,7 @@ fn process_work_item(
         ),
         "EdgionStreamPlugins" => process_work_item_typed::<EdgionStreamPlugins, _>(
             key,
-            path.as_deref(),
+            &path,
             &EdgionStreamPluginsProcessor::new(),
             &ctx,
             config_server,
@@ -740,7 +708,7 @@ fn process_work_item(
         ),
         "PluginMetaData" => process_work_item_typed::<PluginMetaData, _>(
             key,
-            path.as_deref(),
+            &path,
             &PluginMetadataProcessor::new(),
             &ctx,
             config_server,
@@ -748,7 +716,7 @@ fn process_work_item(
         ),
         "LinkSys" => process_work_item_typed::<LinkSys, _>(
             key,
-            path.as_deref(),
+            &path,
             &LinkSysProcessor::new(),
             &ctx,
             config_server,
@@ -766,9 +734,14 @@ fn process_work_item(
 }
 
 /// Process a typed work item
+///
+/// Logic mirrors K8s mode:
+/// - File exists → read, parse, process_resource (create/update)
+/// - File doesn't exist + cache has it → process_resource_delete
+/// - File doesn't exist + no cache → already deleted, skip
 fn process_work_item_typed<K, P>(
     key: &str,
-    path: Option<&Path>,
+    path: &Path,
     processor: &P,
     ctx: &ProcessContext,
     config_server: &ConfigServer,
@@ -777,27 +750,13 @@ fn process_work_item_typed<K, P>(
     K: Resource + Clone + Send + Sync + DeserializeOwned + 'static,
     P: ResourceProcessor<K>,
 {
-    let cache_obj = processor.get(config_server, key);
-
-    match (path, cache_obj) {
-        (Some(path), _) => {
-            // File exists (tracked) → read and process
-            match std::fs::read_to_string(path) {
-                Ok(content) => match serde_yaml::from_str::<K>(&content) {
-                    Ok(obj) => {
-                        process_resource(obj, processor, ctx, false, kind);
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            component = "fs_sync_controller",
-                            kind = kind,
-                            key = key,
-                            path = %path.display(),
-                            error = %e,
-                            "Failed to parse file"
-                        );
-                    }
-                },
+    if path.exists() {
+        // File exists → read and process
+        match std::fs::read_to_string(path) {
+            Ok(content) => match serde_yaml::from_str::<K>(&content) {
+                Ok(obj) => {
+                    process_resource(obj, processor, ctx, false, kind);
+                }
                 Err(e) => {
                     tracing::error!(
                         component = "fs_sync_controller",
@@ -805,22 +764,31 @@ fn process_work_item_typed<K, P>(
                         key = key,
                         path = %path.display(),
                         error = %e,
-                        "Failed to read file"
+                        "Failed to parse file"
                     );
                 }
+            },
+            Err(e) => {
+                tracing::error!(
+                    component = "fs_sync_controller",
+                    kind = kind,
+                    key = key,
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to read file"
+                );
             }
         }
-        (None, Some(cached)) => {
-            // File deleted but cache has it → delete from cache
+    } else {
+        // File doesn't exist → check cache for deletion
+        if let Some(cached) = processor.get(config_server, key) {
             process_resource_delete(cached, processor, ctx, kind);
-        }
-        (None, None) => {
-            // Neither file nor cache → already processed
+        } else {
             tracing::trace!(
                 component = "fs_sync_controller",
                 kind = kind,
                 key = key,
-                "Resource not found in tracker or cache, skipping"
+                "Resource not found in file or cache, skipping"
             );
         }
     }

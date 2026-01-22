@@ -98,7 +98,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -107,7 +107,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -116,7 +116,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -125,7 +125,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -134,7 +134,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -143,7 +143,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &service, is_k8s)?;
             let json_content = serde_json::to_string(&service).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -152,7 +152,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &ep, is_k8s)?;
             let json_content = serde_json::to_string(&ep).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -161,7 +161,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &endpoint, is_k8s)?;
             let json_content = serde_json::to_string(&endpoint).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -201,7 +201,7 @@ pub async fn create_namespaced(
 
             let json_content = serde_json::to_string(&tls).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -210,7 +210,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &plugins, is_k8s)?;
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -219,7 +219,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &metadata, is_k8s)?;
             let json_content = serde_json::to_string(&metadata).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -228,7 +228,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &linksys, is_k8s)?;
             let json_content = serde_json::to_string(&linksys).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -237,7 +237,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &secret, is_k8s)?;
             let json_content = serde_json::to_string(&secret).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -246,7 +246,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &gateway, is_k8s)?;
             let json_content = serde_json::to_string(&gateway).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -255,7 +255,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &rg, is_k8s)?;
             let json_content = serde_json::to_string(&rg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -264,7 +264,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &policy, is_k8s)?;
             let json_content = serde_json::to_string(&policy).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -273,7 +273,7 @@ pub async fn create_namespaced(
             validate_resource(&state.schema_validator, kind, &plugins, is_k8s)?;
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .create_one(&kind_str, Some(&ns), &name, json_content)
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -315,7 +315,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -324,7 +324,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -333,7 +333,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -342,7 +342,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -351,7 +351,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -360,7 +360,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &service, is_k8s)?;
             let json_content = serde_json::to_string(&service).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -369,7 +369,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &ep, is_k8s)?;
             let json_content = serde_json::to_string(&ep).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -378,7 +378,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &endpoint, is_k8s)?;
             let json_content = serde_json::to_string(&endpoint).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -418,7 +418,7 @@ pub async fn update_namespaced(
 
             let json_content = serde_json::to_string(&tls).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -427,7 +427,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &plugins, is_k8s)?;
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -436,7 +436,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &metadata, is_k8s)?;
             let json_content = serde_json::to_string(&metadata).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -445,7 +445,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &linksys, is_k8s)?;
             let json_content = serde_json::to_string(&linksys).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -454,7 +454,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &secret, is_k8s)?;
             let json_content = serde_json::to_string(&secret).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -463,7 +463,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &gateway, is_k8s)?;
             let json_content = serde_json::to_string(&gateway).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -472,7 +472,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &rg, is_k8s)?;
             let json_content = serde_json::to_string(&rg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -481,7 +481,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &policy, is_k8s)?;
             let json_content = serde_json::to_string(&policy).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -490,7 +490,7 @@ pub async fn update_namespaced(
             validate_resource(&state.schema_validator, kind, &plugins, is_k8s)?;
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(&kind_str, Some(&ns), &name, json_content)
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -515,14 +515,14 @@ pub async fn delete_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns, name)): Path<(String, String, String)>,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
-    let _kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let is_k8s = state.is_k8s_mode();
     let writer = state.writer();
 
     // Delete from backend - delete_one will return NotFound if resource doesn't exist
     writer
-        .delete_one(&kind_str, Some(&ns), &name)
+        .delete_one(kind.as_str(), Some(&ns), &name)
         .await
         .map_err(map_writer_error)?;
 

@@ -99,53 +99,24 @@ check_services() {
 }
 
 # =============================================================================
-# copyconfigfile到 CONFIG_DIR（For Gateway Start前预Load）
-# =============================================================================
-copy_file_to_config() {
-    local file=$1
-    local filename=$(basename "$file")
-    local config_dir="${EDGION_WORK_DIR:-}/config"
-    
-    if [ -z "$config_dir" ] || [ ! -d "$config_dir" ]; then
-        return 1
-    fi
-    
-    log_info "copy $filename 到 $config_dir"
-    cp "$file" "$config_dir/"
-    return 0
-}
-
-# =============================================================================
 # use edgion-ctl Load单个file
+# 
+# FileSystemWriter 会自动使用 Kind_namespace_name.yaml 格式保存，
+# 因此不需要手动复制或重命名文件。
 # =============================================================================
 apply_file() {
     local file=$1
     local filename=$(basename "$file")
-    local copied=false
-    local api_loaded=false
-    
-    # 尝试复制文件到 config 目录（为 Gateway 启动准备）
-    if copy_file_to_config "$file"; then
-        copied=true
-    fi
     
     # 检查 Controller 是否在运行
-    if curl -s -f "$CONTROLLER_URL/api/v1/health" >/dev/null 2>&1; then
-        # Controller 已运行，使用 API 加载
-        log_info "Load $filename via API..."
-        if "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$file" 2>&1; then
-            api_loaded=true
-        fi
+    if ! curl -s -f "$CONTROLLER_URL/health" >/dev/null 2>&1; then
+        log_error "Controller 未运行，无法加载 $filename"
+        return 1
     fi
     
-    # 判断结果
-    if [ "$copied" = true ] && [ "$api_loaded" = true ]; then
-        log_success "$filename copy & API loaded"
-        return 0
-    elif [ "$copied" = true ]; then
-        log_success "$filename copycompleted"
-        return 0
-    elif [ "$api_loaded" = true ]; then
+    # 使用 edgion-ctl apply 加载配置
+    log_info "Load $filename via API..."
+    if "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$file" 2>&1; then
         log_success "$filename Loadsuccess"
         return 0
     else

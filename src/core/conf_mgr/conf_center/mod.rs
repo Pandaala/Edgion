@@ -61,7 +61,7 @@ pub mod sync_runtime;
 pub mod traits;
 
 pub use config::{ConfCenterConfig, EndpointMode, LeaderElectionConfig, MetadataFilterConfig};
-pub use file_system::{FileResourceTracker, FileSystemSyncController, FileSystemWriter};
+pub use file_system::{FileSystemSyncController, FileSystemWriter};
 pub use init_loader::load_all_resources;
 
 // Legacy export (deprecated)

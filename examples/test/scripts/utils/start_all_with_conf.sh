@@ -1,7 +1,10 @@
 #!/bin/bash
 # =============================================================================
 # Startall Edgion Testservice并Loadconfig
-# Start顺序: test_server -> controller -> certificateGenerate -> configLoad -> gateway -> verify
+# Start顺序: test_server -> controller -> 基础配置 -> 测试配置 -> gateway -> verify
+# 
+# 配置通过 Admin API (edgion-ctl apply) 加载，FileSystemWriter 会自动以
+# Kind_namespace_name.yaml 格式保存，避免同名文件覆盖问题。
 # =============================================================================
 
 set -e
@@ -326,24 +329,34 @@ start_gateway() {
 }
 
 # =============================================================================
-# Prepare基础configfile
+# 加载基础配置文件
+# 使用 edgion-ctl apply 通过 Admin API 加载，FileSystemWriter 会自动
+# 以 Kind_namespace_name.yaml 格式保存到 config 目录
 # =============================================================================
-prepare_base_config() {
-    log_section "Prepare基础configfile"
+load_base_config() {
+    log_section "加载基础配置文件"
     
     local conf_src="${PROJECT_ROOT}/examples/test/conf/base"
+    local edgion_ctl="${PROJECT_ROOT}/target/debug/edgion-ctl"
     
-    if [ -d "$conf_src" ]; then
-        for file in "$conf_src"/*.yaml; do
-            if [ -f "$file" ]; then
-                cp "$file" "$CONFIG_DIR/"
-                log_info "copy $(basename "$file")"
-            fi
-        done
-        log_success "基础configPreparecompleted"
-    else
+    if [ ! -d "$conf_src" ]; then
         log_warning "无基础configdirectory: $conf_src"
+        return 0
     fi
+    
+    for file in "$conf_src"/*.yaml; do
+        if [ -f "$file" ]; then
+            local filename=$(basename "$file")
+            log_info "Load $filename via API..."
+            if "$edgion_ctl" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1; then
+                log_success "$filename Loadsuccess"
+            else
+                log_warning "$filename Loadfailed"
+            fi
+        fi
+    done
+    
+    log_success "基础config加载completed"
 }
 
 # =============================================================================
@@ -479,7 +492,7 @@ load_configs() {
     for suite in $suites_to_load; do
         log_info "Load $suite config..."
         # 使用 --wait 0 跳过每个 suite 的等待，最后统一等待一次
-        if bash "$load_script" --wait 0 "$suite" > /dev/null 2>&1; then
+        if bash "$load_script" --wait 0 "$suite" 2>&1 | tee -a "${LOG_DIR}/load_config.log"; then
             log_success "$suite configLoadcompleted"
         else
             log_warning "$suite configLoadfailed或为空"
@@ -610,19 +623,19 @@ main() {
     mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR"
     log_success "Workdirectory创建completed: $WORK_DIR"
     
-    # 第四步: Generatecertificate（must在copyconfig前，因为willGenerate Secret file）
+    # 第四步: Generatecertificate（must在加载config前，因为willGenerate Secret file）
     generate_certs
     
-    # 第五步: Prepare基础configfile（包含新Generate的 Secret）
-    prepare_base_config
-    
-    # 第六步: Start test_server
+    # 第五步: Start test_server
     start_test_server
     
-    # 第七步: Start controller
+    # 第六步: Start controller
     start_controller
     
-    # 第八步: LoadTestconfig
+    # 第七步: 加载基础配置文件（通过 API）
+    load_base_config
+    
+    # 第八步: LoadTestconfig（通过 API）
     load_configs
     
     # 第九步: Start gateway
