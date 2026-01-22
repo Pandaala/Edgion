@@ -5,7 +5,7 @@
 //! - Optionally watch for file changes
 //! - Handle graceful shutdown
 
-use super::kubernetes::shutdown::ShutdownHandle;
+use super::sync_runtime::ShutdownHandle;
 use super::{load_all_resources, ConfCenter, ConfCenterConfig, EndpointMode, FileWatcher};
 use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;

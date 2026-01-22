@@ -1,6 +1,6 @@
-//! Kubernetes Controller metrics
+//! Sync Runtime metrics
 //!
-//! Metrics for monitoring controller performance:
+//! Metrics for monitoring sync runtime performance:
 //! - Initial sync duration
 //! - Active controllers count
 //! - Leader election status

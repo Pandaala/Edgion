@@ -44,6 +44,7 @@ pub mod kubernetes;
 mod lifecycle_filesystem;
 mod lifecycle_kubernetes;
 pub mod status;
+pub mod sync_runtime;
 pub mod traits;
 
 pub use config::{ConfCenterConfig, EndpointMode, LeaderElectionConfig, MetadataFilterConfig};
@@ -59,7 +60,7 @@ pub use traits::{ConfEntry, ConfWriter, ConfWriterError, ListOptions, ListResult
 use crate::core::cli::config::{ConfSyncConfig, EdgionControllerConfig};
 use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;
-use kubernetes::shutdown::ShutdownHandle;
+use sync_runtime::ShutdownHandle;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;

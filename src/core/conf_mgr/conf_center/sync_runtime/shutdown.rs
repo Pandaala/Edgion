@@ -1,4 +1,4 @@
-//! Graceful shutdown support for Kubernetes controllers
+//! Graceful shutdown support for sync runtime
 //!
 //! Provides signal handling (SIGTERM/SIGINT) and cancellation token propagation
 //! to enable graceful shutdown of all resource controllers.
@@ -96,7 +96,7 @@ impl ShutdownHandle {
                 Ok(()) => Some("SIGINT"),
                 Err(e) => {
                     tracing::warn!(
-                        component = "k8s_controller",
+                        component = "sync_runtime",
                         error = %e,
                         "Failed to install CTRL+C handler, signal handling may not work"
                     );
@@ -114,7 +114,7 @@ impl ShutdownHandle {
                 }
                 Err(e) => {
                     tracing::warn!(
-                        component = "k8s_controller",
+                        component = "sync_runtime",
                         error = %e,
                         "Failed to install SIGTERM handler, signal handling may not work"
                     );
@@ -134,7 +134,7 @@ impl ShutdownHandle {
 
         if let Some(sig) = signal_name {
             tracing::info!(
-                component = "k8s_controller",
+                component = "sync_runtime",
                 signal = sig,
                 "Received {}, initiating graceful shutdown",
                 sig

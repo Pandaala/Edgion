@@ -5,7 +5,7 @@
 //! Supports graceful shutdown via ShutdownSignal.
 
 use super::resource_applier::apply_resource_change;
-use crate::core::conf_mgr::conf_center::kubernetes::shutdown::ShutdownSignal;
+use crate::core::conf_mgr::conf_center::sync_runtime::ShutdownSignal;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::ConfigServer;
 use anyhow::{Context, Result};
