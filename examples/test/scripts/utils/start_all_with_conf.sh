@@ -198,7 +198,7 @@ wait_for_port() {
 }
 
 # =============================================================================
-# Wait HTTP healthCheck
+# Wait HTTP healthCheck (liveness)
 # =============================================================================
 wait_for_health() {
     local url=$1
@@ -219,6 +219,30 @@ wait_for_health() {
     done
     
     log_error "$service_name healthCheckfailed"
+    return 1
+}
+
+# =============================================================================
+# Wait for readiness check (ConfigServer ready)
+# =============================================================================
+wait_for_ready() {
+    local url=$1
+    local service_name=$2
+    local timeout=${3:-30}
+    local elapsed=0
+    
+    log_info "等待 $service_name ConfigServer 就绪..."
+    
+    while [ $elapsed -lt $timeout ]; do
+        if curl -sf "$url" >/dev/null 2>&1; then
+            log_success "$service_name ConfigServer 就绪"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    
+    log_error "$service_name ConfigServer 未就绪 (超时 ${timeout}s)"
     return 1
 }
 
@@ -318,10 +342,17 @@ start_gateway() {
     local pid=$!
     echo $pid > "${PID_DIR}/gateway.pid"
     
-    # Waitport
-    if ! wait_for_port $GATEWAY_HTTP_PORT "edgion-gateway" $pid 30; then
+    # Wait for Gateway Admin port (always 5900, regardless of test suite listener ports)
+    if ! wait_for_port $GATEWAY_ADMIN_PORT "edgion-gateway" $pid 30; then
         log_error "edgion-gateway Startfailed，viewlog: ${LOG_DIR}/gateway.log"
         tail -20 "${LOG_DIR}/gateway.log" 2>/dev/null || true
+        exit 1
+    fi
+    
+    # Wait for Gateway to be fully ready (all caches synced from Controller)
+    if ! wait_for_ready "http://127.0.0.1:${GATEWAY_ADMIN_PORT}/ready" "edgion-gateway" 60; then
+        log_error "edgion-gateway 缓存同步超时，viewlog: ${LOG_DIR}/gateway.log"
+        tail -30 "${LOG_DIR}/gateway.log" 2>/dev/null || true
         exit 1
     fi
     
@@ -521,9 +552,10 @@ verify_sync() {
     
     log_info "Run resource_diff verify Controller 和 Gateway resourcesync..."
     
-    # Retry logic: wait for gateway HTTP service to be fully ready
-    local max_retries=2
-    local retry_delay=1
+    # Retry logic: wait for gateway to fully sync all resources from controller
+    # Gateway needs time to fetch data from controller via gRPC
+    local max_retries=5
+    local retry_delay=2
     local attempt=1
     
     while [ $attempt -le $max_retries ]; do
@@ -632,16 +664,22 @@ main() {
     # 第六步: Start controller
     start_controller
     
-    # 第七步: 加载基础配置文件（通过 API）
+    # 第七步: 等待 ConfigServer 就绪
+    if ! wait_for_ready "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/ready" "edgion-controller" 30; then
+        log_error "edgion-controller ConfigServer 未就绪"
+        exit 1
+    fi
+    
+    # 第八步: 加载基础配置文件（通过 API）
     load_base_config
     
-    # 第八步: LoadTestconfig（通过 API）
+    # 第九步: LoadTestconfig（通过 API）
     load_configs
     
-    # 第九步: Start gateway
+    # 第十步: Start gateway
     start_gateway
     
-    # 第十步: verifyresourcesync
+    # 第十一步: verifyresourcesync
     verify_sync
     
     # 保存info

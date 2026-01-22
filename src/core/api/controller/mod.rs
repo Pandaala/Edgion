@@ -38,9 +38,18 @@ impl<T> ApiResponse<T> {
 
 // ============= Legacy Endpoints =============
 
-/// Health check endpoint
+/// Health check endpoint - always returns OK if server is up
 async fn health_check() -> Json<ApiResponse<String>> {
     Json(ApiResponse::success("OK".to_string()))
+}
+
+/// Readiness check endpoint - returns OK only when ConfigServer is ready
+async fn readiness_check(State(state): State<Arc<AdminState>>) -> Result<Json<ApiResponse<String>>, StatusCode> {
+    if state.is_ready() {
+        Ok(Json(ApiResponse::success("Ready".to_string())))
+    } else {
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
 }
 
 /// Reload all resources from storage
@@ -75,8 +84,10 @@ pub fn create_admin_router(conf_center: Arc<ConfCenter>, schema_validator: Arc<S
     });
 
     Router::new()
-        // Health check
+        // Health check (liveness)
         .route("/health", get(health_check))
+        // Readiness check (ready to serve traffic - ConfigServer ready)
+        .route("/ready", get(readiness_check))
         // Cross-namespace query - List all resources of a kind
         .route(
             "/api/v1/namespaced/{kind}",

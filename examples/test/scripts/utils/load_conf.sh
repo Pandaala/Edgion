@@ -88,7 +88,7 @@ show_help() {
 check_services() {
     log_info "Checkservicestatus..."
     
-    # Check controller
+    # Check controller health (liveness)
     if ! curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
         log_error "Controller 未Run (${CONTROLLER_URL})"
         return 1
@@ -96,6 +96,31 @@ check_services() {
     
     log_success "Controller Run中"
     return 0
+}
+
+# =============================================================================
+# Wait for controller to be ready (ConfigServer initialized)
+# =============================================================================
+wait_for_ready() {
+    local max_attempts=${1:-30}
+    local attempt=0
+    
+    log_info "等待 Controller ConfigServer 就绪..."
+    
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -sf "${CONTROLLER_URL}/ready" > /dev/null 2>&1; then
+            log_success "Controller ConfigServer 已就绪"
+            return 0
+        fi
+        
+        attempt=$((attempt + 1))
+        if [ $attempt -lt $max_attempts ]; then
+            sleep 1
+        fi
+    done
+    
+    log_error "Controller ConfigServer 未就绪 (超时 ${max_attempts}s)"
+    return 1
 }
 
 # =============================================================================
@@ -107,12 +132,6 @@ check_services() {
 apply_file() {
     local file=$1
     local filename=$(basename "$file")
-    
-    # 检查 Controller 是否在运行
-    if ! curl -s -f "$CONTROLLER_URL/health" >/dev/null 2>&1; then
-        log_error "Controller 未运行，无法加载 $filename"
-        return 1
-    fi
     
     # 使用 edgion-ctl apply 加载配置
     log_info "Load $filename via API..."
@@ -287,6 +306,11 @@ main() {
     
     # Checkservice
     if ! check_services; then
+        exit 1
+    fi
+    
+    # Wait for ConfigServer to be ready before loading configs
+    if ! wait_for_ready 30; then
         exit 1
     fi
     
