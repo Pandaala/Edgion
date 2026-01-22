@@ -31,6 +31,13 @@ pub enum ConfCenterConfig {
     FileSystem {
         /// Directory containing configuration YAML files
         conf_dir: PathBuf,
+        /// Endpoint discovery mode
+        /// In file system mode, this determines which endpoint resource type to use:
+        /// - Endpoint: Use Endpoints resources
+        /// - EndpointSlice: Use EndpointSlice resources (recommended)
+        /// - Auto: Same as EndpointSlice in file system mode
+        #[serde(default)]
+        endpoint_mode: EndpointMode,
     },
     /// Kubernetes based configuration center
     Kubernetes {
@@ -153,6 +160,7 @@ impl Default for ConfCenterConfig {
     fn default() -> Self {
         Self::FileSystem {
             conf_dir: PathBuf::from("conf"),
+            endpoint_mode: EndpointMode::default(),
         }
     }
 }
@@ -168,6 +176,14 @@ impl ConfCenterConfig {
         match self {
             Self::FileSystem { conf_dir, .. } => Some(conf_dir),
             Self::Kubernetes { .. } => None,
+        }
+    }
+
+    /// Get the endpoint mode
+    pub fn endpoint_mode(&self) -> EndpointMode {
+        match self {
+            Self::FileSystem { endpoint_mode, .. } => *endpoint_mode,
+            Self::Kubernetes { endpoint_mode, .. } => *endpoint_mode,
         }
     }
 
@@ -220,11 +236,13 @@ mod tests {
     fn test_file_system_config() {
         let config = ConfCenterConfig::FileSystem {
             conf_dir: PathBuf::from("/etc/edgion/conf"),
+            endpoint_mode: EndpointMode::EndpointSlice,
         };
 
         assert!(!config.is_k8s_mode());
         assert_eq!(config.conf_dir(), Some(&PathBuf::from("/etc/edgion/conf")));
         assert!(config.metadata_filter().is_none());
+        assert_eq!(config.endpoint_mode(), EndpointMode::EndpointSlice);
     }
 
     #[test]

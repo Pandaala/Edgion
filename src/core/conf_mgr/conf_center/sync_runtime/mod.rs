@@ -13,12 +13,12 @@ pub mod workqueue;
 
 pub use metrics::{controller_metrics, ControllerMetrics, InitSyncTimer, ResourceMetrics};
 pub use resource_processor::{
-    make_resource_key, BackendTlsPolicyProcessor, EdgionGatewayConfigProcessor, EdgionPluginsProcessor,
-    EdgionStreamPluginsProcessor, EdgionTlsProcessor, EndpointSliceProcessor, EndpointsProcessor,
-    GatewayClassProcessor, GatewayProcessor, GrpcRouteProcessor, HttpRouteProcessor, LinkSysProcessor,
-    PluginMetadataProcessor, ProcessConfig, ProcessContext, ProcessResult, ReferenceGrantProcessor,
-    RequeueRegistry, ResourceProcessor, SecretProcessor, ServiceProcessor, TcpRouteProcessor, TlsRouteProcessor,
-    UdpRouteProcessor,
+    make_resource_key, process_resource, process_resource_delete, BackendTlsPolicyProcessor,
+    EdgionGatewayConfigProcessor, EdgionPluginsProcessor, EdgionStreamPluginsProcessor, EdgionTlsProcessor,
+    EndpointSliceProcessor, EndpointsProcessor, GatewayClassProcessor, GatewayProcessor, GrpcRouteProcessor,
+    HttpRouteProcessor, LinkSysProcessor, PluginMetadataProcessor, ProcessConfig, ProcessContext, ProcessResult,
+    ReferenceGrantProcessor, RequeueRegistry, ResourceProcessor, SecretProcessor, ServiceProcessor,
+    TcpRouteProcessor, TlsRouteProcessor, UdpRouteProcessor,
 };
 pub use shutdown::{ShutdownController, ShutdownHandle, ShutdownSignal};
 pub use workqueue::{WorkItem, Workqueue, WorkqueueConfig, WorkqueueMetrics};

@@ -1,11 +1,13 @@
 //! EdgionTls Processor
 //!
 //! Handles EdgionTls resources with:
+//! - Validation (warnings for missing secrets, parent_refs, etc.)
 //! - Server Secret reference resolution (secret_ref -> spec.secret)
 //! - CA Secret reference resolution for mTLS (client_auth.ca_secret_ref -> client_auth.ca_secret)
 //! - SecretRefManager registration
 
 use super::{find_secret, format_secret_key, ProcessContext, ProcessResult, ResourceProcessor};
+use crate::core::conf_mgr::resource_check::{check_edgion_tls, ResourceCheckContext};
 use crate::core::conf_sync::conf_server::{ConfigServer, ResourceRef};
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::prelude_resources::EdgionTls;
@@ -14,6 +16,7 @@ use crate::types::ResourceKind;
 /// EdgionTls processor
 ///
 /// Features:
+/// - validate: Check for parent_refs and secret existence
 /// - parse: Parse secret_ref -> fill spec.secret
 /// - parse: Parse client_auth.ca_secret_ref -> fill client_auth.ca_secret
 /// - parse: Register Secret references to SecretRefManager
@@ -35,6 +38,12 @@ impl Default for EdgionTlsProcessor {
 impl ResourceProcessor<EdgionTls> for EdgionTlsProcessor {
     fn kind(&self) -> &'static str {
         "EdgionTls"
+    }
+
+    fn validate(&self, tls: &EdgionTls, ctx: &ProcessContext) -> Vec<String> {
+        let check_ctx = ResourceCheckContext::new(ctx.config_server);
+        let result = check_edgion_tls(&check_ctx, tls);
+        result.warnings
     }
 
     fn parse(&self, mut tls: EdgionTls, ctx: &ProcessContext) -> ProcessResult<EdgionTls> {

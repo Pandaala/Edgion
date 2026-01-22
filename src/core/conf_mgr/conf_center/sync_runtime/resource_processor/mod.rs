@@ -100,6 +100,15 @@ where
         }
     }
 
+    /// Validate resource (cross-namespace checks, etc.)
+    ///
+    /// Called after filter and clean_metadata, before parse.
+    /// Returns a list of warning messages (resource is still processed).
+    /// Override this method to add resource-specific validation.
+    fn validate(&self, _obj: &K, _ctx: &ProcessContext) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Resource parsing/preprocessing
     /// - Parse Secret references
     /// - Register to SecretRefManager
@@ -267,4 +276,108 @@ where
         Some(ns) => format!("{}/{}", ns, name),
         None => name.to_string(),
     }
+}
+
+// ============================================================================
+// Process functions (shared by K8s and FileSystem modes)
+// ============================================================================
+
+/// Process a resource through the processor pipeline
+///
+/// This function is used by both K8s and FileSystem modes:
+/// - Init phase: called directly (is_init=true)
+/// - Runtime phase: called from worker after dequeue (is_init=false)
+///
+/// Returns true if the resource was processed (not filtered out)
+pub fn process_resource<K, P>(obj: K, processor: &P, ctx: &ProcessContext, is_init: bool, kind: &'static str) -> bool
+where
+    K: Resource + Clone + Send + Sync + 'static,
+    P: ResourceProcessor<K>,
+{
+    // 1. Check namespace filter
+    if let Some(allowed_ns) = ctx.namespace_filter {
+        if let Some(ns) = obj.meta().namespace.as_deref() {
+            if !allowed_ns.iter().any(|n| n == ns) {
+                tracing::trace!(
+                    kind,
+                    name = %obj.meta().name.as_deref().unwrap_or(""),
+                    namespace = ns,
+                    "Skipped by namespace filter"
+                );
+                return false;
+            }
+        }
+    }
+
+    // 2. Check processor filter
+    if !processor.filter(&obj) {
+        tracing::trace!(
+            kind,
+            name = %obj.meta().name.as_deref().unwrap_or(""),
+            namespace = %obj.meta().namespace.as_deref().unwrap_or(""),
+            "Skipped by processor filter"
+        );
+        return false;
+    }
+
+    // 3. Clean metadata
+    let mut obj = obj;
+    processor.clean_metadata(&mut obj, ctx);
+
+    // 4. Validate resource (log warnings, but continue processing)
+    let warnings = processor.validate(&obj, ctx);
+    for warning in warnings {
+        tracing::warn!(
+            kind,
+            name = %obj.meta().name.as_deref().unwrap_or(""),
+            namespace = %obj.meta().namespace.as_deref().unwrap_or(""),
+            warning = %warning,
+            "Resource validation warning"
+        );
+    }
+
+    // 5. Resource parse/preprocess
+    match processor.parse(obj, ctx) {
+        ProcessResult::Continue(parsed_obj) => {
+            // 6. Call on_change (e.g., Secret's cascading requeue)
+            processor.on_change(&parsed_obj, ctx);
+
+            let phase = if is_init { "init" } else { "runtime" };
+            tracing::debug!(
+                kind,
+                name = %parsed_obj.meta().name.as_deref().unwrap_or(""),
+                namespace = %parsed_obj.meta().namespace.as_deref().unwrap_or(""),
+                phase,
+                "Resource processed and saving"
+            );
+
+            // 7. Save to cache
+            processor.save(ctx.config_server, parsed_obj);
+            true
+        }
+        ProcessResult::Skip { reason } => {
+            tracing::debug!(kind, reason, "Resource skipped after parse");
+            false
+        }
+    }
+}
+
+/// Process resource deletion
+///
+/// Called when a resource is deleted (file removed or K8s delete event).
+/// Handles cleanup and removes from cache.
+pub fn process_resource_delete<K, P>(cached_obj: K, processor: &P, ctx: &ProcessContext, kind: &'static str)
+where
+    K: Resource + Clone + Send + Sync + 'static,
+    P: ResourceProcessor<K>,
+{
+    let key = make_resource_key(&cached_obj);
+
+    // 1. Execute delete cleanup (e.g., clear SecretRefManager references)
+    processor.on_delete(&cached_obj, ctx);
+
+    // 2. Remove from cache
+    processor.remove(ctx.config_server, &key);
+
+    tracing::debug!(kind, key = %key, "Resource deleted from cache");
 }

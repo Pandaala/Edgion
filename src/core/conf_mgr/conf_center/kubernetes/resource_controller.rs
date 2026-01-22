@@ -23,7 +23,8 @@
 use super::metrics::{controller_metrics, InitSyncTimer};
 use super::namespace::NamespaceWatchMode;
 use super::resource_processor::{
-    make_resource_key, ProcessConfig, ProcessContext, ProcessResult, RequeueRegistry, ResourceProcessor,
+    make_resource_key, process_resource, process_resource_delete, ProcessConfig, ProcessContext, RequeueRegistry,
+    ResourceProcessor,
 };
 use super::shutdown::ShutdownSignal;
 use super::workqueue::Workqueue;
@@ -450,91 +451,6 @@ where
         tracing::warn!(component = "resource_controller", kind = kind, "Controller stopped");
         Ok(())
     }
-}
-
-// ============================================================================
-// Unified process_resource function
-// ============================================================================
-
-/// Unified resource processing function for both Init and Runtime phases
-///
-/// Returns true if the resource was processed (not filtered out)
-fn process_resource<K, P>(obj: K, processor: &P, ctx: &ProcessContext, is_init: bool, kind: &'static str) -> bool
-where
-    K: Resource + Clone + Send + Sync + 'static,
-    P: ResourceProcessor<K>,
-{
-    // 1. Check namespace filter
-    if let Some(allowed_ns) = ctx.namespace_filter {
-        if let Some(ns) = obj.meta().namespace.as_deref() {
-            if !allowed_ns.iter().any(|n| n == ns) {
-                tracing::trace!(
-                    kind,
-                    name = %obj.meta().name.as_deref().unwrap_or(""),
-                    namespace = ns,
-                    "Skipped by namespace filter"
-                );
-                return false;
-            }
-        }
-    }
-
-    // 2. Check processor filter
-    if !processor.filter(&obj) {
-        tracing::trace!(
-            kind,
-            name = %obj.meta().name.as_deref().unwrap_or(""),
-            namespace = %obj.meta().namespace.as_deref().unwrap_or(""),
-            "Skipped by processor filter"
-        );
-        return false;
-    }
-
-    // 3. Clean metadata
-    let mut obj = obj;
-    processor.clean_metadata(&mut obj, ctx);
-
-    // 4. Resource parse/preprocess
-    match processor.parse(obj, ctx) {
-        ProcessResult::Continue(parsed_obj) => {
-            // 5. Call on_change (e.g., Secret's cascading requeue)
-            processor.on_change(&parsed_obj, ctx);
-
-            let phase = if is_init { "init" } else { "runtime" };
-            tracing::debug!(
-                kind,
-                name = %parsed_obj.meta().name.as_deref().unwrap_or(""),
-                namespace = %parsed_obj.meta().namespace.as_deref().unwrap_or(""),
-                phase,
-                "Resource processed and saving"
-            );
-
-            // 6. Save to cache
-            processor.save(ctx.config_server, parsed_obj);
-            true
-        }
-        ProcessResult::Skip { reason } => {
-            tracing::debug!(kind, reason, "Resource skipped after parse");
-            false
-        }
-    }
-}
-
-/// Process resource deletion
-fn process_resource_delete<K, P>(cached_obj: K, processor: &P, ctx: &ProcessContext, kind: &'static str)
-where
-    K: Resource + Clone + Send + Sync + 'static,
-    P: ResourceProcessor<K>,
-{
-    let key = make_resource_key(&cached_obj);
-
-    // 1. Execute delete cleanup (e.g., clear SecretRefManager references)
-    processor.on_delete(&cached_obj, ctx);
-
-    // 2. Remove from cache
-    processor.remove(ctx.config_server, &key);
-
-    tracing::debug!(kind, key = %key, "Resource deleted from cache");
 }
 
 // ============================================================================

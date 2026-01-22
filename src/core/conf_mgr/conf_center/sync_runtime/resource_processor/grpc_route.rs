@@ -1,8 +1,9 @@
 //! GRPCRoute Processor
 //!
-//! Handles GRPCRoute resources
+//! Handles GRPCRoute resources with ReferenceGrant validation
 
 use super::{ProcessContext, ProcessResult, ResourceProcessor};
+use crate::core::conf_mgr::resource_check::validate_grpc_route;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::prelude_resources::GRPCRoute;
@@ -27,8 +28,11 @@ impl ResourceProcessor<GRPCRoute> for GrpcRouteProcessor {
         "GRPCRoute"
     }
 
+    fn validate(&self, route: &GRPCRoute, _ctx: &ProcessContext) -> Vec<String> {
+        validate_grpc_route(route)
+    }
+
     fn parse(&self, route: GRPCRoute, _ctx: &ProcessContext) -> ProcessResult<GRPCRoute> {
-        // TODO: 后续可添加 ref_grant 验证等逻辑
         ProcessResult::Continue(route)
     }
 

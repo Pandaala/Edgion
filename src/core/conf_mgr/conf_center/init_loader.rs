@@ -1,6 +1,13 @@
 //! Resource loader for initialization
 //!
-//! Unified single-pass loading that works for both file system and Kubernetes modes
+//! This module provides `load_all_resources` for:
+//! - Admin API reload endpoint (`/api/v1/reload`)
+//! - Legacy initialization (superseded by FileSystemSyncController for startup)
+//!
+//! Note: For startup, FileSystem mode now uses `FileSystemSyncController` which
+//! provides unified init + runtime flow with ResourceProcessor-based processing.
+//! This loader is kept for Admin API compatibility and includes additional
+//! validation logic (resource_check) not present in the sync controller.
 
 use crate::core::conf_mgr::conf_center::ConfWriter;
 use crate::core::conf_mgr::resource_check::{self, check_edgion_tls, ResourceCheckContext};
@@ -352,9 +359,7 @@ pub async fn load_all_resources(writer: Arc<dyn ConfWriter>, config_server: Arc<
     // In K8s mode, this is handled by the watcher's InitDone event
     // Use ALL_RESOURCE_INFOS to avoid hardcoded kind list
     for info in ALL_RESOURCE_INFOS {
-        // Use Debug format to get PascalCase kind name (e.g., "GatewayClass")
-        let kind_name = format!("{:?}", info.kind);
-        config_server.set_cache_ready_by_kind(&kind_name);
+        config_server.set_cache_ready_by_kind(info.kind.as_str());
     }
 
     // Note: set_all_ready() is called by wait_all_ready() in edgion_controller

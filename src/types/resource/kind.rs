@@ -25,6 +25,37 @@ pub enum ResourceKind {
 }
 
 impl ResourceKind {
+    /// Get the static string representation of this ResourceKind (PascalCase)
+    ///
+    /// This is preferred over `format!("{:?}", kind)` because:
+    /// - Returns `&'static str` instead of `String`
+    /// - No heap allocation
+    /// - Consistent and stable (doesn't depend on Debug trait implementation)
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            ResourceKind::Unspecified => "Unspecified",
+            ResourceKind::GatewayClass => "GatewayClass",
+            ResourceKind::EdgionGatewayConfig => "EdgionGatewayConfig",
+            ResourceKind::Gateway => "Gateway",
+            ResourceKind::HTTPRoute => "HTTPRoute",
+            ResourceKind::Service => "Service",
+            ResourceKind::EndpointSlice => "EndpointSlice",
+            ResourceKind::EdgionTls => "EdgionTls",
+            ResourceKind::Secret => "Secret",
+            ResourceKind::EdgionPlugins => "EdgionPlugins",
+            ResourceKind::GRPCRoute => "GRPCRoute",
+            ResourceKind::TCPRoute => "TCPRoute",
+            ResourceKind::UDPRoute => "UDPRoute",
+            ResourceKind::PluginMetaData => "PluginMetaData",
+            ResourceKind::TLSRoute => "TLSRoute",
+            ResourceKind::LinkSys => "LinkSys",
+            ResourceKind::EdgionStreamPlugins => "EdgionStreamPlugins",
+            ResourceKind::ReferenceGrant => "ReferenceGrant",
+            ResourceKind::BackendTLSPolicy => "BackendTLSPolicy",
+            ResourceKind::Endpoint => "Endpoint",
+        }
+    }
+
     /// Compile-time exhaustiveness check
     ///
     /// This function ensures that all ResourceKind variants are defined in resource_defs.rs.

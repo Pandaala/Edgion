@@ -1,8 +1,9 @@
 //! TCPRoute Processor
 //!
-//! Handles TCPRoute resources
+//! Handles TCPRoute resources with ReferenceGrant validation
 
 use super::{ProcessContext, ProcessResult, ResourceProcessor};
+use crate::core::conf_mgr::resource_check::validate_tcp_route;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::prelude_resources::TCPRoute;
@@ -27,8 +28,11 @@ impl ResourceProcessor<TCPRoute> for TcpRouteProcessor {
         "TCPRoute"
     }
 
+    fn validate(&self, route: &TCPRoute, _ctx: &ProcessContext) -> Vec<String> {
+        validate_tcp_route(route)
+    }
+
     fn parse(&self, route: TCPRoute, _ctx: &ProcessContext) -> ProcessResult<TCPRoute> {
-        // TODO: 后续可添加 ref_grant 验证等逻辑
         ProcessResult::Continue(route)
     }
 

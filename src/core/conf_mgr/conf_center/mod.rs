@@ -1,7 +1,7 @@
 //! Configuration Center (ConfCenter)
 //!
 //! Unified configuration management supporting multiple backends:
-//! - FileSystem: Local YAML files with optional file watching
+//! - FileSystem: Local YAML files with unified sync controller
 //! - Kubernetes: K8s API with kube-runtime Controller-based resource watching
 //!
 //! Architecture:
@@ -9,26 +9,39 @@
 //! ConfCenter
 //! ├── FileSystem Mode
 //! │   ├── FileSystemWriter (ConfWriter impl) - read/write local files
-//! │   └── FileWatcher - watch file changes, notify ConfigServer
+//! │   └── FileSystemSyncController - unified init + runtime with workqueue
+//! │       ├── Init phase: scan directory, process directly (no queue)
+//! │       └── Runtime phase: file watcher → workqueue → ResourceProcessor
 //! └── Kubernetes Mode
 //!     ├── KubernetesWriter (ConfWriter impl) - call K8s API
 //!     ├── KubernetesController - kube-runtime Controller pattern (includes leader election)
+//!     │   └── ResourceController per resource type with workqueue
 //!     └── ResourceStores - reflector::Store for each resource type
+//!
+//! Common Components (sync_runtime module):
+//! ├── Workqueue - Go operator-style work queue with dedup/retry/backoff
+//! ├── ResourceProcessor - trait for resource-specific processing with validation
+//! ├── RequeueRegistry - cross-resource requeue mechanism
+//! ├── ShutdownSignal/Handle - graceful shutdown coordination
+//! └── Metrics - controller and resource count metrics
 //! ```
 //!
 //! ## Lifecycle Management
 //!
 //! ConfCenter uses `start()` which dispatches to mode-specific lifecycle methods:
 //!
-//! - **FileSystem mode** (`lifecycle_filesystem.rs`): Simple and direct
-//!   1. Create ConfigServer
-//!   2. Load resources + start FileWatcher
-//!   3. Block until shutdown
+//! - **FileSystem mode** (`lifecycle_filesystem.rs`):
+//!   1. Create ConfigServer with configured endpoint_mode
+//!   2. Run FileSystemSyncController (init + runtime phases)
+//!   3. Set config_server = Some (services become available)
+//!   4. Block until shutdown signal
 //!
-//! - **K8s mode** (`lifecycle_kubernetes.rs`): Clean loop with retry
-//!   1. Create ConfigServer
-//!   2. Create and run Controller (includes leader election)
-//!   3. On exit, restart with backoff if needed
+//! - **K8s mode** (`lifecycle_kubernetes.rs`): Event-driven with leader election
+//!   1. Initialize leader election
+//!   2. Wait for leadership
+//!   3. Start event watchers (controller, caches, leadership)
+//!   4. Event loop until shutdown or error
+//!   5. On leadership loss, restart from step 2
 //!
 //! ConfigServer is `Option<Arc<ConfigServer>>`:
 //! - None: Not ready (startup, restart, leadership loss)
@@ -48,8 +61,12 @@ pub mod sync_runtime;
 pub mod traits;
 
 pub use config::{ConfCenterConfig, EndpointMode, LeaderElectionConfig, MetadataFilterConfig};
-pub use file_system::{FileSystemWriter, FileWatcher};
+pub use file_system::{FileResourceTracker, FileSystemSyncController, FileSystemWriter};
 pub use init_loader::load_all_resources;
+
+// Legacy export (deprecated)
+#[allow(deprecated)]
+pub use file_system::FileWatcher;
 pub use kubernetes::{
     ControllerExitReason, KubernetesController, KubernetesStatusStore, KubernetesWriter, NamespaceWatchMode,
     RelinkReason, StatusStore, StatusStoreError,

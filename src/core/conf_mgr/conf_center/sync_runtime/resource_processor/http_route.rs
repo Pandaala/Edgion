@@ -1,8 +1,9 @@
 //! HTTPRoute Processor
 //!
-//! Handles HTTPRoute resources
+//! Handles HTTPRoute resources with ReferenceGrant validation
 
 use super::{ProcessContext, ProcessResult, ResourceProcessor};
+use crate::core::conf_mgr::resource_check::validate_http_route;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::prelude_resources::HTTPRoute;
@@ -27,8 +28,11 @@ impl ResourceProcessor<HTTPRoute> for HttpRouteProcessor {
         "HTTPRoute"
     }
 
+    fn validate(&self, route: &HTTPRoute, _ctx: &ProcessContext) -> Vec<String> {
+        validate_http_route(route)
+    }
+
     fn parse(&self, route: HTTPRoute, _ctx: &ProcessContext) -> ProcessResult<HTTPRoute> {
-        // TODO: 后续可添加 ref_grant 验证等逻辑
         ProcessResult::Continue(route)
     }
 

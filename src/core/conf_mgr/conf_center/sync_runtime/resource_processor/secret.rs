@@ -83,7 +83,7 @@ impl ResourceProcessor<Secret> for SecretProcessor {
 
             // Use RequeueRegistry to enqueue key to the corresponding resource's workqueue
             ctx.requeue_registry()
-                .enqueue(format!("{:?}", resource_ref.kind).as_str(), key);
+                .enqueue(resource_ref.kind.as_str(), key);
         }
     }
 
@@ -116,7 +116,7 @@ impl ResourceProcessor<Secret> for SecretProcessor {
             };
 
             ctx.requeue_registry()
-                .enqueue(format!("{:?}", resource_ref.kind).as_str(), key);
+                .enqueue(resource_ref.kind.as_str(), key);
         }
     }
 

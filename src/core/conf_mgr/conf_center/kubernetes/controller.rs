@@ -315,7 +315,7 @@ impl KubernetesController {
         // Gateway (special processing: filter by gateway_class)
         h.push(spawn::<Gateway, _>(
             self,
-            GatewayProcessor::new(self.gateway_class_name.clone()),
+            GatewayProcessor::new(Some(self.gateway_class_name.clone())),
             &ctx,
         ));
 

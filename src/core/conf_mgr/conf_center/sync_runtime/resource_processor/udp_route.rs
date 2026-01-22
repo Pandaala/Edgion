@@ -1,8 +1,9 @@
 //! UDPRoute Processor
 //!
-//! Handles UDPRoute resources
+//! Handles UDPRoute resources with ReferenceGrant validation
 
 use super::{ProcessContext, ProcessResult, ResourceProcessor};
+use crate::core::conf_mgr::resource_check::validate_udp_route;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::prelude_resources::UDPRoute;
@@ -27,8 +28,11 @@ impl ResourceProcessor<UDPRoute> for UdpRouteProcessor {
         "UDPRoute"
     }
 
+    fn validate(&self, route: &UDPRoute, _ctx: &ProcessContext) -> Vec<String> {
+        validate_udp_route(route)
+    }
+
     fn parse(&self, route: UDPRoute, _ctx: &ProcessContext) -> ProcessResult<UDPRoute> {
-        // TODO: 后续可添加 ref_grant 验证等逻辑
         ProcessResult::Continue(route)
     }
 

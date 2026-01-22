@@ -14,16 +14,22 @@ use crate::types::ResourceKind;
 /// Gateway processor
 ///
 /// Features:
-/// - filter: Filter by gateway_class_name
+/// - filter: Filter by gateway_class_name (optional, None means no filter)
 /// - parse: Parse TLS certificateRefs -> fill tls.secrets
 /// - parse: Register Secret references to SecretRefManager
 /// - on_delete: Clear SecretRefManager references
 pub struct GatewayProcessor {
-    gateway_class_name: String,
+    /// If Some, only process Gateways with matching gatewayClassName
+    /// If None, process all Gateways (used by FileSystem mode)
+    gateway_class_name: Option<String>,
 }
 
 impl GatewayProcessor {
-    pub fn new(gateway_class_name: String) -> Self {
+    /// Create a new GatewayProcessor
+    ///
+    /// - `gateway_class_name`: If Some, filter Gateways by this class name (K8s mode).
+    ///   If None, process all Gateways (FileSystem mode).
+    pub fn new(gateway_class_name: Option<String>) -> Self {
         Self { gateway_class_name }
     }
 }
@@ -34,7 +40,10 @@ impl ResourceProcessor<Gateway> for GatewayProcessor {
     }
 
     fn filter(&self, g: &Gateway) -> bool {
-        g.spec.gateway_class_name == self.gateway_class_name
+        match &self.gateway_class_name {
+            Some(class_name) => g.spec.gateway_class_name == *class_name,
+            None => true, // No filter, process all Gateways
+        }
     }
 
     fn parse(&self, mut g: Gateway, ctx: &ProcessContext) -> ProcessResult<Gateway> {
