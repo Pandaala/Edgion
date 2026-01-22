@@ -66,15 +66,15 @@ use tokio::task::JoinHandle;
 use super::namespace::NamespaceWatchMode;
 use super::resource_controller::{RelinkReason, RelinkSignalSender, ResourceControllerBuilder};
 use super::resource_processor::{
-    BackendTlsPolicyProcessor, EdgionGatewayConfigProcessor, EdgionPluginsProcessor,
-    EdgionStreamPluginsProcessor, EdgionTlsProcessor, EndpointSliceProcessor, EndpointsProcessor,
-    GatewayClassProcessor, GatewayProcessor, GrpcRouteProcessor, HttpRouteProcessor, LinkSysProcessor,
-    PluginMetadataProcessor, ProcessConfig, ReferenceGrantProcessor, RequeueRegistry, ResourceProcessor,
-    SecretProcessor, ServiceProcessor, TcpRouteProcessor, TlsRouteProcessor, UdpRouteProcessor,
+    BackendTlsPolicyProcessor, EdgionGatewayConfigProcessor, EdgionPluginsProcessor, EdgionStreamPluginsProcessor,
+    EdgionTlsProcessor, EndpointSliceProcessor, EndpointsProcessor, GatewayClassProcessor, GatewayProcessor,
+    GrpcRouteProcessor, HttpRouteProcessor, LinkSysProcessor, PluginMetadataProcessor, ProcessConfig,
+    ReferenceGrantProcessor, RequeueRegistry, ResourceProcessor, SecretProcessor, ServiceProcessor, TcpRouteProcessor,
+    TlsRouteProcessor, UdpRouteProcessor,
 };
 use super::shutdown::ShutdownSignal;
 use super::status::{KubernetesStatusStore, StatusStore};
-use crate::core::conf_mgr::MetadataFilterConfig;
+use crate::core::conf_mgr::{conf_center::config::EndpointMode, MetadataFilterConfig};
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::types::prelude_resources::*;
 
@@ -88,19 +88,9 @@ struct SpawnContext {
 }
 
 /// Spawn a namespaced ResourceController with the given processor
-fn spawn<K, P>(
-    controller: &KubernetesController,
-    processor: P,
-    ctx: &SpawnContext,
-) -> JoinHandle<Result<()>>
+fn spawn<K, P>(controller: &KubernetesController, processor: P, ctx: &SpawnContext) -> JoinHandle<Result<()>>
 where
-    K: Resource<Scope = kube::core::NamespaceResourceScope>
-        + Clone
-        + Send
-        + Sync
-        + Debug
-        + DeserializeOwned
-        + 'static,
+    K: Resource<Scope = kube::core::NamespaceResourceScope> + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
     P: ResourceProcessor<K> + 'static,
 {
@@ -121,19 +111,9 @@ where
 }
 
 /// Spawn a cluster-scoped ResourceController with the given processor
-fn spawn_cluster<K, P>(
-    controller: &KubernetesController,
-    processor: P,
-    ctx: &SpawnContext,
-) -> JoinHandle<Result<()>>
+fn spawn_cluster<K, P>(controller: &KubernetesController, processor: P, ctx: &SpawnContext) -> JoinHandle<Result<()>>
 where
-    K: Resource<Scope = kube::core::ClusterResourceScope>
-        + Clone
-        + Send
-        + Sync
-        + Debug
-        + DeserializeOwned
-        + 'static,
+    K: Resource<Scope = kube::core::ClusterResourceScope> + Clone + Send + Sync + Debug + DeserializeOwned + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
     P: ResourceProcessor<K> + 'static,
 {
@@ -167,6 +147,8 @@ pub struct KubernetesController {
     label_selector: Option<String>,
     /// Optional metadata filter configuration for reducing resource memory usage
     metadata_filter: Option<MetadataFilterConfig>,
+    /// Resolved endpoint mode (Auto should be resolved before controller creation)
+    endpoint_mode: EndpointMode,
 }
 
 impl KubernetesController {
@@ -179,6 +161,7 @@ impl KubernetesController {
         gateway_class_name: String,
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
+        endpoint_mode: EndpointMode,
     ) -> Result<Self> {
         let client = Client::try_default().await?;
         Self::with_metadata_filter(
@@ -188,6 +171,7 @@ impl KubernetesController {
             watch_namespaces,
             label_selector,
             MetadataFilterConfig::default(),
+            endpoint_mode,
         )
     }
 
@@ -201,9 +185,12 @@ impl KubernetesController {
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
         metadata_filter: MetadataFilterConfig,
+        endpoint_mode: EndpointMode,
     ) -> Result<Self> {
-        let status_store: Arc<dyn StatusStore> =
-            Arc::new(KubernetesStatusStore::new(client.clone(), "edgion-controller".to_string()));
+        let status_store: Arc<dyn StatusStore> = Arc::new(KubernetesStatusStore::new(
+            client.clone(),
+            "edgion-controller".to_string(),
+        ));
 
         let watch_mode = NamespaceWatchMode::from_namespaces(watch_namespaces);
 
@@ -213,6 +200,7 @@ impl KubernetesController {
             label_selector = ?label_selector,
             gateway_class_name = %gateway_class_name,
             metadata_filter_enabled = true,
+            endpoint_mode = ?endpoint_mode,
             "Creating Kubernetes controller"
         );
 
@@ -224,6 +212,7 @@ impl KubernetesController {
             watch_mode,
             label_selector,
             metadata_filter: Some(metadata_filter),
+            endpoint_mode,
         })
     }
 
@@ -294,13 +283,34 @@ impl KubernetesController {
 
         // Backend resources
         h.push(spawn::<Service, _>(self, ServiceProcessor::new(), &ctx));
-        h.push(spawn::<Endpoints, _>(self, EndpointsProcessor::new(), &ctx));
-        h.push(spawn::<EndpointSlice, _>(self, EndpointSliceProcessor::new(), &ctx));
+        match self.endpoint_mode {
+            EndpointMode::Endpoint => {
+                tracing::info!(
+                    component = "k8s_controller",
+                    "Registering Endpoints controller (legacy mode)"
+                );
+                h.push(spawn::<Endpoints, _>(self, EndpointsProcessor::new(), &ctx));
+            }
+            EndpointMode::EndpointSlice => {
+                tracing::info!(
+                    component = "k8s_controller",
+                    "Registering EndpointSlice controller (modern mode)"
+                );
+                h.push(spawn::<EndpointSlice, _>(self, EndpointSliceProcessor::new(), &ctx));
+            }
+            EndpointMode::Auto => {
+                unreachable!("EndpointMode::Auto should be resolved before run_controllers");
+            }
+        }
 
         // TLS related (special processing)
         h.push(spawn::<Secret, _>(self, SecretProcessor::new(), &ctx));
         h.push(spawn::<EdgionTls, _>(self, EdgionTlsProcessor::new(), &ctx));
-        h.push(spawn::<BackendTLSPolicy, _>(self, BackendTlsPolicyProcessor::new(), &ctx));
+        h.push(spawn::<BackendTLSPolicy, _>(
+            self,
+            BackendTlsPolicyProcessor::new(),
+            &ctx,
+        ));
 
         // Gateway (special processing: filter by gateway_class)
         h.push(spawn::<Gateway, _>(
@@ -312,12 +322,20 @@ impl KubernetesController {
         // Other namespaced resources
         h.push(spawn::<ReferenceGrant, _>(self, ReferenceGrantProcessor::new(), &ctx));
         h.push(spawn::<EdgionPlugins, _>(self, EdgionPluginsProcessor::new(), &ctx));
-        h.push(spawn::<EdgionStreamPlugins, _>(self, EdgionStreamPluginsProcessor::new(), &ctx));
+        h.push(spawn::<EdgionStreamPlugins, _>(
+            self,
+            EdgionStreamPluginsProcessor::new(),
+            &ctx,
+        ));
         h.push(spawn::<PluginMetaData, _>(self, PluginMetadataProcessor::new(), &ctx));
         h.push(spawn::<LinkSys, _>(self, LinkSysProcessor::new(), &ctx));
 
         // ==================== Cluster-Scoped Resources (2) ====================
-        h.push(spawn_cluster::<GatewayClass, _>(self, GatewayClassProcessor::new(), &ctx));
+        h.push(spawn_cluster::<GatewayClass, _>(
+            self,
+            GatewayClassProcessor::new(),
+            &ctx,
+        ));
         h.push(spawn_cluster::<EdgionGatewayConfig, _>(
             self,
             EdgionGatewayConfigProcessor::new(),

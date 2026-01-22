@@ -10,7 +10,7 @@ use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use crate::core::backends::endpoint_slice::get_roundrobin_store;
+use crate::core::backends::select_roundrobin_backend;
 use crate::core::observe::{log_tcp, TcpLogEntry};
 use crate::core::plugins::{StreamContext, StreamPluginResult};
 use crate::core::routes::tcp_routes::GatewayTcpRoutes;
@@ -144,9 +144,7 @@ impl EdgionTcp {
             .unwrap_or("default");
         let service_key = format!("{}/{}", namespace, &backend_ref.name);
 
-        // Select backend from EndpointSlice store
-        let ep_store = get_roundrobin_store();
-        let backend = match ep_store.select_peer(&service_key, b"", 256) {
+        let backend = match select_roundrobin_backend(&service_key) {
             Some(backend) => backend,
             None => {
                 ctx.status = TcpStatus::UpstreamConnectionFailed;

@@ -15,45 +15,45 @@
 //! Both Init phase and Runtime phase use the same `process_resource` function,
 //! ensuring consistent processing logic.
 
-mod gateway;
-mod gateway_class;
-mod secret;
-mod edgion_tls;
+mod backend_tls_policy;
 mod edgion_gateway_config;
-mod http_route;
-mod grpc_route;
-mod tcp_route;
-mod udp_route;
-mod tls_route;
-mod service;
-mod endpoints;
-mod endpoint_slice;
-mod reference_grant;
 mod edgion_plugins;
 mod edgion_stream_plugins;
-mod backend_tls_policy;
-mod plugin_metadata;
+mod edgion_tls;
+mod endpoint_slice;
+mod endpoints;
+mod gateway;
+mod gateway_class;
+mod grpc_route;
+mod http_route;
 mod link_sys;
+mod plugin_metadata;
+mod reference_grant;
+mod secret;
+mod service;
+mod tcp_route;
+mod tls_route;
+mod udp_route;
 
-pub use gateway::GatewayProcessor;
-pub use gateway_class::GatewayClassProcessor;
-pub use secret::SecretProcessor;
-pub use edgion_tls::EdgionTlsProcessor;
+pub use backend_tls_policy::BackendTlsPolicyProcessor;
 pub use edgion_gateway_config::EdgionGatewayConfigProcessor;
-pub use http_route::HttpRouteProcessor;
-pub use grpc_route::GrpcRouteProcessor;
-pub use tcp_route::TcpRouteProcessor;
-pub use udp_route::UdpRouteProcessor;
-pub use tls_route::TlsRouteProcessor;
-pub use service::ServiceProcessor;
-pub use endpoints::EndpointsProcessor;
-pub use endpoint_slice::EndpointSliceProcessor;
-pub use reference_grant::ReferenceGrantProcessor;
 pub use edgion_plugins::EdgionPluginsProcessor;
 pub use edgion_stream_plugins::EdgionStreamPluginsProcessor;
-pub use backend_tls_policy::BackendTlsPolicyProcessor;
-pub use plugin_metadata::PluginMetadataProcessor;
+pub use edgion_tls::EdgionTlsProcessor;
+pub use endpoint_slice::EndpointSliceProcessor;
+pub use endpoints::EndpointsProcessor;
+pub use gateway::GatewayProcessor;
+pub use gateway_class::GatewayClassProcessor;
+pub use grpc_route::GrpcRouteProcessor;
+pub use http_route::HttpRouteProcessor;
 pub use link_sys::LinkSysProcessor;
+pub use plugin_metadata::PluginMetadataProcessor;
+pub use reference_grant::ReferenceGrantProcessor;
+pub use secret::SecretProcessor;
+pub use service::ServiceProcessor;
+pub use tcp_route::TcpRouteProcessor;
+pub use tls_route::TlsRouteProcessor;
+pub use udp_route::UdpRouteProcessor;
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -206,7 +206,7 @@ impl RequeueRegistry {
 
         if let Some(queue) = queue {
             let key_for_log = key.clone();
-            
+
             tokio::spawn(async move {
                 queue.enqueue(key).await;
             });
@@ -251,10 +251,10 @@ pub fn find_secret<'a>(
     namespace: Option<&String>,
     name: &str,
 ) -> Option<&'a Secret> {
-    secret_list.data.iter().find(|s| {
-        s.metadata.namespace.as_ref() == namespace
-            && s.metadata.name.as_deref() == Some(name)
-    })
+    secret_list
+        .data
+        .iter()
+        .find(|s| s.metadata.namespace.as_ref() == namespace && s.metadata.name.as_deref() == Some(name))
 }
 
 /// Create a resource key from object: "namespace/name" or "name" for cluster-scoped

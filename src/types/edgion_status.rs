@@ -51,6 +51,21 @@ pub enum EdgionStatus {
     /// EndpointSlice not found for service (EWMA store)
     BackendEndpointSliceNotFoundByEwma = 500_09,
 
+    /// Endpoints not found for service (Consistent hash store)
+    BackendEndpointNotFoundByConsistent = 500_10,
+
+    /// Endpoints not found for service (LeastConnection store)
+    BackendEndpointNotFoundByLeastConn = 500_11,
+
+    /// Endpoints not found for service (RoundRobin store)
+    BackendEndpointNotFoundByRoundRobin = 500_12,
+
+    /// Endpoints not found for service (RoundRobin default)
+    BackendEndpointNotFoundByRoundRobinDefault = 500_13,
+
+    /// Endpoints not found for service (EWMA store)
+    BackendEndpointNotFoundByEwma = 500_14,
+
     /// Service not found in service store
     BackendServiceNotFound = 503_02,
 

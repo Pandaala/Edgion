@@ -32,14 +32,12 @@ impl ResourceProcessor<BackendTLSPolicy> for BackendTlsPolicyProcessor {
     }
 
     fn save(&self, cs: &ConfigServer, btp: BackendTLSPolicy) {
-        cs.backend_tls_policies
-            .apply_change(ResourceChange::EventUpdate, btp);
+        cs.backend_tls_policies.apply_change(ResourceChange::EventUpdate, btp);
     }
 
     fn remove(&self, cs: &ConfigServer, key: &str) {
         if let Some(obj) = cs.backend_tls_policies.get_by_key(key) {
-            cs.backend_tls_policies
-                .apply_change(ResourceChange::EventDelete, obj);
+            cs.backend_tls_policies.apply_change(ResourceChange::EventDelete, obj);
         }
     }
 

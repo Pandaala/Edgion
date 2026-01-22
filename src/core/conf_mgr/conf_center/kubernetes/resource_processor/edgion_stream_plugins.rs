@@ -32,14 +32,12 @@ impl ResourceProcessor<EdgionStreamPlugins> for EdgionStreamPluginsProcessor {
     }
 
     fn save(&self, cs: &ConfigServer, esp: EdgionStreamPlugins) {
-        cs.edgion_stream_plugins
-            .apply_change(ResourceChange::EventUpdate, esp);
+        cs.edgion_stream_plugins.apply_change(ResourceChange::EventUpdate, esp);
     }
 
     fn remove(&self, cs: &ConfigServer, key: &str) {
         if let Some(obj) = cs.edgion_stream_plugins.get_by_key(key) {
-            cs.edgion_stream_plugins
-                .apply_change(ResourceChange::EventDelete, obj);
+            cs.edgion_stream_plugins.apply_change(ResourceChange::EventDelete, obj);
         }
     }
 

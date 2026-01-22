@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
 use super::secret_ref::SecretRefManager;
+use crate::core::conf_mgr::conf_center::EndpointMode;
 use crate::core::conf_sync::cache_server::ServerCache;
 use crate::core::conf_sync::traits::CacheEventDispatch;
 use crate::core::conf_sync::types::{ListData, WatchResponse};
@@ -81,6 +82,8 @@ pub struct ConfigServer {
     /// Used by clients to detect server restarts/failovers
     /// Wrapped in RwLock to allow regeneration during relink
     server_id: RwLock<String>,
+    /// Endpoint discovery mode (K8s resolved mode)
+    endpoint_mode: RwLock<Option<EndpointMode>>,
 
     // Base conf resources now use dedicated ServerCache (same as other resources)
     pub gateway_classes: ServerCache<GatewayClass>,
@@ -131,6 +134,7 @@ impl ConfigServer {
 
         Self {
             server_id: RwLock::new(server_id),
+            endpoint_mode: RwLock::new(None),
             gateway_classes: ServerCache::new(conf_sync_config.gateway_classes_capacity),
             gateways: ServerCache::new(conf_sync_config.gateways_capacity),
             edgion_gateway_configs: ServerCache::new(conf_sync_config.edgion_gateway_configs_capacity),
@@ -168,6 +172,16 @@ impl ConfigServer {
     /// Get the current server ID
     pub fn server_id(&self) -> String {
         self.server_id.read().unwrap().clone()
+    }
+
+    /// Set endpoint discovery mode (called during initialization in K8s mode)
+    pub fn set_endpoint_mode(&self, mode: EndpointMode) {
+        *self.endpoint_mode.write().unwrap() = Some(mode);
+    }
+
+    /// Get endpoint discovery mode (None for FileSystem or not yet initialized)
+    pub fn endpoint_mode(&self) -> Option<EndpointMode> {
+        *self.endpoint_mode.read().unwrap()
     }
 
     /// Get SecretRefManager statistics for monitoring
@@ -869,7 +883,7 @@ impl ConfigServer {
 
     /// Check if all individual caches are ready (internal check)
     pub fn is_each_cache_ready(&self) -> bool {
-        self.gateway_classes.is_ready()
+        let base_ready = self.gateway_classes.is_ready()
             && self.gateways.is_ready()
             && self.edgion_gateway_configs.is_ready()
             && self.routes.is_ready()
@@ -879,15 +893,23 @@ impl ConfigServer {
             && self.tls_routes.is_ready()
             && self.link_sys.is_ready()
             && self.services.is_ready()
-            && self.endpoint_slices.is_ready()
-            && self.endpoints.is_ready()
             && self.edgion_tls.is_ready()
             && self.edgion_plugins.is_ready()
             && self.edgion_stream_plugins.is_ready()
             && self.reference_grants.is_ready()
             && self.backend_tls_policies.is_ready()
             && self.plugin_metadata.is_ready()
-            && self.secrets.is_ready()
+            && self.secrets.is_ready();
+
+        let endpoint_ready = match self.endpoint_mode() {
+            Some(EndpointMode::Endpoint) => self.endpoints.is_ready(),
+            Some(EndpointMode::EndpointSlice) | None => self.endpoint_slices.is_ready(),
+            Some(EndpointMode::Auto) => {
+                unreachable!("EndpointMode::Auto should be resolved before cache checks")
+            }
+        };
+
+        base_ready && endpoint_ready
     }
 
     /// Get list of caches that are not ready yet
@@ -923,11 +945,21 @@ impl ConfigServer {
         if !self.services.is_ready() {
             not_ready.push("Service");
         }
-        if !self.endpoint_slices.is_ready() {
-            not_ready.push("EndpointSlice");
-        }
-        if !self.endpoints.is_ready() {
-            not_ready.push("Endpoints");
+        match self.endpoint_mode() {
+            Some(EndpointMode::Endpoint) => {
+                if !self.endpoints.is_ready() {
+                    not_ready.push("Endpoints");
+                }
+            }
+            Some(EndpointMode::EndpointSlice) | None => {
+                if !self.endpoint_slices.is_ready() {
+                    not_ready.push("EndpointSlice");
+                }
+            }
+            Some(EndpointMode::Auto) => {
+                // Auto should be resolved before readiness checks
+                not_ready.push("EndpointMode(Auto)");
+            }
         }
         if !self.edgion_tls.is_ready() {
             not_ready.push("EdgionTls");
@@ -1083,5 +1115,63 @@ impl ConfigServer {
         from_version: u64,
     ) -> mpsc::Receiver<WatchResponse<EdgionGatewayConfig>> {
         self.edgion_gateway_configs.watch(client_id, client_name, from_version)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::cli::config::ConfSyncConfig;
+
+    fn set_base_caches_ready(cs: &ConfigServer) {
+        let base_kinds = [
+            "GatewayClass",
+            "Gateway",
+            "EdgionGatewayConfig",
+            "HTTPRoute",
+            "GRPCRoute",
+            "TCPRoute",
+            "UDPRoute",
+            "TLSRoute",
+            "LinkSys",
+            "Service",
+            "EdgionTls",
+            "EdgionPlugins",
+            "EdgionStreamPlugins",
+            "ReferenceGrant",
+            "BackendTLSPolicy",
+            "PluginMetaData",
+            "Secret",
+        ];
+
+        for kind in base_kinds {
+            cs.set_cache_ready_by_kind(kind);
+        }
+    }
+
+    #[test]
+    fn test_cache_ready_endpoint_slice_mode() {
+        let cs = ConfigServer::new(&ConfSyncConfig::default());
+        cs.set_endpoint_mode(EndpointMode::EndpointSlice);
+        set_base_caches_ready(&cs);
+        cs.set_cache_ready_by_kind("EndpointSlice");
+
+        assert!(cs.is_each_cache_ready());
+        let not_ready = cs.not_ready_caches();
+        assert!(!not_ready.contains(&"EndpointSlice"));
+        assert!(!not_ready.contains(&"Endpoints"));
+    }
+
+    #[test]
+    fn test_cache_ready_endpoint_mode() {
+        let cs = ConfigServer::new(&ConfSyncConfig::default());
+        cs.set_endpoint_mode(EndpointMode::Endpoint);
+        set_base_caches_ready(&cs);
+        cs.set_cache_ready_by_kind("Endpoints");
+
+        assert!(cs.is_each_cache_ready());
+        let not_ready = cs.not_ready_caches();
+        assert!(!not_ready.contains(&"Endpoints"));
+        assert!(!not_ready.contains(&"EndpointSlice"));
     }
 }

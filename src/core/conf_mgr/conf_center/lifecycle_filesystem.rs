@@ -6,7 +6,7 @@
 //! - Handle graceful shutdown
 
 use super::kubernetes::shutdown::ShutdownHandle;
-use super::{load_all_resources, ConfCenter, ConfCenterConfig, FileWatcher};
+use super::{load_all_resources, ConfCenter, ConfCenterConfig, EndpointMode, FileWatcher};
 use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;
 use std::sync::Arc;
@@ -39,6 +39,8 @@ impl ConfCenter {
 
         // 1. Create ConfigServer
         let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
+        config_server.set_endpoint_mode(EndpointMode::EndpointSlice);
+        crate::core::backends::init_global_endpoint_mode(EndpointMode::EndpointSlice);
 
         // 2. Load resources + start FileWatcher
         let watcher_error_rx = self.start_filesystem_sync(&config_server).await?;

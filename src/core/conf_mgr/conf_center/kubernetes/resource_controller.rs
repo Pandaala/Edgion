@@ -368,7 +368,8 @@ where
                                 }
                             } else {
                                 // Runtime phase - enqueue key for worker
-                                if self.processor.filter(&obj) && passes_namespace_filter(&obj, &self.namespace_filter) {
+                                if self.processor.filter(&obj) && passes_namespace_filter(&obj, &self.namespace_filter)
+                                {
                                     let key = make_resource_key(&obj);
                                     queue.enqueue(key).await;
                                 }
@@ -383,7 +384,8 @@ where
                                 );
                             } else {
                                 // Runtime phase - enqueue key for worker
-                                if self.processor.filter(&obj) && passes_namespace_filter(&obj, &self.namespace_filter) {
+                                if self.processor.filter(&obj) && passes_namespace_filter(&obj, &self.namespace_filter)
+                                {
                                     let key = make_resource_key(&obj);
                                     queue.enqueue(key).await;
                                 }
@@ -467,9 +469,9 @@ where
         if let Some(ns) = obj.meta().namespace.as_deref() {
             if !allowed_ns.iter().any(|n| n == ns) {
                 tracing::trace!(
-                    kind, 
+                    kind,
                     name = %obj.meta().name.as_deref().unwrap_or(""),
-                    namespace = ns, 
+                    namespace = ns,
                     "Skipped by namespace filter"
                 );
                 return false;
@@ -800,8 +802,7 @@ where
             self.api_scope.expect("API scope must be set"),
             self.processor.expect("Processor must be set"),
             self.process_config.unwrap_or_default(),
-            self.requeue_registry
-                .expect("RequeueRegistry must be set"),
+            self.requeue_registry.expect("RequeueRegistry must be set"),
             self.shutdown_signal,
             self.relink_signal,
         )

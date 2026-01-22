@@ -18,6 +18,7 @@ mod namespace;
 mod resource_controller;
 pub mod resource_processor;
 pub mod shutdown;
+mod version_detection;
 mod workqueue;
 mod writer;
 
@@ -27,6 +28,7 @@ pub use metrics::{controller_metrics, ControllerMetrics, InitSyncTimer, Resource
 pub use namespace::NamespaceWatchMode;
 pub use resource_controller::{RelinkReason, RelinkSignalSender, ResourceController, ResourceControllerBuilder};
 pub use shutdown::{ShutdownHandle, ShutdownSignal};
+pub use version_detection::{detect_endpoint_mode, resolve_endpoint_mode};
 pub use writer::KubernetesWriter;
 
 // Re-export status types from conf_center::status

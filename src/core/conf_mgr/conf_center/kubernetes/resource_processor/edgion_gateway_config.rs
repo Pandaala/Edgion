@@ -32,14 +32,12 @@ impl ResourceProcessor<EdgionGatewayConfig> for EdgionGatewayConfigProcessor {
     }
 
     fn save(&self, cs: &ConfigServer, egc: EdgionGatewayConfig) {
-        cs.edgion_gateway_configs
-            .apply_change(ResourceChange::EventUpdate, egc);
+        cs.edgion_gateway_configs.apply_change(ResourceChange::EventUpdate, egc);
     }
 
     fn remove(&self, cs: &ConfigServer, key: &str) {
         if let Some(obj) = cs.edgion_gateway_configs.get_by_key(key) {
-            cs.edgion_gateway_configs
-                .apply_change(ResourceChange::EventDelete, obj);
+            cs.edgion_gateway_configs.apply_change(ResourceChange::EventDelete, obj);
         }
     }
 

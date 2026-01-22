@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 
-use crate::core::backends::endpoint_slice::get_roundrobin_store;
+use crate::core::backends::select_roundrobin_backend;
 use crate::core::observe::{log_udp, UdpLogEntry};
 use crate::core::routes::udp_routes::GatewayUdpRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -118,9 +118,7 @@ impl EdgionUdp {
             .unwrap_or("default");
         let service_key = format!("{}/{}", backend_namespace, backend_ref.name);
 
-        // 4. Resolve backend address via EndpointSlice
-        let ep_store = get_roundrobin_store();
-        let backend = match ep_store.select_peer(&service_key, b"", 256) {
+        let backend = match select_roundrobin_backend(&service_key) {
             Some(backend) => backend,
             None => return,
         };

@@ -5,6 +5,19 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Endpoint discovery mode for Kubernetes
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointMode {
+    /// Use Endpoints resource (K8s 1.0+, legacy)
+    Endpoint,
+    /// Use EndpointSlice resource (K8s 1.21+, recommended)
+    EndpointSlice,
+    /// Auto-detect based on K8s API server version (default)
+    #[default]
+    Auto,
+}
+
 /// Configuration for the Configuration Center
 ///
 /// Supports two backends:
@@ -35,6 +48,9 @@ pub enum ConfCenterConfig {
         /// Leader election configuration (always enabled in K8s mode)
         #[serde(default)]
         leader_election: LeaderElectionConfig,
+        /// Endpoint discovery mode for Kubernetes
+        #[serde(default)]
+        endpoint_mode: EndpointMode,
     },
 }
 
@@ -219,6 +235,7 @@ mod tests {
             gateway_class: "edgion".to_string(),
             metadata_filter: MetadataFilterConfig::default(),
             leader_election: LeaderElectionConfig::default(),
+            endpoint_mode: EndpointMode::default(),
         };
 
         assert!(config.is_k8s_mode());

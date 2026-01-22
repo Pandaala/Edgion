@@ -37,9 +37,11 @@
 //! ```
 
 use super::kubernetes::{
-    LeaderElection, LeaderElectionConfig as K8sLeaderElectionConfig, LeaderHandle, ShutdownHandle,
+    resolve_endpoint_mode, LeaderElection, LeaderElectionConfig as K8sLeaderElectionConfig, LeaderHandle,
+    ShutdownHandle,
 };
 use super::{ConfCenter, ConfCenterConfig, ControllerExitReason, KubernetesController};
+use crate::core::conf_mgr::conf_center::config::EndpointMode;
 use crate::core::conf_sync::ConfigServer;
 use anyhow::Result;
 use kube::Client;
@@ -203,30 +205,32 @@ impl ConfCenter {
             let (event_tx, mut event_rx) = mpsc::channel::<LifecycleEvent>(32);
 
             // Start all event watcher tasks
-            let (watchers, config_server) =
-                match self.start_event_watchers(client, shutdown_handle, leader_handle, event_tx) {
-                    Ok(result) => result,
-                    Err(e) => {
+            let (watchers, config_server) = match self
+                .start_event_watchers(client, shutdown_handle, leader_handle, event_tx)
+                .await
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::error!(
+                        component = "conf_center",
+                        mode = "kubernetes",
+                        error = %e,
+                        "Failed to start event watchers"
+                    );
+                    consecutive_failures += 1;
+                    if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
                         tracing::error!(
                             component = "conf_center",
                             mode = "kubernetes",
-                            error = %e,
-                            "Failed to start event watchers"
+                            consecutive_failures = consecutive_failures,
+                            "Max consecutive failures exceeded, giving up"
                         );
-                        consecutive_failures += 1;
-                        if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
-                            tracing::error!(
-                                component = "conf_center",
-                                mode = "kubernetes",
-                                consecutive_failures = consecutive_failures,
-                                "Max consecutive failures exceeded, giving up"
-                            );
-                            return MainFlowExit::Shutdown;
-                        }
-                        tokio::time::sleep(Self::backoff(consecutive_failures)).await;
-                        continue;
+                        return MainFlowExit::Shutdown;
                     }
-                };
+                    tokio::time::sleep(Self::backoff(consecutive_failures)).await;
+                    continue;
+                }
+            };
 
             let iteration_start = Instant::now();
             let mut caches_ready = false;
@@ -372,6 +376,7 @@ impl ConfCenter {
         &self,
         client: &Client,
         config_server: &Arc<ConfigServer>,
+        endpoint_mode: EndpointMode,
     ) -> Result<KubernetesController> {
         let ConfCenterConfig::Kubernetes {
             watch_namespaces,
@@ -402,6 +407,7 @@ impl ConfCenter {
             watch_namespaces.clone(),
             label_selector.clone(),
             metadata_filter.clone(),
+            endpoint_mode,
         )
     }
 
@@ -415,18 +421,37 @@ impl ConfCenter {
     /// Returns:
     /// - `WatcherHandles`: Handles to abort/await all watcher tasks
     /// - `Arc<ConfigServer>`: The config server for setting service availability
-    fn start_event_watchers(
+    async fn start_event_watchers(
         &self,
         client: &Client,
         shutdown_handle: &ShutdownHandle,
         leader_handle: &LeaderHandle,
         event_tx: mpsc::Sender<LifecycleEvent>,
     ) -> Result<(WatcherHandles, Arc<ConfigServer>)> {
-        // 1. Create ConfigServer and Controller
-        let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
-        let controller = self.create_k8s_controller(client, &config_server)?;
+        // 1. Resolve endpoint mode before creating controller
+        let config_endpoint_mode = match &self.config {
+            ConfCenterConfig::Kubernetes { endpoint_mode, .. } => *endpoint_mode,
+            _ => EndpointMode::EndpointSlice,
+        };
 
-        // 2. Spawn controller.run task
+        let resolved_mode = resolve_endpoint_mode(client, config_endpoint_mode).await?;
+
+        tracing::info!(
+            component = "conf_center",
+            config_mode = ?config_endpoint_mode,
+            resolved_mode = ?resolved_mode,
+            "Endpoint mode resolved"
+        );
+
+        // 2. Create ConfigServer and set endpoint mode
+        let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
+        config_server.set_endpoint_mode(resolved_mode);
+        crate::core::backends::init_global_endpoint_mode(resolved_mode);
+
+        // 3. Create Controller with resolved endpoint mode
+        let controller = self.create_k8s_controller(client, &config_server, resolved_mode)?;
+
+        // 4. Spawn controller.run task
         let shutdown_signal = shutdown_handle.signal();
         let tx = event_tx.clone();
         let controller_handle = tokio::spawn(async move {
@@ -442,7 +467,7 @@ impl ConfCenter {
             let _ = tx.send(LifecycleEvent::ControllerExit(reason)).await;
         });
 
-        // 3. Spawn caches ready watcher task
+        // 5. Spawn caches ready watcher task
         let cs = config_server.clone();
         let tx = event_tx.clone();
         let caches_handle = tokio::spawn(async move {
@@ -469,7 +494,7 @@ impl ConfCenter {
             }
         });
 
-        // 4. Spawn leadership loss watcher task
+        // 6. Spawn leadership loss watcher task
         let lh = leader_handle.clone();
         let tx = event_tx;
         let leader_watcher_handle = tokio::spawn(async move {
