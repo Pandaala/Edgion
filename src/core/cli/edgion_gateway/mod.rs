@@ -1,3 +1,5 @@
+use crate::core::backends::init_global_endpoint_mode;
+use crate::core::conf_mgr::conf_center::EndpointMode;
 use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
 use crate::core::observe::access_log::init_access_logger;
 use crate::core::observe::init_logging;
@@ -159,6 +161,16 @@ impl EdgionGatewayCli {
         // 4. Set global config client
         init_global_config_client(config_client.clone())
             .map_err(|e| anyhow!("Failed to initialize global config client: {}", e))?;
+
+        // 4.1. Initialize global endpoint mode
+        // For Gateway, we use EndpointSlice as default (modern K8s clusters)
+        // This can be made configurable in the future if needed
+        init_global_endpoint_mode(EndpointMode::EndpointSlice);
+        tracing::info!(
+            component = "startup",
+            endpoint_mode = "EndpointSlice",
+            "Global endpoint mode initialized"
+        );
 
         // 5. Start watching all resources
         runtime.block_on(sync_client.start_watch_all())?;

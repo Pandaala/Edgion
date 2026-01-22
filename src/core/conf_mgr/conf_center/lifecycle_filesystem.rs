@@ -38,6 +38,7 @@ impl ConfCenter {
         }
 
         // 1. Create ConfigServer
+        // FileSystem mode uses EndpointSlice (modern) since test configs use EndpointSlice resources
         let config_server = Arc::new(ConfigServer::new(&self.conf_sync_config));
         config_server.set_endpoint_mode(EndpointMode::EndpointSlice);
         crate::core::backends::init_global_endpoint_mode(EndpointMode::EndpointSlice);
