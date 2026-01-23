@@ -292,10 +292,14 @@ impl ConfCenter {
     ///
     /// Performs a complete reset:
     /// 1. Clear all caches (remove stale data from deleted files)
-    /// 2. Run init_phase to reload from directory
+    /// 2. Run init_phase to reload from directory (two passes for dependency resolution)
     ///
     /// This ensures that deleted files are properly removed from the cache,
     /// unlike the old `load_all_resources` which only added resources incrementally.
+    ///
+    /// Note: Two passes are needed because resources are processed in filename order,
+    /// and EdgionTls/Gateway depend on Secret which comes later alphabetically.
+    /// First pass loads all resources, second pass resolves Secret references.
     pub async fn reload(&self) -> Result<()> {
         if self.is_k8s_mode() {
             return Err(anyhow::anyhow!("Reload not supported in K8s mode"));
@@ -319,8 +323,19 @@ impl ConfCenter {
         // 1. Clear all caches (handles deleted files)
         config_server.clear_all_caches();
 
-        // 2. Run init_phase to reload
+        // 2. Run init_phase twice to ensure Secret dependencies are resolved
+        // First pass: load all resources (EdgionTls/Gateway may not find Secrets yet)
+        // Second pass: re-process to resolve Secret references
         let controller = FileSystemSyncController::new_for_reload(conf_dir.clone(), config_server);
+        controller.init_phase().await?;
+
+        tracing::debug!(
+            component = "conf_center",
+            mode = "file_system",
+            "First pass complete, running second pass for Secret dependency resolution"
+        );
+
+        // Second pass to resolve Secret dependencies
         controller.init_phase().await?;
 
         tracing::info!(
