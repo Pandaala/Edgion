@@ -30,6 +30,7 @@
 //! config_sync_server.register_watch_obj("HTTPRoute", processor.as_watch_obj());
 //! ```
 
+pub mod conf_center;
 pub mod processor_registry;
 pub mod sync_runtime;
 

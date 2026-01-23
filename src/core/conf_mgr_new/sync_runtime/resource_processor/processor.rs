@@ -53,6 +53,15 @@ pub trait ProcessorObj: Send + Sync {
 
     /// Clear cache data
     fn clear(&self);
+
+    /// Set namespace filter for this processor
+    fn set_namespace_filter_vec(&self, filter: Option<Vec<String>>);
+
+    /// Set metadata filter for this processor
+    fn set_metadata_filter_config(&self, filter: Option<MetadataFilterConfig>);
+
+    /// Get the workqueue for this processor (for RequeueRegistry registration)
+    fn workqueue(&self) -> Arc<Workqueue>;
 }
 
 /// Enhanced ResourceProcessor that holds ServerCache<T>
@@ -421,6 +430,18 @@ where
 
     fn clear(&self) {
         WatchObj::clear(self.cache.as_ref());
+    }
+
+    fn set_namespace_filter_vec(&self, filter: Option<Vec<String>>) {
+        *self.namespace_filter.write().unwrap() = filter.map(Arc::new);
+    }
+
+    fn set_metadata_filter_config(&self, filter: Option<MetadataFilterConfig>) {
+        *self.metadata_filter.write().unwrap() = filter.map(Arc::new);
+    }
+
+    fn workqueue(&self) -> Arc<Workqueue> {
+        self.workqueue.clone()
     }
 }
 
