@@ -69,13 +69,13 @@ use super::resource_processor::{
     BackendTlsPolicyProcessor, EdgionGatewayConfigProcessor, EdgionPluginsProcessor, EdgionStreamPluginsProcessor,
     EdgionTlsProcessor, EndpointSliceProcessor, EndpointsProcessor, GatewayClassProcessor, GatewayProcessor,
     GrpcRouteProcessor, HttpRouteProcessor, LinkSysProcessor, PluginMetadataProcessor, ProcessConfig,
-    ReferenceGrantProcessor, RequeueRegistry, ResourceProcessor, SecretProcessor, ServiceProcessor, TcpRouteProcessor,
-    TlsRouteProcessor, UdpRouteProcessor,
+    ReferenceGrantProcessor, RequeueRegistry, ResourceProcessor, SecretProcessor, SecretRefManager, ServiceProcessor,
+    TcpRouteProcessor, TlsRouteProcessor, UdpRouteProcessor,
 };
 use super::shutdown::ShutdownSignal;
 use super::status::{KubernetesStatusStore, StatusStore};
 use crate::core::conf_mgr::{conf_center::config::EndpointMode, MetadataFilterConfig};
-use crate::core::conf_sync::conf_server_old::ConfigServer;
+use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::types::prelude_resources::*;
 
 /// Context for spawn functions
@@ -84,6 +84,7 @@ struct SpawnContext {
     shutdown: ShutdownSignal,
     relink_tx: RelinkSignalSender,
     requeue_registry: Arc<RequeueRegistry>,
+    secret_ref_manager: Arc<SecretRefManager>,
     process_config: ProcessConfig,
 }
 
@@ -99,6 +100,7 @@ where
         .with_processor(processor)
         .with_process_config(ctx.process_config.clone())
         .with_requeue_registry(ctx.requeue_registry.clone())
+        .with_secret_ref_manager(ctx.secret_ref_manager.clone())
         .with_shutdown(ctx.shutdown.clone())
         .with_relink_signal(ctx.relink_tx.clone())
         .build(
@@ -122,6 +124,7 @@ where
         .with_processor(processor)
         .with_process_config(ctx.process_config.clone())
         .with_requeue_registry(ctx.requeue_registry.clone())
+        .with_secret_ref_manager(ctx.secret_ref_manager.clone())
         .with_shutdown(ctx.shutdown.clone())
         .with_relink_signal(ctx.relink_tx.clone())
         .build(
@@ -260,12 +263,16 @@ impl KubernetesController {
         // Create global RequeueRegistry (shared by all ResourceControllers)
         let requeue_registry = Arc::new(RequeueRegistry::new());
 
+        // Create global SecretRefManager (shared by all ResourceControllers)
+        let secret_ref_manager = Arc::new(SecretRefManager::new());
+
         // Create SpawnContext
         let ctx = SpawnContext {
             watcher_config: self.watcher_config(),
             shutdown: shutdown_signal.clone(),
             relink_tx: relink_tx.clone(),
             requeue_registry: requeue_registry.clone(),
+            secret_ref_manager: secret_ref_manager.clone(),
             process_config: ProcessConfig {
                 metadata_filter: self.metadata_filter.clone(),
             },

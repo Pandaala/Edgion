@@ -3,7 +3,7 @@
 //! Handles EdgionGatewayConfig resources (cluster-scoped)
 
 use super::{ProcessContext, ProcessResult, ResourceProcessor};
-use crate::core::conf_sync::conf_server_old::ConfigServer;
+use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::prelude_resources::EdgionGatewayConfig;
 

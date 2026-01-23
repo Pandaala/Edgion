@@ -5,13 +5,15 @@ pub mod traits;
 pub mod types;
 
 pub mod conf_client;
+pub mod conf_server;
 pub mod conf_server_old;
 
 pub use crate::types::{GatewayBaseConf, ResourceMeta};
 pub use cache_client::ClientCache;
 pub use cache_server::ServerCache;
 pub use conf_client::{ConfigClient, ConfigSyncClient};
-pub use conf_server_old::{ConfigServer, ConfigSyncServer};
+// Re-export from new conf_server module
+pub use conf_server::{ConfigServer, ConfigSyncServer, ServerCacheObj, WatchResponseSimple};
 pub use traits::{CacheEventDispatch, ConfHandler};
 
 use std::sync::{Arc, OnceLock};

@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 use k8s_openapi::api::core::v1::Secret;
 
 use super::{format_secret_key, ProcessContext, ProcessResult, ResourceProcessor};
-use crate::core::conf_sync::conf_server_old::secret_store::update_secrets;
-use crate::core::conf_sync::conf_server_old::ConfigServer;
+use crate::core::conf_sync::conf_server::update_secrets;
+use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 
 /// Secret processor
@@ -65,7 +65,7 @@ impl ResourceProcessor<Secret> for SecretProcessor {
         update_secrets(add_or_update, HashMap::new(), &HashSet::new());
 
         // 2. Trigger cascading requeue for dependent resources
-        let refs = ctx.config_server.secret_ref_manager.get_refs(&secret_key);
+        let refs = ctx.secret_ref_manager().get_refs(&secret_key);
 
         if !refs.is_empty() {
             tracing::info!(
@@ -99,7 +99,7 @@ impl ResourceProcessor<Secret> for SecretProcessor {
         update_secrets(HashMap::new(), HashMap::new(), &remove);
 
         // 2. Trigger cascading requeue (so dependent resources know Secret is deleted)
-        let refs = ctx.config_server.secret_ref_manager.get_refs(&secret_key);
+        let refs = ctx.secret_ref_manager().get_refs(&secret_key);
 
         if !refs.is_empty() {
             tracing::info!(

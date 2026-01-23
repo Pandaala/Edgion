@@ -1,4 +1,4 @@
-use crate::core::conf_sync::conf_server_old::get_secret_by_name;
+use crate::core::conf_sync::conf_server::get_secret_by_name;
 use crate::core::gateway::gateway::{match_gateway_tls, match_gateway_tls_with_port, GatewayTlsEntry};
 use crate::core::observe::ssl_log::{log_ssl, SslLogEntry};
 use crate::core::tls::tls_cert_matcher::match_sni;

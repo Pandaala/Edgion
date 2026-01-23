@@ -3,7 +3,7 @@
 //! Handles TCPRoute resources with ReferenceGrant validation
 
 use super::{ProcessContext, ProcessResult, ResourceProcessor};
-use crate::core::conf_sync::conf_server_old::ConfigServer;
+use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::ref_grant::validate_tcp_route_if_enabled;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::prelude_resources::TCPRoute;

@@ -24,11 +24,11 @@ use super::metrics::{controller_metrics, InitSyncTimer};
 use super::namespace::NamespaceWatchMode;
 use super::resource_processor::{
     make_resource_key, process_resource, process_resource_delete, ProcessConfig, ProcessContext, RequeueRegistry,
-    ResourceProcessor,
+    ResourceProcessor, SecretRefManager,
 };
 use super::shutdown::ShutdownSignal;
 use super::workqueue::Workqueue;
-use crate::core::conf_sync::conf_server_old::ConfigServer;
+use crate::core::conf_sync::conf_server::ConfigServer;
 use anyhow::Result;
 use futures::StreamExt;
 use kube::runtime::reflector::{ObjectRef, Store};
@@ -107,6 +107,9 @@ where
     // RequeueRegistry for cross-resource requeue
     requeue_registry: Arc<RequeueRegistry>,
 
+    // SecretRefManager for secret reference tracking
+    secret_ref_manager: Arc<SecretRefManager>,
+
     /// Namespace filter for MultipleNamespaces mode
     namespace_filter: Option<Vec<String>>,
 
@@ -156,6 +159,7 @@ where
         processor: P,
         process_config: ProcessConfig,
         requeue_registry: Arc<RequeueRegistry>,
+        secret_ref_manager: Arc<SecretRefManager>,
         shutdown_signal: Option<ShutdownSignal>,
         relink_signal: Option<RelinkSignalSender>,
     ) -> Self {
@@ -171,6 +175,7 @@ where
             processor: Arc::new(processor),
             process_config,
             requeue_registry,
+            secret_ref_manager,
             namespace_filter,
             shutdown_signal,
             relink_signal,
@@ -304,6 +309,7 @@ where
                                 self.process_config.metadata_filter.as_ref(),
                                 self.namespace_filter.as_ref(),
                                 &self.requeue_registry,
+                                &self.secret_ref_manager,
                             );
 
                             if process_resource(obj, &*self.processor, &ctx, true, kind) {
@@ -339,6 +345,7 @@ where
                                 self.process_config.clone(),
                                 self.namespace_filter.clone(),
                                 self.requeue_registry.clone(),
+                                self.secret_ref_manager.clone(),
                                 kind,
                                 self.shutdown_signal.clone(),
                             ));
@@ -362,6 +369,7 @@ where
                                     self.process_config.metadata_filter.as_ref(),
                                     self.namespace_filter.as_ref(),
                                     &self.requeue_registry,
+                                    &self.secret_ref_manager,
                                 );
 
                                 if process_resource(obj, &*self.processor, &ctx, true, kind) {
@@ -474,6 +482,7 @@ fn spawn_worker<K, P>(
     process_config: ProcessConfig,
     namespace_filter: Option<Vec<String>>,
     requeue_registry: Arc<RequeueRegistry>,
+    secret_ref_manager: Arc<SecretRefManager>,
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
 ) -> JoinHandle<()>
@@ -511,6 +520,7 @@ where
                         process_config.metadata_filter.as_ref(),
                         namespace_filter.as_ref(),
                         &requeue_registry,
+                        &secret_ref_manager,
                     );
 
                     process_work_item(&work_item.key, &store, &*processor, &ctx, kind);
@@ -616,6 +626,7 @@ where
     processor: Option<P>,
     process_config: Option<ProcessConfig>,
     requeue_registry: Option<Arc<RequeueRegistry>>,
+    secret_ref_manager: Option<Arc<SecretRefManager>>,
     shutdown_signal: Option<ShutdownSignal>,
     relink_signal: Option<RelinkSignalSender>,
     _marker: std::marker::PhantomData<K>,
@@ -634,6 +645,7 @@ where
             processor: None,
             process_config: None,
             requeue_registry: None,
+            secret_ref_manager: None,
             shutdown_signal: None,
             relink_signal: None,
             _marker: std::marker::PhantomData,
@@ -678,6 +690,7 @@ where
             processor: Some(processor),
             process_config: self.process_config,
             requeue_registry: self.requeue_registry,
+            secret_ref_manager: self.secret_ref_manager,
             shutdown_signal: self.shutdown_signal,
             relink_signal: self.relink_signal,
             _marker: std::marker::PhantomData,
@@ -693,6 +706,12 @@ where
     /// Set the RequeueRegistry for cross-resource requeue
     pub fn with_requeue_registry(mut self, registry: Arc<RequeueRegistry>) -> Self {
         self.requeue_registry = Some(registry);
+        self
+    }
+
+    /// Set the SecretRefManager for secret reference tracking
+    pub fn with_secret_ref_manager(mut self, manager: Arc<SecretRefManager>) -> Self {
+        self.secret_ref_manager = Some(manager);
         self
     }
 }
@@ -719,6 +738,7 @@ where
             self.processor.expect("Processor must be set"),
             self.process_config.unwrap_or_default(),
             self.requeue_registry.expect("RequeueRegistry must be set"),
+            self.secret_ref_manager.expect("SecretRefManager must be set"),
             self.shutdown_signal,
             self.relink_signal,
         )

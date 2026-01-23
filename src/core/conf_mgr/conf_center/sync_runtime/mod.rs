@@ -19,6 +19,9 @@ pub use resource_processor::{
     HttpRouteProcessor, LinkSysProcessor, PluginMetadataProcessor, ProcessConfig, ProcessContext, ProcessResult,
     ReferenceGrantProcessor, RequeueRegistry, ResourceProcessor, SecretProcessor, ServiceProcessor,
     TcpRouteProcessor, TlsRouteProcessor, UdpRouteProcessor,
+    // Secret utilities
+    get_global_secret_store, get_secret, get_secret_by_name, replace_all_secrets, update_secrets,
+    RefManagerStats, ResourceRef, SecretRefManager, SecretStore,
 };
 pub use shutdown::{ShutdownController, ShutdownHandle, ShutdownSignal};
 pub use workqueue::{WorkItem, Workqueue, WorkqueueConfig, WorkqueueMetrics};

@@ -30,6 +30,7 @@ mod link_sys;
 mod plugin_metadata;
 mod reference_grant;
 mod secret;
+pub mod secret_utils;
 mod service;
 mod tcp_route;
 mod tls_route;
@@ -51,6 +52,11 @@ pub use link_sys::LinkSysProcessor;
 pub use plugin_metadata::PluginMetadataProcessor;
 pub use reference_grant::ReferenceGrantProcessor;
 pub use secret::SecretProcessor;
+// Re-export secret_utils types
+pub use secret_utils::{
+    get_global_secret_store, get_secret, get_secret_by_name, replace_all_secrets, update_secrets, RefManagerStats,
+    ResourceRef, SecretRefManager, SecretStore,
+};
 pub use service::ServiceProcessor;
 pub use tcp_route::TcpRouteProcessor;
 pub use tls_route::TlsRouteProcessor;
@@ -64,7 +70,7 @@ use k8s_openapi::api::core::v1::Secret;
 use kube::Resource;
 
 use crate::core::conf_mgr::MetadataFilterConfig;
-use crate::core::conf_sync::conf_server_old::{ConfigServer, SecretRefManager};
+use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::types::ListData;
 
 use super::workqueue::Workqueue;
@@ -141,6 +147,7 @@ pub struct ProcessContext<'a> {
     pub metadata_filter: Option<&'a MetadataFilterConfig>,
     pub namespace_filter: Option<&'a Vec<String>>,
     pub requeue_registry: &'a RequeueRegistry,
+    pub secret_ref_manager: &'a SecretRefManager,
 }
 
 impl<'a> ProcessContext<'a> {
@@ -150,12 +157,14 @@ impl<'a> ProcessContext<'a> {
         metadata_filter: Option<&'a MetadataFilterConfig>,
         namespace_filter: Option<&'a Vec<String>>,
         requeue_registry: &'a RequeueRegistry,
+        secret_ref_manager: &'a SecretRefManager,
     ) -> Self {
         Self {
             config_server,
             metadata_filter,
             namespace_filter,
             requeue_registry,
+            secret_ref_manager,
         }
     }
 
@@ -166,7 +175,7 @@ impl<'a> ProcessContext<'a> {
 
     /// Get SecretRefManager reference
     pub fn secret_ref_manager(&self) -> &SecretRefManager {
-        &self.config_server.secret_ref_manager
+        self.secret_ref_manager
     }
 
     /// Get RequeueRegistry reference (for triggering other resource reprocessing)

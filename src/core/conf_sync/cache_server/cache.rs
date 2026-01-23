@@ -1,10 +1,12 @@
 use kube::{Resource, ResourceExt};
+use serde::Serialize;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
 use super::store::EventStore;
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
+use crate::core::conf_sync::conf_server::{ServerCacheObj, WatchResponseSimple};
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::utils;
 use crate::types::ResourceMeta;
@@ -283,6 +285,79 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     }
 }
 
+/// Implementation of ServerCacheObj trait for ServerCache<T>
+/// This allows storing different ServerCache types in a HashMap<String, Arc<dyn ServerCacheObj>>
+impl<T> ServerCacheObj for ServerCache<T>
+where
+    T: ResourceMeta + Resource + Clone + Send + Sync + Serialize + 'static,
+{
+    fn list_json(&self) -> Result<(String, u64), String> {
+        let list_data = self.list_owned();
+        serde_json::to_string(&list_data.data)
+            .map(|json| (json, list_data.sync_version))
+            .map_err(|e| format!("Failed to serialize {} data: {}", T::kind_name(), e))
+    }
+
+    fn watch_json(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponseSimple> {
+        let typed_rx = self.watch(client_id, client_name, from_version);
+
+        // Create a new channel for the simplified response
+        let (simple_tx, simple_rx) = mpsc::channel(100);
+
+        // Spawn a task to convert WatchResponse<T> to WatchResponseSimple
+        tokio::spawn(async move {
+            let mut typed_rx = typed_rx;
+            while let Some(response) = typed_rx.recv().await {
+                let simple_response = match response.err {
+                    Some(err) => WatchResponseSimple::from_error(err, response.sync_version),
+                    None => {
+                        match serde_json::to_string(&response.events) {
+                            Ok(json) => WatchResponseSimple::new(json, response.sync_version),
+                            Err(e) => WatchResponseSimple::from_error(
+                                format!("Serialization error: {}", e),
+                                response.sync_version,
+                            ),
+                        }
+                    }
+                };
+
+                if simple_tx.send(simple_response).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        simple_rx
+    }
+
+    fn kind_name(&self) -> &'static str {
+        T::kind_name()
+    }
+
+    fn set_ready(&self) {
+        *self.ready.write().unwrap() = true;
+    }
+
+    fn set_not_ready(&self) {
+        *self.ready.write().unwrap() = false;
+    }
+
+    fn is_ready(&self) -> bool {
+        *self.ready.read().unwrap()
+    }
+
+    fn clear(&self) {
+        let mut store_guard = self.store.write().unwrap();
+        store_guard.clear();
+        self.notify.notify_waiters();
+    }
+}
+
 impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispatch<T> for ServerCache<T> {
     fn apply_change(&self, change: ResourceChange, resource: T)
     where
@@ -466,7 +541,7 @@ mod tests {
         };
 
         // Set cache as ready before applying changes
-        cache.set_ready();
+        CacheEventDispatch::set_ready(&cache);
 
         cache.apply_change(ResourceChange::EventAdd, original.clone());
         wait_for_async_store_update().await;
@@ -505,7 +580,7 @@ mod tests {
         };
 
         // Set cache as ready before applying changes
-        cache.set_ready();
+        CacheEventDispatch::set_ready(&cache);
 
         cache.apply_change(ResourceChange::EventAdd, resource.clone());
         wait_for_async_store_update().await;

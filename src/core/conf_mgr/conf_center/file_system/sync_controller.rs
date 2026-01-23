@@ -17,10 +17,10 @@ use crate::core::conf_mgr::conf_center::sync_runtime::{
     EdgionPluginsProcessor, EdgionStreamPluginsProcessor, EdgionTlsProcessor, EndpointSliceProcessor,
     EndpointsProcessor, GatewayClassProcessor, GatewayProcessor, GrpcRouteProcessor, HttpRouteProcessor,
     LinkSysProcessor, PluginMetadataProcessor, ProcessConfig, ProcessContext, ReferenceGrantProcessor,
-    RequeueRegistry, ResourceProcessor, SecretProcessor, ServiceProcessor, ShutdownSignal, TcpRouteProcessor,
-    TlsRouteProcessor, UdpRouteProcessor, Workqueue,
+    RequeueRegistry, ResourceProcessor, SecretProcessor, SecretRefManager, ServiceProcessor, ShutdownSignal,
+    TcpRouteProcessor, TlsRouteProcessor, UdpRouteProcessor, Workqueue,
 };
-use crate::core::conf_sync::conf_server_old::ConfigServer;
+use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::types::prelude_resources::*;
 use crate::types::resource::ALL_RESOURCE_INFOS;
 use crate::types::ResourceKind;
@@ -48,6 +48,7 @@ pub struct FileSystemSyncController {
     conf_dir: PathBuf,
     config_server: Arc<ConfigServer>,
     requeue_registry: Arc<RequeueRegistry>,
+    secret_ref_manager: Arc<SecretRefManager>,
     /// Workqueue per resource kind
     workqueues: HashMap<&'static str, Arc<Workqueue>>,
     process_config: ProcessConfig,
@@ -57,6 +58,7 @@ impl FileSystemSyncController {
     /// Create a new FileSystemSyncController
     pub fn new(conf_dir: PathBuf, config_server: Arc<ConfigServer>) -> Self {
         let requeue_registry = Arc::new(RequeueRegistry::new());
+        let secret_ref_manager = Arc::new(SecretRefManager::new());
 
         // Create workqueues for each resource kind
         let mut workqueues = HashMap::new();
@@ -72,6 +74,7 @@ impl FileSystemSyncController {
             conf_dir,
             config_server,
             requeue_registry,
+            secret_ref_manager,
             workqueues,
             process_config: ProcessConfig::default(),
         }
@@ -188,6 +191,7 @@ impl FileSystemSyncController {
             self.process_config.metadata_filter.as_ref(),
             None, // No namespace filter for FileSystem mode
             &self.requeue_registry,
+            &self.secret_ref_manager,
         );
 
         // Process based on kind
@@ -355,6 +359,7 @@ impl FileSystemSyncController {
         let config_server = self.config_server.clone();
         let conf_dir = self.conf_dir.clone();
         let requeue_registry = self.requeue_registry.clone();
+        let secret_ref_manager = self.secret_ref_manager.clone();
         let process_config = self.process_config.clone();
 
         Some(tokio::spawn(async move {
@@ -378,6 +383,7 @@ impl FileSystemSyncController {
                     &conf_dir,
                     &config_server,
                     &requeue_registry,
+                    &secret_ref_manager,
                     &process_config,
                 );
 
@@ -557,6 +563,7 @@ fn process_work_item(
     conf_dir: &Path,
     config_server: &ConfigServer,
     requeue_registry: &RequeueRegistry,
+    secret_ref_manager: &SecretRefManager,
     process_config: &ProcessConfig,
 ) {
     let ctx = ProcessContext::new(
@@ -564,6 +571,7 @@ fn process_work_item(
         process_config.metadata_filter.as_ref(),
         None,
         requeue_registry,
+        secret_ref_manager,
     );
 
     // Build path from kind and key

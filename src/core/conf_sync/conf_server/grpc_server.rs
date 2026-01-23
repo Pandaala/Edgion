@@ -1,14 +1,19 @@
+//! gRPC server for configuration synchronization
+//!
+//! This module provides the gRPC service implementation for ConfigSync.
+
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 use crate::core::conf_mgr::ConfCenter;
-use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
     ListRequest, ListResponse, WatchRequest, WatchResponse,
 };
 use crate::types::prelude_resources::*;
 use crate::types::WATCH_ERR_SERVER_ID_MISMATCH;
+
+use super::config_server::ConfigServer;
 
 /// Server wrapper for ConfigSync gRPC service
 ///
@@ -36,7 +41,7 @@ impl ConfigSyncServer {
         ConfigSyncService::new(self)
     }
 
-    /// Start the gRPC conf_server_old on the given address
+    /// Start the gRPC server on the given address
     pub async fn serve(self, addr: std::net::SocketAddr) -> Result<(), tonic::transport::Error> {
         let service = self.into_service();
         let server = tonic::transport::Server::builder().add_service(service).serve(addr);
@@ -68,7 +73,7 @@ impl ConfigSyncServer {
         result
     }
 
-    /// Start the gRPC conf_server_old with reflection support
+    /// Start the gRPC server with reflection support
     pub async fn serve_with_reflection(
         self,
         addr: std::net::SocketAddr,
@@ -156,9 +161,14 @@ impl ConfigSync for ConfigSyncServer {
         let client_id_log = req.client_id.clone();
         let client_name_log = req.client_name.clone();
 
-        println!(
-            "[ConfigSyncServer::watch] request key={} kind={:?} client_id={} client_name={} from_version={}",
-            req.key, resource_kind, client_id_log, client_name_log, req.from_version
+        tracing::info!(
+            component = "grpc_server",
+            key = %req.key,
+            kind = ?resource_kind,
+            client_id = %client_id_log,
+            client_name = %client_name_log,
+            from_version = req.from_version,
+            "Watch request received"
         );
 
         // Call watch on ConfigServer
@@ -166,16 +176,25 @@ impl ConfigSync for ConfigSyncServer {
 
         let receiver = match watch_result {
             Ok(receiver) => {
-                println!(
-                    "[ConfigSyncServer::watch] watch established key={} kind={:?} client_id={} client_name={}",
-                    req.key, resource_kind, client_id_log, client_name_log
+                tracing::info!(
+                    component = "grpc_server",
+                    key = %req.key,
+                    kind = ?resource_kind,
+                    client_id = %client_id_log,
+                    client_name = %client_name_log,
+                    "Watch established"
                 );
                 receiver
             }
             Err(e) => {
-                println!(
-                    "[ConfigSyncServer::watch] watch failed key={} kind={:?} client_id={} client_name={} error={}",
-                    req.key, resource_kind, client_id_log, client_name_log, e
+                tracing::error!(
+                    component = "grpc_server",
+                    key = %req.key,
+                    kind = ?resource_kind,
+                    client_id = %client_id_log,
+                    client_name = %client_name_log,
+                    error = %e,
+                    "Watch failed"
                 );
                 return Err(Status::internal(format!("Failed to start watch: {}", e)));
             }

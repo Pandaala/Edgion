@@ -8,7 +8,7 @@
 
 use super::validation::check_edgion_tls;
 use super::{find_secret, format_secret_key, ProcessContext, ProcessResult, ResourceProcessor};
-use crate::core::conf_sync::conf_server_old::{ConfigServer, ResourceRef};
+use crate::core::conf_sync::conf_server::{ConfigServer, ResourceRef};
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::prelude_resources::EdgionTls;
 use crate::types::ResourceKind;

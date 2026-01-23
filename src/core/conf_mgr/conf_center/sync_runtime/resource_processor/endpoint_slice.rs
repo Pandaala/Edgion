@@ -5,7 +5,7 @@
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 
 use super::{ProcessContext, ProcessResult, ResourceProcessor};
-use crate::core::conf_sync::conf_server_old::ConfigServer;
+use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 
 /// EndpointSlice processor
