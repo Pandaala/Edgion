@@ -4,7 +4,7 @@ mod configserver_handlers;
 mod namespaced_handlers;
 mod types;
 
-use crate::core::conf_mgr::{load_all_resources, ConfCenter, SchemaValidator};
+use crate::core::conf_mgr::{ConfCenter, SchemaValidator};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -52,19 +52,29 @@ async fn readiness_check(State(state): State<Arc<AdminState>>) -> Result<Json<Ap
     }
 }
 
-/// Reload all resources from storage
+/// Reload all resources from storage (FileSystem mode only)
+///
+/// Performs a complete reset:
+/// 1. Clear all caches (remove stale data from deleted files)
+/// 2. Reload from directory
 async fn reload_all_resources(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<types::ApiResponse<String>>, StatusCode> {
-    let writer = state.conf_center.writer();
-    let config_server = state.config_server()?;
-
-    load_all_resources(writer, config_server)
+    state
+        .conf_center
+        .reload()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(
+                component = "admin_api",
+                error = %e,
+                "Failed to reload resources"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     tracing::info!(
-        component = "unified_api",
+        component = "admin_api",
         event = "resources_reloaded",
         "All resources reloaded from storage"
     );

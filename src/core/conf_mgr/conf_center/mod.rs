@@ -52,7 +52,6 @@
 
 mod config;
 pub mod file_system;
-pub mod init_loader;
 pub mod kubernetes;
 mod lifecycle_filesystem;
 mod lifecycle_kubernetes;
@@ -62,11 +61,6 @@ pub mod traits;
 
 pub use config::{ConfCenterConfig, EndpointMode, LeaderElectionConfig, MetadataFilterConfig};
 pub use file_system::{FileSystemSyncController, FileSystemWriter};
-pub use init_loader::load_all_resources;
-
-// Legacy export (deprecated)
-#[allow(deprecated)]
-pub use file_system::FileWatcher;
 pub use kubernetes::{
     ControllerExitReason, KubernetesController, KubernetesStatusStore, KubernetesWriter, NamespaceWatchMode,
     RelinkReason, StatusStore, StatusStoreError,
@@ -292,5 +286,49 @@ impl ConfCenter {
     /// Ready means ConfigServer exists and can serve requests.
     pub fn is_ready(&self) -> bool {
         self.config_server.read().unwrap().is_some()
+    }
+
+    /// Reload all resources (FileSystem mode only)
+    ///
+    /// Performs a complete reset:
+    /// 1. Clear all caches (remove stale data from deleted files)
+    /// 2. Run init_phase to reload from directory
+    ///
+    /// This ensures that deleted files are properly removed from the cache,
+    /// unlike the old `load_all_resources` which only added resources incrementally.
+    pub async fn reload(&self) -> Result<()> {
+        if self.is_k8s_mode() {
+            return Err(anyhow::anyhow!("Reload not supported in K8s mode"));
+        }
+
+        let ConfCenterConfig::FileSystem { conf_dir, .. } = &self.config else {
+            return Err(anyhow::anyhow!("Not in FileSystem mode"));
+        };
+
+        let config_server = self
+            .config_server()
+            .ok_or_else(|| anyhow::anyhow!("ConfigServer not available"))?;
+
+        tracing::info!(
+            component = "conf_center",
+            mode = "file_system",
+            conf_dir = %conf_dir.display(),
+            "Reloading all resources (full reset)"
+        );
+
+        // 1. Clear all caches (handles deleted files)
+        config_server.clear_all_caches();
+
+        // 2. Run init_phase to reload
+        let controller = FileSystemSyncController::new_for_reload(conf_dir.clone(), config_server);
+        controller.init_phase().await?;
+
+        tracing::info!(
+            component = "conf_center",
+            mode = "file_system",
+            "Reload complete"
+        );
+
+        Ok(())
     }
 }

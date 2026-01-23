@@ -8,8 +8,8 @@ pub use schema_validator::SchemaValidator;
 
 // ConfCenter exports
 pub use conf_center::{
-    load_all_resources, ConfCenter, ConfCenterConfig, ConfEntry, ConfWriter, ConfWriterError, ControllerExitReason,
-    FileSystemStatusStore, FileSystemWriter, FileWatcher, KubernetesController, KubernetesStatusStore,
+    ConfCenter, ConfCenterConfig, ConfEntry, ConfWriter, ConfWriterError, ControllerExitReason,
+    FileSystemStatusStore, FileSystemSyncController, FileSystemWriter, KubernetesController, KubernetesStatusStore,
     KubernetesWriter, MetadataFilterConfig, NamespaceWatchMode, RelinkReason, StatusStore, StatusStoreError,
 };
 
