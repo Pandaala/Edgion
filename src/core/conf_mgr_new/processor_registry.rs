@@ -136,9 +136,17 @@ impl ProcessorRegistry {
         }
     }
 
-    /// Clear all registered processors (for testing)
-    #[cfg(test)]
+    /// Clear all registered processors
+    ///
+    /// Used when:
+    /// - Restarting controller after failure
+    /// - Losing leadership and re-election
+    /// - Testing cleanup
     pub fn clear_registry(&self) {
+        tracing::info!(
+            component = "processor_registry",
+            "Clearing all registered processors"
+        );
         self.processors.write().unwrap().clear();
     }
 }
