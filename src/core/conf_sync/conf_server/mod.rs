@@ -15,9 +15,3 @@ pub use config_server::{ConfigServer, EventDataSimple, ListDataSimple, ResourceI
 pub use factory::{kind_names, ServerCacheFactory};
 pub use grpc_server::ConfigSyncServer;
 pub use traits::{ServerCacheObj, WatchResponseSimple};
-
-// Backward compatibility re-exports from resource_processor::secret_utils
-// These types have been moved to sync_runtime/resource_processor/secret_utils/
-pub use crate::core::conf_mgr::conf_center::sync_runtime::resource_processor::{
-    get_secret, get_secret_by_name, update_secrets, RefManagerStats, ResourceRef, SecretRefManager, SecretStore,
-};

@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 
 use k8s_openapi::api::core::v1::Secret;
 
+use super::secret_utils::update_secrets;
 use super::{format_secret_key, ProcessContext, ProcessResult, ResourceProcessor};
-use crate::core::conf_sync::conf_server::update_secrets;
 use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 

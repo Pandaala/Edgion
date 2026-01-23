@@ -5,8 +5,9 @@
 //! - TLS Secret reference resolution
 //! - SecretRefManager registration
 
+use super::secret_utils::ResourceRef;
 use super::{find_secret, format_secret_key, ProcessContext, ProcessResult, ResourceProcessor};
-use crate::core::conf_sync::conf_server::{ConfigServer, ResourceRef};
+use crate::core::conf_sync::conf_server::ConfigServer;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::prelude_resources::Gateway;
 use crate::types::ResourceKind;

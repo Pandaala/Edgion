@@ -6,14 +6,15 @@
 
 mod config_server;
 mod grpc_server;
-mod secret_ref;
+pub mod secret_ref;
 pub mod secret_store;
 
-// Re-export from the new conf_server module for backward compatibility
+// Re-export from the new conf_server module for ConfigServer and gRPC types
 pub use crate::core::conf_sync::conf_server::{
-    ConfigServer, ConfigSyncServer, EventDataSimple, ListDataSimple, RefManagerStats, ResourceItem,
-    ResourceRef, SecretRefManager,
+    ConfigServer, ConfigSyncServer, EventDataSimple, ListDataSimple, ResourceItem,
 };
+// Re-export from local secret_ref module
+pub use secret_ref::{RefManagerStats, ResourceRef, SecretRefManager};
 pub use secret_store::{get_secret_by_name, replace_all_secrets, update_secrets, SecretStore};
 
 // NsNameKey is a simple type alias, keep it here
