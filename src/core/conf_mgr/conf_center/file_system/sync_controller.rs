@@ -20,7 +20,7 @@ use crate::core::conf_mgr::conf_center::sync_runtime::{
     RequeueRegistry, ResourceProcessor, SecretProcessor, ServiceProcessor, ShutdownSignal, TcpRouteProcessor,
     TlsRouteProcessor, UdpRouteProcessor, Workqueue,
 };
-use crate::core::conf_sync::conf_server::ConfigServer;
+use crate::core::conf_sync::conf_server_old::ConfigServer;
 use crate::types::prelude_resources::*;
 use crate::types::resource::ALL_RESOURCE_INFOS;
 use crate::types::ResourceKind;

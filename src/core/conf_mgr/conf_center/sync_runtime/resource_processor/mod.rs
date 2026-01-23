@@ -64,7 +64,7 @@ use k8s_openapi::api::core::v1::Secret;
 use kube::Resource;
 
 use crate::core::conf_mgr::MetadataFilterConfig;
-use crate::core::conf_sync::conf_server::{ConfigServer, SecretRefManager};
+use crate::core::conf_sync::conf_server_old::{ConfigServer, SecretRefManager};
 use crate::core::conf_sync::types::ListData;
 
 use super::workqueue::Workqueue;

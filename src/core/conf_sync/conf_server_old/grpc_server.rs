@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 use crate::core::conf_mgr::ConfCenter;
-use crate::core::conf_sync::conf_server::ConfigServer;
+use crate::core::conf_sync::conf_server_old::ConfigServer;
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
     ListRequest, ListResponse, WatchRequest, WatchResponse,
@@ -36,7 +36,7 @@ impl ConfigSyncServer {
         ConfigSyncService::new(self)
     }
 
-    /// Start the gRPC conf_server on the given address
+    /// Start the gRPC conf_server_old on the given address
     pub async fn serve(self, addr: std::net::SocketAddr) -> Result<(), tonic::transport::Error> {
         let service = self.into_service();
         let server = tonic::transport::Server::builder().add_service(service).serve(addr);
@@ -68,7 +68,7 @@ impl ConfigSyncServer {
         result
     }
 
-    /// Start the gRPC conf_server with reflection support
+    /// Start the gRPC conf_server_old with reflection support
     pub async fn serve_with_reflection(
         self,
         addr: std::net::SocketAddr,

@@ -90,7 +90,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
 
     /// Get a single resource by key
     /// Key format: "namespace/name" for namespaced resources, or just "name" for cluster-scoped
-    /// Used by Worker to get "previous state" from conf_server cache
+    /// Used by Worker to get "previous state" from conf_server_old cache
     pub fn get_by_key(&self, key: &str) -> Option<T>
     where
         T: Clone,

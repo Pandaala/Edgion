@@ -119,7 +119,7 @@ where
         })
     }
 
-    /// Start watching resources from gRPC conf_server
+    /// Start watching resources from gRPC conf_server_old
     pub async fn start_watch(&self) -> Result<(), tonic::Status> {
         let grpc_client = self.grpc_client.clone();
         let cache_data = self.cache_data.clone();

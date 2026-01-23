@@ -75,7 +75,7 @@ use super::resource_processor::{
 use super::shutdown::ShutdownSignal;
 use super::status::{KubernetesStatusStore, StatusStore};
 use crate::core::conf_mgr::{conf_center::config::EndpointMode, MetadataFilterConfig};
-use crate::core::conf_sync::conf_server::ConfigServer;
+use crate::core::conf_sync::conf_server_old::ConfigServer;
 use crate::types::prelude_resources::*;
 
 /// Context for spawn functions

@@ -1,4 +1,4 @@
-use crate::core::conf_sync::conf_server::ConfigServer;
+use crate::core::conf_sync::conf_server_old::ConfigServer;
 use crate::core::conf_sync::traits::ResourceChange;
 use crate::core::conf_sync::{CacheEventDispatch, ResourceMeta, ServerCache};
 use crate::types::prelude_resources::*;

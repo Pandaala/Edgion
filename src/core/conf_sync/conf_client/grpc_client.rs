@@ -16,7 +16,7 @@ pub struct ConfigSyncClient {
 }
 
 impl ConfigSyncClient {
-    /// Create a new ConfigSync conf_client and connect to conf_server
+    /// Create a new ConfigSync conf_client and connect to conf_server_old
     /// Uses lazy connection to allow cold start even if the server is not available immediately.
     ///
     /// # Arguments

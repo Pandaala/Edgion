@@ -28,7 +28,7 @@ use super::resource_processor::{
 };
 use super::shutdown::ShutdownSignal;
 use super::workqueue::Workqueue;
-use crate::core::conf_sync::conf_server::ConfigServer;
+use crate::core::conf_sync::conf_server_old::ConfigServer;
 use anyhow::Result;
 use futures::StreamExt;
 use kube::runtime::reflector::{ObjectRef, Store};
