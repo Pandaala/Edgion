@@ -82,7 +82,7 @@ impl ConfigServer {
 
     /// Apply EdgionTls change with secret reference handling
     ///
-    /// Note: Gateway existence check is now handled by callers via `resource_check::check_edgion_tls`.
+    /// Note: Gateway existence check is now handled by callers via `resource_processor::check_edgion_tls`.
     /// This method focuses on Secret resolution and SecretRefManager maintenance.
     pub fn apply_edgion_tls_change(&self, change: ResourceChange, mut resource: EdgionTls) {
         // Handle Secret reference

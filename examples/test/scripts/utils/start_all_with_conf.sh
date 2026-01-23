@@ -655,6 +655,15 @@ main() {
     mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR"
     log_success "Workdirectory创建completed: $WORK_DIR"
     
+    # 第三步半: 复制 CRD schemas 到工作目录
+    if [ -d "${PROJECT_ROOT}/config/crd" ]; then
+        cp -r "${PROJECT_ROOT}/config/crd" "$CONFIG_DIR/"
+        log_success "CRD schemas 复制completed"
+    else
+        log_error "CRD schemas 目录不存在: ${PROJECT_ROOT}/config/crd"
+        exit 1
+    fi
+    
     # 第四步: Generatecertificate（must在加载config前，因为willGenerate Secret file）
     generate_certs
     

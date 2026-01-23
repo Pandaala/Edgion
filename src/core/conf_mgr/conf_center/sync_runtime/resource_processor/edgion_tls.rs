@@ -6,8 +6,8 @@
 //! - CA Secret reference resolution for mTLS (client_auth.ca_secret_ref -> client_auth.ca_secret)
 //! - SecretRefManager registration
 
+use super::validation::check_edgion_tls;
 use super::{find_secret, format_secret_key, ProcessContext, ProcessResult, ResourceProcessor};
-use crate::core::conf_mgr::resource_check::{check_edgion_tls, ResourceCheckContext};
 use crate::core::conf_sync::conf_server::{ConfigServer, ResourceRef};
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::prelude_resources::EdgionTls;
@@ -41,8 +41,7 @@ impl ResourceProcessor<EdgionTls> for EdgionTlsProcessor {
     }
 
     fn validate(&self, tls: &EdgionTls, ctx: &ProcessContext) -> Vec<String> {
-        let check_ctx = ResourceCheckContext::new(ctx.config_server);
-        let result = check_edgion_tls(&check_ctx, tls);
+        let result = check_edgion_tls(ctx.config_server, tls);
         result.warnings
     }
 

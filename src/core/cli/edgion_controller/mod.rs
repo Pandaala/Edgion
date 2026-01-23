@@ -9,7 +9,6 @@ use crate::types::{init_work_dir, work_dir, COMPONENT_EDGION_CONTROLLER, VERSION
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -90,7 +89,8 @@ impl EdgionControllerCli {
             "Non-K8s mode: loading CRD schemas for validation"
         );
 
-        let schema_validator = SchemaValidator::from_crd_dir(Path::new("config/crd")).unwrap_or_else(|e| {
+        let crd_path = work_dir().resolve("config/crd");
+        let schema_validator = SchemaValidator::from_crd_dir(&crd_path).unwrap_or_else(|e| {
             tracing::error!(
                 component = COMPONENT_EDGION_CONTROLLER,
                 event = "schema_load_failed",

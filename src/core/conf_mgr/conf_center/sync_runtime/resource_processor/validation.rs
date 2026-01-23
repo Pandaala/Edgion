@@ -1,9 +1,9 @@
-//! EdgionTls Resource Check
+//! Resource Validation
 //!
-//! Validates EdgionTls resources before apply.
-//! Note: Gateway existence check is removed - controlled by K8s RBAC instead.
+//! Provides validation logic for resources before they are applied.
+//! This module consolidates validation functions that were previously in resource_check.
 
-use super::ResourceCheckContext;
+use crate::core::conf_sync::ConfigServer;
 use crate::types::prelude_resources::EdgionTls;
 
 /// Result of EdgionTls validation check
@@ -35,12 +35,12 @@ impl EdgionTlsCheckResult {
 /// This function only provides warnings for potential issues.
 ///
 /// # Arguments
-/// * `ctx` - Resource check context
+/// * `config_server` - ConfigServer to check resource dependencies
 /// * `tls` - The EdgionTls resource to check
 ///
 /// # Returns
 /// `EdgionTlsCheckResult` with warnings if any (skip_reason is no longer used for Gateway checks)
-pub fn check_edgion_tls(ctx: &ResourceCheckContext, tls: &EdgionTls) -> EdgionTlsCheckResult {
+pub fn check_edgion_tls(config_server: &ConfigServer, tls: &EdgionTls) -> EdgionTlsCheckResult {
     let mut result = EdgionTlsCheckResult::default();
 
     // Warn if parent_refs is empty (structural issue)
@@ -58,7 +58,7 @@ pub fn check_edgion_tls(ctx: &ResourceCheckContext, tls: &EdgionTls) -> EdgionTl
         .as_ref()
         .or(tls.metadata.namespace.as_ref());
 
-    if !ctx.secret_exists(secret_namespace.map(|s| s.as_str()), &tls.spec.secret_ref.name) {
+    if !secret_exists(config_server, secret_namespace.map(|s| s.as_str()), &tls.spec.secret_ref.name) {
         result.warnings.push(format!(
             "Secret '{}' not found, EdgionTls will be applied but TLS may not work until Secret is available",
             tls.spec.secret_ref.name
@@ -66,4 +66,24 @@ pub fn check_edgion_tls(ctx: &ResourceCheckContext, tls: &EdgionTls) -> EdgionTl
     }
 
     result
+}
+
+/// Check if a Secret exists in the cache
+///
+/// # Arguments
+/// * `config_server` - ConfigServer to check
+/// * `namespace` - The namespace to check
+/// * `name` - The Secret name
+fn secret_exists(config_server: &ConfigServer, namespace: Option<&str>, name: &str) -> bool {
+    let secrets = config_server.secrets.list_owned();
+    secrets.data.iter().any(|s| {
+        let s_name_matches = s.metadata.name.as_deref() == Some(name);
+        let s_namespace_matches = match (namespace, s.metadata.namespace.as_deref()) {
+            (Some(ns), Some(s_ns)) => ns == s_ns,
+            (None, None) => true,
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        s_name_matches && s_namespace_matches
+    })
 }

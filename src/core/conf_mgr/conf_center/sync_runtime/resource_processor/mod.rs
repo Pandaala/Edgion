@@ -34,6 +34,7 @@ mod service;
 mod tcp_route;
 mod tls_route;
 mod udp_route;
+mod validation;
 
 pub use backend_tls_policy::BackendTlsPolicyProcessor;
 pub use edgion_gateway_config::EdgionGatewayConfigProcessor;
@@ -54,6 +55,7 @@ pub use service::ServiceProcessor;
 pub use tcp_route::TcpRouteProcessor;
 pub use tls_route::TlsRouteProcessor;
 pub use udp_route::UdpRouteProcessor;
+pub use validation::{check_edgion_tls, EdgionTlsCheckResult};
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};

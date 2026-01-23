@@ -3,8 +3,8 @@
 //! Handles TLSRoute resources with ReferenceGrant validation
 
 use super::{ProcessContext, ProcessResult, ResourceProcessor};
-use crate::core::conf_mgr::resource_check::validate_tls_route;
 use crate::core::conf_sync::conf_server::ConfigServer;
+use crate::core::ref_grant::validate_tls_route_if_enabled;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::types::prelude_resources::TLSRoute;
 
@@ -29,7 +29,7 @@ impl ResourceProcessor<TLSRoute> for TlsRouteProcessor {
     }
 
     fn validate(&self, route: &TLSRoute, _ctx: &ProcessContext) -> Vec<String> {
-        validate_tls_route(route)
+        validate_tls_route_if_enabled(route)
     }
 
     fn parse(&self, route: TLSRoute, _ctx: &ProcessContext) -> ProcessResult<TLSRoute> {

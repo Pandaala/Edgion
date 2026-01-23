@@ -1,4 +1,4 @@
-use crate::core::conf_mgr::resource_check::{check_edgion_tls, ResourceCheckContext};
+use crate::core::conf_mgr::conf_center::sync_runtime::resource_processor::check_edgion_tls;
 use crate::types::prelude_resources::*;
 use axum::{
     body::Bytes,
@@ -169,11 +169,10 @@ pub async fn create_namespaced(
             let tls: EdgionTls = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(&state.schema_validator, kind, &tls, is_k8s)?;
 
-            // Use resource_check to validate EdgionTls before apply (skip in K8s mode)
+            // Validate EdgionTls before apply (skip in K8s mode)
             if !is_k8s {
                 let config_server = state.config_server()?;
-                let ctx = ResourceCheckContext::new(&config_server);
-                let check_result = check_edgion_tls(&ctx, &tls);
+                let check_result = check_edgion_tls(&config_server, &tls);
 
                 if let Some(reason) = check_result.skip_reason {
                     tracing::info!(
@@ -386,11 +385,10 @@ pub async fn update_namespaced(
             let tls: EdgionTls = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(&state.schema_validator, kind, &tls, is_k8s)?;
 
-            // Use resource_check to validate EdgionTls before apply (skip in K8s mode)
+            // Validate EdgionTls before apply (skip in K8s mode)
             if !is_k8s {
                 let config_server = state.config_server()?;
-                let ctx = ResourceCheckContext::new(&config_server);
-                let check_result = check_edgion_tls(&ctx, &tls);
+                let check_result = check_edgion_tls(&config_server, &tls);
 
                 if let Some(reason) = check_result.skip_reason {
                     tracing::info!(
