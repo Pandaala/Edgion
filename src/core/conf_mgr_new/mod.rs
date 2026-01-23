@@ -31,7 +31,9 @@
 //! ```
 
 pub mod conf_center;
+mod conf_mgr_trait;
 pub mod processor_registry;
+mod schema_validator;
 pub mod sync_runtime;
 
 pub use processor_registry::{ProcessorRegistry, PROCESSOR_REGISTRY};
@@ -43,3 +45,7 @@ pub use sync_runtime::resource_processor::{
 pub use sync_runtime::{
     ShutdownController, ShutdownHandle, ShutdownSignal, WorkItem, Workqueue, WorkqueueConfig, WorkqueueMetrics,
 };
+
+// Export top-level types
+pub use conf_mgr_trait::{ConfMgrError, EdgionConfMgr};
+pub use schema_validator::{SchemaValidator, ValidationError};

@@ -28,6 +28,8 @@ mod conf_center;
 mod config;
 mod lifecycle_filesystem;
 mod lifecycle_kubernetes;
+pub mod status;
+mod traits;
 
 pub mod file_system;
 pub mod kubernetes;
@@ -43,13 +45,11 @@ pub use file_system::{FileSystemController, FileSystemWriter};
 
 // Re-export commonly used types from kubernetes
 pub use kubernetes::{
-    ControllerExitReason, KubernetesController, LeaderElection, LeaderHandle, NamespaceWatchMode,
+    ControllerExitReason, KubernetesController, KubernetesWriter, LeaderElection, LeaderHandle, NamespaceWatchMode,
 };
 
-// Re-export traits from old conf_mgr (for compatibility)
-pub use crate::core::conf_mgr::conf_center::traits::{
-    ConfEntry, ConfWriter, ConfWriterError, ListOptions, ListResult,
-};
+// Export traits from local module
+pub use traits::{ConfEntry, ConfWriter, ConfWriterError, ListOptions, ListResult};
 
-// Re-export KubernetesWriter from old conf_mgr (for now)
-pub use crate::core::conf_mgr::conf_center::KubernetesWriter;
+// Export status store types
+pub use status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, StatusStoreError};

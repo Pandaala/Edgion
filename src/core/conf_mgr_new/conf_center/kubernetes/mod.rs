@@ -24,12 +24,14 @@ mod leader_election;
 mod namespace;
 mod resource_controller;
 mod version_detection;
+mod writer;
 
 pub use controller::{ControllerExitReason, KubernetesController};
 pub use leader_election::{LeaderElection, LeaderElectionConfig, LeaderHandle};
 pub use namespace::NamespaceWatchMode;
 pub use resource_controller::{RelinkReason, RelinkSignalSender, ResourceController};
 pub use version_detection::{detect_endpoint_mode, resolve_endpoint_mode};
+pub use writer::KubernetesWriter;
 
 // Re-export types from sync_runtime
 pub use crate::core::conf_mgr_new::sync_runtime::{
@@ -44,7 +46,7 @@ pub use crate::core::conf_mgr_new::sync_runtime::resource_processor::{
 // Re-export registry
 pub use crate::core::conf_mgr_new::PROCESSOR_REGISTRY;
 
-// Re-export metrics from old conf_mgr (shared)
-pub use crate::core::conf_mgr::conf_center::sync_runtime::metrics::{
+// Re-export metrics from local sync_runtime
+pub use crate::core::conf_mgr_new::sync_runtime::metrics::{
     controller_metrics, ControllerMetrics, InitSyncTimer, ResourceMetrics,
 };

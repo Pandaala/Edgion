@@ -16,6 +16,7 @@ mod context;
 mod handler;
 pub mod handlers;
 mod processor;
+pub mod secret_utils;
 
 pub use context::HandlerContext;
 pub use handler::{ProcessResult, ProcessorHandler};
@@ -29,17 +30,13 @@ pub use handlers::{
     TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 
-// Re-export utilities from old conf_mgr
+// Re-export secret utilities from local module
+pub use secret_utils::{
+    get_global_secret_store, get_secret, get_secret_by_name, replace_all_secrets, update_secrets, RefManagerStats,
+    ResourceRef, SecretRefManager, SecretStore,
+};
+
+// Re-export utility functions from old conf_mgr (still shared)
 pub use crate::core::conf_mgr::conf_center::sync_runtime::resource_processor::{
     find_secret, format_secret_key, make_resource_key,
-    // Secret utilities
-    get_global_secret_store,
-    get_secret,
-    get_secret_by_name,
-    replace_all_secrets,
-    update_secrets,
-    RefManagerStats,
-    ResourceRef,
-    SecretRefManager,
-    SecretStore,
 };
