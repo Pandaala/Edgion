@@ -21,7 +21,7 @@
 
 use super::file_watcher::FileSystemWatcher;
 use super::resource_controller::FileSystemResourceController;
-use crate::core::conf_mgr::conf_center::EndpointMode;
+use crate::core::conf_mgr_new::conf_center::EndpointMode;
 use crate::core::conf_mgr_new::sync_runtime::resource_processor::{
     ProcessorHandler, ResourceProcessor, SecretRefManager,
 };

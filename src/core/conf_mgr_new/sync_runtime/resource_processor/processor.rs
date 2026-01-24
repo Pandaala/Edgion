@@ -14,7 +14,7 @@ use kube::Resource;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::core::conf_mgr::MetadataFilterConfig;
+use crate::core::conf_mgr_new::conf_center::MetadataFilterConfig;
 use crate::core::conf_sync::conf_server_new::WatchObj;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::conf_sync::ServerCache;
@@ -23,7 +23,7 @@ use crate::types::ResourceMeta;
 use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
 use super::{make_resource_key, SecretRefManager};
-use crate::core::conf_mgr::conf_center::sync_runtime::workqueue::{Workqueue, WorkqueueConfig};
+use crate::core::conf_mgr_new::sync_runtime::workqueue::{Workqueue, WorkqueueConfig};
 
 /// Object-safe trait for processor management
 ///

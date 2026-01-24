@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use super::traits::WatchObj;
-use crate::core::conf_mgr::conf_center::EndpointMode;
+use crate::core::conf_mgr_new::conf_center::EndpointMode;
 
 /// Simplified event data for watch responses (includes server_id)
 #[derive(Debug, Clone)]

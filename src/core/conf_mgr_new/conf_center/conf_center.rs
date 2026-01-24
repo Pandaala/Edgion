@@ -20,8 +20,8 @@
 
 use super::config::ConfCenterConfig;
 use super::file_system::{FileSystemController, FileSystemWriter};
-use crate::core::conf_mgr::conf_center::traits::ConfWriter;
-use crate::core::conf_mgr::conf_center::KubernetesWriter;
+use super::kubernetes::KubernetesWriter;
+use super::traits::ConfWriter;
 use crate::core::conf_mgr_new::sync_runtime::ShutdownHandle;
 use crate::core::conf_mgr_new::PROCESSOR_REGISTRY;
 use crate::core::conf_sync::conf_server_new::ConfigSyncServer;

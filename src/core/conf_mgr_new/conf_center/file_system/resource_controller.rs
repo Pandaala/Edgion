@@ -12,7 +12,7 @@
 
 use super::event::FileSystemEvent;
 use super::file_watcher::{build_path_from_key, KindEventReceiver};
-use crate::core::conf_mgr::conf_center::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
+use crate::core::conf_mgr_new::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::core::conf_mgr_new::sync_runtime::resource_processor::ResourceProcessor;
 use crate::core::conf_mgr_new::sync_runtime::ShutdownSignal;
 use crate::types::ResourceMeta;

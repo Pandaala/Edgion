@@ -36,7 +36,42 @@ pub use secret_utils::{
     ResourceRef, SecretRefManager, SecretStore,
 };
 
-// Re-export utility functions from old conf_mgr (still shared)
-pub use crate::core::conf_mgr::conf_center::sync_runtime::resource_processor::{
-    find_secret, format_secret_key, make_resource_key,
-};
+// ============================================================================
+// Utility functions (previously in old conf_mgr)
+// ============================================================================
+
+use crate::core::conf_sync::types::ListData;
+use k8s_openapi::api::core::v1::Secret;
+use kube::Resource;
+
+/// Format secret key from namespace and name
+pub fn format_secret_key(namespace: Option<&String>, name: &str) -> String {
+    match namespace {
+        Some(ns) => format!("{}/{}", ns, name),
+        None => name.to_string(),
+    }
+}
+
+/// Find a secret in the cache list
+pub fn find_secret<'a>(
+    secret_list: &'a ListData<Secret>,
+    namespace: Option<&String>,
+    name: &str,
+) -> Option<&'a Secret> {
+    secret_list
+        .data
+        .iter()
+        .find(|s| s.metadata.namespace.as_ref() == namespace && s.metadata.name.as_deref() == Some(name))
+}
+
+/// Create a resource key from object: "namespace/name" or "name" for cluster-scoped
+pub fn make_resource_key<K>(obj: &K) -> String
+where
+    K: Resource,
+{
+    let name = obj.meta().name.as_deref().unwrap_or("");
+    match obj.meta().namespace.as_ref() {
+        Some(ns) => format!("{}/{}", ns, name),
+        None => name.to_string(),
+    }
+}

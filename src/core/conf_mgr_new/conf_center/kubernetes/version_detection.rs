@@ -3,7 +3,7 @@
 //! Detects K8s API capabilities to determine whether to use
 //! Endpoints or EndpointSlice resources.
 
-use crate::core::conf_mgr::conf_center::EndpointMode;
+use crate::core::conf_mgr_new::conf_center::EndpointMode;
 use anyhow::Result;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::api::Api;

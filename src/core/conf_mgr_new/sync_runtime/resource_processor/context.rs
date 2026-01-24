@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Secret;
 
-use crate::core::conf_mgr::MetadataFilterConfig;
+use crate::core::conf_mgr_new::conf_center::MetadataFilterConfig;
 use crate::core::conf_mgr_new::PROCESSOR_REGISTRY;
 use crate::core::conf_sync::types::ListData;
 

@@ -49,8 +49,7 @@ use tokio::task::JoinHandle;
 use super::namespace::NamespaceWatchMode;
 use super::resource_controller::{ApiScope, RelinkReason, RelinkSignalSender, ResourceController};
 use super::ShutdownSignal;
-use crate::core::conf_mgr::conf_center::EndpointMode;
-use crate::core::conf_mgr::MetadataFilterConfig;
+use crate::core::conf_mgr_new::conf_center::{EndpointMode, MetadataFilterConfig};
 use crate::core::conf_mgr_new::sync_runtime::resource_processor::{
     ProcessorHandler, ResourceProcessor, SecretRefManager,
 };
