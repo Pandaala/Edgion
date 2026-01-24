@@ -4,7 +4,7 @@ mod configserver_handlers;
 mod namespaced_handlers;
 mod types;
 
-use crate::core::conf_mgr::{ConfCenter, SchemaValidator};
+use crate::core::conf_mgr_new::{ConfCenter, SchemaValidator};
 use axum::{
     extract::State,
     http::StatusCode,

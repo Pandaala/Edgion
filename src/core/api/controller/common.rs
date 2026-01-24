@@ -1,4 +1,4 @@
-use crate::core::conf_mgr::ConfWriterError;
+use crate::core::conf_mgr_new::ConfWriterError;
 use crate::types::ResourceKind;
 use axum::http::StatusCode;
 
@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 ///
 /// In K8s mode, validation is skipped (handled by K8s API Server)
 pub fn validate_resource<T: serde::Serialize>(
-    validator: &crate::core::conf_mgr::SchemaValidator,
+    validator: &crate::core::conf_mgr_new::SchemaValidator,
     kind: ResourceKind,
     resource: &T,
     is_k8s_mode: bool,

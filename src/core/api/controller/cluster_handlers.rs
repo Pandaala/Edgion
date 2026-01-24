@@ -67,7 +67,7 @@ pub async fn create_cluster(
     match kind {
         crate::types::ResourceKind::GatewayClass => {
             let gc: GatewayClass = parse_resource_and_update_version(&content, !is_k8s)?;
-            validate_resource(&state.schema_validator, kind, &gc, is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &gc, is_k8s)?;
             let json_content = serde_json::to_string(&gc).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), None, &name, json_content)
@@ -76,7 +76,7 @@ pub async fn create_cluster(
         }
         crate::types::ResourceKind::EdgionGatewayConfig => {
             let cfg: EdgionGatewayConfig = parse_resource_and_update_version(&content, !is_k8s)?;
-            validate_resource(&state.schema_validator, kind, &cfg, is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &cfg, is_k8s)?;
             let json_content = serde_json::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), None, &name, json_content)
@@ -120,7 +120,7 @@ pub async fn update_cluster(
     match kind {
         crate::types::ResourceKind::GatewayClass => {
             let gc: GatewayClass = parse_resource_and_update_version(&content, !is_k8s)?;
-            validate_resource(&state.schema_validator, kind, &gc, is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &gc, is_k8s)?;
             let json_content = serde_json::to_string(&gc).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .update_one(kind.as_str(), None, &name, json_content)
@@ -129,7 +129,7 @@ pub async fn update_cluster(
         }
         crate::types::ResourceKind::EdgionGatewayConfig => {
             let cfg: EdgionGatewayConfig = parse_resource_and_update_version(&content, !is_k8s)?;
-            validate_resource(&state.schema_validator, kind, &cfg, is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &cfg, is_k8s)?;
             let json_content = serde_json::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .update_one(kind.as_str(), None, &name, json_content)
