@@ -74,7 +74,7 @@ pub enum ConfWriterError {
 /// - FileSystem: reads/writes local YAML files
 /// - Kubernetes: calls K8s API (similar to client-go)
 #[async_trait]
-pub trait ConfWriter: Send + Sync {
+pub trait CenterApi: Send + Sync {
     /// Set a single configuration (create or update, implementation-specific)
     ///
     /// For FileSystem: always overwrites the file

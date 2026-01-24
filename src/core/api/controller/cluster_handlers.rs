@@ -55,7 +55,7 @@ pub async fn create_cluster(
     }
 
     let is_k8s = state.is_k8s_mode();
-    let writer = state.writer();
+    let writer = state.center_api();
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let metadata = crate::core::utils::extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
@@ -111,7 +111,7 @@ pub async fn update_cluster(
     }
 
     let is_k8s = state.is_k8s_mode();
-    let writer = state.writer();
+    let writer = state.center_api();
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     // Parse, validate, and persist using update_one (fails if not exists)
@@ -163,7 +163,7 @@ pub async fn delete_cluster(
     }
 
     let is_k8s = state.is_k8s_mode();
-    let writer = state.writer();
+    let writer = state.center_api();
 
     // Delete from backend - delete_one will return NotFound if resource doesn't exist
     writer

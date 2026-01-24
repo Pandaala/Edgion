@@ -53,7 +53,7 @@ pub use schema_validator::{SchemaValidator, ValidationError};
 
 // ConfCenter exports (compatible with old conf_mgr)
 pub use conf_center::{
-    ConfCenter, ConfCenterConfig, ConfEntry, ConfWriter, ConfWriterError, ControllerExitReason, EndpointMode,
+    ConfCenter, ConfCenterConfig, ConfEntry, CenterApi, ConfWriterError, ControllerExitReason, EndpointMode,
     FileSystemController, FileSystemStatusStore, FileSystemWriter, KubernetesController, KubernetesStatusStore,
     KubernetesWriter, LeaderElectionConfig, MetadataFilterConfig, NamespaceWatchMode, StatusStore, StatusStoreError,
 };

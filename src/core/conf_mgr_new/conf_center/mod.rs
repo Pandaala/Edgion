@@ -49,7 +49,7 @@ pub use kubernetes::{
 };
 
 // Export traits from local module
-pub use traits::{ConfEntry, ConfWriter, ConfWriterError, ListOptions, ListResult};
+pub use traits::{ConfEntry, CenterApi, ConfWriterError, ListOptions, ListResult};
 
 // Export status store types
 pub use status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, StatusStoreError};

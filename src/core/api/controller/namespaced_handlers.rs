@@ -12,33 +12,33 @@ use std::sync::Arc;
 use super::common::{map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource};
 use super::types::*;
 
-/// List all resources of a kind across all namespaces
+/// List all resources of a kind across all namespaces (from CenterApi/storage)
 pub async fn list_all_namespaces(
     State(state): State<Arc<AdminState>>,
     Path(kind_str): Path<String>,
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let data = state.list_resources(kind)?;
+    let data = state.center_list_resources(kind).await?;
     Ok(Json(ListResponse::success(data)))
 }
 
-/// List namespace-scoped resources
+/// List namespace-scoped resources (from CenterApi/storage)
 pub async fn list_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns)): Path<(String, String)>,
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let data = state.list_resources_namespaced(kind, &ns)?;
+    let data = state.center_list_resources_namespaced(kind, &ns).await?;
     Ok(Json(ListResponse::success(data)))
 }
 
-/// Get a namespace-scoped resource
+/// Get a namespace-scoped resource (from CenterApi/storage)
 pub async fn get_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns, name)): Path<(String, String, String)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let resource = state.get_resource(kind, &ns, &name)?;
+    let resource = state.center_get_resource(kind, &ns, &name).await?;
     resource.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
@@ -63,7 +63,7 @@ pub async fn create_namespaced(
     })?;
 
     let is_k8s = state.is_k8s_mode();
-    let writer = state.writer();
+    let writer = state.center_api();
 
     let content = String::from_utf8(body.to_vec()).map_err(|e| {
         tracing::warn!("Failed to parse body as UTF-8: {}", e);
@@ -266,7 +266,7 @@ pub async fn update_namespaced(
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let is_k8s = state.is_k8s_mode();
-    let writer = state.writer();
+    let writer = state.center_api();
 
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -451,7 +451,7 @@ pub async fn delete_namespaced(
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let is_k8s = state.is_k8s_mode();
-    let writer = state.writer();
+    let writer = state.center_api();
 
     // Delete from backend - delete_one will return NotFound if resource doesn't exist
     writer

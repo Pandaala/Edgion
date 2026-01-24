@@ -68,18 +68,18 @@ impl ListResponse {
     }
 }
 
-/// List all resources of a kind from ConfigSyncServer
+/// List all resources of a kind from ConfigSyncServer cache
 /// GET /configserver/{kind}/list
 pub async fn list_resources(
     State(state): State<Arc<AdminState>>,
     Path(kind_str): Path<String>,
 ) -> Result<Json<ListResponse>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let data = state.list_resources(kind)?;
+    let data = state.cache_list_resources(kind)?;
     Ok(Json(ListResponse::success(data)))
 }
 
-/// Get a single resource from ConfigSyncServer by namespace and name
+/// Get a single resource from ConfigSyncServer cache by namespace and name
 /// GET /configserver/{kind}?namespace=xxx&name=xxx
 pub async fn get_resource(
     State(state): State<Arc<AdminState>>,
@@ -92,10 +92,10 @@ pub async fn get_resource(
 
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    // Use AdminState's resource access methods
+    // Use AdminState's cache methods (reads from ServerCache)
     let resource = match &query.namespace {
-        Some(ns) => state.get_resource(kind, ns, &name)?,
-        None => state.get_cluster_resource(kind, &name)?,
+        Some(ns) => state.cache_get_resource(kind, ns, &name)?,
+        None => state.cache_get_cluster_resource(kind, &name)?,
     };
 
     match resource {

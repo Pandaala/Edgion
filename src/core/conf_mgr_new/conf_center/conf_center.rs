@@ -21,7 +21,7 @@
 use super::config::ConfCenterConfig;
 use super::file_system::{FileSystemController, FileSystemWriter};
 use super::kubernetes::KubernetesWriter;
-use super::traits::ConfWriter;
+use super::traits::CenterApi;
 use crate::core::conf_mgr_new::sync_runtime::ShutdownHandle;
 use crate::core::conf_mgr_new::PROCESSOR_REGISTRY;
 use crate::core::conf_sync::conf_server_new::ConfigSyncServer;
@@ -45,7 +45,7 @@ use tokio::task::JoinHandle;
 /// When None, they should return UNAVAILABLE errors.
 pub struct ConfCenter {
     config: ConfCenterConfig,
-    writer: Arc<dyn ConfWriter>,
+    writer: Arc<dyn CenterApi>,
 
     /// ConfigSyncServer instance for gRPC list/watch
     /// None: Not ready (startup, restart, leadership loss)
@@ -229,7 +229,7 @@ impl ConfCenter {
     // ==================== Public API ====================
 
     /// Get the configuration writer
-    pub fn writer(&self) -> Arc<dyn ConfWriter> {
+    pub fn writer(&self) -> Arc<dyn CenterApi> {
         self.writer.clone()
     }
 

@@ -3,7 +3,7 @@
 //! Implements the ConfWriter trait by calling Kubernetes API.
 //! Similar to client-go, this allows creating/updating/deleting K8s resources via API.
 
-use crate::core::conf_mgr_new::conf_center::{ConfEntry, ConfWriter, ConfWriterError, ListOptions, ListResult};
+use crate::core::conf_mgr_new::conf_center::{ConfEntry, CenterApi, ConfWriterError, ListOptions, ListResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams};
@@ -200,7 +200,7 @@ impl KubernetesWriter {
 }
 
 #[async_trait]
-impl ConfWriter for KubernetesWriter {
+impl CenterApi for KubernetesWriter {
     async fn set_one(
         &self,
         kind: &str,

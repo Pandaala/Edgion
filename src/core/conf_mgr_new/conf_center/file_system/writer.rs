@@ -3,7 +3,7 @@
 //! Implements the ConfWriter trait using local file system as the backend.
 //! Stores resources as YAML files with naming convention: Kind_namespace_name.yaml
 
-use crate::core::conf_mgr_new::conf_center::{ConfEntry, ConfWriter, ConfWriterError, ListOptions, ListResult};
+use crate::core::conf_mgr_new::conf_center::{ConfEntry, CenterApi, ConfWriterError, ListOptions, ListResult};
 use crate::core::utils::extract_resource_metadata;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -46,7 +46,7 @@ impl FileSystemWriter {
 }
 
 #[async_trait]
-impl ConfWriter for FileSystemWriter {
+impl CenterApi for FileSystemWriter {
     async fn set_one(
         &self,
         kind: &str,
