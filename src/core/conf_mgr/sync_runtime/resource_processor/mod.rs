@@ -40,8 +40,6 @@ pub use secret_utils::{
 // Utility functions (previously in old conf_mgr)
 // ============================================================================
 
-use crate::core::conf_sync::types::ListData;
-use k8s_openapi::api::core::v1::Secret;
 use kube::Resource;
 
 /// Format secret key from namespace and name
@@ -50,18 +48,6 @@ pub fn format_secret_key(namespace: Option<&String>, name: &str) -> String {
         Some(ns) => format!("{}/{}", ns, name),
         None => name.to_string(),
     }
-}
-
-/// Find a secret in the cache list
-pub fn find_secret<'a>(
-    secret_list: &'a ListData<Secret>,
-    namespace: Option<&String>,
-    name: &str,
-) -> Option<&'a Secret> {
-    secret_list
-        .data
-        .iter()
-        .find(|s| s.metadata.namespace.as_ref() == namespace && s.metadata.name.as_deref() == Some(name))
 }
 
 /// Create a resource key from object: "namespace/name" or "name" for cluster-scoped

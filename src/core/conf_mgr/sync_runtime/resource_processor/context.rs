@@ -7,11 +7,8 @@
 
 use std::sync::Arc;
 
-use k8s_openapi::api::core::v1::Secret;
-
 use crate::core::conf_mgr::conf_center::MetadataFilterConfig;
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
-use crate::core::conf_sync::types::ListData;
 
 use super::SecretRefManager;
 
@@ -30,9 +27,6 @@ pub struct HandlerContext {
 
     /// Namespace filter (if set, only process resources in these namespaces)
     pub namespace_filter: Option<Arc<Vec<String>>>,
-
-    /// Function to get secrets list (injected to avoid circular dependency)
-    secrets_list_fn: Option<Box<dyn Fn() -> ListData<Secret> + Send + Sync>>,
 }
 
 impl HandlerContext {
@@ -46,17 +40,7 @@ impl HandlerContext {
             secret_ref_manager,
             metadata_filter,
             namespace_filter,
-            secrets_list_fn: None,
         }
-    }
-
-    /// Set the secrets list function
-    pub fn with_secrets_list_fn<F>(mut self, f: F) -> Self
-    where
-        F: Fn() -> ListData<Secret> + Send + Sync + 'static,
-    {
-        self.secrets_list_fn = Some(Box::new(f));
-        self
     }
 
     /// Get SecretRefManager reference
@@ -72,11 +56,6 @@ impl HandlerContext {
     /// Get namespace filter
     pub fn namespace_filter(&self) -> Option<&Vec<String>> {
         self.namespace_filter.as_ref().map(|arc| arc.as_ref())
-    }
-
-    /// Get secrets list (if available)
-    pub fn list_secrets(&self) -> Option<ListData<Secret>> {
-        self.secrets_list_fn.as_ref().map(|f| f())
     }
 
     /// Cross-resource requeue
