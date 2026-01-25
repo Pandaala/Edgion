@@ -50,5 +50,5 @@ pub use controller::FileSystemController;
 pub use event::{FileSystemEvent, ResourceEvent};
 pub use file_watcher::FileSystemWatcher;
 pub use resource_controller::FileSystemResourceController;
-pub use status::{FileSystemStatusHandler, ResourceStatus};
+pub use status::{ErrorStatus, FileSystemStatusHandler};
 pub use storage::FileSystemStorage;

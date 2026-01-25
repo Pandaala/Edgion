@@ -88,6 +88,7 @@ mod tests {
                 },
                 options: None,
             },
+            status: None,
         }
     }
 

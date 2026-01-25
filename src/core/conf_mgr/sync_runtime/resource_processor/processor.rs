@@ -14,6 +14,27 @@ use kube::Resource;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+/// Result of processing a work item
+///
+/// Used by workers to determine if status needs to be persisted
+#[derive(Debug)]
+pub enum WorkItemResult<K> {
+    /// Resource was processed successfully
+    Processed {
+        /// The processed object (with updated status)
+        obj: K,
+        /// Whether status changed and needs persistence
+        status_changed: bool,
+    },
+    /// Resource was deleted
+    Deleted {
+        /// The key of the deleted resource
+        key: String,
+    },
+    /// Nothing to do (already processed or filtered)
+    Skipped,
+}
+
 use crate::core::conf_mgr::conf_center::MetadataFilterConfig;
 use crate::core::conf_sync::conf_server::WatchObj;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
@@ -24,6 +45,25 @@ use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
 use super::{make_resource_key, SecretRefManager};
 use crate::core::conf_mgr::sync_runtime::workqueue::{Workqueue, WorkqueueConfig};
+
+/// Extract status field from a resource as JSON string for comparison
+///
+/// Returns None if the object doesn't have a status field or serialization fails.
+/// This is used to detect status changes without knowing the concrete status type.
+fn extract_status_json<T: Serialize>(obj: &T) -> Option<String> {
+    serde_json::to_value(obj)
+        .ok()
+        .and_then(|v| v.get("status").cloned())
+        .and_then(|s| serde_json::to_string(&s).ok())
+}
+
+/// Extract status field from a resource as serde_json::Value
+///
+/// Returns the status as a JSON Value, or None if not present.
+/// This is used for persisting status to FileSystem (.status files).
+pub fn extract_status_value<T: Serialize>(obj: &T) -> Option<serde_json::Value> {
+    serde_json::to_value(obj).ok().and_then(|v| v.get("status").cloned())
+}
 
 /// Object-safe trait for processor management
 ///
@@ -183,9 +223,12 @@ where
     ///
     /// Called directly during init phase (not via workqueue).
     /// Returns true if resource was processed, false if filtered.
+    ///
+    /// Note: During init phase, we don't persist status because the resources
+    /// are freshly loaded from K8s and their status is already up-to-date.
     pub fn on_init_apply(&self, obj: K) -> bool {
         let ctx = self.create_context();
-        self.process_resource(obj, &ctx, true)
+        matches!(self.process_resource(obj, &ctx, true), WorkItemResult::Processed { .. })
     }
 
     /// Handle InitDone event (LIST completed)
@@ -249,22 +292,27 @@ where
     ///
     /// This compares the store state (from K8s) with cache state
     /// and determines whether to update or delete.
-    pub fn process_work_item(&self, key: &str, store_obj: Option<K>) {
+    ///
+    /// Returns `WorkItemResult` indicating what action was taken and whether
+    /// status needs to be persisted.
+    pub fn process_work_item(&self, key: &str, store_obj: Option<K>) -> WorkItemResult<K> {
         let ctx = self.create_context();
         let cache_obj = self.get(key);
 
         match (store_obj, cache_obj) {
             (Some(obj), _) => {
                 // Object exists in store -> process it
-                self.process_resource(obj, &ctx, false);
+                self.process_resource(obj, &ctx, false)
             }
             (None, Some(cached)) => {
                 // Object deleted from store but exists in cache -> delete
                 self.process_delete(&cached, &ctx);
+                WorkItemResult::Deleted { key: key.to_string() }
             }
             (None, None) => {
                 // Both empty -> already processed, skip
                 tracing::trace!(kind = self.kind, key = key, "Already processed, skipping");
+                WorkItemResult::Skipped
             }
         }
     }
@@ -281,7 +329,7 @@ where
     }
 
     /// Process a resource through the handler pipeline
-    fn process_resource(&self, obj: K, ctx: &HandlerContext, is_init: bool) -> bool {
+    fn process_resource(&self, obj: K, ctx: &HandlerContext, is_init: bool) -> WorkItemResult<K> {
         // Extract name/namespace early for logging (owned strings to avoid borrow issues)
         let name = obj.meta().name.clone().unwrap_or_default();
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
@@ -295,7 +343,7 @@ where
                     namespace = %namespace,
                     "Skipped by namespace filter"
                 );
-                return false;
+                return WorkItemResult::Skipped;
             }
         }
 
@@ -307,7 +355,7 @@ where
                 namespace = %namespace,
                 "Skipped by handler filter"
             );
-            return false;
+            return WorkItemResult::Skipped;
         }
 
         // 3. Clean metadata
@@ -332,10 +380,26 @@ where
         // 5. Parse/preprocess
         match self.handler.parse(obj, ctx) {
             ProcessResult::Continue(mut parsed_obj) => {
-                // 6. Update status (handler sets Gateway API conditions)
+                // 6. Capture old status for comparison (serialize to JSON for comparison)
+                let old_status = extract_status_json(&parsed_obj);
+
+                // 7. Update status (handler sets Gateway API conditions)
                 self.handler.update_status(&mut parsed_obj, ctx, &warnings);
 
-                // 7. Call on_change
+                // 8. Check if status changed
+                let new_status = extract_status_json(&parsed_obj);
+                let status_changed = old_status != new_status;
+
+                if status_changed {
+                    tracing::trace!(
+                        kind = self.kind,
+                        name = %name,
+                        namespace = %namespace,
+                        "Status changed, will persist"
+                    );
+                }
+
+                // 9. Call on_change
                 if !is_init {
                     self.handler.on_change(&parsed_obj, ctx);
                 }
@@ -346,17 +410,23 @@ where
                     name = %parsed_obj.meta().name.as_deref().unwrap_or(""),
                     namespace = %parsed_obj.meta().namespace.as_deref().unwrap_or(""),
                     phase = phase,
+                    status_changed = status_changed,
                     "Resource processed and saving"
                 );
 
-                // 8. Save to cache
+                // 10. Save to cache
                 // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async)
+                let obj_for_result = parsed_obj.clone();
                 if is_init {
                     self.cache.apply_change(ResourceChange::InitAdd, parsed_obj);
                 } else {
                     self.save(parsed_obj);
                 }
-                true
+
+                WorkItemResult::Processed {
+                    obj: obj_for_result,
+                    status_changed,
+                }
             }
             ProcessResult::Skip { reason } => {
                 tracing::debug!(
@@ -364,7 +434,7 @@ where
                     reason = %reason,
                     "Resource skipped after parse"
                 );
-                false
+                WorkItemResult::Skipped
             }
         }
     }

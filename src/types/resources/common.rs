@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// This type is shared across all route resources and follows the
 /// Gateway API specification for parent references.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ParentReference {
     /// Group is the group of the referent

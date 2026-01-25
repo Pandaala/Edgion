@@ -2,6 +2,7 @@
 //!
 //! BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
 
+use super::common::{Condition, ParentReference};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -21,7 +22,8 @@ pub const BACKEND_TLS_POLICY_KIND: &str = "BackendTLSPolicy";
     kind = "BackendTLSPolicy",
     plural = "backendtlspolicies",
     shortname = "btlspolicy",
-    namespaced
+    namespaced,
+    status = "BackendTLSPolicyStatus"
 )]
 #[serde(rename_all = "camelCase")]
 pub struct BackendTLSPolicySpec {
@@ -167,4 +169,38 @@ impl BackendTLSPolicy {
             }
         })
     }
+}
+
+// ============================================================================
+// BackendTLSPolicy Status (Gateway API standard)
+// ============================================================================
+
+/// BackendTLSPolicyStatus describes the status of the BackendTLSPolicy
+/// Following Gateway API PolicyAncestorStatus pattern
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendTLSPolicyStatus {
+    /// Ancestors is a list of ancestor resources (usually Gateways) that are
+    /// associated with the policy, and the status of the policy with respect to
+    /// each ancestor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ancestors: Vec<PolicyAncestorStatus>,
+}
+
+/// PolicyAncestorStatus describes the status of a policy with respect to an
+/// ancestor resource. Ancestors refer to the Gateway(s) that this policy
+/// is associated with.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyAncestorStatus {
+    /// AncestorRef corresponds with a ParentRef in the spec that this
+    /// PolicyAncestorStatus struct describes the status of.
+    pub ancestor_ref: ParentReference,
+
+    /// ControllerName is a domain/path string that indicates the name of the
+    /// controller that wrote this status.
+    pub controller_name: String,
+
+    /// Conditions describes the status of the Policy with respect to the given Ancestor.
+    pub conditions: Vec<Condition>,
 }

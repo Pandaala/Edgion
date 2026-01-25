@@ -4,11 +4,14 @@
 //! - Filter by gateway_class_name
 //! - TLS Secret reference resolution
 //! - SecretRefManager registration for cascading updates
+//! - Gateway API standard status management
 
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, get_secret, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    accepted_condition, condition_false, condition_true, condition_types, format_secret_key, get_secret,
+    HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::Gateway;
+use crate::types::resources::gateway::{GatewayStatus, ListenerStatus, RouteGroupKind};
 use crate::types::ResourceKind;
 
 /// Gateway handler
@@ -118,5 +121,155 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             gateway = %resource_ref.key(),
             "Cleared secret references on Gateway delete"
         );
+    }
+
+    fn update_status(&self, gateway: &mut Gateway, _ctx: &HandlerContext, validation_errors: &[String]) {
+        let generation = gateway.metadata.generation;
+
+        // Initialize status if not present
+        let status = gateway.status.get_or_insert_with(GatewayStatus::default);
+
+        // Initialize conditions if not present
+        let conditions = status.conditions.get_or_insert_with(Vec::new);
+
+        // Set Gateway-level conditions
+        // Accepted: True if no validation errors
+        if validation_errors.is_empty() {
+            let cond = accepted_condition(generation);
+            update_gateway_condition(conditions, cond);
+        } else {
+            let cond = condition_false(
+                condition_types::ACCEPTED,
+                "Invalid",
+                validation_errors.join("; "),
+                generation,
+            );
+            update_gateway_condition(conditions, cond);
+        }
+
+        // Programmed: Always True after parsing (configuration accepted)
+        let programmed = condition_true(
+            condition_types::PROGRAMMED,
+            "Programmed",
+            "Gateway configuration programmed",
+            generation,
+        );
+        update_gateway_condition(conditions, programmed);
+
+        // Ready: True (data plane ready)
+        let ready = condition_true(condition_types::READY, "Ready", "Gateway is ready", generation);
+        update_gateway_condition(conditions, ready);
+
+        // Update listener statuses
+        if let Some(listeners) = &gateway.spec.listeners {
+            let listener_statuses = status.listeners.get_or_insert_with(Vec::new);
+
+            for listener in listeners {
+                // Find or create listener status
+                let listener_status = listener_statuses.iter_mut().find(|ls| ls.name == listener.name);
+
+                if let Some(ls) = listener_status {
+                    // Update existing listener status
+                    update_listener_conditions(ls, validation_errors, generation);
+                } else {
+                    // Create new listener status
+                    let mut ls = ListenerStatus {
+                        name: listener.name.clone(),
+                        supported_kinds: get_supported_kinds_for_protocol(&listener.protocol),
+                        attached_routes: 0,
+                        conditions: Vec::new(),
+                    };
+                    update_listener_conditions(&mut ls, validation_errors, generation);
+                    listener_statuses.push(ls);
+                }
+            }
+        }
+    }
+}
+
+/// Update or insert a condition in Gateway conditions list
+fn update_gateway_condition(
+    conditions: &mut Vec<crate::types::resources::common::Condition>,
+    new_condition: crate::types::resources::common::Condition,
+) {
+    if let Some(existing) = conditions.iter_mut().find(|c| c.type_ == new_condition.type_) {
+        let status_changed = existing.status != new_condition.status;
+        existing.status = new_condition.status;
+        existing.reason = new_condition.reason;
+        existing.message = new_condition.message;
+        existing.observed_generation = new_condition.observed_generation;
+        if status_changed {
+            existing.last_transition_time = new_condition.last_transition_time;
+        }
+    } else {
+        conditions.push(new_condition);
+    }
+}
+
+/// Update listener conditions
+fn update_listener_conditions(ls: &mut ListenerStatus, validation_errors: &[String], generation: Option<i64>) {
+    // Accepted
+    if validation_errors.is_empty() {
+        let cond = accepted_condition(generation);
+        update_gateway_condition(&mut ls.conditions, cond);
+    } else {
+        let cond = condition_false(
+            condition_types::ACCEPTED,
+            "Invalid",
+            validation_errors.join("; "),
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, cond);
+    }
+
+    // Programmed
+    let programmed = condition_true(
+        condition_types::PROGRAMMED,
+        "Programmed",
+        "Listener configuration programmed",
+        generation,
+    );
+    update_gateway_condition(&mut ls.conditions, programmed);
+
+    // ResolvedRefs: True (TLS secrets resolved in parse phase)
+    let resolved = condition_true(
+        condition_types::RESOLVED_REFS,
+        "ResolvedRefs",
+        "All references resolved",
+        generation,
+    );
+    update_gateway_condition(&mut ls.conditions, resolved);
+
+    // Ready
+    let ready = condition_true(condition_types::READY, "Ready", "Listener is ready", generation);
+    update_gateway_condition(&mut ls.conditions, ready);
+}
+
+/// Get supported route kinds for a protocol
+fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
+    match protocol.to_uppercase().as_str() {
+        "HTTP" | "HTTPS" => vec![
+            RouteGroupKind {
+                group: Some("gateway.networking.k8s.io".to_string()),
+                kind: "HTTPRoute".to_string(),
+            },
+            RouteGroupKind {
+                group: Some("gateway.networking.k8s.io".to_string()),
+                kind: "GRPCRoute".to_string(),
+            },
+        ],
+        "TCP" => vec![RouteGroupKind {
+            group: Some("gateway.networking.k8s.io".to_string()),
+            kind: "TCPRoute".to_string(),
+        }],
+        "UDP" => vec![RouteGroupKind {
+            group: Some("gateway.networking.k8s.io".to_string()),
+            kind: "UDPRoute".to_string(),
+        }],
+        "TLS" => vec![RouteGroupKind {
+            group: Some("gateway.networking.k8s.io".to_string()),
+            kind: "TLSRoute".to_string(),
+        }],
+        _ => vec![],
     }
 }

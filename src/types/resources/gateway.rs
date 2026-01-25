@@ -150,7 +150,7 @@ pub struct GatewayAddress {
     pub value: String,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayStatus {
     /// Addresses assigned to the Gateway

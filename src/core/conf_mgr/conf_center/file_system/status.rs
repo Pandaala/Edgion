@@ -8,9 +8,29 @@
 //! For a config file `HTTPRoute_default_my-route.yaml`, the status file is:
 //! `HTTPRoute_default_my-route.yaml.status`
 //!
-//! ## Status Structure
+//! The status file contains the resource's native status in YAML format.
+//! For example, HTTPRoute status:
+//! ```yaml
+//! parents:
+//!   - parentRef:
+//!       name: my-gateway
+//!     controllerName: edgion.io/gateway-controller
+//!     conditions:
+//!       - type: Accepted
+//!         status: "True"
+//!         ...
+//! ```
 //!
-//! Uses standard K8s Condition format for consistency.
+//! ## Error Status
+//!
+//! For resources that fail to parse, a simplified error status is written:
+//! ```yaml
+//! conditions:
+//!   - type: Ready
+//!     status: "False"
+//!     reason: ParseError
+//!     message: "error details..."
+//! ```
 
 use crate::types::resources::common::Condition;
 use chrono::Utc;
@@ -20,30 +40,17 @@ use std::path::{Path, PathBuf};
 /// Status file extension
 const STATUS_EXTENSION: &str = ".status";
 
-/// Resource status structure (mirrors K8s status format)
+/// Simple error status structure (for parse errors, etc.)
+/// Used when the resource can't be fully parsed and we can't extract native status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResourceStatus {
+pub struct ErrorStatus {
     /// Standard K8s conditions
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
 }
 
-impl ResourceStatus {
-    /// Create a Ready status
-    pub fn ready() -> Self {
-        Self {
-            conditions: vec![Condition {
-                type_: "Ready".to_string(),
-                status: "True".to_string(),
-                reason: "ProcessingComplete".to_string(),
-                message: "Resource processed successfully".to_string(),
-                last_transition_time: Utc::now().to_rfc3339(),
-                observed_generation: None,
-            }],
-        }
-    }
-
+impl ErrorStatus {
     /// Create an Error status
     pub fn error(reason: &str, message: &str) -> Self {
         Self {
@@ -101,32 +108,59 @@ impl FileSystemStatusHandler {
             .unwrap_or(false)
     }
 
-    /// Write status to file
-    pub fn write_status(&self, kind: &str, key: &str, status: &ResourceStatus) -> std::io::Result<()> {
+    /// Write native status to file in YAML format
+    ///
+    /// This writes the resource's native status (e.g., HTTPRouteStatus, GatewayStatus)
+    /// directly to the status file, preserving the exact structure.
+    ///
+    /// # Arguments
+    /// * `kind` - Resource kind (e.g., "HTTPRoute")
+    /// * `key` - Resource key (e.g., "default/my-route")
+    /// * `status` - The native status object (must implement Serialize)
+    pub fn write_native_status<S: Serialize>(&self, kind: &str, key: &str, status: &S) -> std::io::Result<()> {
         let status_path = self.build_status_path(kind, key);
-        let json = serde_json::to_string_pretty(status)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&status_path, json)?;
+        let yaml =
+            serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(&status_path, yaml)?;
 
         tracing::trace!(
             component = "fs_status",
             kind = kind,
             key = key,
             status_file = %status_path.display(),
-            "Wrote status file"
+            "Wrote native status file (YAML)"
         );
 
         Ok(())
     }
 
-    /// Write ready status
-    pub fn write_ready(&self, kind: &str, key: &str) -> std::io::Result<()> {
-        self.write_status(kind, key, &ResourceStatus::ready())
+    /// Write native status from serde_json::Value
+    ///
+    /// This is useful when the status is extracted from a generic object
+    /// using `extract_status_value()`.
+    pub fn write_status_value(&self, kind: &str, key: &str, status: &serde_json::Value) -> std::io::Result<()> {
+        let status_path = self.build_status_path(kind, key);
+        let yaml =
+            serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(&status_path, yaml)?;
+
+        tracing::trace!(
+            component = "fs_status",
+            kind = kind,
+            key = key,
+            status_file = %status_path.display(),
+            "Wrote status value file (YAML)"
+        );
+
+        Ok(())
     }
 
-    /// Write error status
-    pub fn write_error(&self, kind: &str, key: &str, reason: &str, message: &str) -> std::io::Result<()> {
-        self.write_status(kind, key, &ResourceStatus::error(reason, message))
+    /// Write error status (for parse errors, etc.)
+    ///
+    /// This writes a simplified error status when the resource can't be fully parsed.
+    pub fn write_error_status(&self, kind: &str, key: &str, reason: &str, message: &str) -> std::io::Result<()> {
+        let status = ErrorStatus::error(reason, message);
+        self.write_native_status(kind, key, &status)
     }
 
     /// Delete status file
@@ -235,20 +269,16 @@ mod tests {
     }
 
     #[test]
-    fn test_resource_status_serialization() {
-        let status = ResourceStatus::ready();
-        let json = serde_json::to_string(&status).unwrap();
-        assert!(json.contains("\"Ready\""));
-        assert!(json.contains("\"True\""));
-
-        let status = ResourceStatus::error("TestError", "Test message");
-        let json = serde_json::to_string(&status).unwrap();
-        assert!(json.contains("\"False\""));
-        assert!(json.contains("\"TestError\""));
+    fn test_error_status_serialization() {
+        let status = ErrorStatus::error("TestError", "Test message");
+        let yaml = serde_yaml::to_string(&status).unwrap();
+        assert!(yaml.contains("Ready"));
+        assert!(yaml.contains("False"));
+        assert!(yaml.contains("TestError"));
     }
 
     #[test]
-    fn test_write_and_delete_status() {
+    fn test_write_native_status() {
         let temp_dir = TempDir::new().unwrap();
         let conf_dir = temp_dir.path().to_path_buf();
         let handler = FileSystemStatusHandler::new(conf_dir.clone());
@@ -257,15 +287,62 @@ mod tests {
         let config_path = conf_dir.join("HTTPRoute_default_test.yaml");
         std::fs::write(&config_path, "test: content").unwrap();
 
-        // Write ready status
-        handler.write_ready("HTTPRoute", "default/test").unwrap();
+        // Write native status (simulating HTTPRouteStatus)
+        #[derive(Serialize)]
+        struct TestRouteStatus {
+            parents: Vec<TestParentStatus>,
+        }
+
+        #[derive(Serialize)]
+        struct TestParentStatus {
+            controller_name: String,
+        }
+
+        let status = TestRouteStatus {
+            parents: vec![TestParentStatus {
+                controller_name: "edgion.io/gateway-controller".to_string(),
+            }],
+        };
+
+        handler
+            .write_native_status("HTTPRoute", "default/test", &status)
+            .unwrap();
 
         let status_path = handler.build_status_path("HTTPRoute", "default/test");
         assert!(status_path.exists());
 
+        // Verify content is YAML
+        let content = std::fs::read_to_string(&status_path).unwrap();
+        assert!(content.contains("parents:"));
+        assert!(content.contains("edgion.io/gateway-controller"));
+
         // Delete status
         handler.delete_status("HTTPRoute", "default/test").unwrap();
         assert!(!status_path.exists());
+    }
+
+    #[test]
+    fn test_write_error_status() {
+        let temp_dir = TempDir::new().unwrap();
+        let conf_dir = temp_dir.path().to_path_buf();
+        let handler = FileSystemStatusHandler::new(conf_dir.clone());
+
+        // Create a test config file
+        let config_path = conf_dir.join("HTTPRoute_default_test.yaml");
+        std::fs::write(&config_path, "test: content").unwrap();
+
+        // Write error status
+        handler
+            .write_error_status("HTTPRoute", "default/test", "ParseError", "Invalid YAML")
+            .unwrap();
+
+        let status_path = handler.build_status_path("HTTPRoute", "default/test");
+        assert!(status_path.exists());
+
+        // Verify content
+        let content = std::fs::read_to_string(&status_path).unwrap();
+        assert!(content.contains("ParseError"));
+        assert!(content.contains("Invalid YAML"));
     }
 
     #[test]
@@ -277,11 +354,13 @@ mod tests {
         // Create a config file with status
         let config1 = conf_dir.join("HTTPRoute_default_route1.yaml");
         std::fs::write(&config1, "test: content").unwrap();
-        handler.write_ready("HTTPRoute", "default/route1").unwrap();
+        handler
+            .write_error_status("HTTPRoute", "default/route1", "OK", "Success")
+            .unwrap();
 
         // Create an orphan status file (no corresponding config)
         let orphan_status = conf_dir.join("HTTPRoute_default_deleted.yaml.status");
-        std::fs::write(&orphan_status, r#"{"conditions":[]}"#).unwrap();
+        std::fs::write(&orphan_status, "conditions: []").unwrap();
 
         // Verify both exist
         assert!(handler.build_status_path("HTTPRoute", "default/route1").exists());

@@ -12,8 +12,11 @@
 
 use super::event::FileSystemEvent;
 use super::file_watcher::{build_path_from_key, KindEventReceiver};
+use super::status::FileSystemStatusHandler;
 use crate::core::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
-use crate::core::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+use crate::core::conf_mgr::sync_runtime::resource_processor::{
+    extract_status_value, ResourceProcessor, WorkItemResult,
+};
 use crate::core::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::types::ResourceMeta;
 use anyhow::Result;
@@ -307,6 +310,7 @@ where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
 {
     let workqueue = processor.workqueue();
+    let status_handler = FileSystemStatusHandler::new(conf_dir.clone());
 
     tokio::spawn(async move {
         // Clone shutdown_signal once outside the loop
@@ -335,38 +339,95 @@ where
                     // For FileSystem mode, we read from file instead of K8s store
                     let path = build_path_from_key(&conf_dir, kind, &work_item.key);
 
-                    let store_obj = if path.exists() {
+                    let (store_obj, parse_error) = if path.exists() {
                         match std::fs::read_to_string(&path) {
                             Ok(content) => match serde_yaml::from_str::<K>(&content) {
-                                Ok(obj) => Some(obj),
+                                Ok(obj) => (Some(obj), None),
                                 Err(e) => {
+                                    let error_msg = e.to_string();
                                     tracing::warn!(
                                         component = "fs_resource_controller",
                                         kind = kind,
                                         key = %work_item.key,
-                                        error = %e,
+                                        error = %error_msg,
                                         "Failed to parse file"
                                     );
-                                    None
+                                    (None, Some(error_msg))
                                 }
                             },
                             Err(e) => {
+                                let error_msg = e.to_string();
                                 tracing::warn!(
                                     component = "fs_resource_controller",
                                     kind = kind,
                                     key = %work_item.key,
-                                    error = %e,
+                                    error = %error_msg,
                                     "Failed to read file"
                                 );
-                                None
+                                (None, Some(error_msg))
                             }
                         }
                     } else {
-                        None
+                        (None, None)
                     };
 
+                    // Handle parse errors by writing error status
+                    if let Some(error_msg) = parse_error {
+                        if let Err(e) =
+                            status_handler.write_error_status(kind, &work_item.key, "ParseError", &error_msg)
+                        {
+                            tracing::warn!(
+                                component = "fs_resource_controller",
+                                kind = kind,
+                                key = %work_item.key,
+                                error = %e,
+                                "Failed to write error status"
+                            );
+                        }
+                        workqueue.done(&work_item.key);
+                        continue;
+                    }
+
                     // Use processor's process_work_item which handles the reconciliation logic
-                    processor.process_work_item(&work_item.key, store_obj);
+                    let result = processor.process_work_item(&work_item.key, store_obj);
+
+                    // Persist status based on result
+                    match result {
+                        WorkItemResult::Processed { obj, status_changed } => {
+                            if status_changed {
+                                // Extract and persist native status
+                                if let Some(status_value) = extract_status_value(&obj) {
+                                    if let Err(e) =
+                                        status_handler.write_status_value(kind, &work_item.key, &status_value)
+                                    {
+                                        tracing::warn!(
+                                            component = "fs_resource_controller",
+                                            kind = kind,
+                                            key = %work_item.key,
+                                            error = %e,
+                                            "Failed to write status file"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        WorkItemResult::Deleted { key } => {
+                            // Delete status file when resource is deleted
+                            if let Err(e) = status_handler.delete_status(kind, &key) {
+                                tracing::warn!(
+                                    component = "fs_resource_controller",
+                                    kind = kind,
+                                    key = %key,
+                                    error = %e,
+                                    "Failed to delete status file"
+                                );
+                            }
+                        }
+                        WorkItemResult::Skipped => {
+                            // Nothing to do
+                        }
+                    }
+
                     workqueue.done(&work_item.key);
                 }
                 None => {

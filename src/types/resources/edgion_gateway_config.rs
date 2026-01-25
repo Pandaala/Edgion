@@ -3,6 +3,7 @@
 //! This model defines the EdgionGatewayConfig custom resource, which is used
 //! as parametersRef in GatewayClass to provide gateway-wide configuration.
 
+use super::common::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -244,25 +245,14 @@ impl Default for BackendTimeout {
 // Status
 // ============================================
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+/// EdgionGatewayConfigStatus describes the status of the EdgionGatewayConfig resource
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionGatewayConfigStatus {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conditions: Option<Vec<StatusCondition>>,
-}
-
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct StatusCondition {
-    #[serde(rename = "type")]
-    pub condition_type: String,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_transition_time: Option<String>,
+    /// Conditions describe the current conditions of the EdgionGatewayConfig.
+    /// Standard conditions: Accepted, Ready
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
 }
 
 // ============================================

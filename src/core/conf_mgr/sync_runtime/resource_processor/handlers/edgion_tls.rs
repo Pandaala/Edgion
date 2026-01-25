@@ -5,12 +5,19 @@
 //! - Server Secret reference resolution (secret_ref -> spec.secret)
 //! - CA Secret reference resolution for mTLS (client_auth.ca_secret_ref -> client_auth.ca_secret)
 //! - SecretRefManager registration for cascading updates
+//! - Gateway API standard status management (per parent)
 
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, get_secret, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    format_secret_key, get_secret, set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler,
+    ResourceRef,
 };
 use crate::types::prelude_resources::EdgionTls;
+use crate::types::resources::edgion_tls::EdgionTlsStatus;
+use crate::types::resources::http_route::RouteParentStatus;
 use crate::types::ResourceKind;
+
+/// Controller name for status reporting
+const CONTROLLER_NAME: &str = "edgion.io/gateway-controller";
 
 /// EdgionTls handler
 ///
@@ -143,5 +150,37 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             edgion_tls = %resource_ref.key(),
             "Cleared secret references on EdgionTls delete"
         );
+    }
+
+    fn update_status(&self, tls: &mut EdgionTls, _ctx: &HandlerContext, validation_errors: &[String]) {
+        let generation = tls.metadata.generation;
+
+        // Initialize status if not present
+        let status = tls.status.get_or_insert_with(|| EdgionTlsStatus { parents: vec![] });
+
+        // Update status for each parent ref
+        if let Some(parent_refs) = &tls.spec.parent_refs {
+            for parent_ref in parent_refs {
+                // Find existing parent status or create new one
+                let parent_status = status.parents.iter_mut().find(|ps| {
+                    ps.parent_ref.name == parent_ref.name && ps.parent_ref.namespace == parent_ref.namespace
+                });
+
+                if let Some(ps) = parent_status {
+                    // Update existing parent status
+                    set_route_parent_conditions(&mut ps.conditions, validation_errors, generation);
+                } else {
+                    // Create new parent status
+                    let mut conditions = Vec::new();
+                    set_route_parent_conditions(&mut conditions, validation_errors, generation);
+
+                    status.parents.push(RouteParentStatus {
+                        parent_ref: parent_ref.clone(),
+                        controller_name: CONTROLLER_NAME.to_string(),
+                        conditions,
+                    });
+                }
+            }
+        }
     }
 }

@@ -23,10 +23,13 @@ use super::controller_metrics;
 use super::namespace::NamespaceWatchMode;
 use super::InitSyncTimer;
 use super::ShutdownSignal;
-use crate::core::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+use crate::core::conf_mgr::sync_runtime::resource_processor::{
+    extract_status_value, ResourceProcessor, WorkItemResult,
+};
 use crate::types::ResourceMeta;
 use anyhow::Result;
 use futures::StreamExt;
+use kube::api::{Patch, PatchParams};
 use kube::runtime::reflector::{ObjectRef, Store};
 use kube::runtime::watcher::Event;
 use kube::runtime::{reflector, watcher};
@@ -273,6 +276,8 @@ where
                                 self.namespace_filter.clone(),
                                 kind,
                                 self.shutdown_signal.clone(),
+                                self.client.clone(),
+                                self.api_scope.clone(),
                             ));
 
                             tracing::info!(
@@ -390,12 +395,15 @@ where
 /// Worker implements Go operator-style reconciliation:
 /// - Dequeue key from workqueue
 /// - Check store (K8s state) and call processor.process_work_item()
+/// - Persist status to K8s API when status changes
 fn spawn_worker<K>(
     processor: Arc<ResourceProcessor<K>>,
     store: Store<K>,
     namespace_filter: Option<Vec<String>>,
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
+    client: Client,
+    api_scope: ApiScope,
 ) -> JoinHandle<()>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -438,7 +446,32 @@ where
                     };
 
                     if should_process {
-                        processor.process_work_item(&work_item.key, store_obj);
+                        let result = processor.process_work_item(&work_item.key, store_obj);
+
+                        // Persist status to K8s API when status changes
+                        if let WorkItemResult::Processed { obj, status_changed } = result {
+                            if status_changed {
+                                if let Some(status_value) = extract_status_value(&obj) {
+                                    let name = obj.meta().name.as_deref().unwrap_or("");
+                                    let namespace = obj.meta().namespace.as_deref();
+
+                                    if let Err(e) =
+                                        persist_k8s_status::<K>(&client, &api_scope, namespace, name, &status_value)
+                                            .await
+                                    {
+                                        tracing::warn!(
+                                            component = "resource_controller",
+                                            kind = kind,
+                                            key = %work_item.key,
+                                            error = %e,
+                                            "Failed to persist status to K8s API"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        // Note: For WorkItemResult::Deleted, K8s handles status cleanup
+                        // automatically when the resource is deleted
                     }
 
                     workqueue.done(&work_item.key);
@@ -456,6 +489,61 @@ where
 
         tracing::info!(component = "resource_controller", kind = kind, "Worker task ended");
     })
+}
+
+/// Persist status to K8s API using Server-Side Apply on status subresource
+///
+/// Note: This function uses DynamicObject to avoid the Scope type constraint issue.
+/// The status is patched using the resource's API path constructed from metadata.
+async fn persist_k8s_status<K>(
+    client: &Client,
+    api_scope: &ApiScope,
+    namespace: Option<&str>,
+    name: &str,
+    status_value: &serde_json::Value,
+) -> Result<(), kube::Error>
+where
+    K: Resource + Clone + Debug + DeserializeOwned + Serialize,
+    K::DynamicType: Default,
+{
+    use kube::core::DynamicObject;
+    use kube::discovery::ApiResource;
+
+    // Get API resource info from K type
+    let dt = K::DynamicType::default();
+    let api_resource = ApiResource::from_gvk(&kube::core::GroupVersionKind {
+        group: K::group(&dt).to_string(),
+        version: K::version(&dt).to_string(),
+        kind: K::kind(&dt).to_string(),
+    });
+
+    // Build status patch
+    let patch = serde_json::json!({
+        "status": status_value
+    });
+
+    let params = PatchParams::apply("edgion-controller").force();
+
+    match api_scope {
+        ApiScope::Namespaced(_) => {
+            let ns = namespace.unwrap_or("default");
+            let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), ns, &api_resource);
+            api.patch_status(name, &params, &Patch::Apply(&patch)).await?;
+        }
+        ApiScope::ClusterScoped => {
+            let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
+            api.patch_status(name, &params, &Patch::Apply(&patch)).await?;
+        }
+    }
+
+    tracing::trace!(
+        component = "resource_controller",
+        name = name,
+        namespace = namespace,
+        "Persisted status to K8s API"
+    );
+
+    Ok(())
 }
 
 /// Check if resource passes namespace filter

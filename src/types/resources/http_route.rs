@@ -621,7 +621,7 @@ pub struct HTTPRouteStatus {
     pub parents: Vec<RouteParentStatus>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteParentStatus {
     /// ParentRef references the parent that this status corresponds to.

@@ -1,7 +1,7 @@
 use super::common::ParentReference;
 use super::gateway::SecretObjectReference;
+use super::http_route::RouteParentStatus;
 use k8s_openapi::api::core::v1::Secret;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -235,10 +235,14 @@ pub struct EarlyDataConfig {
     pub reject_on_replay: bool,
 }
 
+/// EdgionTlsStatus describes the status of the EdgionTls resource
+/// Following Gateway API RouteParentStatus pattern for parent-based status
 #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct EdgionTlsStatus {
+    /// Parents describe the status of the TLS config with respect to each parent Gateway.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub condition: Vec<Condition>,
+    pub parents: Vec<RouteParentStatus>,
 }
 
 impl EdgionTls {
