@@ -55,7 +55,9 @@ pub mod sync_runtime;
 pub use conf_mgr::ConfMgr;
 
 // Configuration (from conf_center)
-pub use conf_center::{ConfCenterConfig, EndpointMode, LeaderElectionConfig, MetadataFilterConfig};
+pub use conf_center::{
+    ConfCenterConfig, EndpointMode, FileSystemConfig, KubernetesConfig, LeaderElectionConfig, MetadataFilterConfig,
+};
 
 // ProcessorRegistry exports
 pub use processor_registry::{ProcessorRegistry, PROCESSOR_REGISTRY};

@@ -1,10 +1,136 @@
 //! Kubernetes-specific configuration types
 //!
 //! This module contains configuration types specific to the Kubernetes backend:
+//! - `KubernetesConfig`: Main configuration for Kubernetes backend
 //! - `LeaderElectionConfig`: Configuration for leader election in HA deployments
 //! - `MetadataFilterConfig`: Configuration for filtering K8s resource metadata
 
 use serde::{Deserialize, Serialize};
+
+use crate::core::conf_mgr_new::conf_center::common::EndpointMode;
+
+/// Kubernetes configuration center settings
+///
+/// Used when running in Kubernetes mode where configuration is read from
+/// K8s Custom Resources and Services/Endpoints.
+///
+/// ## Example (YAML)
+///
+/// ```yaml
+/// type: kubernetes
+/// gateway_class: edgion
+/// watch_namespaces:
+///   - default
+///   - prod
+/// label_selector: app=edgion
+/// endpoint_mode: auto
+/// leader_election:
+///   lease_name: edgion-controller-leader
+///   lease_namespace: edgion-system
+/// metadata_filter:
+///   remove_managed_fields: true
+///   blocked_annotations:
+///     - kubectl.kubernetes.io/last-applied-configuration
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KubernetesConfig {
+    /// Namespaces to watch. Empty means all namespaces.
+    #[serde(default)]
+    pub watch_namespaces: Vec<String>,
+
+    /// Label selector for filtering resources
+    #[serde(default)]
+    pub label_selector: Option<String>,
+
+    /// Gateway class name this controller manages
+    pub gateway_class: String,
+
+    /// Metadata filter configuration for reducing resource memory usage
+    #[serde(default)]
+    pub metadata_filter: MetadataFilterConfig,
+
+    /// Leader election configuration (always enabled in K8s mode)
+    #[serde(default)]
+    pub leader_election: LeaderElectionConfig,
+
+    /// Endpoint discovery mode for Kubernetes
+    #[serde(default)]
+    pub endpoint_mode: EndpointMode,
+}
+
+impl KubernetesConfig {
+    /// Create a new KubernetesConfig with the required gateway class
+    pub fn new(gateway_class: impl Into<String>) -> Self {
+        Self {
+            watch_namespaces: Vec::new(),
+            label_selector: None,
+            gateway_class: gateway_class.into(),
+            metadata_filter: MetadataFilterConfig::default(),
+            leader_election: LeaderElectionConfig::default(),
+            endpoint_mode: EndpointMode::default(),
+        }
+    }
+
+    /// Set watch namespaces
+    pub fn with_watch_namespaces(mut self, namespaces: Vec<String>) -> Self {
+        self.watch_namespaces = namespaces;
+        self
+    }
+
+    /// Set label selector
+    pub fn with_label_selector(mut self, selector: impl Into<String>) -> Self {
+        self.label_selector = Some(selector.into());
+        self
+    }
+
+    /// Set endpoint mode
+    pub fn with_endpoint_mode(mut self, mode: EndpointMode) -> Self {
+        self.endpoint_mode = mode;
+        self
+    }
+
+    /// Set metadata filter
+    pub fn with_metadata_filter(mut self, filter: MetadataFilterConfig) -> Self {
+        self.metadata_filter = filter;
+        self
+    }
+
+    /// Set leader election config
+    pub fn with_leader_election(mut self, config: LeaderElectionConfig) -> Self {
+        self.leader_election = config;
+        self
+    }
+
+    /// Get the endpoint mode
+    pub fn endpoint_mode(&self) -> EndpointMode {
+        self.endpoint_mode
+    }
+
+    /// Get watch namespaces
+    pub fn watch_namespaces(&self) -> &[String] {
+        &self.watch_namespaces
+    }
+
+    /// Get label selector
+    pub fn label_selector(&self) -> Option<&str> {
+        self.label_selector.as_deref()
+    }
+
+    /// Get gateway class
+    pub fn gateway_class(&self) -> &str {
+        &self.gateway_class
+    }
+
+    /// Get metadata filter
+    pub fn metadata_filter(&self) -> &MetadataFilterConfig {
+        &self.metadata_filter
+    }
+
+    /// Get leader election config
+    pub fn leader_election(&self) -> &LeaderElectionConfig {
+        &self.leader_election
+    }
+}
 
 /// Leader election configuration for HA deployments
 ///
@@ -120,6 +246,53 @@ fn default_remove_managed_fields() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_kubernetes_config_new() {
+        let config = KubernetesConfig::new("edgion");
+        assert_eq!(config.gateway_class, "edgion");
+        assert!(config.watch_namespaces.is_empty());
+        assert!(config.label_selector.is_none());
+        assert!(config.endpoint_mode.is_auto());
+    }
+
+    #[test]
+    fn test_kubernetes_config_builder() {
+        let config = KubernetesConfig::new("edgion")
+            .with_watch_namespaces(vec!["default".to_string(), "prod".to_string()])
+            .with_label_selector("app=edgion")
+            .with_endpoint_mode(EndpointMode::EndpointSlice);
+
+        assert_eq!(config.gateway_class(), "edgion");
+        assert_eq!(config.watch_namespaces(), &["default", "prod"]);
+        assert_eq!(config.label_selector(), Some("app=edgion"));
+        assert_eq!(config.endpoint_mode(), EndpointMode::EndpointSlice);
+    }
+
+    #[test]
+    fn test_kubernetes_config_serialize() {
+        let config = KubernetesConfig::new("edgion")
+            .with_watch_namespaces(vec!["default".to_string()]);
+
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        assert!(yaml.contains("gateway_class: edgion"));
+        assert!(yaml.contains("watch_namespaces:"));
+    }
+
+    #[test]
+    fn test_kubernetes_config_deserialize() {
+        let yaml = r#"
+gateway_class: edgion
+watch_namespaces:
+  - default
+  - prod
+label_selector: app=edgion
+"#;
+        let config: KubernetesConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.gateway_class, "edgion");
+        assert_eq!(config.watch_namespaces, vec!["default", "prod"]);
+        assert_eq!(config.label_selector, Some("app=edgion".to_string()));
+    }
 
     #[test]
     fn test_leader_election_config_default() {

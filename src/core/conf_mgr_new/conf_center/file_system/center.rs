@@ -8,14 +8,14 @@
 //! ```text
 //! FileSystemCenter
 //! ├── writer: FileSystemWriter (CRUD delegate)
-//! ├── config: ConfCenterConfig
+//! ├── config: FileSystemConfig
 //! ├── config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>
 //! ├── shutdown_handle: Mutex<Option<ShutdownHandle>>
 //! └── controller_handle: Mutex<Option<JoinHandle<()>>>
 //! ```
 
 use super::super::common::EndpointMode;
-use super::super::config::ConfCenterConfig;
+use super::config::FileSystemConfig;
 use super::controller::FileSystemController;
 use super::writer::FileSystemWriter;
 use crate::core::conf_mgr_new::conf_center::traits::{
@@ -37,7 +37,7 @@ use tokio::task::JoinHandle;
 /// automatically getting `ConfCenter` implementation via blanket impl.
 pub struct FileSystemCenter {
     /// Configuration
-    config: ConfCenterConfig,
+    config: FileSystemConfig,
     /// Writer for CRUD operations (delegate)
     writer: FileSystemWriter,
     /// ConfigSyncServer instance for gRPC list/watch
@@ -52,19 +52,15 @@ pub struct FileSystemCenter {
 
 impl FileSystemCenter {
     /// Create a new FileSystemCenter
-    pub fn new(config: ConfCenterConfig) -> Result<Self> {
-        let ConfCenterConfig::FileSystem { conf_dir, .. } = &config else {
-            return Err(anyhow::anyhow!("FileSystemCenter requires FileSystem config"));
-        };
-
+    pub fn new(config: FileSystemConfig) -> Result<Self> {
         tracing::info!(
             component = "file_system_center",
             mode = "file_system",
-            conf_dir = %conf_dir.display(),
+            conf_dir = %config.conf_dir().display(),
             "Creating FileSystemCenter"
         );
 
-        let writer = FileSystemWriter::new(conf_dir);
+        let writer = FileSystemWriter::new(config.conf_dir());
 
         Ok(Self {
             config,
@@ -76,7 +72,7 @@ impl FileSystemCenter {
     }
 
     /// Get the configuration
-    pub fn config(&self) -> &ConfCenterConfig {
+    pub fn config(&self) -> &FileSystemConfig {
         &self.config
     }
 
@@ -272,12 +268,10 @@ impl CenterLifeCycle for FileSystemCenter {
         let shutdown_signal = shutdown_handle.signal();
 
         // 1. Get configuration
-        let ConfCenterConfig::FileSystem { conf_dir, .. } = self.config() else {
-            return Err(anyhow::anyhow!("Not in FileSystem mode"));
-        };
+        let conf_dir = self.config.conf_dir();
 
         // 2. Resolve endpoint mode (Auto -> EndpointSlice in FileSystem mode)
-        let endpoint_mode = match self.config().endpoint_mode() {
+        let endpoint_mode = match self.config.endpoint_mode() {
             EndpointMode::Auto => EndpointMode::EndpointSlice,
             mode => mode,
         };
@@ -393,9 +387,7 @@ impl CenterLifeCycle for FileSystemCenter {
     /// 2. Set all processors to not ready
     /// 3. Run FileSystemController init phase
     async fn reload(&self) -> Result<()> {
-        let ConfCenterConfig::FileSystem { conf_dir, .. } = &self.config else {
-            return Err(anyhow::anyhow!("Not in FileSystem mode"));
-        };
+        let conf_dir = self.config.conf_dir();
 
         tracing::info!(
             component = "file_system_center",

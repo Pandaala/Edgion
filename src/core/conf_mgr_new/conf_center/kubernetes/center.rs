@@ -8,14 +8,14 @@
 //! ```text
 //! KubernetesCenter
 //! ├── writer: KubernetesWriter (CenterApi delegate)
-//! ├── config: ConfCenterConfig
+//! ├── config: KubernetesConfig
 //! ├── config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>
 //! ├── shutdown_handle: Mutex<Option<ShutdownHandle>>
 //! └── client: kube::Client
 //! ```
 
 use super::super::common::EndpointMode;
-use super::super::config::ConfCenterConfig;
+use super::config::KubernetesConfig;
 use super::controller::{ControllerExitReason, KubernetesController};
 use super::leader_election::{LeaderElection, LeaderElectionConfig as InternalLeaderElectionConfig, LeaderHandle};
 use super::version_detection::resolve_endpoint_mode;
@@ -80,7 +80,7 @@ impl WatcherHandles {
 /// automatically getting `ConfCenter` implementation via blanket impl.
 pub struct KubernetesCenter {
     /// Configuration
-    config: ConfCenterConfig,
+    config: KubernetesConfig,
     /// Writer for CRUD operations (delegate)
     writer: KubernetesWriter,
     /// ConfigSyncServer instance for gRPC list/watch
@@ -93,14 +93,11 @@ pub struct KubernetesCenter {
 
 impl KubernetesCenter {
     /// Create a new KubernetesCenter
-    pub async fn new(config: ConfCenterConfig) -> Result<Self> {
-        let ConfCenterConfig::Kubernetes { .. } = &config else {
-            return Err(anyhow::anyhow!("KubernetesCenter requires Kubernetes config"));
-        };
-
+    pub async fn new(config: KubernetesConfig) -> Result<Self> {
         tracing::info!(
             component = "kubernetes_center",
             mode = "kubernetes",
+            gateway_class = %config.gateway_class(),
             "Creating KubernetesCenter"
         );
 
@@ -115,7 +112,7 @@ impl KubernetesCenter {
     }
 
     /// Get the configuration
-    pub fn config(&self) -> &ConfCenterConfig {
+    pub fn config(&self) -> &KubernetesConfig {
         &self.config
     }
 
@@ -145,15 +142,9 @@ impl KubernetesCenter {
         *shutdown_handle = Some(handle);
     }
 
-    /// Create internal LeaderElectionConfig from ConfCenterConfig
+    /// Create internal LeaderElectionConfig from KubernetesConfig
     fn create_leader_election_config(&self) -> Result<InternalLeaderElectionConfig> {
-        let ConfCenterConfig::Kubernetes {
-            leader_election: le_config,
-            ..
-        } = self.config()
-        else {
-            return Err(anyhow::anyhow!("Not in Kubernetes mode"));
-        };
+        let le_config = self.config.leader_election();
 
         // Create internal leader election config from serialized config
         let config = InternalLeaderElectionConfig::new(&le_config.lease_name, &le_config.lease_namespace)
@@ -175,34 +166,25 @@ impl KubernetesCenter {
 
     /// Create K8s controller (new architecture - no ConfigServer dependency)
     fn create_k8s_controller(&self, client: &Client, endpoint_mode: EndpointMode) -> Result<KubernetesController> {
-        let ConfCenterConfig::Kubernetes {
-            watch_namespaces,
-            label_selector,
-            gateway_class,
-            metadata_filter,
-            ..
-        } = self.config()
-        else {
-            return Err(anyhow::anyhow!("Not in Kubernetes mode"));
-        };
+        let config = self.config();
 
         tracing::info!(
             component = "kubernetes_center",
             mode = "kubernetes",
-            gateway_class = gateway_class,
-            namespaces = ?watch_namespaces,
+            gateway_class = %config.gateway_class(),
+            namespaces = ?config.watch_namespaces(),
             metadata_filter_enabled = true,
-            blocked_annotations_count = metadata_filter.blocked_annotations.len(),
-            remove_managed_fields = metadata_filter.remove_managed_fields,
+            blocked_annotations_count = config.metadata_filter().blocked_annotations.len(),
+            remove_managed_fields = config.metadata_filter().remove_managed_fields,
             "Creating Kubernetes controller"
         );
 
         KubernetesController::with_metadata_filter(
             client.clone(),
-            gateway_class.clone(),
-            watch_namespaces.clone(),
-            label_selector.clone(),
-            metadata_filter.clone(),
+            config.gateway_class.clone(),
+            config.watch_namespaces.clone(),
+            config.label_selector.clone(),
+            config.metadata_filter.clone(),
             endpoint_mode,
         )
     }
@@ -405,10 +387,7 @@ impl KubernetesCenter {
         event_tx: mpsc::Sender<LifecycleEvent>,
     ) -> Result<(WatcherHandles, Arc<ConfigSyncServer>)> {
         // 1. Resolve endpoint mode before creating controller
-        let config_endpoint_mode = match self.config() {
-            ConfCenterConfig::Kubernetes { endpoint_mode, .. } => *endpoint_mode,
-            _ => EndpointMode::EndpointSlice,
-        };
+        let config_endpoint_mode = self.config.endpoint_mode();
 
         let resolved_mode = resolve_endpoint_mode(client, config_endpoint_mode).await?;
 

@@ -1,4 +1,4 @@
-use crate::core::conf_mgr_new::ConfCenterConfig;
+use crate::core::conf_mgr_new::{ConfCenterConfig, FileSystemConfig};
 use anyhow::{Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
@@ -359,10 +359,9 @@ impl EdgionControllerConfig {
         if let Some(conf_dir) = &cli.conf_dir {
             // Preserve existing endpoint_mode if we're switching from FileSystem to FileSystem
             let endpoint_mode = base.conf_center.endpoint_mode();
-            base.conf_center = ConfCenterConfig::FileSystem {
-                conf_dir: conf_dir.clone(),
-                endpoint_mode,
-            };
+            base.conf_center = ConfCenterConfig::FileSystem(
+                FileSystemConfig::new(conf_dir.clone()).with_endpoint_mode(endpoint_mode),
+            );
         }
 
         // Server config

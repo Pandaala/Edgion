@@ -2,9 +2,14 @@
 //!
 //! This module defines the top-level configuration enum for the configuration center,
 //! which determines whether to use FileSystem or Kubernetes backend.
+//!
+//! The actual configuration fields are defined in their respective modules:
+//! - `file_system::FileSystemConfig`: FileSystem-specific configuration
+//! - `kubernetes::KubernetesConfig`: Kubernetes-specific configuration
 
 use super::common::EndpointMode;
-use super::kubernetes::config::{LeaderElectionConfig, MetadataFilterConfig};
+use super::file_system::FileSystemConfig;
+use super::kubernetes::KubernetesConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -45,160 +50,110 @@ use std::path::PathBuf;
 pub enum ConfCenterConfig {
     /// File system based configuration center
     /// File watching is always enabled in this mode
-    FileSystem {
-        /// Directory containing configuration YAML files
-        conf_dir: PathBuf,
-
-        /// Endpoint discovery mode
-        /// In file system mode, this determines which endpoint resource type to use:
-        /// - Endpoint: Use Endpoints resources
-        /// - EndpointSlice: Use EndpointSlice resources (recommended)
-        /// - Auto: Same as EndpointSlice in file system mode
-        #[serde(default)]
-        endpoint_mode: EndpointMode,
-    },
+    FileSystem(FileSystemConfig),
 
     /// Kubernetes based configuration center
-    Kubernetes {
-        /// Namespaces to watch. Empty means all namespaces.
-        #[serde(default)]
-        watch_namespaces: Vec<String>,
-
-        /// Label selector for filtering resources
-        #[serde(default)]
-        label_selector: Option<String>,
-
-        /// Gateway class name this controller manages
-        gateway_class: String,
-
-        /// Metadata filter configuration for reducing resource memory usage
-        #[serde(default)]
-        metadata_filter: MetadataFilterConfig,
-
-        /// Leader election configuration (always enabled in K8s mode)
-        #[serde(default)]
-        leader_election: LeaderElectionConfig,
-
-        /// Endpoint discovery mode for Kubernetes
-        #[serde(default)]
-        endpoint_mode: EndpointMode,
-    },
+    Kubernetes(KubernetesConfig),
 }
 
 impl Default for ConfCenterConfig {
     fn default() -> Self {
-        Self::FileSystem {
-            conf_dir: PathBuf::from("conf"),
-            endpoint_mode: EndpointMode::default(),
-        }
+        Self::FileSystem(FileSystemConfig::default())
     }
 }
 
 impl ConfCenterConfig {
     /// Check if running in Kubernetes mode
     pub fn is_k8s_mode(&self) -> bool {
-        matches!(self, Self::Kubernetes { .. })
-    }
-
-    /// Get the configuration directory (FileSystem mode only)
-    pub fn conf_dir(&self) -> Option<&PathBuf> {
-        match self {
-            Self::FileSystem { conf_dir, .. } => Some(conf_dir),
-            Self::Kubernetes { .. } => None,
-        }
+        matches!(self, Self::Kubernetes(_))
     }
 
     /// Get the endpoint mode
     pub fn endpoint_mode(&self) -> EndpointMode {
         match self {
-            Self::FileSystem { endpoint_mode, .. } => *endpoint_mode,
-            Self::Kubernetes { endpoint_mode, .. } => *endpoint_mode,
+            Self::FileSystem(config) => config.endpoint_mode(),
+            Self::Kubernetes(config) => config.endpoint_mode(),
         }
     }
 
-    /// Get watch namespaces (Kubernetes mode only)
-    pub fn watch_namespaces(&self) -> &[String] {
+    /// Get FileSystem config (if in FileSystem mode)
+    pub fn as_file_system(&self) -> Option<&FileSystemConfig> {
         match self {
-            Self::FileSystem { .. } => &[],
-            Self::Kubernetes { watch_namespaces, .. } => watch_namespaces,
+            Self::FileSystem(config) => Some(config),
+            Self::Kubernetes(_) => None,
         }
     }
 
-    /// Get label selector (Kubernetes mode only)
-    pub fn label_selector(&self) -> Option<&str> {
+    /// Get Kubernetes config (if in Kubernetes mode)
+    pub fn as_kubernetes(&self) -> Option<&KubernetesConfig> {
         match self {
-            Self::FileSystem { .. } => None,
-            Self::Kubernetes { label_selector, .. } => label_selector.as_deref(),
+            Self::FileSystem(_) => None,
+            Self::Kubernetes(config) => Some(config),
         }
     }
 
-    /// Get gateway class name (Kubernetes mode only)
-    pub fn gateway_class(&self) -> Option<&str> {
-        match self {
-            Self::FileSystem { .. } => None,
-            Self::Kubernetes { gateway_class, .. } => Some(gateway_class),
-        }
+    /// Get the configuration directory (FileSystem mode only)
+    pub fn conf_dir(&self) -> Option<&PathBuf> {
+        self.as_file_system().map(|c| c.conf_dir())
     }
+}
 
-    /// Get metadata filter configuration (Kubernetes mode only)
-    pub fn metadata_filter(&self) -> Option<&MetadataFilterConfig> {
-        match self {
-            Self::FileSystem { .. } => None,
-            Self::Kubernetes { metadata_filter, .. } => Some(metadata_filter),
-        }
+/// Create a FileSystem config from path
+impl From<PathBuf> for ConfCenterConfig {
+    fn from(conf_dir: PathBuf) -> Self {
+        Self::FileSystem(FileSystemConfig::new(conf_dir))
     }
+}
 
-    /// Get leader election configuration (Kubernetes mode only)
-    pub fn leader_election(&self) -> Option<&LeaderElectionConfig> {
-        match self {
-            Self::FileSystem { .. } => None,
-            Self::Kubernetes { leader_election, .. } => Some(leader_election),
-        }
+/// Create a Kubernetes config from gateway class
+impl From<&str> for ConfCenterConfig {
+    fn from(gateway_class: &str) -> Self {
+        Self::Kubernetes(KubernetesConfig::new(gateway_class))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::conf_mgr_new::conf_center::kubernetes::config::MetadataFilterConfig;
 
     #[test]
     fn test_file_system_config() {
-        let config = ConfCenterConfig::FileSystem {
+        let config = ConfCenterConfig::FileSystem(FileSystemConfig {
             conf_dir: PathBuf::from("/etc/edgion/conf"),
             endpoint_mode: EndpointMode::EndpointSlice,
-        };
+        });
 
         assert!(!config.is_k8s_mode());
         assert_eq!(config.conf_dir(), Some(&PathBuf::from("/etc/edgion/conf")));
-        assert!(config.metadata_filter().is_none());
         assert_eq!(config.endpoint_mode(), EndpointMode::EndpointSlice);
+        assert!(config.as_file_system().is_some());
+        assert!(config.as_kubernetes().is_none());
     }
 
     #[test]
     fn test_kubernetes_config() {
-        let config = ConfCenterConfig::Kubernetes {
-            watch_namespaces: vec!["default".to_string(), "prod".to_string()],
-            label_selector: Some("app=edgion".to_string()),
-            gateway_class: "edgion".to_string(),
-            metadata_filter: MetadataFilterConfig::default(),
-            leader_election: LeaderElectionConfig::default(),
-            endpoint_mode: EndpointMode::default(),
-        };
+        let config = ConfCenterConfig::Kubernetes(
+            KubernetesConfig::new("edgion")
+                .with_watch_namespaces(vec!["default".to_string(), "prod".to_string()])
+                .with_label_selector("app=edgion"),
+        );
 
         assert!(config.is_k8s_mode());
-        assert_eq!(config.watch_namespaces(), &["default", "prod"]);
-        assert_eq!(config.label_selector(), Some("app=edgion"));
-        assert_eq!(config.gateway_class(), Some("edgion"));
+        let k8s_config = config.as_kubernetes().unwrap();
+        assert_eq!(k8s_config.watch_namespaces(), &["default", "prod"]);
+        assert_eq!(k8s_config.label_selector(), Some("app=edgion"));
+        assert_eq!(k8s_config.gateway_class(), "edgion");
 
         // Test metadata filter
-        let filter = config.metadata_filter().unwrap();
+        let filter = k8s_config.metadata_filter();
         assert!(filter.remove_managed_fields);
         assert!(filter
             .blocked_annotations
             .contains(&"kubectl.kubernetes.io/last-applied-configuration".to_string()));
 
         // Test leader election config
-        let le = config.leader_election().unwrap();
+        let le = k8s_config.leader_election();
         assert_eq!(le.lease_name, "edgion-controller-leader");
         assert_eq!(le.lease_duration_secs, 15);
     }
@@ -211,6 +166,7 @@ conf_dir: /etc/edgion/conf
 "#;
         let config: ConfCenterConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(!config.is_k8s_mode());
+        assert_eq!(config.conf_dir(), Some(&PathBuf::from("/etc/edgion/conf")));
     }
 
     #[test]
@@ -226,7 +182,7 @@ gateway_class: edgion
         let config: ConfCenterConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.is_k8s_mode());
         // Default metadata filter should be applied
-        let filter = config.metadata_filter().unwrap();
+        let filter = config.as_kubernetes().unwrap().metadata_filter();
         assert!(filter.remove_managed_fields);
     }
 
@@ -242,9 +198,23 @@ metadata_filter:
 "#;
         let config: ConfCenterConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.is_k8s_mode());
-        let filter = config.metadata_filter().unwrap();
+        let filter = config.as_kubernetes().unwrap().metadata_filter();
         assert!(!filter.remove_managed_fields);
         assert_eq!(filter.blocked_annotations.len(), 1);
         assert_eq!(filter.blocked_annotations[0], "custom.annotation/to-remove");
+    }
+
+    #[test]
+    fn test_from_path() {
+        let config: ConfCenterConfig = PathBuf::from("/etc/edgion/conf").into();
+        assert!(!config.is_k8s_mode());
+        assert_eq!(config.conf_dir(), Some(&PathBuf::from("/etc/edgion/conf")));
+    }
+
+    #[test]
+    fn test_from_gateway_class() {
+        let config: ConfCenterConfig = "edgion".into();
+        assert!(config.is_k8s_mode());
+        assert_eq!(config.as_kubernetes().unwrap().gateway_class(), "edgion");
     }
 }

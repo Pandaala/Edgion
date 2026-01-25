@@ -49,7 +49,7 @@ mod version_detection;
 mod writer;
 
 pub use center::KubernetesCenter;
-pub use config::{LeaderElectionConfig, MetadataFilterConfig};
+pub use config::{KubernetesConfig, LeaderElectionConfig, MetadataFilterConfig};
 pub use controller::{ControllerExitReason, KubernetesController};
 pub use leader_election::{LeaderElection, LeaderHandle};
 pub use namespace::NamespaceWatchMode;

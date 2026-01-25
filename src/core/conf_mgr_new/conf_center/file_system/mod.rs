@@ -36,6 +36,7 @@
 //! - Cluster-scoped: `{Kind}__{name}.yaml` (double underscore)
 
 mod center;
+pub mod config;
 mod controller;
 mod event;
 mod file_watcher;
@@ -43,6 +44,7 @@ mod resource_controller;
 mod writer;
 
 pub use center::FileSystemCenter;
+pub use config::FileSystemConfig;
 pub use controller::FileSystemController;
 pub use event::{FileSystemEvent, ResourceEvent};
 pub use file_watcher::FileSystemWatcher;

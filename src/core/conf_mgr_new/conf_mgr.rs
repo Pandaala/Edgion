@@ -50,22 +50,24 @@ impl ConfMgr {
     /// - FileSystem mode: Creates `FileSystemCenter`
     /// - Kubernetes mode: Creates `KubernetesCenter`
     pub async fn create(config: ConfCenterConfig) -> Result<Self> {
-        let conf_center: Arc<dyn ConfCenter> = match &config {
-            ConfCenterConfig::FileSystem { .. } => {
+        let conf_center: Arc<dyn ConfCenter> = match config {
+            ConfCenterConfig::FileSystem(fs_config) => {
                 tracing::info!(
                     component = "conf_mgr",
                     mode = "file_system",
+                    conf_dir = %fs_config.conf_dir().display(),
                     "Creating FileSystemCenter"
                 );
-                Arc::new(FileSystemCenter::new(config)?)
+                Arc::new(FileSystemCenter::new(fs_config)?)
             }
-            ConfCenterConfig::Kubernetes { .. } => {
+            ConfCenterConfig::Kubernetes(k8s_config) => {
                 tracing::info!(
                     component = "conf_mgr",
                     mode = "kubernetes",
+                    gateway_class = %k8s_config.gateway_class(),
                     "Creating KubernetesCenter"
                 );
-                Arc::new(KubernetesCenter::new(config).await?)
+                Arc::new(KubernetesCenter::new(k8s_config).await?)
             }
         };
 

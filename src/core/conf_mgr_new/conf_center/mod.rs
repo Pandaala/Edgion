@@ -45,12 +45,12 @@ pub mod kubernetes;
 pub use traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfEntry, ConfWriterError, ListOptions, ListResult};
 
 // Re-export FileSystem types
-pub use file_system::{FileSystemCenter, FileSystemController, FileSystemWriter};
+pub use file_system::{FileSystemCenter, FileSystemConfig, FileSystemController, FileSystemWriter};
 
 // Re-export Kubernetes types
 pub use kubernetes::{
-    ControllerExitReason, KubernetesCenter, KubernetesController, KubernetesWriter, LeaderElection, LeaderHandle,
-    NamespaceWatchMode, RelinkReason,
+    ControllerExitReason, KubernetesCenter, KubernetesConfig, KubernetesController, KubernetesWriter, LeaderElection,
+    LeaderHandle, LeaderElectionConfig, MetadataFilterConfig, NamespaceWatchMode, RelinkReason,
 };
 
 // Re-export status store types
@@ -59,4 +59,3 @@ pub use status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, Stat
 // Re-export configuration types
 pub use common::EndpointMode;
 pub use config::ConfCenterConfig;
-pub use kubernetes::{LeaderElectionConfig, MetadataFilterConfig};
