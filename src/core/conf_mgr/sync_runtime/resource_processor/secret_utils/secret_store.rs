@@ -2,61 +2,60 @@
 //!
 //! Provides a global store for Secret resources that can be accessed
 //! from anywhere in the application (e.g., TLS callback).
+//!
+//! This is control-plane code with low read/write frequency,
+//! so a simple RwLock<HashMap> is sufficient.
 
-use arc_swap::ArcSwap;
 use k8s_openapi::api::core::v1::Secret;
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock, RwLock};
 
 /// Type alias for the secret map: "namespace/name" -> Secret
 type SecretMap = HashMap<String, Secret>;
 
-/// Global Secret Store with lock-free reads
+/// Global Secret Store
 pub struct SecretStore {
-    secrets: ArcSwap<SecretMap>,
+    secrets: RwLock<SecretMap>,
 }
 
 impl SecretStore {
     pub fn new() -> Self {
         Self {
-            secrets: ArcSwap::from_pointee(HashMap::new()),
+            secrets: RwLock::new(HashMap::new()),
         }
     }
 
     /// Get a Secret by namespace and name
     pub fn get(&self, namespace: Option<&str>, name: &str) -> Option<Secret> {
-        let map = self.secrets.load();
         let key = Self::make_key(namespace, name);
+        let map = self.secrets.read().unwrap();
         map.get(&key).cloned()
     }
 
-    /// Replace all secrets atomically
+    /// Replace all secrets
     pub fn replace_all(&self, secrets: HashMap<String, Secret>) {
         let count = secrets.len();
-        self.secrets.store(Arc::new(secrets));
+        let mut map = self.secrets.write().unwrap();
+        *map = secrets;
         tracing::info!(component = "secret_store", count = count, "Replaced all secrets");
     }
 
-    /// Update secrets atomically
+    /// Update secrets
     ///
     /// - `upsert`: Secrets to add or update (insert if not exists, update if exists)
     /// - `remove`: Keys of secrets to remove
-    pub fn update(&self, upsert: HashMap<String, Secret>, remove: &std::collections::HashSet<String>) {
-        let current = self.secrets.load();
-        let current_map: &SecretMap = &current;
-        let mut new_map: SecretMap = current_map.clone();
+    pub fn update(&self, upsert: HashMap<String, Secret>, remove: &HashSet<String>) {
+        let mut map = self.secrets.write().unwrap();
 
         // Remove secrets first
         for key in remove {
-            new_map.remove(key);
+            map.remove(key);
         }
 
         // Add or update secrets
         for (key, secret) in upsert {
-            new_map.insert(key, secret);
+            map.insert(key, secret);
         }
-
-        self.secrets.store(Arc::new(new_map));
 
         tracing::debug!(component = "secret_store", "Updated secrets in store");
     }
@@ -103,7 +102,7 @@ pub fn replace_all_secrets(secrets: HashMap<String, Secret>) {
 ///
 /// - `upsert`: Secrets to add or update
 /// - `remove`: Keys of secrets to remove
-pub fn update_secrets(upsert: HashMap<String, Secret>, remove: &std::collections::HashSet<String>) {
+pub fn update_secrets(upsert: HashMap<String, Secret>, remove: &HashSet<String>) {
     get_global_secret_store().update(upsert, remove);
 }
 
@@ -169,7 +168,7 @@ mod tests {
         let secret2 = create_test_secret("prod", "cert-2", "cert2", "key2");
         let mut upsert = HashMap::new();
         upsert.insert("prod/cert-2".to_string(), secret2);
-        store.update(upsert, &std::collections::HashSet::new());
+        store.update(upsert, &HashSet::new());
 
         // Both secrets should exist
         assert!(store.get(Some("prod"), "cert-1").is_some());
@@ -179,7 +178,7 @@ mod tests {
         let secret1_updated = create_test_secret("prod", "cert-1", "updated-cert", "updated-key");
         let mut upsert = HashMap::new();
         upsert.insert("prod/cert-1".to_string(), secret1_updated);
-        store.update(upsert, &std::collections::HashSet::new());
+        store.update(upsert, &HashSet::new());
 
         // Verify update
         let found = store.get(Some("prod"), "cert-1").unwrap();
@@ -188,7 +187,7 @@ mod tests {
         assert_eq!(String::from_utf8(cert.0.clone()).unwrap(), "updated-cert");
 
         // Remove cert-2
-        let mut remove = std::collections::HashSet::new();
+        let mut remove = HashSet::new();
         remove.insert("prod/cert-2".to_string());
         store.update(HashMap::new(), &remove);
 

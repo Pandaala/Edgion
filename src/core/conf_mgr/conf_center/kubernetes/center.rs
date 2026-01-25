@@ -147,7 +147,7 @@ impl KubernetesCenter {
         let le_config = self.config.leader_election();
 
         // Create internal leader election config from serialized config
-        let config = InternalLeaderElectionConfig::new(&le_config.lease_name, &le_config.lease_namespace)
+        let config = InternalLeaderElectionConfig::new(&le_config.lease_name, &le_config.lease_namespace)?
             .with_lease_duration_secs(le_config.lease_duration_secs)
             .with_renew_period_secs(le_config.renew_period_secs)
             .with_retry_period_secs(le_config.retry_period_secs);

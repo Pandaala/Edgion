@@ -115,7 +115,6 @@ impl From<&str> for ConfCenterConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::conf_mgr::conf_center::kubernetes::config::MetadataFilterConfig;
 
     #[test]
     fn test_file_system_config() {
