@@ -7,8 +7,6 @@ pub mod types;
 pub mod conf_client;
 pub mod conf_server;
 pub mod conf_server_new;
-pub mod conf_server_old;
-
 pub use crate::types::{GatewayBaseConf, ResourceMeta};
 pub use cache_client::ClientCache;
 pub use cache_server::ServerCache;
