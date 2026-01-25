@@ -16,7 +16,7 @@ pub use services::{create_service_handler, get_global_service_store, ServiceStor
 
 use std::sync::OnceLock;
 
-use crate::core::conf_mgr_new::conf_center::EndpointMode;
+use crate::core::conf_mgr::conf_center::EndpointMode;
 use crate::core::gateway::end_response_503;
 use crate::core::utils::net::is_localhost;
 use crate::types::edgion_status::EdgionStatus;

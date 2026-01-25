@@ -1,7 +1,7 @@
 use crate::core::api::controller::serve_with_shutdown as serve_admin_api_with_shutdown;
 use crate::core::cli::config::EdgionControllerConfig;
-use crate::core::conf_mgr_new::{ConfMgr, SchemaValidator, ShutdownHandle};
-use crate::core::conf_sync::conf_server_new::ConfigSyncGrpcServer;
+use crate::core::conf_mgr::{ConfMgr, SchemaValidator, ShutdownHandle};
+use crate::core::conf_sync::conf_server::ConfigSyncGrpcServer;
 use crate::core::observe::init_logging;
 use crate::core::utils;
 use crate::types::{init_work_dir, work_dir, COMPONENT_EDGION_CONTROLLER, VERSION};

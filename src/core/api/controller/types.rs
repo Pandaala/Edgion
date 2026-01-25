@@ -1,5 +1,5 @@
-use crate::core::conf_mgr_new::{ConfCenter, ConfMgr, ConfWriterError, SchemaValidator};
-use crate::core::conf_sync::conf_server_new::ConfigSyncServer;
+use crate::core::conf_mgr::{ConfCenter, ConfMgr, ConfWriterError, SchemaValidator};
+use crate::core::conf_sync::conf_server::ConfigSyncServer;
 use crate::types::ResourceKind;
 use axum::http::StatusCode;
 use serde::Serialize;

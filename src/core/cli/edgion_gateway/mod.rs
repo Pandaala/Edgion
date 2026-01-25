@@ -1,5 +1,5 @@
 use crate::core::backends::init_global_endpoint_mode;
-use crate::core::conf_mgr_new::conf_center::EndpointMode;
+use crate::core::conf_mgr::conf_center::EndpointMode;
 use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
 use crate::core::observe::access_log::init_access_logger;
 use crate::core::observe::init_logging;

@@ -1,7 +1,7 @@
 pub mod api;
 pub mod backends;
 pub mod cli;
-pub mod conf_mgr_new;
+pub mod conf_mgr;
 pub mod conf_sync;
 mod gateway;
 pub mod lb;

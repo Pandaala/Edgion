@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, Notify};
 
 use super::store::EventStore;
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
-use crate::core::conf_sync::conf_server_new::{WatchObj, WatchResponseSimple};
+use crate::core::conf_sync::conf_server::{WatchObj, WatchResponseSimple};
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::utils;
 use crate::types::ResourceMeta;
