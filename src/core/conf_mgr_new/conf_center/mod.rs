@@ -22,11 +22,19 @@
 //! - `CenterLifeCycle`: Lifecycle management (start, reload, shutdown)
 //! - `ConfCenter`: Super trait combining CenterApi + CenterLifeCycle
 //!
+//! ## Configuration
+//!
+//! - `common`: Common types shared across backends (EndpointMode)
+//! - `config`: Top-level ConfCenterConfig enum
+//! - `kubernetes::config`: Kubernetes-specific config (LeaderElectionConfig, MetadataFilterConfig)
+//!
 //! ## Implementations
 //!
 //! - `FileSystemCenter`: FileSystem-based implementation
 //! - `KubernetesCenter`: Kubernetes API-based implementation
 
+pub mod common;
+mod config;
 pub mod status;
 pub mod traits;
 
@@ -48,5 +56,7 @@ pub use kubernetes::{
 // Re-export status store types
 pub use status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, StatusStoreError};
 
-// Re-export configuration types for backward compatibility
-pub use crate::core::conf_mgr_new::config::{ConfCenterConfig, EndpointMode, LeaderElectionConfig, MetadataFilterConfig};
+// Re-export configuration types
+pub use common::EndpointMode;
+pub use config::ConfCenterConfig;
+pub use kubernetes::{LeaderElectionConfig, MetadataFilterConfig};

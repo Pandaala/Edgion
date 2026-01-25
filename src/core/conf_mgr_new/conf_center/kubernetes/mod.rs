@@ -40,6 +40,7 @@
 //! - **ProcessorRegistry**: Global registry for all processors
 
 mod center;
+pub mod config;
 mod controller;
 mod leader_election;
 mod namespace;
@@ -48,8 +49,9 @@ mod version_detection;
 mod writer;
 
 pub use center::KubernetesCenter;
+pub use config::{LeaderElectionConfig, MetadataFilterConfig};
 pub use controller::{ControllerExitReason, KubernetesController};
-pub use leader_election::{LeaderElection, LeaderElectionConfig, LeaderHandle};
+pub use leader_election::{LeaderElection, LeaderHandle};
 pub use namespace::NamespaceWatchMode;
 pub use resource_controller::{RelinkReason, RelinkSignalSender, ResourceController};
 pub use version_detection::{detect_endpoint_mode, resolve_endpoint_mode};

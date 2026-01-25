@@ -14,11 +14,12 @@
 //! └── client: kube::Client
 //! ```
 
+use super::super::common::EndpointMode;
+use super::super::config::ConfCenterConfig;
 use super::controller::{ControllerExitReason, KubernetesController};
-use super::leader_election::{LeaderElection, LeaderElectionConfig as K8sLeaderElectionConfig, LeaderHandle};
+use super::leader_election::{LeaderElection, LeaderElectionConfig as InternalLeaderElectionConfig, LeaderHandle};
 use super::version_detection::resolve_endpoint_mode;
 use super::writer::KubernetesWriter;
-use crate::core::conf_mgr_new::config::{ConfCenterConfig, EndpointMode};
 use crate::core::conf_mgr_new::conf_center::traits::{
     CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
@@ -144,8 +145,8 @@ impl KubernetesCenter {
         *shutdown_handle = Some(handle);
     }
 
-    /// Create LeaderElectionConfig from ConfCenterConfig
-    fn create_leader_election_config(&self) -> Result<K8sLeaderElectionConfig> {
+    /// Create internal LeaderElectionConfig from ConfCenterConfig
+    fn create_leader_election_config(&self) -> Result<InternalLeaderElectionConfig> {
         let ConfCenterConfig::Kubernetes {
             leader_election: le_config,
             ..
@@ -154,8 +155,8 @@ impl KubernetesCenter {
             return Err(anyhow::anyhow!("Not in Kubernetes mode"));
         };
 
-        // Create K8s leader election config
-        let config = K8sLeaderElectionConfig::new(&le_config.lease_name, &le_config.lease_namespace)
+        // Create internal leader election config from serialized config
+        let config = InternalLeaderElectionConfig::new(&le_config.lease_name, &le_config.lease_namespace)
             .with_lease_duration_secs(le_config.lease_duration_secs)
             .with_renew_period_secs(le_config.renew_period_secs)
             .with_retry_period_secs(le_config.retry_period_secs);

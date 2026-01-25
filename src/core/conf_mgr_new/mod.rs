@@ -45,7 +45,6 @@
 pub mod conf_center;
 mod conf_mgr;
 mod conf_mgr_trait;
-mod config;
 pub mod processor_registry;
 mod schema_validator;
 pub mod sync_runtime;
@@ -55,8 +54,8 @@ pub mod sync_runtime;
 // ConfMgr - main entry point
 pub use conf_mgr::ConfMgr;
 
-// Configuration
-pub use config::{ConfCenterConfig, EndpointMode, LeaderElectionConfig, MetadataFilterConfig};
+// Configuration (from conf_center)
+pub use conf_center::{ConfCenterConfig, EndpointMode, LeaderElectionConfig, MetadataFilterConfig};
 
 // ProcessorRegistry exports
 pub use processor_registry::{ProcessorRegistry, PROCESSOR_REGISTRY};

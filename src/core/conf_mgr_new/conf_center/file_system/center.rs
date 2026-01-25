@@ -14,9 +14,10 @@
 //! └── controller_handle: Mutex<Option<JoinHandle<()>>>
 //! ```
 
+use super::super::common::EndpointMode;
+use super::super::config::ConfCenterConfig;
 use super::controller::FileSystemController;
 use super::writer::FileSystemWriter;
-use crate::core::conf_mgr_new::config::{ConfCenterConfig, EndpointMode};
 use crate::core::conf_mgr_new::conf_center::traits::{
     CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };

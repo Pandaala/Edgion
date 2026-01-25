@@ -1,28 +1,45 @@
-//! ConfMgr configuration
+//! Configuration Center configuration
 //!
-//! Defines the configuration enum for different configuration center backends.
+//! This module defines the top-level configuration enum for the configuration center,
+//! which determines whether to use FileSystem or Kubernetes backend.
 
+use super::common::EndpointMode;
+use super::kubernetes::config::{LeaderElectionConfig, MetadataFilterConfig};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-
-/// Endpoint discovery mode for Kubernetes
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum EndpointMode {
-    /// Use Endpoints resource (K8s 1.0+, legacy)
-    Endpoint,
-    /// Use EndpointSlice resource (K8s 1.21+, recommended)
-    EndpointSlice,
-    /// Auto-detect based on K8s API server version (default)
-    #[default]
-    Auto,
-}
 
 /// Configuration for the Configuration Center
 ///
 /// Supports two backends:
 /// - FileSystem: Local YAML files with file watching (always enabled)
 /// - Kubernetes: K8s API with resource watching via Controller
+///
+/// ## Example (FileSystem mode)
+///
+/// ```yaml
+/// type: file_system
+/// conf_dir: /etc/edgion/conf
+/// endpoint_mode: endpoint_slice
+/// ```
+///
+/// ## Example (Kubernetes mode)
+///
+/// ```yaml
+/// type: kubernetes
+/// gateway_class: edgion
+/// watch_namespaces:
+///   - default
+///   - prod
+/// label_selector: app=edgion
+/// endpoint_mode: auto
+/// leader_election:
+///   lease_name: edgion-controller-leader
+///   lease_namespace: edgion-system
+/// metadata_filter:
+///   remove_managed_fields: true
+///   blocked_annotations:
+///     - kubectl.kubernetes.io/last-applied-configuration
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ConfCenterConfig {
@@ -31,6 +48,7 @@ pub enum ConfCenterConfig {
     FileSystem {
         /// Directory containing configuration YAML files
         conf_dir: PathBuf,
+
         /// Endpoint discovery mode
         /// In file system mode, this determines which endpoint resource type to use:
         /// - Endpoint: Use Endpoints resources
@@ -39,121 +57,32 @@ pub enum ConfCenterConfig {
         #[serde(default)]
         endpoint_mode: EndpointMode,
     },
+
     /// Kubernetes based configuration center
     Kubernetes {
         /// Namespaces to watch. Empty means all namespaces.
         #[serde(default)]
         watch_namespaces: Vec<String>,
+
         /// Label selector for filtering resources
         #[serde(default)]
         label_selector: Option<String>,
+
         /// Gateway class name this controller manages
         gateway_class: String,
+
         /// Metadata filter configuration for reducing resource memory usage
         #[serde(default)]
         metadata_filter: MetadataFilterConfig,
+
         /// Leader election configuration (always enabled in K8s mode)
         #[serde(default)]
         leader_election: LeaderElectionConfig,
+
         /// Endpoint discovery mode for Kubernetes
         #[serde(default)]
         endpoint_mode: EndpointMode,
     },
-}
-
-/// Leader election configuration for HA deployments
-///
-/// In K8s mode, leader election is always enabled to ensure only one
-/// controller instance is active at a time when running multiple replicas.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LeaderElectionConfig {
-    /// Lease resource name for leader election
-    #[serde(default = "default_lease_name")]
-    pub lease_name: String,
-    /// Namespace where the Lease resource will be created
-    /// Defaults to the namespace from POD_NAMESPACE env var or "default"
-    #[serde(default = "default_lease_namespace")]
-    pub lease_namespace: String,
-    /// Lease duration in seconds (how long the lease is valid)
-    #[serde(default = "default_lease_duration_secs")]
-    pub lease_duration_secs: i32,
-    /// Renew period in seconds (how often the leader renews the lease)
-    #[serde(default = "default_renew_period_secs")]
-    pub renew_period_secs: u64,
-    /// Retry period in seconds (how often non-leaders try to acquire)
-    #[serde(default = "default_retry_period_secs")]
-    pub retry_period_secs: u64,
-}
-
-impl Default for LeaderElectionConfig {
-    fn default() -> Self {
-        Self {
-            lease_name: default_lease_name(),
-            lease_namespace: default_lease_namespace(),
-            lease_duration_secs: default_lease_duration_secs(),
-            renew_period_secs: default_renew_period_secs(),
-            retry_period_secs: default_retry_period_secs(),
-        }
-    }
-}
-
-fn default_lease_name() -> String {
-    "edgion-controller-leader".to_string()
-}
-
-fn default_lease_namespace() -> String {
-    // Try to get namespace from environment (set by K8s Downward API)
-    std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "default".to_string())
-}
-
-fn default_lease_duration_secs() -> i32 {
-    15
-}
-
-fn default_renew_period_secs() -> u64 {
-    10
-}
-
-fn default_retry_period_secs() -> u64 {
-    2
-}
-
-/// Metadata filter configuration for reducing K8s resource size in memory
-///
-/// When loading resources from Kubernetes, certain metadata fields can be
-/// removed to reduce memory usage. These fields are typically not needed
-/// for the controller's operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetadataFilterConfig {
-    /// Annotations to remove from resources (blacklist)
-    /// Default includes kubectl last-applied-configuration and helm metadata
-    #[serde(default = "default_blocked_annotations")]
-    pub blocked_annotations: Vec<String>,
-    /// Whether to remove managedFields from resources
-    /// managedFields can be large and is not needed for most operations
-    #[serde(default = "default_remove_managed_fields")]
-    pub remove_managed_fields: bool,
-}
-
-impl Default for MetadataFilterConfig {
-    fn default() -> Self {
-        Self {
-            blocked_annotations: default_blocked_annotations(),
-            remove_managed_fields: default_remove_managed_fields(),
-        }
-    }
-}
-
-fn default_blocked_annotations() -> Vec<String> {
-    vec![
-        "kubectl.kubernetes.io/last-applied-configuration".to_string(),
-        "meta.helm.sh/release-name".to_string(),
-        "meta.helm.sh/release-namespace".to_string(),
-    ]
-}
-
-fn default_remove_managed_fields() -> bool {
-    true
 }
 
 impl Default for ConfCenterConfig {
@@ -317,21 +246,5 @@ metadata_filter:
         assert!(!filter.remove_managed_fields);
         assert_eq!(filter.blocked_annotations.len(), 1);
         assert_eq!(filter.blocked_annotations[0], "custom.annotation/to-remove");
-    }
-
-    #[test]
-    fn test_metadata_filter_config_default() {
-        let filter = MetadataFilterConfig::default();
-        assert!(filter.remove_managed_fields);
-        assert_eq!(filter.blocked_annotations.len(), 3);
-        assert!(filter
-            .blocked_annotations
-            .contains(&"kubectl.kubernetes.io/last-applied-configuration".to_string()));
-        assert!(filter
-            .blocked_annotations
-            .contains(&"meta.helm.sh/release-name".to_string()));
-        assert!(filter
-            .blocked_annotations
-            .contains(&"meta.helm.sh/release-namespace".to_string()));
     }
 }
