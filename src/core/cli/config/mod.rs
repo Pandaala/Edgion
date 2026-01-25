@@ -1,4 +1,4 @@
-use crate::core::conf_mgr::ConfCenterConfig;
+use crate::core::conf_mgr_new::ConfCenterConfig;
 use anyhow::{Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
