@@ -54,33 +54,25 @@ async fn readiness_check(State(state): State<Arc<AdminState>>) -> Result<Json<Ap
 
 /// Reload all resources from storage (FileSystem mode only)
 ///
-/// Performs a complete reset:
-/// 1. Clear all caches (remove stale data from deleted files)
-/// 2. Reload from directory
+/// TODO: Reload functionality is currently disabled.
+/// The FileSystemWatcher automatically detects file changes, so manual reload
+/// is not necessary in most cases. If full reload is needed in the future,
+/// the implementation should:
+/// 1. Only run init_phase (not runtime_phase)
+/// 2. Not interfere with the running watcher
+///
+/// For now, this endpoint returns a message indicating reload is not needed.
 async fn reload_all_resources(
-    State(state): State<Arc<AdminState>>,
+    State(_state): State<Arc<AdminState>>,
 ) -> Result<Json<types::ApiResponse<String>>, StatusCode> {
-    state
-        .conf_mgr
-        .reload()
-        .await
-        .map_err(|e| {
-            tracing::error!(
-                component = "admin_api",
-                error = %e,
-                "Failed to reload resources"
-            );
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
     tracing::info!(
         component = "admin_api",
-        event = "resources_reloaded",
-        "All resources reloaded from storage"
+        event = "reload_skipped",
+        "Reload requested but not needed - FileSystemWatcher handles changes automatically"
     );
 
     Ok(Json(types::ApiResponse::success(
-        "Resources reloaded successfully".to_string(),
+        "Reload not needed - file changes are detected automatically".to_string(),
     )))
 }
 

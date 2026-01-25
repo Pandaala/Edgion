@@ -191,21 +191,6 @@ load_directory_recursive() {
 }
 
 # =============================================================================
-# triggerconfigreload
-# =============================================================================
-trigger_reload() {
-    log_info "trigger Controller configreload..."
-    
-    if curl -sf -X POST "${CONTROLLER_URL}/api/v1/reload" > /dev/null 2>&1; then
-        log_success "configreloadsuccess"
-        return 0
-    else
-        log_warn "无法triggerreload (may不need)"
-        return 0
-    fi
-}
-
-# =============================================================================
 # verifyresourcesync
 # =============================================================================
 verify_sync() {
@@ -338,9 +323,6 @@ main() {
         log_info "Wait ${wait_time}s 让configtake effect..."
         sleep $wait_time
     fi
-    
-    # triggerreload
-    trigger_reload
     
     # verify
     if $do_verify; then
