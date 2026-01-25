@@ -122,6 +122,28 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
 
     fn update_status(&self, route: &mut TLSRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = route.metadata.generation;
+
+        // Collect ref_denied errors from backendRefs
+        let mut all_errors: Vec<String> = validation_errors.to_vec();
+
+        if let Some(rules) = &route.spec.rules {
+            for rule in rules {
+                if let Some(backend_refs) = &rule.backend_refs {
+                    for backend_ref in backend_refs {
+                        if let Some(ref_denied) = &backend_ref.ref_denied {
+                            let msg = format!(
+                                "Cross-namespace reference to {}/{} denied: {}",
+                                ref_denied.target_namespace,
+                                ref_denied.target_name,
+                                ref_denied.reason.as_deref().unwrap_or("NoMatchingReferenceGrant")
+                            );
+                            all_errors.push(msg);
+                        }
+                    }
+                }
+            }
+        }
+
         let status = route.status.get_or_insert_with(|| TLSRouteStatus { parents: vec![] });
 
         if let Some(parent_refs) = &route.spec.parent_refs {
@@ -131,10 +153,10 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
                 });
 
                 if let Some(ps) = parent_status {
-                    set_route_parent_conditions(&mut ps.conditions, validation_errors, generation);
+                    set_route_parent_conditions(&mut ps.conditions, &all_errors, generation);
                 } else {
                     let mut conditions = Vec::new();
-                    set_route_parent_conditions(&mut conditions, validation_errors, generation);
+                    set_route_parent_conditions(&mut conditions, &all_errors, generation);
 
                     status.parents.push(RouteParentStatus {
                         parent_ref: parent_ref.clone(),

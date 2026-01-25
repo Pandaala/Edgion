@@ -1,5 +1,3 @@
-# HTTPRoute in app namespace referencing Service in another-backend namespace
-# This tests cross-namespace reference WITHOUT ReferenceGrant (should be denied)
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -7,18 +5,17 @@ metadata:
   namespace: app
 spec:
   parentRefs:
-    - name: edge
-      namespace: edge
-      sectionName: http
+    - name: public-gateway
+      namespace: edgion-test
   hostnames:
-    - "denied.example.com"
+    - cross-ns-denied.example.com
   rules:
     - matches:
         - path:
             type: PathPrefix
             value: /
       backendRefs:
-        # Cross-namespace reference to another-backend/some-svc (no ReferenceGrant exists)
+        # This references a service in 'other' namespace without ReferenceGrant
         - name: some-svc
-          namespace: another-backend
-          port: 8080
+          namespace: other
+          port: 80

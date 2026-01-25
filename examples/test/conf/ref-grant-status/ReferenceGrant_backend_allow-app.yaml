@@ -1,4 +1,3 @@
-# ReferenceGrant allowing HTTPRoute from 'app' namespace to reference Services in 'backend' namespace
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:

@@ -60,7 +60,7 @@ struct Cli {
     #[arg(long, default_value = "18443")]
     grpc_https_port: u16,
 
-    #[arg(long, default_value = "8080")]
+    #[arg(long, default_value = "5800")]
     admin_port: u16,
 
     #[arg(long)]

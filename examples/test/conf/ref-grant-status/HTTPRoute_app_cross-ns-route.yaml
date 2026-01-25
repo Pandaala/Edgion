@@ -1,5 +1,3 @@
-# HTTPRoute in app namespace referencing Service in backend namespace
-# This tests cross-namespace reference with ReferenceGrant
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -7,18 +5,16 @@ metadata:
   namespace: app
 spec:
   parentRefs:
-    - name: edge
-      namespace: edge
-      sectionName: http
+    - name: public-gateway
+      namespace: edgion-test
   hostnames:
-    - "cross-ns.example.com"
+    - cross-ns.example.com
   rules:
     - matches:
         - path:
             type: PathPrefix
             value: /
       backendRefs:
-        # Cross-namespace reference to backend/cross-ns-svc
         - name: cross-ns-svc
           namespace: backend
-          port: 8080
+          port: 80

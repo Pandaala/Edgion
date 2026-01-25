@@ -56,6 +56,23 @@ impl Default for SecretHandler {
 
 impl ProcessorHandler<Secret> for SecretHandler {
     fn parse(&self, secret: Secret, _ctx: &HandlerContext) -> ProcessResult<Secret> {
+        // Update global SecretStore during parse
+        // This ensures SecretStore is populated during Init phase
+        // (on_change is not called during Init)
+        let secret_key = format_secret_key(
+            secret.metadata.namespace.as_ref(),
+            secret.metadata.name.as_deref().unwrap_or(""),
+        );
+
+        let mut upsert = HashMap::new();
+        upsert.insert(secret_key.clone(), secret.clone());
+        update_secrets(upsert, &HashSet::new());
+
+        tracing::debug!(
+            secret_key = %secret_key,
+            "Secret parsed and added to SecretStore"
+        );
+
         ProcessResult::Continue(secret)
     }
 
@@ -65,12 +82,8 @@ impl ProcessorHandler<Secret> for SecretHandler {
             secret.metadata.name.as_deref().unwrap_or(""),
         );
 
-        // 1. Update global SecretStore (for TLS callback access)
-        let mut upsert = HashMap::new();
-        upsert.insert(secret_key.clone(), secret.clone());
-        update_secrets(upsert, &HashSet::new());
-
-        // 2. Trigger cascading requeue for dependent resources
+        // SecretStore is already updated in parse(), so we only trigger cascading requeue here
+        // Trigger cascading requeue for dependent resources
         self.trigger_cascading_requeue(&secret_key, "updated", ctx);
     }
 
