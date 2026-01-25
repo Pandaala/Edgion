@@ -47,40 +47,70 @@ impl AdminState {
         let kind_str = kind.as_str();
 
         let result = api.get_list_by_kind(kind_str, None).await.map_err(|e| {
-            tracing::warn!(component = "admin_state", kind = kind_str, error = %e, "Failed to list from storage");
+            tracing::warn!(
+                component = "admin_state",
+                kind = kind_str,
+                error = %e,
+                "Failed to list resources from storage"
+            );
             map_center_api_error(e)
         })?;
 
+        // Parse YAML/JSON content to Vec<Value>
         let values: Vec<serde_json::Value> = result
             .items
             .into_iter()
-            .filter_map(|entry| serde_yaml::from_str(&entry.content).or_else(|_| serde_json::from_str(&entry.content)).ok())
+            .filter_map(|entry| {
+                serde_yaml::from_str(&entry.content)
+                    .or_else(|_| serde_json::from_str(&entry.content))
+                    .ok()
+            })
             .collect();
 
         Ok(values)
     }
 
     /// List resources of a kind in a specific namespace from storage (via CenterApi)
-    pub async fn center_list_resources_namespaced(&self, kind: ResourceKind, namespace: &str) -> Result<Vec<serde_json::Value>, StatusCode> {
+    pub async fn center_list_resources_namespaced(
+        &self,
+        kind: ResourceKind,
+        namespace: &str,
+    ) -> Result<Vec<serde_json::Value>, StatusCode> {
         let api = self.center_api();
         let kind_str = kind.as_str();
 
         let result = api.get_list_by_kind_ns(kind_str, namespace, None).await.map_err(|e| {
-            tracing::warn!(component = "admin_state", kind = kind_str, namespace = namespace, error = %e, "Failed to list namespaced from storage");
+            tracing::warn!(
+                component = "admin_state",
+                kind = kind_str,
+                namespace = namespace,
+                error = %e,
+                "Failed to list namespaced resources from storage"
+            );
             map_center_api_error(e)
         })?;
 
+        // Parse YAML/JSON content to Vec<Value>
         let values: Vec<serde_json::Value> = result
             .items
             .into_iter()
-            .filter_map(|entry| serde_yaml::from_str(&entry.content).or_else(|_| serde_json::from_str(&entry.content)).ok())
+            .filter_map(|entry| {
+                serde_yaml::from_str(&entry.content)
+                    .or_else(|_| serde_json::from_str(&entry.content))
+                    .ok()
+            })
             .collect();
 
         Ok(values)
     }
 
     /// Get a specific resource by namespace and name from storage (via CenterApi)
-    pub async fn center_get_resource(&self, kind: ResourceKind, namespace: &str, name: &str) -> Result<Option<serde_json::Value>, StatusCode> {
+    pub async fn center_get_resource(
+        &self,
+        kind: ResourceKind,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Option<serde_json::Value>, StatusCode> {
         let api = self.center_api();
         let kind_str = kind.as_str();
 
@@ -88,16 +118,40 @@ impl AdminState {
             Ok(content) => {
                 let value: serde_json::Value = serde_yaml::from_str(&content)
                     .or_else(|_| serde_json::from_str(&content))
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    .map_err(|e| {
+                        tracing::warn!(
+                            component = "admin_state",
+                            kind = kind_str,
+                            namespace = namespace,
+                            name = name,
+                            error = %e,
+                            "Failed to parse resource content"
+                        );
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
                 Ok(Some(value))
             }
             Err(ConfWriterError::NotFound(_)) => Ok(None),
-            Err(e) => Err(map_center_api_error(e)),
+            Err(e) => {
+                tracing::warn!(
+                    component = "admin_state",
+                    kind = kind_str,
+                    namespace = namespace,
+                    name = name,
+                    error = %e,
+                    "Failed to get resource from storage"
+                );
+                Err(map_center_api_error(e))
+            }
         }
     }
 
     /// Get a cluster-scoped resource by name from storage (via CenterApi)
-    pub async fn center_get_cluster_resource(&self, kind: ResourceKind, name: &str) -> Result<Option<serde_json::Value>, StatusCode> {
+    pub async fn center_get_cluster_resource(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+    ) -> Result<Option<serde_json::Value>, StatusCode> {
         let api = self.center_api();
         let kind_str = kind.as_str();
 
@@ -105,49 +159,101 @@ impl AdminState {
             Ok(content) => {
                 let value: serde_json::Value = serde_yaml::from_str(&content)
                     .or_else(|_| serde_json::from_str(&content))
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    .map_err(|e| {
+                        tracing::warn!(
+                            component = "admin_state",
+                            kind = kind_str,
+                            name = name,
+                            error = %e,
+                            "Failed to parse cluster resource content"
+                        );
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
                 Ok(Some(value))
             }
             Err(ConfWriterError::NotFound(_)) => Ok(None),
-            Err(e) => Err(map_center_api_error(e)),
+            Err(e) => {
+                tracing::warn!(
+                    component = "admin_state",
+                    kind = kind_str,
+                    name = name,
+                    error = %e,
+                    "Failed to get cluster resource from storage"
+                );
+                Err(map_center_api_error(e))
+            }
         }
     }
 
-    // ==================== Cache Methods (ConfigSyncServer) ====================
+    // ==================== ConfigSyncServer Methods (Cache Layer) ====================
     // Used by /configserver/... endpoints - reads from ServerCache
 
-    /// List all resources of a kind from cache
+    /// List all resources of a kind from cache (via ConfigSyncServer)
     pub fn cache_list_resources(&self, kind: ResourceKind) -> Result<Vec<serde_json::Value>, StatusCode> {
         let server = self.config_sync_server()?;
         let kind_str = kind.as_str();
 
         let result = server.list(kind_str).map_err(|e| {
-            tracing::warn!(component = "admin_state", kind = kind_str, error = %e, "Failed to list from cache");
+            tracing::warn!(
+                component = "admin_state",
+                kind = kind_str,
+                error = %e,
+                "Failed to list resources from cache"
+            );
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-        let values: Vec<serde_json::Value> = serde_json::from_str(&result.data).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        // Parse JSON data to Vec<Value>
+        let values: Vec<serde_json::Value> = serde_json::from_str(&result.data).map_err(|e| {
+            tracing::warn!(
+                component = "admin_state",
+                kind = kind_str,
+                error = %e,
+                "Failed to parse list response from cache"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
         Ok(values)
     }
 
-    /// Get a specific resource by namespace and name from cache
-    pub fn cache_get_resource(&self, kind: ResourceKind, namespace: &str, name: &str) -> Result<Option<serde_json::Value>, StatusCode> {
+    /// Get a specific resource by namespace and name from cache (via ConfigSyncServer)
+    pub fn cache_get_resource(
+        &self,
+        kind: ResourceKind,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Option<serde_json::Value>, StatusCode> {
         let all = self.cache_list_resources(kind)?;
+
         let found = all.into_iter().find(|v| {
             let meta = v.get("metadata");
-            let ns_match = meta.and_then(|m| m.get("namespace")).and_then(|n| n.as_str()) == Some(namespace);
+            let ns_match = meta
+                .and_then(|m| m.get("namespace"))
+                .and_then(|n| n.as_str())
+                == Some(namespace);
             let name_match = meta.and_then(|m| m.get("name")).and_then(|n| n.as_str()) == Some(name);
             ns_match && name_match
         });
+
         Ok(found)
     }
 
-    /// Get a cluster-scoped resource by name from cache
-    pub fn cache_get_cluster_resource(&self, kind: ResourceKind, name: &str) -> Result<Option<serde_json::Value>, StatusCode> {
+    /// Get a cluster-scoped resource by name from cache (via ConfigSyncServer)
+    pub fn cache_get_cluster_resource(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+    ) -> Result<Option<serde_json::Value>, StatusCode> {
         let all = self.cache_list_resources(kind)?;
+
         let found = all.into_iter().find(|v| {
-            v.get("metadata").and_then(|m| m.get("name")).and_then(|n| n.as_str()) == Some(name)
+            v.get("metadata")
+                .and_then(|m| m.get("name"))
+                .and_then(|n| n.as_str())
+                == Some(name)
         });
+
         Ok(found)
     }
 }
@@ -157,10 +263,13 @@ fn map_center_api_error(e: ConfWriterError) -> StatusCode {
     match e {
         ConfWriterError::NotFound(_) => StatusCode::NOT_FOUND,
         ConfWriterError::AlreadyExists(_) => StatusCode::CONFLICT,
-        ConfWriterError::ValidationError(_) | ConfWriterError::ParseError(_) => StatusCode::BAD_REQUEST,
+        ConfWriterError::ValidationError(_) => StatusCode::BAD_REQUEST,
         ConfWriterError::PermissionDenied(_) => StatusCode::FORBIDDEN,
         ConfWriterError::Conflict(_) => StatusCode::CONFLICT,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
+        ConfWriterError::ParseError(_) => StatusCode::BAD_REQUEST,
+        ConfWriterError::IOError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        ConfWriterError::KubeError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        ConfWriterError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
