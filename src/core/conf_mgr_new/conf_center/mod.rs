@@ -1,55 +1,52 @@
-//! Configuration Center for conf_mgr_new
+//! Configuration Center module
 //!
-//! Provides Kubernetes and FileSystem based configuration synchronization.
+//! Provides configuration center implementations for different backends.
 //!
 //! ## Architecture
 //!
 //! ```text
-//! ConfCenter
-//! ├── PROCESSOR_REGISTRY (global, holds Arc<dyn ProcessorObj>)
-//! │   └── ResourceProcessor<T> for each resource type
-//! ├── ConfigSyncServer (for gRPC list/watch)
-//! │   └── Uses WatchObj from PROCESSOR_REGISTRY
-//! └── ConfWriter (for Admin API CRUD)
+//! ConfCenter = CenterApi + CenterLifeCycle (super trait)
+//!     │
+//!     ├── FileSystemCenter (implements ConfCenter)
+//!     │   ├── CenterApi delegate -> FileSystemWriter
+//!     │   └── CenterLifeCycle impl (lifecycle logic)
+//!     │
+//!     └── KubernetesCenter (implements ConfCenter)
+//!         ├── CenterApi delegate -> KubernetesWriter
+//!         └── CenterLifeCycle impl (lifecycle logic)
 //! ```
 //!
-//! ## Lifecycle
+//! ## Traits
 //!
-//! - FileSystem mode: `lifecycle_filesystem.rs`
-//!   - Runs FileSystemController (registers to PROCESSOR_REGISTRY)
-//!   - Creates ConfigSyncServer when ready
+//! - `CenterApi`: CRUD operations for configuration storage
+//! - `CenterLifeCycle`: Lifecycle management (start, reload, shutdown)
+//! - `ConfCenter`: Super trait combining CenterApi + CenterLifeCycle
 //!
-//! - Kubernetes mode: `lifecycle_kubernetes.rs`
-//!   - Leader election with auto-retry
-//!   - Runs KubernetesController (registers to PROCESSOR_REGISTRY)
-//!   - Creates ConfigSyncServer when ready
+//! ## Implementations
+//!
+//! - `FileSystemCenter`: FileSystem-based implementation
+//! - `KubernetesCenter`: Kubernetes API-based implementation
 
-mod conf_center;
-mod config;
-mod lifecycle_filesystem;
-mod lifecycle_kubernetes;
 pub mod status;
-mod traits;
+pub mod traits;
 
 pub mod file_system;
 pub mod kubernetes;
 
-// Export configuration types
-pub use config::{ConfCenterConfig, EndpointMode, LeaderElectionConfig, MetadataFilterConfig};
+// Re-export traits
+pub use traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfEntry, ConfWriterError, ListOptions, ListResult};
 
-// Export ConfCenter
-pub use conf_center::ConfCenter;
+// Re-export FileSystem types
+pub use file_system::{FileSystemCenter, FileSystemController, FileSystemWriter};
 
-// Re-export commonly used types from file_system
-pub use file_system::{FileSystemController, FileSystemWriter};
-
-// Re-export commonly used types from kubernetes
+// Re-export Kubernetes types
 pub use kubernetes::{
-    ControllerExitReason, KubernetesController, KubernetesWriter, LeaderElection, LeaderHandle, NamespaceWatchMode,
+    ControllerExitReason, KubernetesCenter, KubernetesController, KubernetesWriter, LeaderElection, LeaderHandle,
+    NamespaceWatchMode, RelinkReason,
 };
 
-// Export traits from local module
-pub use traits::{ConfEntry, CenterApi, ConfWriterError, ListOptions, ListResult};
-
-// Export status store types
+// Re-export status store types
 pub use status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, StatusStoreError};
+
+// Re-export configuration types for backward compatibility
+pub use crate::core::conf_mgr_new::config::{ConfCenterConfig, EndpointMode, LeaderElectionConfig, MetadataFilterConfig};

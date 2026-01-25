@@ -1,6 +1,6 @@
 use crate::core::api::controller::serve_with_shutdown as serve_admin_api_with_shutdown;
 use crate::core::cli::config::EdgionControllerConfig;
-use crate::core::conf_mgr_new::{ConfCenter, SchemaValidator, ShutdownHandle};
+use crate::core::conf_mgr_new::{ConfMgr, SchemaValidator, ShutdownHandle};
 use crate::core::conf_sync::conf_server_new::ConfigSyncGrpcServer;
 use crate::core::observe::init_logging;
 use crate::core::utils;
@@ -122,9 +122,9 @@ impl EdgionControllerCli {
     /// Start gRPC and Admin services with graceful shutdown support
     ///
     /// Note: Services can start immediately. When ConfigSyncServer is not ready,
-    /// they will return UNAVAILABLE errors until ConfCenter.start() completes.
+    /// they will return UNAVAILABLE errors until ConfMgr.start() completes.
     async fn start_services(
-        conf_center: Arc<ConfCenter>,
+        conf_mgr: Arc<ConfMgr>,
         schema_validator: Arc<SchemaValidator>,
         grpc_addr: SocketAddr,
         admin_addr: SocketAddr,
@@ -149,11 +149,11 @@ impl EdgionControllerCli {
         };
 
         // Wait for ConfigSyncServer to be available
-        // It will be created by ConfCenter.start_with_shutdown()
-        let wait_conf_center = conf_center.clone();
+        // It will be created by ConfMgr.start_with_shutdown()
+        let wait_conf_mgr = conf_mgr.clone();
         let config_sync_server = tokio::spawn(async move {
             loop {
-                if let Some(server) = wait_conf_center.config_sync_server() {
+                if let Some(server) = wait_conf_mgr.config_sync_server() {
                     return server;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -168,7 +168,7 @@ impl EdgionControllerCli {
         // Run both services concurrently with shutdown support
         let (sync_result, admin_result) = tokio::join!(
             grpc_server.serve_with_shutdown(grpc_addr, grpc_shutdown),
-            serve_admin_api_with_shutdown(conf_center.clone(), schema_validator, admin_addr, admin_shutdown)
+            serve_admin_api_with_shutdown(conf_mgr.clone(), schema_validator, admin_addr, admin_shutdown)
         );
 
         // Check results
@@ -207,8 +207,8 @@ impl EdgionControllerCli {
     /// Architecture:
     /// 1. Initialize environment
     /// 2. Create shutdown handler for graceful shutdown
-    /// 3. Create ConfCenter
-    /// 4. Spawn ConfCenter.start() (manages lifecycle: leader election, link, relink)
+    /// 3. Create ConfMgr
+    /// 4. Spawn ConfMgr.start() (manages lifecycle: leader election, link, relink)
     /// 5. Start gRPC and Admin services with shutdown support
     pub async fn run(&self) -> Result<()> {
         // Load and merge configuration
@@ -217,13 +217,13 @@ impl EdgionControllerCli {
         // 1. Initialize environment (work_dir, logging)
         let _log_guard = self.init_environment(&config).await?;
 
-        // 2. Log ConfCenter configuration
+        // 2. Log ConfMgr configuration
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
-            event = "conf_center_config",
+            event = "conf_mgr_config",
             k8s_mode = config.is_k8s_mode(),
             config = ?config.conf_center,
-            "ConfCenter configuration"
+            "ConfMgr configuration"
         );
 
         // 3. Create shutdown handler for graceful shutdown (SIGINT/SIGTERM)
@@ -233,22 +233,22 @@ impl EdgionControllerCli {
             signal_shutdown.wait_for_signals().await;
         });
 
-        // 4. Create ConfCenter (ConfigSyncServer is None initially)
+        // 4. Create ConfMgr (ConfigSyncServer is None initially)
         let conf_center_config = config.conf_center.clone();
-        let conf_center = Arc::new(ConfCenter::create(conf_center_config).await?);
+        let conf_mgr = Arc::new(ConfMgr::create(conf_center_config).await?);
 
-        // 5. Spawn ConfCenter.start_with_shutdown() in background
-        // Pass the shutdown_handle so ConfCenter uses the same signal source
+        // 5. Spawn ConfMgr.start_with_shutdown() in background
+        // Pass the shutdown_handle so ConfMgr uses the same signal source
         // This avoids duplicate signal handlers and ensures coordinated shutdown
-        let start_conf_center = conf_center.clone();
-        let conf_center_shutdown = shutdown_handle.clone();
+        let start_conf_mgr = conf_mgr.clone();
+        let conf_mgr_shutdown = shutdown_handle.clone();
         tokio::spawn(async move {
-            if let Err(e) = start_conf_center.start_with_shutdown(conf_center_shutdown).await {
+            if let Err(e) = start_conf_mgr.start_with_shutdown(conf_mgr_shutdown).await {
                 tracing::error!(
                     component = COMPONENT_EDGION_CONTROLLER,
-                    event = "conf_center_start_error",
+                    event = "conf_mgr_start_error",
                     error = %e,
-                    "ConfCenter start failed"
+                    "ConfMgr start failed"
                 );
             }
         });
@@ -261,6 +261,6 @@ impl EdgionControllerCli {
         let grpc_addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
         let admin_addr = utils::parse_listen_addr(Some(&config.admin_listen()), "0.0.0.0:8080")?;
 
-        Self::start_services(conf_center, schema_validator, grpc_addr, admin_addr, shutdown_handle).await
+        Self::start_services(conf_mgr, schema_validator, grpc_addr, admin_addr, shutdown_handle).await
     }
 }

@@ -5,36 +5,58 @@
 //! - ProcessorRegistry provides global access to all processors
 //! - ProcessorHandler<T> trait defines resource-specific processing logic
 //!
+//! ## Architecture
+//!
+//! ```text
+//! ConfMgr (facade)
+//! └── Arc<dyn ConfCenter>
+//!     ├── FileSystemCenter (FileSystem mode)
+//!     └── KubernetesCenter (Kubernetes mode)
+//!
+//! ConfCenter = CenterApi + CenterLifeCycle (super trait)
+//! ```
+//!
 //! ## Key Components
 //!
-//! - `ProcessorRegistry`: Global registry of all processors, provides typed and dynamic access
+//! - `ConfMgr`: Unified configuration manager facade
+//! - `ConfCenter`: Super trait combining CenterApi + CenterLifeCycle
+//! - `CenterApi`: CRUD operations trait (replaces old ConfCenter)
+//! - `CenterLifeCycle`: Lifecycle management trait
+//! - `FileSystemCenter` / `KubernetesCenter`: Concrete implementations
+//! - `ProcessorRegistry`: Global registry of all processors
 //! - `ResourceProcessor<T>`: Enhanced processor that holds cache, workqueue, and handler
-//! - `ProcessorHandler<T>`: Trait for resource-specific processing logic
-//! - `HandlerContext`: Context for handler methods
 //!
 //! ## Usage
 //!
 //! ```ignore
-//! // Create a processor
-//! let processor = ResourceProcessor::new(
-//!     "HTTPRoute",
-//!     1000,
-//!     Arc::new(HttpRouteHandler),
-//!     secret_ref_manager,
-//! );
+//! // Create ConfMgr based on configuration
+//! let conf_mgr = Arc::new(ConfMgr::create(config).await?);
 //!
-//! // Register to global registry
-//! PROCESSOR_REGISTRY.register(processor.clone());
+//! // Start the configuration center
+//! conf_mgr.start_with_shutdown(shutdown_handle).await?;
 //!
-//! // Register WatchObj to ConfigSyncServer
-//! config_sync_server.register_watch_obj("HTTPRoute", processor.as_watch_obj());
+//! // Access CRUD operations (via CenterApi)
+//! let content = conf_mgr.get_one("HTTPRoute", Some("default"), "my-route").await?;
+//!
+//! // Access lifecycle (via CenterLifeCycle)
+//! let is_ready = conf_mgr.is_ready();
 //! ```
 
 pub mod conf_center;
+mod conf_mgr;
 mod conf_mgr_trait;
+mod config;
 pub mod processor_registry;
 mod schema_validator;
 pub mod sync_runtime;
+
+// ==================== Top-level exports ====================
+
+// ConfMgr - main entry point
+pub use conf_mgr::ConfMgr;
+
+// Configuration
+pub use config::{ConfCenterConfig, EndpointMode, LeaderElectionConfig, MetadataFilterConfig};
 
 // ProcessorRegistry exports
 pub use processor_registry::{ProcessorRegistry, PROCESSOR_REGISTRY};
@@ -51,15 +73,25 @@ pub use sync_runtime::{
 pub use conf_mgr_trait::{ConfMgrError, EdgionConfMgr};
 pub use schema_validator::{SchemaValidator, ValidationError};
 
-// ConfCenter exports (compatible with old conf_mgr)
-pub use conf_center::{
-    ConfCenter, ConfCenterConfig, ConfEntry, CenterApi, ConfWriterError, ControllerExitReason, EndpointMode,
-    FileSystemController, FileSystemStatusStore, FileSystemWriter, KubernetesController, KubernetesStatusStore,
-    KubernetesWriter, LeaderElectionConfig, MetadataFilterConfig, NamespaceWatchMode, StatusStore, StatusStoreError,
+// ==================== conf_center exports ====================
+
+// Traits
+pub use conf_center::traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfEntry, ConfWriterError, ListOptions, ListResult};
+
+// FileSystem implementations
+pub use conf_center::file_system::{FileSystemCenter, FileSystemController, FileSystemWriter};
+
+// Kubernetes implementations  
+pub use conf_center::kubernetes::{
+    ControllerExitReason, KubernetesCenter, KubernetesController, KubernetesWriter, NamespaceWatchMode,
 };
 
-// Kubernetes-specific exports
+// Leader election
 pub use conf_center::kubernetes::{LeaderElection, LeaderHandle, RelinkReason};
 
-// Backward compatibility aliases
-pub use conf_center::ConfWriterError as ConfStoreError;
+// Status store
+pub use conf_center::status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, StatusStoreError};
+
+// ==================== Backward compatibility aliases ====================
+
+pub use conf_center::traits::ConfWriterError as ConfStoreError;

@@ -4,6 +4,26 @@
 //! Each resource type runs as an independent ResourceController with its own
 //! complete lifecycle (create store, reflector, wait ready, init, workqueue reconcile loop).
 //!
+//! ## Architecture
+//!
+//! ```text
+//! KubernetesCenter (implements ConfCenter = CenterApi + CenterLifeCycle)
+//!     │
+//!     ├── writer: KubernetesWriter (CenterApi delegate)
+//!     │
+//!     └── lifecycle (CenterLifeCycle impl)
+//!             │
+//!             ├── Leader Election
+//!             │
+//!             └── KubernetesController
+//!                     │
+//!                     ├── spawn::<HTTPRoute, _>(HttpRouteHandler)
+//!                     │       └── ResourceProcessor + ResourceController
+//!                     │
+//!                     └── spawn::<Gateway, _>(GatewayHandler)  
+//!                             └── ResourceProcessor + ResourceController
+//! ```
+//!
 //! ## Key Differences from Old Architecture
 //!
 //! - ResourceProcessor<K> is now a stateful struct holding ServerCache
@@ -19,6 +39,7 @@
 //! - **Workqueue**: Go controller-runtime style deduplication and retry with backoff
 //! - **ProcessorRegistry**: Global registry for all processors
 
+mod center;
 mod controller;
 mod leader_election;
 mod namespace;
@@ -26,6 +47,7 @@ mod resource_controller;
 mod version_detection;
 mod writer;
 
+pub use center::KubernetesCenter;
 pub use controller::{ControllerExitReason, KubernetesController};
 pub use leader_election::{LeaderElection, LeaderElectionConfig, LeaderHandle};
 pub use namespace::NamespaceWatchMode;

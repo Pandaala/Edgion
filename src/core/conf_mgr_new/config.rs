@@ -1,4 +1,4 @@
-//! ConfCenter configuration
+//! ConfMgr configuration
 //!
 //! Defines the configuration enum for different configuration center backends.
 

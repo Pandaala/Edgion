@@ -4,7 +4,7 @@ mod configserver_handlers;
 mod namespaced_handlers;
 mod types;
 
-use crate::core::conf_mgr_new::{ConfCenter, SchemaValidator};
+use crate::core::conf_mgr_new::{ConfMgr, SchemaValidator};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -61,7 +61,7 @@ async fn reload_all_resources(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<types::ApiResponse<String>>, StatusCode> {
     state
-        .conf_center
+        .conf_mgr
         .reload()
         .await
         .map_err(|e| {
@@ -87,9 +87,9 @@ async fn reload_all_resources(
 // ============= Router Setup =============
 
 /// Create the admin API router with unified K8s-style endpoints
-pub fn create_admin_router(conf_center: Arc<ConfCenter>, schema_validator: Arc<SchemaValidator>) -> Router {
+pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaValidator>) -> Router {
     let admin_state = Arc::new(AdminState {
-        conf_center,
+        conf_mgr,
         schema_validator,
     });
 
@@ -143,11 +143,11 @@ pub fn create_admin_router(conf_center: Arc<ConfCenter>, schema_validator: Arc<S
 
 /// Serve the admin API on the specified address
 pub async fn serve(
-    conf_center: Arc<ConfCenter>,
+    conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
 ) -> anyhow::Result<()> {
-    let app = create_admin_router(conf_center, schema_validator);
+    let app = create_admin_router(conf_mgr, schema_validator);
 
     tracing::info!(
         component = "unified_api",
@@ -164,12 +164,12 @@ pub async fn serve(
 
 /// Serve the admin API with graceful shutdown support
 pub async fn serve_with_shutdown(
-    conf_center: Arc<ConfCenter>,
+    conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let app = create_admin_router(conf_center, schema_validator);
+    let app = create_admin_router(conf_mgr, schema_validator);
 
     tracing::info!(
         component = "admin_api",

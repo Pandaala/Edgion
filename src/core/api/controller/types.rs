@@ -1,49 +1,49 @@
-use crate::core::conf_mgr_new::{CenterApi, ConfCenter, ConfWriterError, SchemaValidator};
+use crate::core::conf_mgr_new::{ConfCenter, ConfMgr, ConfWriterError, SchemaValidator};
 use crate::core::conf_sync::conf_server_new::ConfigSyncServer;
 use crate::types::ResourceKind;
 use axum::http::StatusCode;
 use serde::Serialize;
 use std::sync::Arc;
 
-/// Admin state containing ConfCenter and SchemaValidator
+/// Admin state containing ConfMgr and SchemaValidator
 pub struct AdminState {
-    pub conf_center: Arc<ConfCenter>,
+    pub conf_mgr: Arc<ConfMgr>,
     pub schema_validator: Arc<SchemaValidator>,
 }
 
 impl AdminState {
-    /// Get the ConfigSyncServer from ConfCenter (may be None if not ready)
+    /// Get the ConfigSyncServer from ConfMgr (may be None if not ready)
     ///
     /// Returns Ok(Arc<ConfigSyncServer>) if ready, Err(StatusCode) if not ready.
     /// Callers should use this method and handle the error appropriately.
     pub fn config_sync_server(&self) -> Result<Arc<ConfigSyncServer>, StatusCode> {
-        self.conf_center
+        self.conf_mgr
             .config_sync_server()
             .ok_or(StatusCode::SERVICE_UNAVAILABLE)
     }
 
-    /// Get the CenterApi from ConfCenter
-    pub fn center_api(&self) -> Arc<dyn CenterApi> {
-        self.conf_center.writer()
+    /// Get the ConfCenter from ConfMgr
+    pub fn conf_center(&self) -> Arc<dyn ConfCenter> {
+        self.conf_mgr.conf_center()
     }
 
     /// Check if running in Kubernetes mode
     pub fn is_k8s_mode(&self) -> bool {
-        self.conf_center.is_k8s_mode()
+        self.conf_mgr.is_k8s_mode()
     }
 
     /// Check if the system is ready (ConfigSyncServer exists)
     #[allow(dead_code)]
     pub fn is_ready(&self) -> bool {
-        self.conf_center.is_ready()
+        self.conf_mgr.is_ready()
     }
 
-    // ==================== CenterApi Methods (Storage Layer) ====================
+    // ==================== ConfCenter Methods (Storage Layer) ====================
     // Used by /api/v1/... endpoints - reads directly from storage
 
-    /// List all resources of a kind from storage (via CenterApi)
+    /// List all resources of a kind from storage (via ConfCenter)
     pub async fn center_list_resources(&self, kind: ResourceKind) -> Result<Vec<serde_json::Value>, StatusCode> {
-        let api = self.center_api();
+        let api = self.conf_center();
         let kind_str = kind.as_str();
 
         let result = api.get_list_by_kind(kind_str, None).await.map_err(|e| {
@@ -70,13 +70,13 @@ impl AdminState {
         Ok(values)
     }
 
-    /// List resources of a kind in a specific namespace from storage (via CenterApi)
+    /// List resources of a kind in a specific namespace from storage (via ConfCenter)
     pub async fn center_list_resources_namespaced(
         &self,
         kind: ResourceKind,
         namespace: &str,
     ) -> Result<Vec<serde_json::Value>, StatusCode> {
-        let api = self.center_api();
+        let api = self.conf_center();
         let kind_str = kind.as_str();
 
         let result = api.get_list_by_kind_ns(kind_str, namespace, None).await.map_err(|e| {
@@ -104,14 +104,14 @@ impl AdminState {
         Ok(values)
     }
 
-    /// Get a specific resource by namespace and name from storage (via CenterApi)
+    /// Get a specific resource by namespace and name from storage (via ConfCenter)
     pub async fn center_get_resource(
         &self,
         kind: ResourceKind,
         namespace: &str,
         name: &str,
     ) -> Result<Option<serde_json::Value>, StatusCode> {
-        let api = self.center_api();
+        let api = self.conf_center();
         let kind_str = kind.as_str();
 
         match api.get_one(kind_str, Some(namespace), name).await {
@@ -146,13 +146,13 @@ impl AdminState {
         }
     }
 
-    /// Get a cluster-scoped resource by name from storage (via CenterApi)
+    /// Get a cluster-scoped resource by name from storage (via ConfCenter)
     pub async fn center_get_cluster_resource(
         &self,
         kind: ResourceKind,
         name: &str,
     ) -> Result<Option<serde_json::Value>, StatusCode> {
-        let api = self.center_api();
+        let api = self.conf_center();
         let kind_str = kind.as_str();
 
         match api.get_one(kind_str, None, name).await {
@@ -258,7 +258,7 @@ impl AdminState {
     }
 }
 
-/// Map CenterApi errors to HTTP status codes
+/// Map ConfCenter errors to HTTP status codes
 fn map_center_api_error(e: ConfWriterError) -> StatusCode {
     match e {
         ConfWriterError::NotFound(_) => StatusCode::NOT_FOUND,

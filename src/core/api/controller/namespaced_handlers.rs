@@ -12,7 +12,7 @@ use std::sync::Arc;
 use super::common::{map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource};
 use super::types::*;
 
-/// List all resources of a kind across all namespaces (from CenterApi/storage)
+/// List all resources of a kind across all namespaces (from ConfCenter/storage)
 pub async fn list_all_namespaces(
     State(state): State<Arc<AdminState>>,
     Path(kind_str): Path<String>,
@@ -22,7 +22,7 @@ pub async fn list_all_namespaces(
     Ok(Json(ListResponse::success(data)))
 }
 
-/// List namespace-scoped resources (from CenterApi/storage)
+/// List namespace-scoped resources (from ConfCenter/storage)
 pub async fn list_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns)): Path<(String, String)>,
@@ -32,7 +32,7 @@ pub async fn list_namespaced(
     Ok(Json(ListResponse::success(data)))
 }
 
-/// Get a namespace-scoped resource (from CenterApi/storage)
+/// Get a namespace-scoped resource (from ConfCenter/storage)
 pub async fn get_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns, name)): Path<(String, String, String)>,
@@ -63,7 +63,7 @@ pub async fn create_namespaced(
     })?;
 
     let is_k8s = state.is_k8s_mode();
-    let writer = state.center_api();
+    let writer = state.conf_center();
 
     let content = String::from_utf8(body.to_vec()).map_err(|e| {
         tracing::warn!("Failed to parse body as UTF-8: {}", e);
@@ -266,7 +266,7 @@ pub async fn update_namespaced(
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let is_k8s = state.is_k8s_mode();
-    let writer = state.center_api();
+    let writer = state.conf_center();
 
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -451,7 +451,7 @@ pub async fn delete_namespaced(
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let is_k8s = state.is_k8s_mode();
-    let writer = state.center_api();
+    let writer = state.conf_center();
 
     // Delete from backend - delete_one will return NotFound if resource doesn't exist
     writer
