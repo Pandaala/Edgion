@@ -175,11 +175,7 @@ where
 
     /// Handle Init event (LIST started)
     pub fn on_init(&self) {
-        tracing::info!(
-            component = "resource_processor",
-            kind = self.kind,
-            "Init started"
-        );
+        tracing::info!(component = "resource_processor", kind = self.kind, "Init started");
         self.cache.set_not_ready();
     }
 
@@ -268,11 +264,7 @@ where
             }
             (None, None) => {
                 // Both empty -> already processed, skip
-                tracing::trace!(
-                    kind = self.kind,
-                    key = key,
-                    "Already processed, skipping"
-                );
+                tracing::trace!(kind = self.kind, key = key, "Already processed, skipping");
             }
         }
     }
@@ -358,8 +350,7 @@ where
                 // 7. Save to cache
                 // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async)
                 if is_init {
-                    self.cache
-                        .apply_change(ResourceChange::InitAdd, parsed_obj);
+                    self.cache.apply_change(ResourceChange::InitAdd, parsed_obj);
                 } else {
                     self.save(parsed_obj);
                 }
@@ -508,12 +499,7 @@ mod tests {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let handler = Arc::new(DefaultHandler);
 
-        let processor = ResourceProcessor::<TestResource>::new(
-            "TestResource",
-            100,
-            handler,
-            secret_ref_manager,
-        );
+        let processor = ResourceProcessor::<TestResource>::new("TestResource", 100, handler, secret_ref_manager);
 
         assert_eq!(processor.kind(), "TestResource");
         assert!(!processor.is_ready());
@@ -527,12 +513,7 @@ mod tests {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let handler = Arc::new(DefaultHandler);
 
-        let processor = ResourceProcessor::<TestResource>::new(
-            "TestResource",
-            100,
-            handler,
-            secret_ref_manager,
-        );
+        let processor = ResourceProcessor::<TestResource>::new("TestResource", 100, handler, secret_ref_manager);
 
         let resource = TestResource {
             metadata: ObjectMeta {

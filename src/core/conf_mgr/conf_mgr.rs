@@ -25,10 +25,10 @@
 //! let content = conf_mgr.get_one("HTTPRoute", Some("default"), "my-route").await?;
 //! ```
 
-use super::conf_center::ConfCenterConfig;
 use super::conf_center::file_system::FileSystemCenter;
 use super::conf_center::kubernetes::KubernetesCenter;
 use super::conf_center::traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfWriterError, ListOptions, ListResult};
+use super::conf_center::ConfCenterConfig;
 use super::sync_runtime::ShutdownHandle;
 use crate::core::conf_sync::conf_server::ConfigSyncServer;
 use anyhow::Result;

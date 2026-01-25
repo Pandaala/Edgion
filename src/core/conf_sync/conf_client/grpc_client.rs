@@ -211,10 +211,7 @@ impl ConfigSyncClient {
 
     /// Get server information including endpoint mode and supported resource kinds
     pub async fn get_server_info(&mut self) -> Result<ServerInfoResponse, tonic::Status> {
-        let response = self
-            .conf_client_handle
-            .get_server_info(ServerInfoRequest {})
-            .await?;
+        let response = self.conf_client_handle.get_server_info(ServerInfoRequest {}).await?;
 
         let info = response.into_inner();
 

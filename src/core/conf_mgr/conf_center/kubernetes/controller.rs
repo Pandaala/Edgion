@@ -50,9 +50,7 @@ use super::namespace::NamespaceWatchMode;
 use super::resource_controller::{ApiScope, RelinkReason, RelinkSignalSender, ResourceController};
 use super::ShutdownSignal;
 use crate::core::conf_mgr::conf_center::{EndpointMode, MetadataFilterConfig};
-use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    ProcessorHandler, ResourceProcessor, SecretRefManager,
-};
+use crate::core::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor, SecretRefManager};
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::*;
 use crate::types::ResourceMeta;
@@ -85,7 +83,15 @@ fn spawn<K, H>(
     ctx: &SpawnContext,
 ) -> JoinHandle<Result<()>>
 where
-    K: ResourceMeta + Resource<Scope = kube::core::NamespaceResourceScope> + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
+    K: ResourceMeta
+        + Resource<Scope = kube::core::NamespaceResourceScope>
+        + Clone
+        + Send
+        + Sync
+        + Debug
+        + Serialize
+        + DeserializeOwned
+        + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
     H: ProcessorHandler<K> + 'static,
 {
@@ -127,7 +133,15 @@ fn spawn_cluster<K, H>(
     ctx: &SpawnContext,
 ) -> JoinHandle<Result<()>>
 where
-    K: ResourceMeta + Resource<Scope = kube::core::ClusterResourceScope> + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
+    K: ResourceMeta
+        + Resource<Scope = kube::core::ClusterResourceScope>
+        + Clone
+        + Send
+        + Sync
+        + Debug
+        + Serialize
+        + DeserializeOwned
+        + 'static,
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
     H: ProcessorHandler<K> + 'static,
 {

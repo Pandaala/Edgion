@@ -271,8 +271,7 @@ mod tests {
 
     #[test]
     fn test_kubernetes_config_serialize() {
-        let config = KubernetesConfig::new("edgion")
-            .with_watch_namespaces(vec!["default".to_string()]);
+        let config = KubernetesConfig::new("edgion").with_watch_namespaces(vec!["default".to_string()]);
 
         let yaml = serde_yaml::to_string(&config).unwrap();
         assert!(yaml.contains("gateway_class: edgion"));

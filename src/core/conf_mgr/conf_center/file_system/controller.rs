@@ -22,9 +22,7 @@
 use super::file_watcher::FileSystemWatcher;
 use super::resource_controller::FileSystemResourceController;
 use crate::core::conf_mgr::conf_center::EndpointMode;
-use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    ProcessorHandler, ResourceProcessor, SecretRefManager,
-};
+use crate::core::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor, SecretRefManager};
 use crate::core::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::*;
@@ -104,10 +102,7 @@ impl FileSystemController {
             handle.abort();
         }
 
-        tracing::info!(
-            component = "fs_controller",
-            "FileSystemController stopped"
-        );
+        tracing::info!(component = "fs_controller", "FileSystemController stopped");
 
         Ok(())
     }
@@ -203,10 +198,7 @@ impl FileSystemController {
                 );
             }
             EndpointMode::EndpointSlice | EndpointMode::Auto => {
-                tracing::info!(
-                    component = "fs_controller",
-                    "Registering EndpointSlice controller"
-                );
+                tracing::info!(component = "fs_controller", "Registering EndpointSlice controller");
                 handles.push(
                     spawn::<EndpointSlice, _>(
                         "EndpointSlice",

@@ -34,7 +34,7 @@ pub type KindEventReceiver = broadcast::Receiver<FileSystemEvent<String>>;
 pub struct FileSystemWatcher {
     /// Configuration directory to watch
     conf_dir: PathBuf,
-    
+
     /// Event senders per resource kind
     /// Key is kind name (e.g., "HTTPRoute", "Gateway")
     senders: Arc<RwLock<HashMap<&'static str, KindEventSender>>>,
@@ -54,7 +54,7 @@ impl FileSystemWatcher {
     /// Must be called before `run()` for each resource kind that needs events.
     pub async fn subscribe(&self, kind: &'static str) -> KindEventReceiver {
         let mut senders = self.senders.write().await;
-        
+
         if let Some(sender) = senders.get(kind) {
             sender.subscribe()
         } else {
@@ -88,10 +88,7 @@ impl FileSystemWatcher {
         // Phase 2: Runtime - watch for changes
         self.runtime_phase(&mut shutdown_signal).await?;
 
-        tracing::info!(
-            component = "fs_watcher",
-            "FileSystemWatcher stopped"
-        );
+        tracing::info!(component = "fs_watcher", "FileSystemWatcher stopped");
 
         Ok(())
     }
@@ -137,16 +134,13 @@ impl FileSystemWatcher {
             // Determine kind from content
             if let Some(kind) = ResourceKind::from_content(&content) {
                 let kind_str = kind.as_str();
-                files_by_kind
-                    .entry(kind_str)
-                    .or_default()
-                    .push((path, content));
+                files_by_kind.entry(kind_str).or_default().push((path, content));
             }
         }
 
         // Dispatch events per kind
         let senders = self.senders.read().await;
-        
+
         for (kind, files) in &files_by_kind {
             if let Some(sender) = senders.get(kind) {
                 // Send Init
@@ -157,7 +151,7 @@ impl FileSystemWatcher {
                     // The content is sent as the event payload
                     // ResourceController will parse it to the actual type
                     let _ = sender.send(FileSystemEvent::InitApply(content.clone()));
-                    
+
                     tracing::trace!(
                         component = "fs_watcher",
                         kind = kind,
@@ -183,7 +177,7 @@ impl FileSystemWatcher {
             if !files_by_kind.contains_key(kind) {
                 let _ = sender.send(FileSystemEvent::Init);
                 let _ = sender.send(FileSystemEvent::InitDone);
-                
+
                 tracing::debug!(
                     component = "fs_watcher",
                     kind = kind,

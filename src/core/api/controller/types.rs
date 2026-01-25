@@ -228,10 +228,7 @@ impl AdminState {
 
         let found = all.into_iter().find(|v| {
             let meta = v.get("metadata");
-            let ns_match = meta
-                .and_then(|m| m.get("namespace"))
-                .and_then(|n| n.as_str())
-                == Some(namespace);
+            let ns_match = meta.and_then(|m| m.get("namespace")).and_then(|n| n.as_str()) == Some(namespace);
             let name_match = meta.and_then(|m| m.get("name")).and_then(|n| n.as_str()) == Some(name);
             ns_match && name_match
         });
@@ -247,12 +244,9 @@ impl AdminState {
     ) -> Result<Option<serde_json::Value>, StatusCode> {
         let all = self.cache_list_resources(kind)?;
 
-        let found = all.into_iter().find(|v| {
-            v.get("metadata")
-                .and_then(|m| m.get("name"))
-                .and_then(|n| n.as_str())
-                == Some(name)
-        });
+        let found = all
+            .into_iter()
+            .find(|v| v.get("metadata").and_then(|m| m.get("name")).and_then(|n| n.as_str()) == Some(name));
 
         Ok(found)
     }

@@ -130,8 +130,8 @@ impl ConfigSync for ConfigSyncGrpcServer {
         }
 
         // Convert proto ResourceKind to string kind name
-        let kind_name = parse_resource_kind_to_name(req.kind)
-            .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
+        let kind_name =
+            parse_resource_kind_to_name(req.kind).ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
         // Call list on ConfigSyncServer
         let list_data = self
@@ -167,8 +167,8 @@ impl ConfigSync for ConfigSyncGrpcServer {
         }
 
         // Convert proto ResourceKind to string kind name
-        let kind_name = parse_resource_kind_to_name(req.kind)
-            .ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
+        let kind_name =
+            parse_resource_kind_to_name(req.kind).ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
 
         let client_id_log = req.client_id.clone();
         let client_name_log = req.client_name.clone();

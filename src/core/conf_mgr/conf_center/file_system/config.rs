@@ -89,8 +89,8 @@ mod tests {
 
     #[test]
     fn test_file_system_config_builder() {
-        let config = FileSystemConfig::new(PathBuf::from("/etc/edgion/conf"))
-            .with_endpoint_mode(EndpointMode::EndpointSlice);
+        let config =
+            FileSystemConfig::new(PathBuf::from("/etc/edgion/conf")).with_endpoint_mode(EndpointMode::EndpointSlice);
         assert_eq!(config.endpoint_mode, EndpointMode::EndpointSlice);
     }
 

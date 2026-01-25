@@ -141,12 +141,7 @@ impl FileSystemCenter {
                 let not_ready = PROCESSOR_REGISTRY
                     .all_kinds()
                     .into_iter()
-                    .filter(|kind| {
-                        PROCESSOR_REGISTRY
-                            .get(kind)
-                            .map(|p| !p.is_ready())
-                            .unwrap_or(false)
-                    })
+                    .filter(|kind| PROCESSOR_REGISTRY.get(kind).map(|p| !p.is_ready()).unwrap_or(false))
                     .collect::<Vec<_>>();
 
                 tracing::warn!(
@@ -358,11 +353,7 @@ impl CenterLifeCycle for FileSystemCenter {
             }
         }
 
-        tracing::info!(
-            component = "file_system_center",
-            mode = "file_system",
-            "Cleaning up"
-        );
+        tracing::info!(component = "file_system_center", mode = "file_system", "Cleaning up");
 
         // 9. Cleanup
         self.set_config_sync_server(None);

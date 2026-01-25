@@ -41,11 +41,7 @@ impl ProcessorRegistry {
         let kind = processor.kind();
         let mut map = self.processors.write().unwrap();
 
-        tracing::info!(
-            component = "processor_registry",
-            kind = kind,
-            "Registering processor"
-        );
+        tracing::info!(component = "processor_registry", kind = kind, "Registering processor");
 
         map.insert(kind, processor);
     }
@@ -146,10 +142,7 @@ impl ProcessorRegistry {
     /// - Losing leadership and re-election
     /// - Testing cleanup
     pub fn clear_registry(&self) {
-        tracing::info!(
-            component = "processor_registry",
-            "Clearing all registered processors"
-        );
+        tracing::info!(component = "processor_registry", "Clearing all registered processors");
         self.processors.write().unwrap().clear();
     }
 }

@@ -359,9 +359,8 @@ impl EdgionControllerConfig {
         if let Some(conf_dir) = &cli.conf_dir {
             // Preserve existing endpoint_mode if we're switching from FileSystem to FileSystem
             let endpoint_mode = base.conf_center.endpoint_mode();
-            base.conf_center = ConfCenterConfig::FileSystem(
-                FileSystemConfig::new(conf_dir.clone()).with_endpoint_mode(endpoint_mode),
-            );
+            base.conf_center =
+                ConfCenterConfig::FileSystem(FileSystemConfig::new(conf_dir.clone()).with_endpoint_mode(endpoint_mode));
         }
 
         // Server config

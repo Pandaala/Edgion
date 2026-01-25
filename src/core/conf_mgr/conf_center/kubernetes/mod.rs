@@ -45,8 +45,8 @@ mod controller;
 mod leader_election;
 mod namespace;
 mod resource_controller;
-mod version_detection;
 mod storage;
+mod version_detection;
 
 pub use center::KubernetesCenter;
 pub use config::{KubernetesConfig, LeaderElectionConfig, MetadataFilterConfig};
@@ -54,8 +54,8 @@ pub use controller::{ControllerExitReason, KubernetesController};
 pub use leader_election::{LeaderElection, LeaderHandle};
 pub use namespace::NamespaceWatchMode;
 pub use resource_controller::{RelinkReason, RelinkSignalSender, ResourceController};
-pub use version_detection::{detect_endpoint_mode, resolve_endpoint_mode};
 pub use storage::KubernetesStorage;
+pub use version_detection::{detect_endpoint_mode, resolve_endpoint_mode};
 
 // Re-export types from sync_runtime
 pub use crate::core::conf_mgr::sync_runtime::{

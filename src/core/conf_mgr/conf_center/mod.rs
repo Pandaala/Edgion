@@ -50,7 +50,7 @@ pub use file_system::{FileSystemCenter, FileSystemConfig, FileSystemController, 
 // Re-export Kubernetes types
 pub use kubernetes::{
     ControllerExitReason, KubernetesCenter, KubernetesConfig, KubernetesController, KubernetesStorage, LeaderElection,
-    LeaderHandle, LeaderElectionConfig, MetadataFilterConfig, NamespaceWatchMode, RelinkReason,
+    LeaderElectionConfig, LeaderHandle, MetadataFilterConfig, NamespaceWatchMode, RelinkReason,
 };
 
 // Re-export status store types

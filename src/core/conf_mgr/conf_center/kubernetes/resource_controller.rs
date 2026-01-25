@@ -154,9 +154,7 @@ where
     {
         let api: Api<K> = match &self.api_scope {
             ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces) => Api::all(self.client.clone()),
-            ApiScope::Namespaced(NamespaceWatchMode::SingleNamespace(ns)) => {
-                Api::namespaced(self.client.clone(), ns)
-            }
+            ApiScope::Namespaced(NamespaceWatchMode::SingleNamespace(ns)) => Api::namespaced(self.client.clone(), ns),
             ApiScope::Namespaced(NamespaceWatchMode::MultipleNamespaces(_)) => {
                 // For multiple namespaces, we watch all and filter in processing
                 Api::all(self.client.clone())
@@ -241,11 +239,7 @@ where
                                 }
                                 break;
                             } else {
-                                tracing::debug!(
-                                    component = "resource_controller",
-                                    kind = kind,
-                                    "Init phase started"
-                                );
+                                tracing::debug!(component = "resource_controller", kind = kind, "Init phase started");
                                 init_timer = Some(InitSyncTimer::start(kind));
                                 self.processor.on_init();
                             }
@@ -456,11 +450,7 @@ where
             }
         }
 
-        tracing::info!(
-            component = "resource_controller",
-            kind = kind,
-            "Worker task ended"
-        );
+        tracing::info!(component = "resource_controller", kind = kind, "Worker task ended");
     })
 }
 

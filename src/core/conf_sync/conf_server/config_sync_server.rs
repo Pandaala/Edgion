@@ -4,8 +4,8 @@
 //! It holds a HashMap<kind, Arc<dyn WatchObj>> registered by ResourceProcessors.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
 use std::sync::Arc;
+use std::sync::RwLock;
 use tokio::sync::mpsc;
 
 use super::traits::WatchObj;
@@ -219,11 +219,7 @@ impl ConfigSyncServer {
         let map = self.watch_objects.read().unwrap();
         if let Some(obj) = map.get(kind) {
             obj.set_ready();
-            tracing::info!(
-                component = "config_sync_server",
-                kind = kind,
-                "Cache marked as ready"
-            );
+            tracing::info!(component = "config_sync_server", kind = kind, "Cache marked as ready");
         } else {
             tracing::warn!(
                 component = "config_sync_server",

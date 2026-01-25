@@ -327,24 +327,22 @@ where
                 Some(work_item) => {
                     // For FileSystem mode, we read from file instead of K8s store
                     let path = build_path_from_key(&conf_dir, kind, &work_item.key);
-                    
+
                     let store_obj = if path.exists() {
                         match std::fs::read_to_string(&path) {
-                            Ok(content) => {
-                                match serde_yaml::from_str::<K>(&content) {
-                                    Ok(obj) => Some(obj),
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            component = "fs_resource_controller",
-                                            kind = kind,
-                                            key = %work_item.key,
-                                            error = %e,
-                                            "Failed to parse file"
-                                        );
-                                        None
-                                    }
+                            Ok(content) => match serde_yaml::from_str::<K>(&content) {
+                                Ok(obj) => Some(obj),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        component = "fs_resource_controller",
+                                        kind = kind,
+                                        key = %work_item.key,
+                                        error = %e,
+                                        "Failed to parse file"
+                                    );
+                                    None
                                 }
-                            }
+                            },
                             Err(e) => {
                                 tracing::warn!(
                                     component = "fs_resource_controller",
@@ -375,11 +373,7 @@ where
             }
         }
 
-        tracing::info!(
-            component = "fs_resource_controller",
-            kind = kind,
-            "Worker task ended"
-        );
+        tracing::info!(component = "fs_resource_controller", kind = kind, "Worker task ended");
     })
 }
 

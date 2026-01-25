@@ -18,8 +18,8 @@ use super::super::common::EndpointMode;
 use super::config::KubernetesConfig;
 use super::controller::{ControllerExitReason, KubernetesController};
 use super::leader_election::{LeaderElection, LeaderElectionConfig as InternalLeaderElectionConfig, LeaderHandle};
-use super::version_detection::resolve_endpoint_mode;
 use super::storage::KubernetesStorage;
+use super::version_detection::resolve_endpoint_mode;
 use crate::core::conf_mgr::conf_center::traits::{
     CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
@@ -275,11 +275,7 @@ impl KubernetesCenter {
                         break ControllerExitReason::AllControllersStopped;
                     }
                     Some(LifecycleEvent::LeadershipLost) => {
-                        tracing::warn!(
-                            component = "kubernetes_center",
-                            mode = "kubernetes",
-                            "Lost leadership"
-                        );
+                        tracing::warn!(component = "kubernetes_center", mode = "kubernetes", "Lost leadership");
                         break ControllerExitReason::LostLeadership;
                     }
                     Some(LifecycleEvent::ControllerExit(reason)) => {
@@ -444,12 +440,7 @@ impl KubernetesCenter {
                 let not_ready: Vec<String> = PROCESSOR_REGISTRY
                     .all_kinds()
                     .into_iter()
-                    .filter(|kind| {
-                        PROCESSOR_REGISTRY
-                            .get(kind)
-                            .map(|p| !p.is_ready())
-                            .unwrap_or(false)
-                    })
+                    .filter(|kind| PROCESSOR_REGISTRY.get(kind).map(|p| !p.is_ready()).unwrap_or(false))
                     .map(|s| s.to_string())
                     .collect();
 
@@ -636,11 +627,7 @@ impl CenterLifeCycle for KubernetesCenter {
             // === Phase 3: Handle exit reason ===
             match exit_reason {
                 MainFlowExit::Shutdown => {
-                    tracing::info!(
-                        component = "kubernetes_center",
-                        mode = "kubernetes",
-                        "Normal shutdown"
-                    );
+                    tracing::info!(component = "kubernetes_center", mode = "kubernetes", "Normal shutdown");
                     // Clear PROCESSOR_REGISTRY
                     PROCESSOR_REGISTRY.clear_registry();
                     return Ok(());

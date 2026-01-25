@@ -77,12 +77,14 @@ pub use schema_validator::{SchemaValidator, ValidationError};
 // ==================== conf_center exports ====================
 
 // Traits
-pub use conf_center::traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfEntry, ConfWriterError, ListOptions, ListResult};
+pub use conf_center::traits::{
+    CenterApi, CenterLifeCycle, ConfCenter, ConfEntry, ConfWriterError, ListOptions, ListResult,
+};
 
 // FileSystem implementations
 pub use conf_center::file_system::{FileSystemCenter, FileSystemController, FileSystemStorage};
 
-// Kubernetes implementations  
+// Kubernetes implementations
 pub use conf_center::kubernetes::{
     ControllerExitReason, KubernetesCenter, KubernetesController, KubernetesStorage, NamespaceWatchMode,
 };

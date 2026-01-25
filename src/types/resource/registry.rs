@@ -81,10 +81,7 @@ pub fn all_resource_type_names() -> Vec<&'static str> {
     match try_get_global_endpoint_mode() {
         Some(EndpointMode::EndpointSlice) => {
             // In EndpointSlice mode, exclude legacy "endpoints"
-            all_names
-                .into_iter()
-                .filter(|name| *name != "endpoints")
-                .collect()
+            all_names.into_iter().filter(|name| *name != "endpoints").collect()
         }
         Some(EndpointMode::Endpoint) => {
             // In Endpoint mode, exclude "endpoint_slices"
