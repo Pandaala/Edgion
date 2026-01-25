@@ -356,7 +356,13 @@ where
                 );
 
                 // 7. Save to cache
-                self.save(parsed_obj);
+                // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async)
+                if is_init {
+                    self.cache
+                        .apply_change(ResourceChange::InitAdd, parsed_obj);
+                } else {
+                    self.save(parsed_obj);
+                }
                 true
             }
             ProcessResult::Skip { reason } => {
