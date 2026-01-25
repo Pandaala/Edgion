@@ -102,12 +102,6 @@ impl FileSystemCenter {
         *shutdown_handle = Some(handle);
     }
 
-    /// Get shutdown signal from stored handle
-    fn get_shutdown_signal(&self) -> Option<crate::core::conf_mgr::sync_runtime::ShutdownSignal> {
-        let handle = self.shutdown_handle.lock().unwrap();
-        handle.as_ref().map(|h| h.signal())
-    }
-
     /// Store controller task handle for cleanup
     fn set_controller_handle(&self, handle: JoinHandle<()>) {
         let mut controller_handle = self.controller_handle.lock().unwrap();
@@ -366,48 +360,6 @@ impl CenterLifeCycle for FileSystemCenter {
             component = "file_system_center",
             mode = "file_system",
             "FileSystem lifecycle completed"
-        );
-
-        Ok(())
-    }
-
-    /// Reload all resources (FileSystem mode)
-    ///
-    /// Performs a complete reset:
-    /// 1. Clear all caches in PROCESSOR_REGISTRY
-    /// 2. Set all processors to not ready
-    /// 3. Run FileSystemController init phase
-    async fn reload(&self) -> Result<()> {
-        let conf_dir = self.config.conf_dir();
-
-        tracing::info!(
-            component = "file_system_center",
-            mode = "file_system",
-            conf_dir = %conf_dir.display(),
-            "Reloading all resources (full reset)"
-        );
-
-        // 1. Clear all caches and set not ready
-        PROCESSOR_REGISTRY.clear_all();
-        PROCESSOR_REGISTRY.set_all_not_ready();
-
-        // 2. Get shutdown signal for the controller
-        let shutdown_signal = self
-            .get_shutdown_signal()
-            .ok_or_else(|| anyhow::anyhow!("Shutdown handle not set"))?;
-
-        // 3. Run a new FileSystemController to reload
-        // Note: This is a simplified reload - it re-runs init phase
-        let endpoint_mode = self.config.endpoint_mode();
-        let controller = FileSystemController::new(conf_dir.clone(), endpoint_mode);
-
-        // Run controller (this will re-register processors and load data)
-        controller.run(shutdown_signal).await?;
-
-        tracing::info!(
-            component = "file_system_center",
-            mode = "file_system",
-            "Reload complete"
         );
 
         Ok(())

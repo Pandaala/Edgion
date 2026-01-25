@@ -404,21 +404,25 @@ where
     let workqueue = processor.workqueue();
 
     tokio::spawn(async move {
+        // Move shutdown_signal once outside the loop
+        let mut shutdown = shutdown_signal;
+
         loop {
-            let item = if let Some(ref mut shutdown) = shutdown_signal.clone() {
-                tokio::select! {
-                    item = workqueue.dequeue() => item,
-                    _ = shutdown.wait() => {
-                        tracing::info!(
-                            component = "resource_controller",
-                            kind = kind,
-                            "Worker received shutdown signal"
-                        );
-                        break;
+            let item = match &mut shutdown {
+                Some(signal) => {
+                    tokio::select! {
+                        item = workqueue.dequeue() => item,
+                        _ = signal.wait() => {
+                            tracing::info!(
+                                component = "resource_controller",
+                                kind = kind,
+                                "Worker received shutdown signal"
+                            );
+                            break;
+                        }
                     }
                 }
-            } else {
-                workqueue.dequeue().await
+                None => workqueue.dequeue().await,
             };
 
             match item {

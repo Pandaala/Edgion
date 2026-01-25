@@ -311,12 +311,11 @@ where
         }
 
         // 3. Clean metadata
+        // First apply context's metadata filter (removes managedFields, annotations, etc.)
+        // Then let handler do any additional custom cleaning
         let mut obj = obj;
+        ctx.clean_metadata(&mut obj);
         self.handler.clean_metadata(&mut obj, ctx);
-        // Also apply context's metadata cleaning if configured
-        if ctx.metadata_filter().is_some() {
-            ctx.clean_metadata(&mut obj);
-        }
 
         // 4. Validate (log warnings but continue)
         let warnings = self.handler.validate(&obj, ctx);

@@ -106,11 +106,6 @@ impl ConfMgr {
         self.start_with_shutdown(shutdown_handle).await
     }
 
-    /// Reload all resources (FileSystem mode only)
-    pub async fn reload(&self) -> Result<()> {
-        self.conf_center.reload().await
-    }
-
     /// Check if the system is ready
     pub fn is_ready(&self) -> bool {
         self.conf_center.is_ready()
@@ -205,10 +200,6 @@ impl CenterApi for ConfMgr {
 impl CenterLifeCycle for ConfMgr {
     async fn start(&self, shutdown_handle: ShutdownHandle) -> Result<()> {
         self.conf_center.start(shutdown_handle).await
-    }
-
-    async fn reload(&self) -> Result<()> {
-        self.conf_center.reload().await
     }
 
     fn is_ready(&self) -> bool {

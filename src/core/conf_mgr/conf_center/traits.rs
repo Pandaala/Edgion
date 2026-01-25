@@ -191,14 +191,6 @@ pub trait CenterLifeCycle: Send + Sync {
     /// It blocks until shutdown is requested or an error occurs.
     async fn start(&self, shutdown_handle: ShutdownHandle) -> Result<()>;
 
-    /// Reload all resources (FileSystem mode only)
-    ///
-    /// Performs a complete reset:
-    /// 1. Clear all caches in PROCESSOR_REGISTRY
-    /// 2. Set all processors to not ready
-    /// 3. Re-run init phase to reload all resources
-    async fn reload(&self) -> Result<()>;
-
     /// Check if the system is ready
     ///
     /// Ready means PROCESSOR_REGISTRY is ready and ConfigSyncServer exists.

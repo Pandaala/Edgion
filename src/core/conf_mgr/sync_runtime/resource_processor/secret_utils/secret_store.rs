@@ -38,28 +38,21 @@ impl SecretStore {
     }
 
     /// Update secrets atomically
-    pub fn update(
-        &self,
-        add: HashMap<String, Secret>,
-        update: HashMap<String, Secret>,
-        remove: &std::collections::HashSet<String>,
-    ) {
+    ///
+    /// - `upsert`: Secrets to add or update (insert if not exists, update if exists)
+    /// - `remove`: Keys of secrets to remove
+    pub fn update(&self, upsert: HashMap<String, Secret>, remove: &std::collections::HashSet<String>) {
         let current = self.secrets.load();
         let current_map: &SecretMap = &current;
         let mut new_map: SecretMap = current_map.clone();
 
-        // Remove secrets
+        // Remove secrets first
         for key in remove {
             new_map.remove(key);
         }
 
-        // Add new secrets
-        for (key, secret) in add {
-            new_map.insert(key, secret);
-        }
-
-        // Update existing secrets
-        for (key, secret) in update {
+        // Add or update secrets
+        for (key, secret) in upsert {
             new_map.insert(key, secret);
         }
 
@@ -107,12 +100,11 @@ pub fn replace_all_secrets(secrets: HashMap<String, Secret>) {
 }
 
 /// Update secrets in the global store
-pub fn update_secrets(
-    add: HashMap<String, Secret>,
-    update: HashMap<String, Secret>,
-    remove: &std::collections::HashSet<String>,
-) {
-    get_global_secret_store().update(add, update, remove);
+///
+/// - `upsert`: Secrets to add or update
+/// - `remove`: Keys of secrets to remove
+pub fn update_secrets(upsert: HashMap<String, Secret>, remove: &std::collections::HashSet<String>) {
+    get_global_secret_store().update(upsert, remove);
 }
 
 #[cfg(test)]
@@ -173,21 +165,21 @@ mod tests {
         initial.insert("prod/cert-1".to_string(), secret1);
         store.replace_all(initial);
 
-        // Add new secret
+        // Add new secret (upsert)
         let secret2 = create_test_secret("prod", "cert-2", "cert2", "key2");
-        let mut add = HashMap::new();
-        add.insert("prod/cert-2".to_string(), secret2);
-        store.update(add, HashMap::new(), &std::collections::HashSet::new());
+        let mut upsert = HashMap::new();
+        upsert.insert("prod/cert-2".to_string(), secret2);
+        store.update(upsert, &std::collections::HashSet::new());
 
         // Both secrets should exist
         assert!(store.get(Some("prod"), "cert-1").is_some());
         assert!(store.get(Some("prod"), "cert-2").is_some());
 
-        // Update cert-1
+        // Update cert-1 (upsert existing)
         let secret1_updated = create_test_secret("prod", "cert-1", "updated-cert", "updated-key");
-        let mut update = HashMap::new();
-        update.insert("prod/cert-1".to_string(), secret1_updated);
-        store.update(HashMap::new(), update, &std::collections::HashSet::new());
+        let mut upsert = HashMap::new();
+        upsert.insert("prod/cert-1".to_string(), secret1_updated);
+        store.update(upsert, &std::collections::HashSet::new());
 
         // Verify update
         let found = store.get(Some("prod"), "cert-1").unwrap();
@@ -198,7 +190,7 @@ mod tests {
         // Remove cert-2
         let mut remove = std::collections::HashSet::new();
         remove.insert("prod/cert-2".to_string());
-        store.update(HashMap::new(), HashMap::new(), &remove);
+        store.update(HashMap::new(), &remove);
 
         // cert-2 should be gone
         assert!(store.get(Some("prod"), "cert-2").is_none());

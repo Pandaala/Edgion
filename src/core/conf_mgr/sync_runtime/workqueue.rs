@@ -6,8 +6,6 @@
 //! - Exponential backoff: retry with increasing delays
 //! - Metrics: queue depth, adds, retries, latency
 
-#![allow(dead_code)]
-
 use dashmap::DashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

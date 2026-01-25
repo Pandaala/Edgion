@@ -647,11 +647,6 @@ impl CenterLifeCycle for KubernetesCenter {
         }
     }
 
-    /// Reload is not supported in Kubernetes mode
-    async fn reload(&self) -> Result<()> {
-        Err(anyhow::anyhow!("Reload not supported in K8s mode"))
-    }
-
     /// Check if the system is ready
     fn is_ready(&self) -> bool {
         PROCESSOR_REGISTRY.is_all_ready() && self.config_sync_server.read().unwrap().is_some()

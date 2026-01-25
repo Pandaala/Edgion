@@ -24,6 +24,28 @@ impl SecretHandler {
     pub fn new() -> Self {
         Self
     }
+
+    /// Trigger cascading requeue for all resources that depend on this secret
+    fn trigger_cascading_requeue(&self, secret_key: &str, event: &str, ctx: &HandlerContext) {
+        let refs = ctx.secret_ref_manager().get_refs(secret_key);
+
+        if !refs.is_empty() {
+            tracing::info!(
+                secret_key = %secret_key,
+                ref_count = refs.len(),
+                event = %event,
+                "Triggering cascading requeue for referencing resources"
+            );
+        }
+
+        for resource_ref in refs {
+            let key = match &resource_ref.namespace {
+                Some(ns) => format!("{}/{}", ns, resource_ref.name),
+                None => resource_ref.name.clone(),
+            };
+            ctx.requeue(resource_ref.kind.as_str(), key);
+        }
+    }
 }
 
 impl Default for SecretHandler {
@@ -44,30 +66,12 @@ impl ProcessorHandler<Secret> for SecretHandler {
         );
 
         // 1. Update global SecretStore (for TLS callback access)
-        let mut add_or_update = HashMap::new();
-        add_or_update.insert(secret_key.clone(), secret.clone());
-        update_secrets(add_or_update, HashMap::new(), &HashSet::new());
+        let mut upsert = HashMap::new();
+        upsert.insert(secret_key.clone(), secret.clone());
+        update_secrets(upsert, &HashSet::new());
 
         // 2. Trigger cascading requeue for dependent resources
-        let refs = ctx.secret_ref_manager().get_refs(&secret_key);
-
-        if !refs.is_empty() {
-            tracing::info!(
-                secret_key = %secret_key,
-                ref_count = refs.len(),
-                "Secret updated, triggering cascading requeue for referencing resources"
-            );
-        }
-
-        for resource_ref in refs {
-            let key = match &resource_ref.namespace {
-                Some(ns) => format!("{}/{}", ns, resource_ref.name),
-                None => resource_ref.name.clone(),
-            };
-
-            // Use ProcessorRegistry to enqueue key to the corresponding resource's workqueue
-            ctx.requeue(resource_ref.kind.as_str(), key);
-        }
+        self.trigger_cascading_requeue(&secret_key, "updated", ctx);
     }
 
     fn on_delete(&self, secret: &Secret, ctx: &HandlerContext) {
@@ -79,26 +83,9 @@ impl ProcessorHandler<Secret> for SecretHandler {
         // 1. Update global SecretStore (delete)
         let mut remove = HashSet::new();
         remove.insert(secret_key.clone());
-        update_secrets(HashMap::new(), HashMap::new(), &remove);
+        update_secrets(HashMap::new(), &remove);
 
         // 2. Trigger cascading requeue (so dependent resources know Secret is deleted)
-        let refs = ctx.secret_ref_manager().get_refs(&secret_key);
-
-        if !refs.is_empty() {
-            tracing::info!(
-                secret_key = %secret_key,
-                ref_count = refs.len(),
-                "Secret deleted, triggering cascading requeue for referencing resources"
-            );
-        }
-
-        for resource_ref in refs {
-            let key = match &resource_ref.namespace {
-                Some(ns) => format!("{}/{}", ns, resource_ref.name),
-                None => resource_ref.name.clone(),
-            };
-
-            ctx.requeue(resource_ref.kind.as_str(), key);
-        }
+        self.trigger_cascading_requeue(&secret_key, "deleted", ctx);
     }
 }
