@@ -246,10 +246,10 @@ where
                         }
                         Event::InitApply(obj) => {
                             // Init phase: process directly via processor
-                            if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                if self.processor.on_init_apply(obj) {
-                                    init_count += 1;
-                                }
+                            if passes_namespace_filter(&obj, &self.namespace_filter)
+                                && self.processor.on_init_apply(obj)
+                            {
+                                init_count += 1;
                             }
                         }
                         Event::InitDone => {
@@ -289,10 +289,10 @@ where
                                     kind = kind,
                                     "Received Apply event during init phase, treating as InitApply"
                                 );
-                                if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                    if self.processor.on_init_apply(obj) {
-                                        init_count += 1;
-                                    }
+                                if passes_namespace_filter(&obj, &self.namespace_filter)
+                                    && self.processor.on_init_apply(obj)
+                                {
+                                    init_count += 1;
                                 }
                             } else {
                                 // Runtime phase - enqueue key for worker

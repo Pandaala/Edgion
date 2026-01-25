@@ -147,6 +147,7 @@ impl AdminState {
     }
 
     /// Get a cluster-scoped resource by name from storage (via ConfCenter)
+    #[allow(dead_code)]
     pub async fn center_get_cluster_resource(
         &self,
         kind: ResourceKind,

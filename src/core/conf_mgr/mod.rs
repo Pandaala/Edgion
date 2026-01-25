@@ -43,8 +43,8 @@
 //! ```
 
 pub mod conf_center;
-mod conf_mgr;
 mod conf_mgr_trait;
+mod manager;
 pub mod processor_registry;
 mod schema_validator;
 pub mod sync_runtime;
@@ -52,7 +52,7 @@ pub mod sync_runtime;
 // ==================== Top-level exports ====================
 
 // ConfMgr - main entry point
-pub use conf_mgr::ConfMgr;
+pub use manager::ConfMgr;
 
 // Configuration (from conf_center)
 pub use conf_center::{

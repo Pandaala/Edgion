@@ -101,6 +101,7 @@ where
 /// Default handler that passes through all resources unchanged
 ///
 /// Useful for resources that don't need special processing.
+#[allow(dead_code)]
 pub struct DefaultHandler;
 
 impl<K> ProcessorHandler<K> for DefaultHandler
