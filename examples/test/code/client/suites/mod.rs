@@ -4,6 +4,7 @@ pub mod edgion_tls;
 pub mod gateway;
 pub mod grpc_route;
 pub mod http_route;
+pub mod ref_grant_status;
 pub mod tcp_route;
 pub mod udp_route;
 
@@ -28,3 +29,6 @@ pub use gateway::{
     BackendTlsTestSuite, CombinedScenariosTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite,
     ListenerHostnameTestSuite, PluginLogsTestSuite, RealIpTestSuite, SecurityTestSuite, UpdatePhaseTestSuite,
 };
+
+// ReferenceGrant Status tests
+pub use ref_grant_status::RefGrantStatusTestSuite;

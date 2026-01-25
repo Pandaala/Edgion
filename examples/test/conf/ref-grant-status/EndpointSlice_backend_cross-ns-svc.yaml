@@ -1,0 +1,18 @@
+# EndpointSlice for cross-ns-svc in backend namespace
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: cross-ns-svc
+  namespace: backend
+  labels:
+    kubernetes.io/service-name: cross-ns-svc
+addressType: IPv4
+endpoints:
+  - addresses:
+      - 127.0.0.1
+    conditions:
+      ready: true
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP

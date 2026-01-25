@@ -60,6 +60,9 @@ struct Cli {
     #[arg(long, default_value = "18443")]
     grpc_https_port: u16,
 
+    #[arg(long, default_value = "8080")]
+    admin_port: u16,
+
     #[arg(long)]
     json: bool,
 
@@ -404,6 +407,14 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::CipherTestSuite));
         }
+        // ReferenceGrant Status tests
+        "ReferenceGrant/Status" | "ref-grant-status" => {
+            if !gateway {
+                eprintln!("Error: ReferenceGrant/Status tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RefGrantStatusTestSuite));
+        }
         // 运行所有测试
         "all" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
@@ -549,6 +560,7 @@ async fn main() -> Result<()> {
         udp_port,
         https_port,
         grpc_https_port,
+        cli.admin_port,
         http_host.clone(),
         grpc_host,
         cli.gateway,

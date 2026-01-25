@@ -1,13 +1,14 @@
 //! HTTPRoute Handler
 //!
-//! Handles HTTPRoute resources with ReferenceGrant validation.
+//! Handles HTTPRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler,
 };
-use crate::core::ref_grant::validate_http_route_if_enabled;
+use crate::core::ref_grant::{get_global_cross_ns_ref_manager, validate_http_route_if_enabled, CrossNsResourceRef};
 use crate::types::prelude_resources::HTTPRoute;
 use crate::types::resources::http_route::{HTTPRouteStatus, RouteParentStatus};
+use crate::types::ResourceKind;
 
 /// Controller name for status reporting
 const CONTROLLER_NAME: &str = "edgion.io/gateway-controller";
@@ -18,6 +19,40 @@ pub struct HttpRouteHandler;
 impl HttpRouteHandler {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Create a CrossNsResourceRef for this route
+    fn create_resource_ref(route: &HTTPRoute) -> CrossNsResourceRef {
+        CrossNsResourceRef::new(
+            ResourceKind::HTTPRoute,
+            route.metadata.namespace.clone(),
+            route.metadata.name.clone().unwrap_or_default(),
+        )
+    }
+
+    /// Record cross-namespace references from backend_refs
+    fn record_cross_ns_refs(route: &HTTPRoute) {
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let resource_ref = Self::create_resource_ref(route);
+        let manager = get_global_cross_ns_ref_manager();
+
+        // Clear old references first (handles updates)
+        manager.clear_resource_refs(&resource_ref);
+
+        // Collect cross-namespace references from rules
+        if let Some(rules) = &route.spec.rules {
+            for rule in rules {
+                if let Some(backend_refs) = &rule.backend_refs {
+                    for backend_ref in backend_refs {
+                        if let Some(backend_ns) = &backend_ref.namespace {
+                            if backend_ns != route_ns {
+                                manager.add_cross_ns_ref(backend_ns.clone(), resource_ref.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -33,7 +68,15 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     }
 
     fn parse(&self, route: HTTPRoute, _ctx: &HandlerContext) -> ProcessResult<HTTPRoute> {
+        // Record cross-namespace references for revalidation when ReferenceGrant changes
+        Self::record_cross_ns_refs(&route);
         ProcessResult::Continue(route)
+    }
+
+    fn on_delete(&self, route: &HTTPRoute, _ctx: &HandlerContext) {
+        // Clear cross-namespace references when route is deleted
+        let resource_ref = Self::create_resource_ref(route);
+        get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
     }
 
     fn update_status(&self, route: &mut HTTPRoute, _ctx: &HandlerContext, validation_errors: &[String]) {

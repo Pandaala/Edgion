@@ -18,6 +18,7 @@ pub struct TestContext {
     pub udp_port: u16,
     pub https_port: u16,
     pub grpc_https_port: u16,
+    pub admin_port: u16, // Controller Admin API port
     pub http_client: reqwest::Client,
     pub http_host: Option<String>,
     pub grpc_host: Option<String>,
@@ -40,6 +41,7 @@ impl TestContext {
         udp_port: u16,
         https_port: u16,
         grpc_https_port: u16,
+        admin_port: u16,
         http_host: Option<String>,
         grpc_host: Option<String>,
         gateway: bool,
@@ -81,6 +83,7 @@ impl TestContext {
             udp_port,
             https_port,
             grpc_https_port,
+            admin_port,
             http_client,
             http_host,
             grpc_host,
@@ -123,6 +126,11 @@ impl TestContext {
     #[allow(dead_code)]
     pub fn grpc_https_url(&self) -> String {
         format!("https://{}:{}", self.target_host, self.grpc_https_port)
+    }
+
+    /// Get the Admin API base URL (Controller)
+    pub fn admin_api_url(&self) -> String {
+        format!("http://{}:{}", self.target_host, self.admin_port)
     }
 }
 

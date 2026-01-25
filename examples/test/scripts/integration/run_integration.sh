@@ -477,6 +477,9 @@ main() {
                     run_test "EdgionTls_${item}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${item}" || test_failed=true
                 fi
                 ;;
+            ReferenceGrant)
+                run_test "ReferenceGrant_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g ref-grant-status" || test_failed=true
+                ;;
             *)
                 log_error "Unknown resource type: $resource"
                 exit 1
@@ -541,6 +544,9 @@ main() {
         run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
         run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
         run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
+        
+        # ReferenceGrant Status Tests
+        run_test "ReferenceGrant_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g ref-grant-status" || test_failed=true
         
         # Gateway Dynamic Tests (if enabled)
         if $dynamic_test; then

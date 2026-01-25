@@ -31,6 +31,7 @@ use super::conf_center::traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfWri
 use super::conf_center::ConfCenterConfig;
 use super::sync_runtime::ShutdownHandle;
 use crate::core::conf_sync::conf_server::ConfigSyncServer;
+use crate::core::ref_grant::{get_global_dispatcher, CrossNsRevalidationListener};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -70,6 +71,12 @@ impl ConfMgr {
                 Arc::new(KubernetesCenter::new(k8s_config).await?)
             }
         };
+
+        // Register cross-namespace revalidation listener
+        // This ensures that when ReferenceGrant changes, affected routes are requeued
+        let listener = Arc::new(CrossNsRevalidationListener::new());
+        get_global_dispatcher().register_listener(listener);
+        tracing::debug!(component = "conf_mgr", "Registered CrossNsRevalidationListener");
 
         Ok(Self { conf_center })
     }

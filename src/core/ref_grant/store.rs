@@ -3,7 +3,6 @@
 //! This module provides global storage for ReferenceGrant resources with
 //! efficient lookup by to_namespace for permission checking.
 
-use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::{Arc, RwLock};
@@ -29,21 +28,22 @@ type IndexedGrantMap = HashMap<String, Vec<Arc<ReferenceGrant>>>;
 /// Uses two-layer storage:
 /// 1. Raw storage: HashMap<String, Arc<ReferenceGrant>> for basic lookup
 /// 2. Indexed storage: HashMap<String, Vec<Arc<ReferenceGrant>>> indexed by to_namespace
+///
+/// Note: This is control plane code, so we use simple RwLock instead of ArcSwap.
 pub struct ReferenceGrantStore {
     /// Raw storage: namespace/name -> ReferenceGrant
-    /// Protected by RwLock for rare write operations
-    grants: Arc<RwLock<RawGrantMap>>,
+    grants: RwLock<RawGrantMap>,
 
     /// Indexed storage: to_namespace -> Vec<ReferenceGrant>
-    /// Used for fast permission checking without locks
-    grants_by_to_namespace: ArcSwap<IndexedGrantMap>,
+    /// Used for permission checking
+    grants_by_to_namespace: RwLock<IndexedGrantMap>,
 }
 
 impl ReferenceGrantStore {
     pub fn new() -> Self {
         Self {
-            grants: Arc::new(RwLock::new(HashMap::new())),
-            grants_by_to_namespace: ArcSwap::from_pointee(HashMap::new()),
+            grants: RwLock::new(HashMap::new()),
+            grants_by_to_namespace: RwLock::new(HashMap::new()),
         }
     }
 
@@ -64,7 +64,7 @@ impl ReferenceGrantStore {
     /// This is the primary query method for permission checking.
     /// Returns all ReferenceGrants defined in the target namespace.
     pub fn get_by_to_namespace(&self, to_namespace: &str) -> Vec<Arc<ReferenceGrant>> {
-        let index = self.grants_by_to_namespace.load();
+        let index = self.grants_by_to_namespace.read().unwrap();
         index.get(to_namespace).cloned().unwrap_or_default()
     }
 
@@ -111,15 +111,18 @@ impl ReferenceGrantStore {
 
     /// Replace all grants and rebuild all indexes
     pub(crate) fn replace_all(&self, new_grants: RawGrantMap) {
-        // Update raw storage
+        // Rebuild index first
+        let new_index = Self::build_index(&new_grants);
+
+        // Update both storages
         {
             let mut grants = self.grants.write().unwrap();
-            *grants = new_grants.clone();
+            *grants = new_grants;
         }
-
-        // Rebuild all indexes
-        let new_index = Self::build_index(&new_grants);
-        self.grants_by_to_namespace.store(Arc::new(new_index));
+        {
+            let mut index = self.grants_by_to_namespace.write().unwrap();
+            *index = new_index;
+        }
     }
 
     /// Update grants incrementally and rebuild affected indexes only
@@ -193,17 +196,14 @@ impl ReferenceGrantStore {
         affected
     }
 
-    /// Rebuild indexes for affected namespaces only (RCU pattern)
+    /// Rebuild indexes for affected namespaces only
     fn rebuild_indexes_incremental(&self, affected_namespaces: &std::collections::HashSet<String>) {
         if affected_namespaces.is_empty() {
             return;
         }
 
         let grants = self.grants.read().unwrap();
-        let current_index = self.grants_by_to_namespace.load();
-
-        // Clone current index
-        let mut new_index = (**current_index).clone();
+        let mut index = self.grants_by_to_namespace.write().unwrap();
 
         // Rebuild only affected namespaces
         for ns in affected_namespaces {
@@ -215,15 +215,12 @@ impl ReferenceGrantStore {
 
             if grants_in_ns.is_empty() {
                 // Remove empty namespace from index
-                new_index.remove(ns);
+                index.remove(ns);
             } else {
                 // Update namespace index
-                new_index.insert(ns.clone(), grants_in_ns);
+                index.insert(ns.clone(), grants_in_ns);
             }
         }
-
-        // Atomic swap
-        self.grants_by_to_namespace.store(Arc::new(new_index));
     }
 
     /// Identify all namespaces affected by this update (public for conf_handler_impl)

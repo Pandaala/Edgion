@@ -1,14 +1,15 @@
 //! GRPCRoute Handler
 //!
-//! Handles GRPCRoute resources with ReferenceGrant validation.
+//! Handles GRPCRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler,
 };
-use crate::core::ref_grant::validate_grpc_route_if_enabled;
+use crate::core::ref_grant::{get_global_cross_ns_ref_manager, validate_grpc_route_if_enabled, CrossNsResourceRef};
 use crate::types::prelude_resources::GRPCRoute;
 use crate::types::resources::grpc_route::GRPCRouteStatus;
 use crate::types::resources::http_route::RouteParentStatus;
+use crate::types::ResourceKind;
 
 /// Controller name for status reporting
 const CONTROLLER_NAME: &str = "edgion.io/gateway-controller";
@@ -19,6 +20,40 @@ pub struct GrpcRouteHandler;
 impl GrpcRouteHandler {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Create a CrossNsResourceRef for this route
+    fn create_resource_ref(route: &GRPCRoute) -> CrossNsResourceRef {
+        CrossNsResourceRef::new(
+            ResourceKind::GRPCRoute,
+            route.metadata.namespace.clone(),
+            route.metadata.name.clone().unwrap_or_default(),
+        )
+    }
+
+    /// Record cross-namespace references from backend_refs
+    fn record_cross_ns_refs(route: &GRPCRoute) {
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let resource_ref = Self::create_resource_ref(route);
+        let manager = get_global_cross_ns_ref_manager();
+
+        // Clear old references first (handles updates)
+        manager.clear_resource_refs(&resource_ref);
+
+        // Collect cross-namespace references from rules
+        if let Some(rules) = &route.spec.rules {
+            for rule in rules {
+                if let Some(backend_refs) = &rule.backend_refs {
+                    for backend_ref in backend_refs {
+                        if let Some(backend_ns) = &backend_ref.namespace {
+                            if backend_ns != route_ns {
+                                manager.add_cross_ns_ref(backend_ns.clone(), resource_ref.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -34,7 +69,15 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
     }
 
     fn parse(&self, route: GRPCRoute, _ctx: &HandlerContext) -> ProcessResult<GRPCRoute> {
+        // Record cross-namespace references for revalidation when ReferenceGrant changes
+        Self::record_cross_ns_refs(&route);
         ProcessResult::Continue(route)
+    }
+
+    fn on_delete(&self, route: &GRPCRoute, _ctx: &HandlerContext) {
+        // Clear cross-namespace references when route is deleted
+        let resource_ref = Self::create_resource_ref(route);
+        get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
     }
 
     fn update_status(&self, route: &mut GRPCRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
