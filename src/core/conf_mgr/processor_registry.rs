@@ -66,8 +66,11 @@ impl ProcessorRegistry {
     }
 
     /// Check if all registered processors are ready
+    ///
+    /// Returns `false` if registry is empty (must have at least one processor)
     pub fn is_all_ready(&self) -> bool {
-        self.processors.read().unwrap().values().all(|p| p.is_ready())
+        let processors = self.processors.read().unwrap();
+        !processors.is_empty() && processors.values().all(|p| p.is_ready())
     }
 
     /// Get list of kinds that are not ready
@@ -165,6 +168,7 @@ mod tests {
     fn test_registry_basic() {
         let registry = ProcessorRegistry::new();
         assert_eq!(registry.count(), 0);
-        assert!(registry.is_all_ready()); // Empty registry is "ready"
+        // Empty registry is NOT ready - must have at least one processor
+        assert!(!registry.is_all_ready());
     }
 }
