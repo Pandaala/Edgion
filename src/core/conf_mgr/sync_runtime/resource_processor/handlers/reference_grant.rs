@@ -6,10 +6,10 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::core::conf_mgr::sync_runtime::ref_grant::{
+use super::super::ref_grant::{
     get_global_dispatcher, get_global_reference_grant_store, ReferenceGrantChangedEvent,
 };
-use crate::core::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
+use super::super::{HandlerContext, ProcessResult, ProcessorHandler};
 use crate::types::prelude_resources::ReferenceGrant;
 
 /// ReferenceGrant handler

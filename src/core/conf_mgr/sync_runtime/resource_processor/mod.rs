@@ -16,6 +16,7 @@ mod context;
 mod handler;
 pub mod handlers;
 mod processor;
+pub mod ref_grant;
 pub mod secret_utils;
 pub mod status_utils;
 
@@ -39,6 +40,15 @@ pub use handlers::{
 pub use secret_utils::{
     get_global_secret_store, get_secret, get_secret_by_name, replace_all_secrets, update_secrets, RefManagerStats,
     ResourceRef, SecretRefManager, SecretStore,
+};
+
+// Re-export ref_grant utilities
+pub use ref_grant::{
+    get_global_cross_ns_ref_manager, get_global_dispatcher, get_global_reference_grant_store, is_cross_ns_ref_allowed,
+    trigger_full_cross_ns_revalidation, validate_grpc_route_if_enabled, validate_http_route_if_enabled,
+    validate_tcp_route_if_enabled, validate_tls_route_if_enabled, validate_udp_route_if_enabled,
+    CrossNamespaceRefManager, CrossNamespaceValidator, CrossNsRevalidationListener, CrossNsResourceRef,
+    ReferenceGrantChangedEvent, ReferenceGrantStore, RevalidationListener,
 };
 
 // ============================================================================

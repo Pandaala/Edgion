@@ -176,6 +176,13 @@ impl CrossNamespaceRefManager {
         }
     }
 
+    /// Get all target namespaces that have resources referencing them
+    /// Used for full revalidation after init
+    pub fn all_target_namespaces(&self) -> Vec<String> {
+        let ns_map = self.ns_to_resources.read().unwrap();
+        ns_map.keys().cloned().collect()
+    }
+
     /// Clear all references
     /// Used during relink to reset state
     pub fn clear(&self) {

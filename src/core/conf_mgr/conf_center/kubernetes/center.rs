@@ -435,6 +435,11 @@ impl KubernetesCenter {
             if PROCESSOR_REGISTRY.is_all_ready() {
                 // Register all WatchObjs to ConfigSyncServer
                 css.register_all(PROCESSOR_REGISTRY.all_watch_objs());
+
+                // Trigger full cross-namespace revalidation
+                // This ensures Routes processed before ReferenceGrants are revalidated
+                crate::core::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation();
+
                 let _ = tx.send(LifecycleEvent::CachesReady).await;
             } else {
                 let not_ready: Vec<String> = PROCESSOR_REGISTRY

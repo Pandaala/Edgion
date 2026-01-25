@@ -300,6 +300,10 @@ impl CenterLifeCycle for FileSystemCenter {
         // 5. Wait for PROCESSOR_REGISTRY to be ready (with timeout)
         self.wait_registry_ready(30).await;
 
+        // 5.5. Trigger full cross-namespace revalidation
+        // This ensures Routes processed before ReferenceGrants are revalidated
+        crate::core::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation();
+
         // 6. Create ConfigSyncServer and register all WatchObjs
         let config_sync_server = Arc::new(ConfigSyncServer::new());
         config_sync_server.set_endpoint_mode(endpoint_mode);
