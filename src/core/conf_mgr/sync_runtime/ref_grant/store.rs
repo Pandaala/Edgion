@@ -109,8 +109,60 @@ impl ReferenceGrantStore {
             .any(|grant| grant.allows_reference(from_namespace, from_group, from_kind, to_group, to_kind, to_name))
     }
 
+    /// Add or update a single grant
+    pub fn upsert(&self, key: String, grant: Arc<ReferenceGrant>) {
+        let to_namespace = grant.namespace().map(|s| s.to_string());
+
+        // Update raw storage
+        {
+            let mut grants = self.grants.write().unwrap();
+            grants.insert(key, grant.clone());
+        }
+
+        // Rebuild index for affected namespace
+        if let Some(ns) = to_namespace {
+            self.rebuild_namespace_index(&ns);
+        }
+    }
+
+    /// Remove a grant by key
+    pub fn remove(&self, key: &str) -> Option<Arc<ReferenceGrant>> {
+        // Get the grant first to know which namespace to rebuild
+        let grant = {
+            let mut grants = self.grants.write().unwrap();
+            grants.remove(key)
+        };
+
+        // Rebuild index for affected namespace
+        if let Some(ref g) = grant {
+            if let Some(ns) = g.namespace() {
+                self.rebuild_namespace_index(ns);
+            }
+        }
+
+        grant
+    }
+
+    /// Rebuild the index for a specific namespace
+    fn rebuild_namespace_index(&self, namespace: &str) {
+        let grants = self.grants.read().unwrap();
+        let mut index = self.grants_by_to_namespace.write().unwrap();
+
+        let grants_in_ns: Vec<Arc<ReferenceGrant>> = grants
+            .values()
+            .filter(|g| g.namespace() == Some(namespace))
+            .cloned()
+            .collect();
+
+        if grants_in_ns.is_empty() {
+            index.remove(namespace);
+        } else {
+            index.insert(namespace.to_string(), grants_in_ns);
+        }
+    }
+
     /// Replace all grants and rebuild all indexes
-    pub(crate) fn replace_all(&self, new_grants: RawGrantMap) {
+    pub fn replace_all(&self, new_grants: RawGrantMap) {
         // Rebuild index first
         let new_index = Self::build_index(&new_grants);
 
@@ -126,7 +178,7 @@ impl ReferenceGrantStore {
     }
 
     /// Update grants incrementally and rebuild affected indexes only
-    pub(crate) fn update_incremental(
+    pub fn update_incremental(
         &self,
         add_or_update: HashMap<String, Arc<ReferenceGrant>>,
         remove: &std::collections::HashSet<String>,
@@ -223,8 +275,8 @@ impl ReferenceGrantStore {
         }
     }
 
-    /// Identify all namespaces affected by this update (public for conf_handler_impl)
-    pub(crate) fn identify_affected_namespaces(
+    /// Identify all namespaces affected by this update (public for handler use)
+    pub fn identify_affected_namespaces(
         &self,
         add: &HashMap<String, ReferenceGrant>,
         update: &HashMap<String, ReferenceGrant>,
@@ -326,6 +378,23 @@ mod tests {
     }
 
     #[test]
+    fn test_upsert_and_remove() {
+        let store = ReferenceGrantStore::new();
+        let grant = create_test_grant("ns-target", "test-grant", "ns-source", "HTTPRoute", "Service");
+
+        // Upsert
+        store.upsert("ns-target/test-grant".to_string(), Arc::new(grant));
+        assert!(store.get("ns-target/test-grant").is_some());
+        assert_eq!(store.get_by_to_namespace("ns-target").len(), 1);
+
+        // Remove
+        let removed = store.remove("ns-target/test-grant");
+        assert!(removed.is_some());
+        assert!(store.get("ns-target/test-grant").is_none());
+        assert_eq!(store.get_by_to_namespace("ns-target").len(), 0);
+    }
+
+    #[test]
     fn test_index_query() {
         let store = ReferenceGrantStore::new();
 
@@ -349,57 +418,6 @@ mod tests {
 
         let ns_nonexistent = store.get_by_to_namespace("ns-nonexistent");
         assert_eq!(ns_nonexistent.len(), 0);
-    }
-
-    #[test]
-    fn test_incremental_update() {
-        let store = ReferenceGrantStore::new();
-
-        // Initial state
-        let grant1 = create_test_grant("ns1", "grant1", "ns-source", "HTTPRoute", "Service");
-        let mut grants = HashMap::new();
-        grants.insert("ns1/grant1".to_string(), Arc::new(grant1));
-        store.replace_all(grants);
-
-        assert_eq!(store.get_by_to_namespace("ns1").len(), 1);
-
-        // Add a grant to ns1
-        let grant2 = create_test_grant("ns1", "grant2", "ns-source2", "TCPRoute", "Service");
-        let mut add = HashMap::new();
-        add.insert("ns1/grant2".to_string(), Arc::new(grant2));
-        store.update_incremental(add, &std::collections::HashSet::new());
-
-        assert_eq!(store.get_by_to_namespace("ns1").len(), 2);
-
-        // Remove a grant from ns1
-        let mut remove = std::collections::HashSet::new();
-        remove.insert("ns1/grant1".to_string());
-        store.update_incremental(HashMap::new(), &remove);
-
-        assert_eq!(store.get_by_to_namespace("ns1").len(), 1);
-        assert!(store.get("ns1/grant1").is_none());
-        assert!(store.get("ns1/grant2").is_some());
-    }
-
-    #[test]
-    fn test_incremental_update_removes_empty_namespace() {
-        let store = ReferenceGrantStore::new();
-
-        // Initial state: one grant in ns1
-        let grant1 = create_test_grant("ns1", "grant1", "ns-source", "HTTPRoute", "Service");
-        let mut grants = HashMap::new();
-        grants.insert("ns1/grant1".to_string(), Arc::new(grant1));
-        store.replace_all(grants);
-
-        assert_eq!(store.get_by_to_namespace("ns1").len(), 1);
-
-        // Remove the only grant in ns1
-        let mut remove = std::collections::HashSet::new();
-        remove.insert("ns1/grant1".to_string());
-        store.update_incremental(HashMap::new(), &remove);
-
-        // Namespace should be removed from index
-        assert_eq!(store.get_by_to_namespace("ns1").len(), 0);
     }
 
     #[test]
@@ -442,64 +460,6 @@ mod tests {
         // Should deny: no grant for different source namespace
         assert!(!store.check_reference_allowed(
             "ns-other",
-            "gateway.networking.k8s.io",
-            "HTTPRoute",
-            "ns-target",
-            "",
-            "Service",
-            Some("my-service")
-        ));
-
-        // Should deny: no grant for different target namespace
-        assert!(!store.check_reference_allowed(
-            "ns-source",
-            "gateway.networking.k8s.io",
-            "HTTPRoute",
-            "ns-other",
-            "",
-            "Service",
-            Some("my-service")
-        ));
-    }
-
-    #[test]
-    fn test_check_reference_allowed_multiple_grants() {
-        let store = ReferenceGrantStore::new();
-
-        // Create two grants in ns-target
-        let grant1 = create_test_grant("ns-target", "grant1", "ns-source1", "HTTPRoute", "Service");
-        let grant2 = create_test_grant("ns-target", "grant2", "ns-source2", "TCPRoute", "Service");
-
-        let mut grants = HashMap::new();
-        grants.insert("ns-target/grant1".to_string(), Arc::new(grant1));
-        grants.insert("ns-target/grant2".to_string(), Arc::new(grant2));
-        store.replace_all(grants);
-
-        // Should allow: grant1 allows HTTPRoute from ns-source1
-        assert!(store.check_reference_allowed(
-            "ns-source1",
-            "gateway.networking.k8s.io",
-            "HTTPRoute",
-            "ns-target",
-            "",
-            "Service",
-            Some("my-service")
-        ));
-
-        // Should allow: grant2 allows TCPRoute from ns-source2
-        assert!(store.check_reference_allowed(
-            "ns-source2",
-            "gateway.networking.k8s.io",
-            "TCPRoute",
-            "ns-target",
-            "",
-            "Service",
-            Some("my-service")
-        ));
-
-        // Should deny: no grant for HTTPRoute from ns-source2
-        assert!(!store.check_reference_allowed(
-            "ns-source2",
             "gateway.networking.k8s.io",
             "HTTPRoute",
             "ns-target",

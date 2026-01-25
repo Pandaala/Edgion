@@ -74,7 +74,7 @@ impl RevalidationListener for CrossNsRevalidationListener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ref_grant::cross_ns_ref_manager::CrossNsResourceRef;
+    use super::super::cross_ns_ref_manager::CrossNsResourceRef;
     use crate::types::ResourceKind;
     use std::collections::HashSet;
 

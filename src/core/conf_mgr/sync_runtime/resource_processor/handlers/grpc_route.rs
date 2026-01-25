@@ -5,7 +5,7 @@
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler,
 };
-use crate::core::ref_grant::{
+use crate::core::conf_mgr::sync_runtime::ref_grant::{
     get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_grpc_route_if_enabled, CrossNsResourceRef,
 };
 use crate::types::prelude_resources::GRPCRoute;
@@ -97,8 +97,14 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                                         target_name: backend_ref.name.clone(),
                                         reason: Some("NoMatchingReferenceGrant".to_string()),
                                     });
+                                } else {
+                                    backend_ref.ref_denied = None;
                                 }
+                            } else {
+                                backend_ref.ref_denied = None;
                             }
+                        } else {
+                            backend_ref.ref_denied = None;
                         }
                     }
                 }

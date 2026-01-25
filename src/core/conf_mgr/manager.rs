@@ -31,7 +31,7 @@ use super::conf_center::traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfWri
 use super::conf_center::ConfCenterConfig;
 use super::sync_runtime::ShutdownHandle;
 use crate::core::conf_sync::conf_server::ConfigSyncServer;
-use crate::core::ref_grant::{get_global_dispatcher, CrossNsRevalidationListener};
+use crate::core::conf_mgr::sync_runtime::ref_grant::{get_global_dispatcher, CrossNsRevalidationListener};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
