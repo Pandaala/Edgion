@@ -3,6 +3,24 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+/// Global controller configuration for runtime access
+static CONTROLLER_CONFIG: OnceLock<EdgionControllerConfig> = OnceLock::new();
+
+/// Initialize global controller configuration (called once at startup)
+pub fn init_controller_config(config: EdgionControllerConfig) {
+    let _ = CONTROLLER_CONFIG.set(config);
+}
+
+/// Check if ReferenceGrant validation is enabled
+/// This reads from the global controller configuration
+pub fn is_reference_grant_validation_enabled() -> bool {
+    CONTROLLER_CONFIG
+        .get()
+        .map(|c| c.validation.enable_reference_grant_validation)
+        .unwrap_or(true) // Default: enabled if config not initialized
+}
 
 /// Edgion Controller configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
@@ -49,6 +67,10 @@ pub struct EdgionControllerConfig {
     #[command(flatten)]
     #[serde(default)]
     pub debug: DebugConfig,
+
+    #[command(flatten)]
+    #[serde(default)]
+    pub validation: ValidationConfig,
 
     #[command(flatten)]
     #[serde(default)]
@@ -111,6 +133,30 @@ pub struct DebugConfig {
     #[arg(skip)]
     #[serde(default = "default_debug_enabled")]
     pub enabled: bool,
+}
+
+/// Validation configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Args)]
+pub struct ValidationConfig {
+    /// Enable ReferenceGrant validation for cross-namespace references
+    /// When enabled, cross-namespace backend references without matching ReferenceGrant
+    /// will be denied at Gateway level (ref_denied field set on BackendRef)
+    /// Default: true (enabled)
+    #[arg(skip)]
+    #[serde(default = "default_reference_grant_validation")]
+    pub enable_reference_grant_validation: bool,
+}
+
+impl Default for ValidationConfig {
+    fn default() -> Self {
+        Self {
+            enable_reference_grant_validation: default_reference_grant_validation(),
+        }
+    }
+}
+
+fn default_reference_grant_validation() -> bool {
+    true // Default: enabled
 }
 
 /// Configuration synchronization configuration

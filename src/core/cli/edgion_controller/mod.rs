@@ -214,6 +214,9 @@ impl EdgionControllerCli {
         // Load and merge configuration
         let config = EdgionControllerConfig::load(self.config.clone())?;
 
+        // Initialize global controller config for runtime access (e.g., by ReferenceGrant validator)
+        crate::core::cli::config::init_controller_config(config.clone());
+
         // 1. Initialize environment (work_dir, logging)
         let _log_guard = self.init_environment(&config).await?;
 

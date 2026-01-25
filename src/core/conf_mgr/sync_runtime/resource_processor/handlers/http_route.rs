@@ -75,6 +75,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         Self::record_cross_ns_refs(&route);
 
         // Mark denied cross-namespace references
+        // This sets ref_denied field on BackendRef, which Gateway uses to deny requests
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         if let Some(rules) = &mut route.spec.rules {
             for rule in rules {
@@ -125,7 +126,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     fn update_status(&self, route: &mut HTTPRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = route.metadata.generation;
 
-        // Collect ref_denied errors from backendRefs
+        // Collect ref_denied errors from backendRefs (already set in parse())
         let mut all_errors: Vec<String> = validation_errors.to_vec();
 
         if let Some(rules) = &route.spec.rules {

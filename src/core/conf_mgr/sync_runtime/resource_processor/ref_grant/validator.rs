@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use super::ReferenceGrantStore;
-use crate::core::gateway::edgion_gateway_config::list_edgion_gateway_configs;
+use crate::core::cli::config::is_reference_grant_validation_enabled;
 use crate::types::resources::{gateway::SecretObjectReference, http_route::BackendObjectReference};
 
 /// Validator for cross-namespace references
@@ -121,9 +121,7 @@ impl Default for CrossNamespaceValidator {
 
 /// Check if ReferenceGrant validation is enabled by querying EdgionGatewayConfig
 fn is_validation_enabled() -> bool {
-    list_edgion_gateway_configs()
-        .iter()
-        .any(|egwc| egwc.spec.enable_reference_grant_validation)
+    is_reference_grant_validation_enabled()
 }
 
 fn normalize_group(group: Option<&String>) -> &str {
