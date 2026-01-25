@@ -163,6 +163,48 @@ impl FileSystemStatusHandler {
         self.write_native_status(kind, key, &status)
     }
 
+    /// Read status from file as JSON string (for comparison)
+    ///
+    /// Returns the status content as a JSON string, or None if:
+    /// - File doesn't exist
+    /// - File read fails
+    /// - Parsing/conversion fails
+    pub fn read_status_json(&self, kind: &str, key: &str) -> Option<String> {
+        let status_path = self.build_status_path(kind, key);
+        if !status_path.exists() {
+            return None;
+        }
+
+        match std::fs::read_to_string(&status_path) {
+            Ok(yaml_content) => {
+                // Parse YAML and convert to JSON for consistent comparison
+                match serde_yaml::from_str::<serde_json::Value>(&yaml_content) {
+                    Ok(value) => serde_json::to_string(&value).ok(),
+                    Err(e) => {
+                        tracing::warn!(
+                            component = "fs_status",
+                            kind = kind,
+                            key = key,
+                            error = %e,
+                            "Failed to parse status file"
+                        );
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    component = "fs_status",
+                    kind = kind,
+                    key = key,
+                    error = %e,
+                    "Failed to read status file"
+                );
+                None
+            }
+        }
+    }
+
     /// Delete status file
     pub fn delete_status(&self, kind: &str, key: &str) -> std::io::Result<()> {
         let status_path = self.build_status_path(kind, key);

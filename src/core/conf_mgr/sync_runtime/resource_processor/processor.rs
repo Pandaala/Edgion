@@ -265,13 +265,17 @@ where
     /// Handle InitApply event (process single resource from LIST)
     ///
     /// Called directly during init phase (not via workqueue).
-    /// Returns true if resource was processed, false if filtered.
     ///
-    /// Note: During init phase, we don't persist status because the resources
-    /// are freshly loaded from K8s and their status is already up-to-date.
-    pub fn on_init_apply(&self, obj: K) -> bool {
+    /// # Arguments
+    /// * `obj` - Object from config center
+    /// * `existing_status_json` - Existing status from config center
+    ///   - K8s mode: pass None (status is already in obj from K8s API)
+    ///   - FileSystem mode: pass content of .status file as JSON string
+    ///
+    /// Returns WorkItemResult for status persistence handling by caller.
+    pub fn on_init_apply(&self, obj: K, existing_status_json: Option<String>) -> WorkItemResult<K> {
         let ctx = self.create_context();
-        matches!(self.process_resource(obj, &ctx, true), WorkItemResult::Processed { .. })
+        self.process_resource(obj, &ctx, true, existing_status_json)
     }
 
     /// Handle InitDone event (LIST completed)
@@ -333,19 +337,31 @@ where
 
     /// Process a single work item (called by worker loop)
     ///
-    /// This compares the store state (from K8s) with cache state
+    /// This compares the store state (from K8s/FileSystem) with cache state
     /// and determines whether to update or delete.
+    ///
+    /// # Arguments
+    /// * `key` - Resource key (namespace/name or just name)
+    /// * `store_obj` - Object from config center (K8s store or file)
+    /// * `existing_status_json` - Existing status from config center (for FileSystem: from .status file)
+    ///   - K8s mode: pass None (status is already in store_obj)
+    ///   - FileSystem mode: pass content of .status file as JSON string
     ///
     /// Returns `WorkItemResult` indicating what action was taken and whether
     /// status needs to be persisted.
-    pub fn process_work_item(&self, key: &str, store_obj: Option<K>) -> WorkItemResult<K> {
+    pub fn process_work_item(
+        &self,
+        key: &str,
+        store_obj: Option<K>,
+        existing_status_json: Option<String>,
+    ) -> WorkItemResult<K> {
         let ctx = self.create_context();
         let cache_obj = self.get(key);
 
         match (store_obj, cache_obj) {
             (Some(obj), _) => {
                 // Object exists in store -> process it
-                self.process_resource(obj, &ctx, false)
+                self.process_resource(obj, &ctx, false, existing_status_json)
             }
             (None, Some(cached)) => {
                 // Object deleted from store but exists in cache -> delete
@@ -372,7 +388,21 @@ where
     }
 
     /// Process a resource through the handler pipeline
-    fn process_resource(&self, obj: K, ctx: &HandlerContext, is_init: bool) -> WorkItemResult<K> {
+    ///
+    /// # Arguments
+    /// * `obj` - Object to process
+    /// * `ctx` - Handler context
+    /// * `is_init` - Whether this is during init phase
+    /// * `existing_status_json` - Existing status from config center as JSON string
+    ///   - K8s mode: None (status is in obj)
+    ///   - FileSystem mode: content of .status file
+    fn process_resource(
+        &self,
+        obj: K,
+        ctx: &HandlerContext,
+        is_init: bool,
+        existing_status_json: Option<String>,
+    ) -> WorkItemResult<K> {
         // Extract name/namespace early for logging (owned strings to avoid borrow issues)
         let name = obj.meta().name.clone().unwrap_or_default();
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
@@ -423,8 +453,13 @@ where
         // 5. Parse/preprocess
         match self.handler.parse(obj, ctx) {
             ProcessResult::Continue(mut parsed_obj) => {
-                // 6. Capture old status for comparison (serialize to JSON for comparison)
-                let old_status = extract_status_json(&parsed_obj);
+                // 6. Determine old status for comparison
+                // - If existing_status_json provided (FileSystem mode): use it
+                // - Otherwise: extract from object (K8s mode - status is already in obj)
+                let old_status = match existing_status_json {
+                    Some(json) => StatusExtractResult::Present(json),
+                    None => extract_status_json(&parsed_obj),
+                };
 
                 // Log serialization errors
                 if matches!(old_status, StatusExtractResult::SerializationError) {
@@ -663,8 +698,8 @@ mod tests {
         processor.on_init();
         assert!(!processor.is_ready());
 
-        let processed = processor.on_init_apply(resource.clone());
-        assert!(processed);
+        let result = processor.on_init_apply(resource.clone(), None);
+        assert!(matches!(result, WorkItemResult::Processed { .. }));
 
         processor.on_init_done();
         assert!(processor.is_ready());

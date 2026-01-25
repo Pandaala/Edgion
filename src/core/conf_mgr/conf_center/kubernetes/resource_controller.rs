@@ -249,10 +249,39 @@ where
                         }
                         Event::InitApply(obj) => {
                             // Init phase: process directly via processor
-                            if passes_namespace_filter(&obj, &self.namespace_filter)
-                                && self.processor.on_init_apply(obj)
-                            {
-                                init_count += 1;
+                            // K8s mode: pass None for existing_status_json (status is already in obj from K8s API)
+                            if passes_namespace_filter(&obj, &self.namespace_filter) {
+                                let result = self.processor.on_init_apply(obj, None);
+
+                                // Handle status persistence (same as runtime)
+                                if let WorkItemResult::Processed { obj, status_changed } = result {
+                                    init_count += 1;
+                                    if status_changed {
+                                        if let Some(status_value) = extract_status_value(&obj) {
+                                            let name = obj.meta().name.as_deref().unwrap_or("");
+                                            let namespace = obj.meta().namespace.as_deref();
+
+                                            // Persist status to K8s API
+                                            if let Err(e) = persist_k8s_status::<K>(
+                                                &self.client,
+                                                &self.api_scope,
+                                                namespace,
+                                                name,
+                                                &status_value,
+                                            )
+                                            .await
+                                            {
+                                                tracing::warn!(
+                                                    component = "resource_controller",
+                                                    kind = kind,
+                                                    name = %name,
+                                                    error = %e,
+                                                    "Failed to persist status during init"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         Event::InitDone => {
@@ -294,10 +323,36 @@ where
                                     kind = kind,
                                     "Received Apply event during init phase, treating as InitApply"
                                 );
-                                if passes_namespace_filter(&obj, &self.namespace_filter)
-                                    && self.processor.on_init_apply(obj)
-                                {
-                                    init_count += 1;
+                                if passes_namespace_filter(&obj, &self.namespace_filter) {
+                                    let result = self.processor.on_init_apply(obj, None);
+
+                                    if let WorkItemResult::Processed { obj, status_changed } = result {
+                                        init_count += 1;
+                                        if status_changed {
+                                            if let Some(status_value) = extract_status_value(&obj) {
+                                                let name = obj.meta().name.as_deref().unwrap_or("");
+                                                let namespace = obj.meta().namespace.as_deref();
+
+                                                if let Err(e) = persist_k8s_status::<K>(
+                                                    &self.client,
+                                                    &self.api_scope,
+                                                    namespace,
+                                                    name,
+                                                    &status_value,
+                                                )
+                                                .await
+                                                {
+                                                    tracing::warn!(
+                                                        component = "resource_controller",
+                                                        kind = kind,
+                                                        name = %name,
+                                                        error = %e,
+                                                        "Failed to persist status during apply-as-init"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             } else {
                                 // Runtime phase - enqueue key for worker
@@ -446,7 +501,8 @@ where
                     };
 
                     if should_process {
-                        let result = processor.process_work_item(&work_item.key, store_obj);
+                        // K8s mode: pass None for existing_status_json (status is already in store_obj from K8s API)
+                        let result = processor.process_work_item(&work_item.key, store_obj, None);
 
                         // Persist status to K8s API when status changes
                         if let WorkItemResult::Processed { obj, status_changed } = result {
