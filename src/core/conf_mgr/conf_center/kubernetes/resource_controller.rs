@@ -451,20 +451,31 @@ where
                         // Persist status to K8s API when status changes
                         if let WorkItemResult::Processed { obj, status_changed } = result {
                             if status_changed {
-                                if let Some(status_value) = extract_status_value(&obj) {
-                                    let name = obj.meta().name.as_deref().unwrap_or("");
-                                    let namespace = obj.meta().namespace.as_deref();
+                                let name = obj.meta().name.as_deref().unwrap_or("");
+                                let namespace = obj.meta().namespace.as_deref();
 
-                                    if let Err(e) =
-                                        persist_k8s_status::<K>(&client, &api_scope, namespace, name, &status_value)
-                                            .await
-                                    {
+                                match extract_status_value(&obj) {
+                                    Some(status_value) => {
+                                        if let Err(e) =
+                                            persist_k8s_status::<K>(&client, &api_scope, namespace, name, &status_value)
+                                                .await
+                                        {
+                                            tracing::warn!(
+                                                component = "resource_controller",
+                                                kind = kind,
+                                                key = %work_item.key,
+                                                error = %e,
+                                                "Failed to persist status to K8s API"
+                                            );
+                                        }
+                                    }
+                                    None => {
+                                        // Status changed but extraction failed - log warning
                                         tracing::warn!(
                                             component = "resource_controller",
                                             kind = kind,
                                             key = %work_item.key,
-                                            error = %e,
-                                            "Failed to persist status to K8s API"
+                                            "Status changed but failed to extract status value for persistence"
                                         );
                                     }
                                 }

@@ -46,15 +46,48 @@ use super::handler::{ProcessResult, ProcessorHandler};
 use super::{make_resource_key, SecretRefManager};
 use crate::core::conf_mgr::sync_runtime::workqueue::{Workqueue, WorkqueueConfig};
 
+/// Result of status extraction
+#[derive(Debug, PartialEq)]
+enum StatusExtractResult {
+    /// Status field present with serialized value
+    Present(String),
+    /// Status field is null or empty
+    Empty,
+    /// Serialization failed
+    SerializationError,
+}
+
 /// Extract status field from a resource as JSON string for comparison
 ///
-/// Returns None if the object doesn't have a status field or serialization fails.
-/// This is used to detect status changes without knowing the concrete status type.
-fn extract_status_json<T: Serialize>(obj: &T) -> Option<String> {
-    serde_json::to_value(obj)
-        .ok()
-        .and_then(|v| v.get("status").cloned())
-        .and_then(|s| serde_json::to_string(&s).ok())
+/// Returns the extraction result to distinguish between:
+/// - Status field present with value
+/// - Status field is null/empty
+/// - Serialization error (should be logged)
+fn extract_status_json<T: Serialize>(obj: &T) -> StatusExtractResult {
+    match serde_json::to_value(obj) {
+        Ok(value) => match value.get("status") {
+            Some(status) if !status.is_null() => match serde_json::to_string(status) {
+                Ok(s) => StatusExtractResult::Present(s),
+                Err(_) => StatusExtractResult::SerializationError,
+            },
+            _ => StatusExtractResult::Empty,
+        },
+        Err(_) => StatusExtractResult::SerializationError,
+    }
+}
+
+/// Check if status has changed based on extraction results
+fn status_has_changed(old: &StatusExtractResult, new: &StatusExtractResult) -> bool {
+    match (old, new) {
+        // Both present - compare values
+        (StatusExtractResult::Present(old_val), StatusExtractResult::Present(new_val)) => old_val != new_val,
+        // Both empty - no change
+        (StatusExtractResult::Empty, StatusExtractResult::Empty) => false,
+        // One has error - assume change to trigger persistence attempt
+        (StatusExtractResult::SerializationError, _) | (_, StatusExtractResult::SerializationError) => true,
+        // One empty, one present - change
+        _ => true,
+    }
 }
 
 /// Extract status field from a resource as serde_json::Value
@@ -62,7 +95,17 @@ fn extract_status_json<T: Serialize>(obj: &T) -> Option<String> {
 /// Returns the status as a JSON Value, or None if not present.
 /// This is used for persisting status to FileSystem (.status files).
 pub fn extract_status_value<T: Serialize>(obj: &T) -> Option<serde_json::Value> {
-    serde_json::to_value(obj).ok().and_then(|v| v.get("status").cloned())
+    match serde_json::to_value(obj) {
+        Ok(value) => value.get("status").cloned().filter(|s| !s.is_null()),
+        Err(e) => {
+            tracing::warn!(
+                component = "resource_processor",
+                error = %e,
+                "Failed to serialize object for status extraction"
+            );
+            None
+        }
+    }
 }
 
 /// Object-safe trait for processor management
@@ -383,12 +426,33 @@ where
                 // 6. Capture old status for comparison (serialize to JSON for comparison)
                 let old_status = extract_status_json(&parsed_obj);
 
+                // Log serialization errors
+                if matches!(old_status, StatusExtractResult::SerializationError) {
+                    tracing::warn!(
+                        kind = self.kind,
+                        name = %name,
+                        namespace = %namespace,
+                        "Failed to serialize old status for comparison"
+                    );
+                }
+
                 // 7. Update status (handler sets Gateway API conditions)
                 self.handler.update_status(&mut parsed_obj, ctx, &warnings);
 
                 // 8. Check if status changed
                 let new_status = extract_status_json(&parsed_obj);
-                let status_changed = old_status != new_status;
+
+                // Log serialization errors
+                if matches!(new_status, StatusExtractResult::SerializationError) {
+                    tracing::warn!(
+                        kind = self.kind,
+                        name = %name,
+                        namespace = %namespace,
+                        "Failed to serialize new status for comparison"
+                    );
+                }
+
+                let status_changed = status_has_changed(&old_status, &new_status);
 
                 if status_changed {
                     tracing::trace!(

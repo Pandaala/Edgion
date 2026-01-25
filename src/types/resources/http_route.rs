@@ -613,7 +613,7 @@ impl ParsedRouteTimeouts {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteStatus {
     /// Parents describe the status of the route with respect to each parent.

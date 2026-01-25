@@ -396,16 +396,27 @@ where
                         WorkItemResult::Processed { obj, status_changed } => {
                             if status_changed {
                                 // Extract and persist native status
-                                if let Some(status_value) = extract_status_value(&obj) {
-                                    if let Err(e) =
-                                        status_handler.write_status_value(kind, &work_item.key, &status_value)
-                                    {
+                                match extract_status_value(&obj) {
+                                    Some(status_value) => {
+                                        if let Err(e) =
+                                            status_handler.write_status_value(kind, &work_item.key, &status_value)
+                                        {
+                                            tracing::warn!(
+                                                component = "fs_resource_controller",
+                                                kind = kind,
+                                                key = %work_item.key,
+                                                error = %e,
+                                                "Failed to write status file"
+                                            );
+                                        }
+                                    }
+                                    None => {
+                                        // Status changed but extraction failed - log warning
                                         tracing::warn!(
                                             component = "fs_resource_controller",
                                             kind = kind,
                                             key = %work_item.key,
-                                            error = %e,
-                                            "Failed to write status file"
+                                            "Status changed but failed to extract status value for persistence"
                                         );
                                     }
                                 }
