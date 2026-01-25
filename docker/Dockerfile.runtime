@@ -1,0 +1,77 @@
+# Edgion CI Dockerfile - For prebuilt binaries
+# Used by GitHub Actions for multi-arch builds with cross-compiled binaries
+# Also used for local fast builds (--local-build option)
+#
+# Build arguments:
+#   BINARY: Target binary name (e.g., gateway, controller, test_server)
+#   BUILD_TYPE: Build type - bin or example (default: bin)
+#   BINARY_PATH: Path to prebuilt binaries directory
+#
+# Usage:
+#   # For bin type
+#   docker build -f docker/Dockerfile.runtime --build-arg BINARY=gateway --build-arg BUILD_TYPE=bin --build-arg BINARY_PATH=target/release -t edgion/edgion-gateway:0.1.0 .
+#   # For example type
+#   docker build -f docker/Dockerfile.runtime --build-arg BINARY=test_server --build-arg BUILD_TYPE=example --build-arg BINARY_PATH=target/release -t edgion/edgion-test-server:0.1.0 .
+
+FROM debian:bookworm-slim
+
+# Build arguments
+ARG BINARY=gateway
+ARG BUILD_TYPE=bin
+ARG BINARY_PATH
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -g 1000 edgion && \
+    useradd -r -u 1000 -g edgion edgion
+
+# Create necessary directories
+RUN mkdir -p /usr/local/edgion/{config,logs,runtime} && \
+    chown -R edgion:edgion /usr/local/edgion
+
+# Set working directory
+WORKDIR /usr/local/edgion
+
+# Copy prebuilt binaries based on BUILD_TYPE
+# For bin: copy from release/, for example: copy from release/examples/
+RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
+    if [ "$BUILD_TYPE" = "example" ]; then \
+      cp /tmp/binaries/examples/${BINARY} /usr/local/bin/${BINARY} && \
+      chmod +x /usr/local/bin/${BINARY}; \
+    else \
+      cp /tmp/binaries/edgion-${BINARY} /usr/local/bin/edgion-${BINARY} && \
+      cp /tmp/binaries/edgion-ctl /usr/local/bin/edgion-ctl && \
+      chmod +x /usr/local/bin/edgion-${BINARY} /usr/local/bin/edgion-ctl; \
+    fi
+
+# Copy default config files (if exist)
+# Note: mkdir ensures the directory exists even if copy fails
+RUN --mount=type=bind,source=config,target=/tmp/config \
+    mkdir -p ./config && \
+    cp -r /tmp/config/*.toml ./config/ 2>/dev/null || true && \
+    chown -R edgion:edgion ./config/
+
+# Switch to non-root user
+USER edgion
+
+# Environment variables
+ENV RUST_LOG=info
+ENV RUST_BACKTRACE=0
+
+# Expose ports
+EXPOSE 80 443 10080 10443 18443 19000 19002 19010 50051 5800
+
+# Set entrypoint
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["exec /usr/local/bin/edgion-${BINARY}"]
+
+# Labels
+LABEL maintainer="Edgion Team"
+LABEL org.opencontainers.image.source="https://github.com/Pandaala/Edgion"
+LABEL org.opencontainers.image.description="Edgion - Kubernetes Gateway API Implementation"
+LABEL org.opencontainers.image.licenses="Apache-2.0"

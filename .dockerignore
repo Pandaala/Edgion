@@ -1,5 +1,7 @@
-# Rust build artifacts
-target/
+# Rust build artifacts (keep target/release for local builds)
+target/debug/
+target/.rustc_info.json
+target/.cargo-lock
 **/*.rs.bk
 **/*.pdb
 
@@ -52,16 +54,15 @@ docs/
 .travis.yml
 
 # Docker
-Dockerfile
 .dockerignore
 docker-compose*.yml
 
 # Development tools
+build-image.sh
 Makefile
 scripts/
 
-# Examples and testing
-examples/
+# Testing only (keep examples/ for test_server/test_client builds)
 tests/
 
 # License files

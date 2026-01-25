@@ -1,3 +1,5 @@
+use crate::core::gateway::gateway::route_match::check_gateway_listener_match;
+use crate::core::gateway::gateway::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::resources::common::ParentReference;
 use crate::types::{GRPCRouteMatch, GRPCRouteRule};
@@ -87,8 +89,8 @@ pub struct GrpcRouteRuleUnit {
 }
 
 impl GrpcRouteRuleUnit {
-    /// Deep match: check hostname, section_name, and headers
-    pub fn deep_match(&self, session: &Session, listener_name: &str, hostname: &str) -> Result<bool, EdError> {
+    /// Deep match: check hostname, Gateway/sectionName, and headers
+    pub fn deep_match(&self, session: &Session, gateway_info: &GatewayInfo, hostname: &str) -> Result<bool, EdError> {
         let req_header = session.req_header();
 
         // Check Hostname (if route specifies hostnames)
@@ -98,14 +100,16 @@ impl GrpcRouteRuleUnit {
             }
         }
 
-        // Check SectionName (if parent_refs specify section_name)
+        // Check Gateway/Listener constraints (sectionName, hostname, AllowedRoutes)
         if let Some(ref parent_refs) = self.route_info.parent_refs {
-            // At least one parent_ref must match: section_name is None or equals listener_name
-            let matches = parent_refs
-                .iter()
-                .any(|pr| pr.section_name.as_ref().is_none_or(|name| name == listener_name));
-
-            if !matches {
+            if !check_gateway_listener_match(
+                parent_refs,
+                gateway_info,
+                hostname,
+                &self.matched_info.route_ns,
+                "GRPCRoute",
+                &self.matched_info.route_name,
+            ) {
                 return Ok(false);
             }
         }

@@ -3,18 +3,51 @@ pub mod commands;
 pub mod output;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use client::EdgionClient;
 use output::OutputFormat;
+
+/// Target type for edgion-ctl commands
+///
+/// - `center`: ConfCenter API (default, full CRUD operations)
+/// - `server`: ConfigServer cache (read-only, Controller side)
+/// - `client`: ConfigClient cache (read-only, Gateway side)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum TargetType {
+    /// ConfCenter API - full CRUD operations (default)
+    #[default]
+    Center,
+    /// ConfigServer cache - read-only (Controller)
+    Server,
+    /// ConfigClient cache - read-only (Gateway)
+    Client,
+}
+
+impl std::fmt::Display for TargetType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TargetType::Center => write!(f, "center"),
+            TargetType::Server => write!(f, "server"),
+            TargetType::Client => write!(f, "client"),
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "edgion-ctl")]
 #[command(about = "Edgion control tool for managing gateway resources", long_about = None)]
 #[command(version)]
 pub struct Cli {
-    /// Server address (e.g., http://localhost:8080)
+    /// Target API to connect to:
+    /// - center: ConfCenter API (default, port 5800)
+    /// - server: ConfigServer cache (port 5800)
+    /// - client: ConfigClient cache (port 5900)
+    #[arg(long, short = 't', value_enum, default_value = "center")]
+    pub target: TargetType,
+
+    /// Server address (e.g., http://localhost:5800)
     #[arg(long)]
     pub server: Option<String>,
 
@@ -79,12 +112,18 @@ pub enum Commands {
 
 impl Cli {
     pub async fn run(&self) -> Result<()> {
-        // Create API client
-        let client = EdgionClient::new(self.server.clone(), self.socket.clone())?;
+        // Create API client with target type
+        let client = EdgionClient::new(self.target, self.server.clone(), self.socket.clone())?;
 
         // Execute command
         match &self.command {
-            Commands::Apply { file, dry_run } => commands::apply::apply(&client, file, *dry_run).await,
+            Commands::Apply { file, dry_run } => {
+                // Apply command only supported for 'center' target
+                if self.target != TargetType::Center {
+                    anyhow::bail!("apply command only supported for 'center' target");
+                }
+                commands::apply::apply(&client, file, *dry_run).await
+            }
             Commands::Get {
                 kind,
                 name,
@@ -100,6 +139,10 @@ impl Cli {
                 namespace,
                 file,
             } => {
+                // Delete command only supported for 'center' target
+                if self.target != TargetType::Center {
+                    anyhow::bail!("delete command only supported for 'center' target");
+                }
                 commands::delete::delete(
                     &client,
                     kind.as_deref(),
@@ -109,7 +152,13 @@ impl Cli {
                 )
                 .await
             }
-            Commands::Reload => commands::reload::reload(&client).await,
+            Commands::Reload => {
+                // Reload command only supported for 'center' target
+                if self.target != TargetType::Center {
+                    anyhow::bail!("reload command only supported for 'center' target");
+                }
+                commands::reload::reload(&client).await
+            }
         }
     }
 }

@@ -26,7 +26,9 @@ conf/
 ├── redirect/               # HTTP 重定向测试
 ├── stream-plugins/         # 流式插件测试
 ├── mtls/                   # 双向 TLS (mTLS) 测试
-└── backend-tls/            # 后端 TLS 测试
+├── backend-tls/            # 后端 TLS 测试
+└── EdgionTls/
+    └── cipher/             # TLS cipher 加密算法测试
 ```
 
 ## 加载顺序
@@ -111,6 +113,17 @@ conf/
 - **Gateway_edge_mtls-test-gateway.yaml**: mTLS 测试网关
 - **EdgionTls_edge_mtls-test-*.yaml**: 各种 mTLS 配置
 - **HTTPRoute_edge_mtls-test.yaml**: mTLS 测试路由
+
+### EdgionTls/cipher/
+
+TLS cipher（加密算法）配置测试，验证 EdgionTls 在 TLS 1.2 时支持自定义 cipher 列表。
+
+- **Gateway.yaml**: cipher 测试网关（端口 31195/31196）
+- **HTTPRoute.yaml**: cipher 测试路由
+- **EdgionTls_cipher_legacy.yaml**: TLS 1.2 + 弱算法配置（AES128-SHA, AES256-SHA 等）
+- **EdgionTls_cipher_modern.yaml**: TLS 1.2 + 现代算法配置（ECDHE-RSA-AES256-GCM-SHA384 等）
+
+测试用例使用 `openssl s_client` 验证服务端协商的 cipher 是否符合配置。
 
 ### backend-tls/
 

@@ -17,26 +17,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
         with:
           toolchain: "1.92"
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake libclang-dev protobuf-compiler
-
-      - name: Cache cargo
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-check-
+          install-deps: "true"
+          cache-enabled: "true"
+          cache-key-prefix: "cargo-check"
 
       - name: Run cargo check
         run: cargo check --all-targets
@@ -47,11 +34,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
         with:
           toolchain: "1.92"
           components: rustfmt
+          install-deps: "false"
+          cache-enabled: "false"
+          cache-key-prefix: "cargo-fmt"
 
       - name: Run cargo fmt
         run: cargo fmt --all -- --check
@@ -62,27 +52,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
         with:
           toolchain: "1.92"
           components: clippy
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake libclang-dev protobuf-compiler
-
-      - name: Cache cargo
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-clippy-
+          install-deps: "true"
+          cache-enabled: "true"
+          cache-key-prefix: "cargo-clippy"
 
       - name: Run clippy
         run: cargo clippy --all-targets
@@ -93,26 +70,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
         with:
           toolchain: "1.92"
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake libclang-dev protobuf-compiler
-
-      - name: Cache cargo
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-
+          install-deps: "true"
+          cache-enabled: "true"
+          cache-key-prefix: "cargo-test"
 
       - name: Run tests
         run: cargo test --all
@@ -134,4 +98,3 @@ jobs:
             exit 1
           fi
           echo "All CI checks passed!"
-

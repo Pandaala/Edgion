@@ -2,6 +2,7 @@
 //!
 //! Gateway defines a network gateway
 
+use k8s_openapi::api::core::v1::Secret;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -77,6 +78,11 @@ pub struct GatewayTLSConfig {
     /// Options are implementation-specific TLS options
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<serde_json::Value>,
+
+    /// Resolved Secret data (filled by Controller, not user-configured)
+    /// Contains the actual TLS certificates referenced by certificate_refs
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<Vec<Secret>>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -160,7 +166,7 @@ pub struct GatewayStatus {
     pub listeners: Option<Vec<ListenerStatus>>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayStatusAddress {
     /// Type of the address

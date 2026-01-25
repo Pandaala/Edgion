@@ -1,3 +1,5 @@
+use crate::core::backends::init_global_endpoint_mode;
+use crate::core::conf_mgr::conf_center::EndpointMode;
 use crate::core::conf_sync::conf_client::{ConfigClient, ConfigSyncClient};
 use crate::core::observe::access_log::init_access_logger;
 use crate::core::observe::init_logging;
@@ -44,33 +46,15 @@ impl EdgionGatewayCli {
             .as_deref()
             .ok_or_else(|| anyhow!("server_addr is required, please provide --server-addr or set in config file"))?;
 
-        // Get relist_on_server_change config (default: false)
-        let relist_on_server_change = config.gateway.relist_on_server_change.unwrap_or(false);
-
-        let sync_client = ConfigSyncClient::with_options(
-            server_addr,
-            "edgion-gateway".to_string(),
-            Duration::from_secs(10),
-            relist_on_server_change,
-        )
-        .await
-        .map_err(|e| anyhow!("Failed to create ConfigSyncClient: {}", e))?;
-
-        if relist_on_server_change {
-            tracing::info!(
-                component = "config_sync",
-                "relist_on_server_change is enabled, will relist when server instance changes"
-            );
-        }
+        let sync_client = ConfigSyncClient::new(server_addr, "edgion-gateway".to_string(), Duration::from_secs(10))
+            .await
+            .map_err(|e| anyhow!("Failed to create ConfigSyncClient: {}", e))?;
 
         Ok(sync_client)
     }
 
     /// Start auxiliary services
     async fn start_auxiliary_services(config_client: Arc<ConfigClient>) {
-        // Spawn config printer
-        Self::spawn_config_printer(config_client.clone());
-
         // Start backend cleaner
         let cleaner = BackendCleaner::new();
         cleaner.start();
@@ -132,17 +116,6 @@ impl EdgionGatewayCli {
         }
     }
 
-    /// Spawn config printer task
-    fn spawn_config_printer(config_client: Arc<ConfigClient>) {
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(120));
-            loop {
-                interval.tick().await;
-                config_client.print_config();
-            }
-        });
-    }
-
     pub fn run(&self) -> Result<()> {
         // Create a Tokio runtime for async operations
         let runtime = tokio::runtime::Runtime::new()?;
@@ -189,9 +162,40 @@ impl EdgionGatewayCli {
         init_global_config_client(config_client.clone())
             .map_err(|e| anyhow!("Failed to initialize global config client: {}", e))?;
 
-        // 5. Start watching all resources
-        runtime.block_on(sync_client.start_watch_all())?;
-        tracing::info!("Started watching all resources");
+        // 4.1. Get server info from Controller (includes EndpointMode and supported kinds)
+        let server_info = runtime
+            .block_on(sync_client.get_server_info())
+            .map_err(|e| anyhow!("Failed to get server info from Controller: {}", e))?;
+
+        // 4.2. Parse and initialize global endpoint mode from Controller
+        let endpoint_mode = match server_info.endpoint_mode.as_str() {
+            "EndpointSlice" => EndpointMode::EndpointSlice,
+            "Endpoint" => EndpointMode::Endpoint,
+            _ => {
+                tracing::warn!(
+                    component = "startup",
+                    endpoint_mode = %server_info.endpoint_mode,
+                    "Unknown endpoint mode from Controller, defaulting to EndpointSlice"
+                );
+                EndpointMode::EndpointSlice
+            }
+        };
+        init_global_endpoint_mode(endpoint_mode);
+        tracing::info!(
+            component = "startup",
+            endpoint_mode = ?endpoint_mode,
+            server_id = %server_info.server_id,
+            "Global endpoint mode initialized from Controller"
+        );
+
+        // 5. Start watching resources based on Controller's supported kinds
+        runtime
+            .block_on(sync_client.start_watch_kinds(&server_info.supported_kinds))
+            .map_err(|e| anyhow!("Failed to start watching resources: {}", e))?;
+        tracing::info!(
+            supported_kinds = ?server_info.supported_kinds,
+            "Started watching resources from Controller"
+        );
 
         // 6. Start auxiliary services
         runtime.block_on(Self::start_auxiliary_services(config_client.clone()));

@@ -34,6 +34,7 @@ impl HttpRedirectTestSuite {
                     let client = reqwest::Client::builder()
                         .redirect(Policy::none())
                         .danger_accept_invalid_certs(true)
+                        .no_proxy()
                         .build()
                         .unwrap();
 
@@ -90,6 +91,7 @@ impl HttpRedirectTestSuite {
                     let client = reqwest::Client::builder()
                         .redirect(Policy::none())
                         .danger_accept_invalid_certs(true)
+                        .no_proxy()
                         .build()
                         .unwrap();
 
@@ -142,6 +144,7 @@ impl HttpRedirectTestSuite {
                     let client = reqwest::Client::builder()
                         .redirect(Policy::none())
                         .danger_accept_invalid_certs(true)
+                        .no_proxy()
                         .build()
                         .unwrap();
 
@@ -194,6 +197,7 @@ impl HttpRedirectTestSuite {
                     let client = reqwest::Client::builder()
                         .redirect(Policy::none())
                         .danger_accept_invalid_certs(true)
+                        .no_proxy()
                         .build()
                         .unwrap();
 

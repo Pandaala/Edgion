@@ -20,9 +20,6 @@ where
     // conf_client identification
     pub(crate) client_id: Arc<String>,
     pub(crate) client_name: Arc<String>,
-
-    // Trigger relist when server instance changes (detected via server_id)
-    pub(crate) relist_on_server_change: bool,
 }
 
 impl<T: kube::Resource> Clone for ClientCache<T> {
@@ -32,23 +29,17 @@ impl<T: kube::Resource> Clone for ClientCache<T> {
             grpc_client: self.grpc_client.clone(),
             client_id: self.client_id.clone(),
             client_name: self.client_name.clone(),
-            relist_on_server_change: self.relist_on_server_change,
         }
     }
 }
 
 impl<T: ResourceMeta + Resource> ClientCache<T> {
     pub fn new(client_id: String, client_name: String) -> Self {
-        Self::with_options(client_id, client_name, false)
-    }
-
-    pub fn with_options(client_id: String, client_name: String, relist_on_server_change: bool) -> Self {
         Self {
             cache_data: Arc::new(RwLock::new(CacheData::new())),
             grpc_client: Arc::new(AsyncRwLock::new(None)),
             client_id: Arc::new(client_id),
             client_name: Arc::new(client_name),
-            relist_on_server_change,
         }
     }
 
@@ -73,30 +64,30 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         cache.set_conf_processor(processor, self.cache_data.clone());
     }
 
-    /// Get current resource version
-    pub fn get_resource_version(&self) -> u64 {
+    /// Get current sync version
+    pub fn get_sync_version(&self) -> u64 {
         let cache = self.cache_data.read().unwrap();
-        cache.resource_version()
+        cache.sync_version()
     }
 
-    /// Set current resource version
-    pub fn set_resource_version(&self, version: u64) {
+    /// Set current sync version
+    pub fn set_sync_version(&self, version: u64) {
         let mut cache = self.cache_data.write().unwrap();
-        cache.set_resource_version(version);
+        cache.set_sync_version(version);
     }
 
     /// Reset cache with a complete set of resources
     /// This clears existing cache and rebuilds it with the provided resources
     /// Uses resource.key_name() (namespace/name) as the key for each resource
-    pub fn reset(&self, resources: Vec<T>, resource_version: u64)
+    pub fn reset(&self, resources: Vec<T>, sync_version: u64)
     where
         T: ResourceMeta,
     {
         let mut cache = self.cache_data.write().unwrap();
-        cache.reset(resources, resource_version);
+        cache.reset(resources, sync_version);
     }
 
-    /// List all data - returns all resources in the cache with resource version
+    /// List all data - returns all resources in the cache with sync version
     pub fn list(&self) -> ListData<T>
     where
         T: Clone,
@@ -111,8 +102,8 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
     {
         let cache = self.cache_data.read().unwrap();
         let data = cache.values().cloned().collect();
-        let resource_version = cache.resource_version();
-        ListData::new(data, resource_version)
+        let sync_version = cache.sync_version();
+        ListData::new(data, sync_version)
     }
 
     /// Get a resource by key

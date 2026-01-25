@@ -166,6 +166,7 @@ impl TimeoutTestSuite {
                     // Create 1s timeout HTTP client，simulate client disconnect
                     let short_timeout_client = reqwest::Client::builder()
                         .timeout(std::time::Duration::from_secs(1))
+                        .no_proxy()
                         .build()
                         .expect("Failed to create short timeout client");
 
@@ -235,6 +236,7 @@ impl TimeoutTestSuite {
                     // Create alonger timeout HTTP client（5s），simulate long wait client that won't timeout first
                     let long_timeout_client = reqwest::Client::builder()
                         .timeout(std::time::Duration::from_secs(5))
+                        .no_proxy()
                         .build()
                         .expect("Failed to create long timeout client");
 

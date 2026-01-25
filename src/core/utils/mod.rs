@@ -8,11 +8,11 @@ pub use net::*;
 pub mod duration;
 pub use duration::parse_duration;
 
-pub mod global_state;
-pub use global_state::{detect_k8s_mode, is_k8s_mode, set_k8s_mode};
-
 pub mod real_ip_extractor;
 pub use real_ip_extractor::{extract_ip_string, RealIpExtractor};
+
+pub mod metadata_filter;
+pub use metadata_filter::clean_metadata;
 
 /// Get the number of available CPU cores on the system
 ///

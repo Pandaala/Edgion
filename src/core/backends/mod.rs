@@ -14,6 +14,9 @@ pub use endpoint_slice::{
 };
 pub use services::{create_service_handler, get_global_service_store, ServiceStore};
 
+use std::sync::OnceLock;
+
+use crate::core::conf_mgr::conf_center::EndpointMode;
 use crate::core::gateway::end_response_503;
 use crate::core::utils::net::is_localhost;
 use crate::types::edgion_status::EdgionStatus;
@@ -24,6 +27,64 @@ use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 use std::sync::Arc;
+
+/// Global endpoint mode - initialized once at startup, zero-cost read access.
+static GLOBAL_ENDPOINT_MODE: OnceLock<EndpointMode> = OnceLock::new();
+
+/// Initialize global endpoint mode (called once at startup).
+///
+/// Uses get_or_init to avoid panics on restart and logs mismatch if detected.
+pub fn init_global_endpoint_mode(mode: EndpointMode) {
+    let existing = GLOBAL_ENDPOINT_MODE.get_or_init(|| {
+        tracing::info!(
+            component = "backends",
+            mode = ?mode,
+            "Global endpoint mode initialized"
+        );
+        mode
+    });
+
+    if *existing != mode {
+        tracing::warn!(
+            component = "backends",
+            existing_mode = ?existing,
+            new_mode = ?mode,
+            "Endpoint mode mismatch on restart - using existing mode"
+        );
+    }
+}
+
+/// Get global endpoint mode (zero-cost after initialization).
+#[inline]
+pub fn get_global_endpoint_mode() -> EndpointMode {
+    *GLOBAL_ENDPOINT_MODE
+        .get()
+        .expect("GLOBAL_ENDPOINT_MODE not initialized - call init_global_endpoint_mode first")
+}
+
+/// Try to get global endpoint mode without panicking.
+///
+/// Returns `None` if the endpoint mode has not been initialized yet.
+/// Useful for code that needs to check endpoint mode but may run before initialization.
+#[inline]
+pub fn try_get_global_endpoint_mode() -> Option<EndpointMode> {
+    GLOBAL_ENDPOINT_MODE.get().copied()
+}
+
+/// Check if using EndpointSlice mode.
+#[inline]
+pub fn is_endpoint_slice_mode() -> bool {
+    matches!(get_global_endpoint_mode(), EndpointMode::EndpointSlice)
+}
+
+/// Select backend using round-robin based on endpoint mode.
+pub fn select_roundrobin_backend(service_key: &str) -> Option<pingora_load_balancing::Backend> {
+    match get_global_endpoint_mode() {
+        EndpointMode::EndpointSlice => get_roundrobin_store().select_peer(service_key, b"", 256),
+        EndpointMode::Endpoint => get_endpoint_roundrobin_store().select_peer(service_key, b"", 256),
+        EndpointMode::Auto => unreachable!("EndpointMode::Auto should be resolved at startup"),
+    }
+}
 
 /// EdgionService defines the types of backend services
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +198,101 @@ fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Ve
     }
 }
 
+/// Select backend based on endpoint mode and LB policy.
+fn select_backend_by_policy(
+    service_key: &str,
+    lb_policy: &Option<ParsedLBPolicy>,
+    session: &Session,
+) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
+    match get_global_endpoint_mode() {
+        EndpointMode::EndpointSlice => select_from_endpoint_slice(service_key, lb_policy, session),
+        EndpointMode::Endpoint => select_from_endpoints(service_key, lb_policy, session),
+        EndpointMode::Auto => unreachable!("EndpointMode::Auto should be resolved at startup"),
+    }
+}
+
+fn select_from_endpoint_slice(
+    service_key: &str,
+    lb_policy: &Option<ParsedLBPolicy>,
+    session: &Session,
+) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
+    match lb_policy {
+        None => {
+            let ep_store = get_roundrobin_store();
+            ep_store
+                .select_peer(service_key, b"", 256)
+                .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault)
+        }
+        Some(ParsedLBPolicy::ConsistentHash(_)) => {
+            let hash_key = extract_hash_key(session, lb_policy);
+            if hash_key.is_empty() {
+                let ep_store = get_roundrobin_store();
+                ep_store
+                    .select_peer(service_key, b"", 256)
+                    .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin)
+            } else {
+                let ep_store = get_consistent_store();
+                ep_store
+                    .select_peer(service_key, &hash_key, 256)
+                    .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByConsistent)
+            }
+        }
+        Some(ParsedLBPolicy::LeastConn) => {
+            let ep_store = get_leastconn_store();
+            ep_store
+                .select_peer(service_key, b"", 256)
+                .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByLeastConn)
+        }
+        Some(ParsedLBPolicy::Ewma) => {
+            let ep_store = get_ewma_store();
+            ep_store
+                .select_peer(service_key, b"", 256)
+                .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByEwma)
+        }
+    }
+}
+
+fn select_from_endpoints(
+    service_key: &str,
+    lb_policy: &Option<ParsedLBPolicy>,
+    session: &Session,
+) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
+    match lb_policy {
+        None => {
+            let ep_store = get_endpoint_roundrobin_store();
+            ep_store
+                .select_peer(service_key, b"", 256)
+                .ok_or(EdgionStatus::BackendEndpointNotFoundByRoundRobinDefault)
+        }
+        Some(ParsedLBPolicy::ConsistentHash(_)) => {
+            let hash_key = extract_hash_key(session, lb_policy);
+            if hash_key.is_empty() {
+                let ep_store = get_endpoint_roundrobin_store();
+                ep_store
+                    .select_peer(service_key, b"", 256)
+                    .ok_or(EdgionStatus::BackendEndpointNotFoundByRoundRobin)
+            } else {
+                let ep_store = get_endpoint_consistent_store();
+                ep_store
+                    .select_peer(service_key, &hash_key, 256)
+                    .ok_or(EdgionStatus::BackendEndpointNotFoundByConsistent)
+            }
+        }
+        Some(ParsedLBPolicy::LeastConn) => {
+            let ep_store = get_endpoint_leastconn_store();
+            ep_store
+                .select_peer(service_key, b"", 256)
+                .ok_or(EdgionStatus::BackendEndpointNotFoundByLeastConn)
+        }
+        Some(ParsedLBPolicy::Ewma) => {
+            let ep_store = get_endpoint_ewma_store();
+            ep_store
+                .select_peer(service_key, b"", 256)
+                .ok_or(EdgionStatus::BackendEndpointNotFoundByEwma)
+        }
+    }
+}
+
 /// Internal: try to get peer, returns Result with EdgionStatus on error
 fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -> Result<Box<HttpPeer>, EdgionStatus> {
     // Extract needed fields from backend_ref to avoid clone and borrow checker issues
@@ -181,44 +337,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
 
     match service_type {
         EdgionService::Service => {
-            // Select backend based on pre-parsed LB policy from extension_info
-            // None branch first for better branch prediction (most common case)
-            let backend = match lb_policy {
-                None => {
-                    // Default: RoundRobin (most common case)
-                    let ep_store = get_roundrobin_store();
-                    ep_store
-                        .select_peer(&service_key, b"", 256)
-                        .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault)?
-                }
-                Some(ParsedLBPolicy::ConsistentHash(_)) => {
-                    let hash_key = extract_hash_key(session, lb_policy);
-                    // Fallback to RoundRobin when hash_key is empty
-                    if hash_key.is_empty() {
-                        let ep_store = get_roundrobin_store();
-                        ep_store
-                            .select_peer(&service_key, b"", 256)
-                            .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin)?
-                    } else {
-                        let ep_store = get_consistent_store();
-                        ep_store
-                            .select_peer(&service_key, &hash_key, 256)
-                            .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByConsistent)?
-                    }
-                }
-                Some(ParsedLBPolicy::LeastConn) => {
-                    let ep_store = get_leastconn_store();
-                    ep_store
-                        .select_peer(&service_key, b"", 256)
-                        .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByLeastConn)?
-                }
-                Some(ParsedLBPolicy::Ewma) => {
-                    let ep_store = get_ewma_store();
-                    ep_store
-                        .select_peer(&service_key, b"", 256)
-                        .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByEwma)?
-                }
-            };
+            let backend = select_backend_by_policy(&service_key, lb_policy, session)?;
 
             let mut addr = backend.addr;
             if let Some(port) = br_port {

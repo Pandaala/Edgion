@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
 
+use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::routes::grpc_routes::{GrpcMatchEngine, GrpcRouteRuleUnit};
 use crate::types::err::EdError;
@@ -42,14 +43,19 @@ impl GrpcRouteRules {
     }
 
     /// Match a gRPC route
+    ///
+    /// # Parameters
+    /// - `session`: The HTTP session
+    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    /// - `hostname`: Request hostname for route-level hostname matching
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-        listener_name: &str,
+        gateway_info: &GatewayInfo,
         hostname: &str,
     ) -> Result<Arc<GrpcRouteRuleUnit>, EdError> {
         if let Some(ref engine) = self.match_engine {
-            engine.match_route(session, listener_name, hostname)
+            engine.match_route(session, gateway_info, hostname)
         } else {
             Err(EdError::RouteNotFound())
         }
@@ -114,14 +120,19 @@ impl DomainGrpcRouteRules {
     }
 
     /// Match a route based on service/method
+    ///
+    /// # Parameters
+    /// - `session`: The HTTP session
+    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    /// - `hostname`: Request hostname for route-level hostname matching
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-        listener_name: &str,
+        gateway_info: &GatewayInfo,
         hostname: &str,
     ) -> Result<Arc<GrpcRouteRuleUnit>, EdError> {
         let grpc_routes = self.grpc_routes.load();
-        grpc_routes.match_route(session, listener_name, hostname)
+        grpc_routes.match_route(session, gateway_info, hostname)
     }
 }
 

@@ -1,0 +1,17 @@
+# TLS Cipher 测试套件 Gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cipher-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # Legacy cipher 监听器 - TLS 1.2 + 弱算法
+    - name: https-legacy
+      protocol: HTTPS
+      port: 31195
+    # Modern cipher 监听器 - TLS 1.2 + 现代算法
+    - name: https-modern
+      protocol: HTTPS
+      port: 31196

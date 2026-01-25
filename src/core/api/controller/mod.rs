@@ -1,10 +1,10 @@
 mod cluster_handlers;
 mod common;
+mod configserver_handlers;
 mod namespaced_handlers;
 mod types;
 
-use crate::core::conf_mgr::{load_all_resources_from_store, ResourceMgrAPI, SchemaValidator};
-use crate::core::conf_sync::ConfigServer;
+use crate::core::conf_mgr::{ConfMgr, SchemaValidator};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -38,52 +38,58 @@ impl<T> ApiResponse<T> {
 
 // ============= Legacy Endpoints =============
 
-/// Health check endpoint
+/// Health check endpoint - always returns OK if server is up
 async fn health_check() -> Json<ApiResponse<String>> {
     Json(ApiResponse::success("OK".to_string()))
 }
 
-/// Reload all resources from storage
+/// Readiness check endpoint - returns OK only when ConfigServer is ready
+async fn readiness_check(State(state): State<Arc<AdminState>>) -> Result<Json<ApiResponse<String>>, StatusCode> {
+    if state.is_ready() {
+        Ok(Json(ApiResponse::success("Ready".to_string())))
+    } else {
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+
+/// Reload all resources from storage (FileSystem mode only)
+///
+/// TODO: Reload functionality is currently disabled.
+/// The FileSystemWatcher automatically detects file changes, so manual reload
+/// is not necessary in most cases. If full reload is needed in the future,
+/// the implementation should:
+/// 1. Only run init_phase (not runtime_phase)
+/// 2. Not interfere with the running watcher
+///
+/// For now, this endpoint returns a message indicating reload is not needed.
 async fn reload_all_resources(
-    State(state): State<Arc<AdminState>>,
+    State(_state): State<Arc<AdminState>>,
 ) -> Result<Json<types::ApiResponse<String>>, StatusCode> {
-    let resource_mgr = state.resource_mgr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let store = resource_mgr
-        .get_backend(None)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    load_all_resources_from_store(store, state.config_server.clone())
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     tracing::info!(
-        component = "unified_api",
-        event = "resources_reloaded",
-        "All resources reloaded from storage"
+        component = "admin_api",
+        event = "reload_skipped",
+        "Reload requested but not needed - FileSystemWatcher handles changes automatically"
     );
 
     Ok(Json(types::ApiResponse::success(
-        "Resources reloaded successfully".to_string(),
+        "Reload not needed - file changes are detected automatically".to_string(),
     )))
 }
 
 // ============= Router Setup =============
 
 /// Create the admin API router with unified K8s-style endpoints
-pub fn create_admin_router(
-    config_server: Arc<ConfigServer>,
-    resource_mgr: Option<Arc<ResourceMgrAPI>>,
-    schema_validator: Arc<SchemaValidator>,
-) -> Router {
+pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaValidator>) -> Router {
     let admin_state = Arc::new(AdminState {
-        config_server,
-        resource_mgr,
+        conf_mgr,
         schema_validator,
     });
 
     Router::new()
-        // Health check
+        // Health check (liveness)
         .route("/health", get(health_check))
+        // Readiness check (ready to serve traffic - ConfigServer ready)
+        .route("/ready", get(readiness_check))
         // Cross-namespace query - List all resources of a kind
         .route(
             "/api/v1/namespaced/{kind}",
@@ -121,19 +127,19 @@ pub fn create_admin_router(
         )
         // Special operations
         .route("/api/v1/reload", post(reload_all_resources))
+        // ConfigServer endpoints (for edgion-ctl --target server)
+        .route("/configserver/{kind}/list", get(configserver_handlers::list_resources))
+        .route("/configserver/{kind}", get(configserver_handlers::get_resource))
         .with_state(admin_state)
 }
 
-/// Serve the admin API on the specified port
+/// Serve the admin API on the specified address
 pub async fn serve(
-    config_server: Arc<ConfigServer>,
-    resource_mgr: Option<Arc<ResourceMgrAPI>>,
+    conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
-    port: u16,
+    addr: std::net::SocketAddr,
 ) -> anyhow::Result<()> {
-    let app = create_admin_router(config_server, resource_mgr, schema_validator);
-    let addr_str = format!("0.0.0.0:{}", port);
-    let addr: std::net::SocketAddr = addr_str.parse()?;
+    let app = create_admin_router(conf_mgr, schema_validator);
 
     tracing::info!(
         component = "unified_api",
@@ -145,5 +151,29 @@ pub async fn serve(
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 
+    Ok(())
+}
+
+/// Serve the admin API with graceful shutdown support
+pub async fn serve_with_shutdown(
+    conf_mgr: Arc<ConfMgr>,
+    schema_validator: Arc<SchemaValidator>,
+    addr: std::net::SocketAddr,
+    shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let app = create_admin_router(conf_mgr, schema_validator);
+
+    tracing::info!(
+        component = "admin_api",
+        addr = %addr,
+        "Starting Admin API server with graceful shutdown support"
+    );
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
+
+    tracing::info!(component = "admin_api", "Admin API server stopped");
     Ok(())
 }

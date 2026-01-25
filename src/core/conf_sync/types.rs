@@ -6,21 +6,21 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone)]
 pub struct ListData<T> {
     pub data: Vec<T>,
-    pub resource_version: u64,
+    pub sync_version: u64,
 }
 
 impl<T> ListData<T> {
-    pub fn new(data: Vec<T>, resource_version: u64) -> Self {
-        Self { data, resource_version }
+    pub fn new(data: Vec<T>, sync_version: u64) -> Self {
+        Self { data, sync_version }
     }
 }
 
 impl<T: serde::Serialize> ListData<T> {
-    /// Serialize the list data to JSON and return (json, resource_version)
+    /// Serialize the list data to JSON and return (json, sync_version)
     /// Helper to reduce repetitive code in list() methods
     pub fn to_json(&self, type_name: &str) -> Result<(String, u64), String> {
         serde_json::to_string(&self.data)
-            .map(|json| (json, self.resource_version))
+            .map(|json| (json, self.sync_version))
             .map_err(|e| format!("Failed to serialize {} data: {}", type_name, e))
     }
 }
@@ -39,7 +39,7 @@ pub enum EventType {
 pub struct WatcherEvent<T> {
     #[serde(rename = "type")]
     pub event_type: EventType,
-    pub resource_version: u64,
+    pub sync_version: u64,
     pub data: T,
 }
 
@@ -47,23 +47,23 @@ pub struct WatcherEvent<T> {
 #[derive(Debug, Clone)]
 pub struct WatchResponse<T> {
     pub events: Vec<WatcherEvent<T>>,
-    pub resource_version: u64,
+    pub sync_version: u64,
     pub err: Option<String>,
 }
 
 impl<T> WatchResponse<T> {
-    pub fn new(events: Vec<WatcherEvent<T>>, resource_version: u64) -> Self {
+    pub fn new(events: Vec<WatcherEvent<T>>, sync_version: u64) -> Self {
         Self {
             events,
-            resource_version,
+            sync_version,
             err: None,
         }
     }
 
-    pub fn from_error(error: String, resource_version: u64) -> Self {
+    pub fn from_error(error: String, sync_version: u64) -> Self {
         Self {
             events: Vec::new(),
-            resource_version,
+            sync_version,
             err: Some(error),
         }
     }

@@ -1,0 +1,17 @@
+# GRPCRoute（应拒绝）
+# Gateway 配置 allowedRoutes.kinds 不包含 GRPCRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: kinds-grpc-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: allowed-routes-kinds-gateway
+      namespace: edgion-test
+  hostnames:
+    - "kinds-grpc.example.com"
+  rules:
+    - backendRefs:
+        - name: test-grpc
+          port: 30021

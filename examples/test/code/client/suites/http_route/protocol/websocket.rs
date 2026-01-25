@@ -37,7 +37,7 @@ impl WebSocketTestSuite {
                 match connect_async(request).await {
                     Ok((mut ws_stream, _)) => {
                         // Send message
-                        if let Err(e) = ws_stream.send(Message::Text(test_message.to_string())).await {
+                        if let Err(e) = ws_stream.send(Message::Text(test_message.to_string().into())).await {
                             return TestResult::failed(start.elapsed(), format!("Send error: {}", e));
                         }
 

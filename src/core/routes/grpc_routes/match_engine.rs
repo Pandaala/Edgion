@@ -1,3 +1,4 @@
+use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::routes::grpc_routes::GrpcRouteRuleUnit;
 use crate::types::err::EdError;
 use pingora_proxy::Session;
@@ -72,10 +73,15 @@ impl GrpcMatchEngine {
     }
 
     /// Match gRPC route based on service/method with optimized lookup
+    ///
+    /// # Parameters
+    /// - `session`: The HTTP session
+    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    /// - `hostname`: Request hostname for route-level hostname matching
     pub fn match_route(
         &self,
         session: &Session,
-        listener_name: &str,
+        gateway_info: &GatewayInfo,
         hostname: &str,
     ) -> Result<Arc<GrpcRouteRuleUnit>, EdError> {
         let path = session.req_header().uri.path();
@@ -87,7 +93,7 @@ impl GrpcMatchEngine {
         // Iterate through all routes with matching service/method and return first one that passes deep_match
         if let Some(routes) = self.exact_routes.get(&(service.clone(), method.clone())) {
             for route_unit in routes {
-                if route_unit.deep_match(session, listener_name, hostname)? {
+                if route_unit.deep_match(session, gateway_info, hostname)? {
                     return Ok(route_unit.clone());
                 }
             }
@@ -97,7 +103,7 @@ impl GrpcMatchEngine {
         // Iterate through all routes with matching service and return first one that passes deep_match
         if let Some(routes) = self.service_routes.get(&service) {
             for route_unit in routes {
-                if route_unit.deep_match(session, listener_name, hostname)? {
+                if route_unit.deep_match(session, gateway_info, hostname)? {
                     return Ok(route_unit.clone());
                 }
             }
@@ -105,7 +111,7 @@ impl GrpcMatchEngine {
 
         // Priority 3: Try catch-all match
         if let Some(ref route_unit) = self.catch_all_route {
-            if route_unit.deep_match(session, listener_name, hostname)? {
+            if route_unit.deep_match(session, gateway_info, hostname)? {
                 tracing::debug!(
                     service = %service,
                     method = %method,

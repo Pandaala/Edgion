@@ -53,39 +53,6 @@ grpc_listen = "0.0.0.0:50051"
 # 用于管理和健康检查端点，同时提供 Web Dashboard
 admin_listen = "0.0.0.0:5800"
 
-# Gateway class name that this operator instance will handle
-# 指定此 operator 实例将处理的 gateway class 名称
-gateway_class = "public-gateway"
-
-# ============================================================================
-# Namespace Watch Configuration (K8s Mode Only)
-# ============================================================================
-# Configure which namespaces the controller should watch for resources.
-# This setting only takes effect in Kubernetes mode (k8s_mode = true).
-#
-# Watch modes:
-#   1. All namespaces (default): watch_namespaces = []
-#      Controller watches all namespaces in the cluster.
-#
-#   2. Single namespace: watch_namespaces = ["default"]
-#      Controller only watches resources in the specified namespace.
-#      Useful for namespace-scoped deployments.
-#
-#   3. Multiple namespaces: watch_namespaces = ["ns1", "ns2", "ns3"]
-#      Controller watches resources in the specified namespaces only.
-#      Useful for multi-tenant deployments.
-#
-# Note: Cluster-scoped resources (GatewayClass, EdgionGatewayConfig) are
-# always watched regardless of this setting.
-# ============================================================================
-watch_namespaces = []
-
-# Optional label selector for filtering resources
-# Only resources matching this selector will be watched.
-# Format: "key=value" or "key1=value1,key2=value2"
-# Example: label_selector = "app.kubernetes.io/managed-by=edgion"
-# label_selector = ""
-
 [logging]
 # 日志文件存储目录
 log_dir = "logs"
@@ -111,24 +78,43 @@ json_format = false
 # 增大此值可以提高高并发场景下的日志性能
 buffer_size = 10000
 
-[loader]
-# 配置加载器类型: localpath 或 etcd
-# - localpath: 从本地文件系统加载配置（开发和测试环境推荐）
-# - etcd:      从 etcd 集群加载配置（生产环境推荐）
-type = "localpath"
-
-# 文件系统加载器的根目录 (仅当 type = "localpath" 时生效)
-# 该目录应包含所有 Gateway API 资源的 YAML 文件
-# 开发测试推荐使用 examples/conf，生产环境使用 config/examples
-dir = "examples/conf"
-
-# Etcd 集群端点列表 (仅当 type = "etcd" 时生效)
-# 示例: etcd_endpoints = ["http://127.0.0.1:2379", "http://127.0.0.1:2380"]
-# etcd_endpoints = ["http://127.0.0.1:2379"]
-
-# Etcd 键前缀 (仅当 type = "etcd" 时生效)
-# 所有配置将存储在该前缀下
-# etcd_prefix = "/edgion/config"
+# ============================================================================
+# Configuration Center (conf_center)
+# ============================================================================
+# Determines which backend to use for configuration management:
+#   - file_system: Local YAML files with file watching (development/testing)
+#   - kubernetes:  K8s API with resource watching (production)
+#
+# FileSystem mode example:
+# [conf_center]
+# type = "file_system"
+# conf_dir = "examples/test/conf"  # Directory containing YAML files
+#
+# Kubernetes mode example (production):
+# [conf_center]
+# type = "kubernetes"
+# gateway_class = "edgion"              # Required: GatewayClass name to manage
+# watch_namespaces = []                 # Empty = all namespaces, or ["ns1", "ns2"]
+# label_selector = ""                   # Optional: filter resources by label
+#
+# [conf_center.leader_election]
+# lease_name = "edgion-controller-leader"    # Lease resource name
+# lease_namespace = "edgion-system"          # Namespace for Lease (default: from POD_NAMESPACE env)
+# lease_duration_secs = 15                   # Lease validity period
+# renew_period_secs = 10                     # How often leader renews lease
+# retry_period_secs = 2                      # How often non-leaders retry
+#
+# [conf_center.metadata_filter]
+# blocked_annotations = [                    # Annotations to remove from resources
+#   "kubectl.kubernetes.io/last-applied-configuration",
+#   "meta.helm.sh/release-name",
+#   "meta.helm.sh/release-namespace"
+# ]
+# remove_managed_fields = true               # Remove managedFields to save memory
+# ============================================================================
+[conf_center]
+type = "file_system"
+conf_dir = "examples/test/conf"
 
 [debug]
 # 是否启用调试模式

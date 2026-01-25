@@ -70,13 +70,13 @@ if [ -f "$CONF_DIR/Secret_edgion-test_edge-tls.yaml" ]; then
 fi
 
 # Generate single certificate with multiple SANs
-log_info "Generate多域名certificate (test.example.com, grpc.example.com, tcp.example.com, match-test.example.com)..."
+log_info "Generate多域名certificate (test.example.com, grpc.example.com, tcp.example.com, match-test.example.com, gateway-tls.example.com)..."
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout "$TEMP_DIR/edge-tls.key" \
   -out "$TEMP_DIR/edge-tls.crt" \
   -days 365 \
   -subj "/CN=test.example.com" \
-  -addext "subjectAltName=DNS:test.example.com,DNS:grpc.example.com,DNS:tcp.example.com,DNS:match-test.example.com,DNS:*.wildcard.example.com,DNS:section-test.example.com" \
+  -addext "subjectAltName=DNS:test.example.com,DNS:grpc.example.com,DNS:tcp.example.com,DNS:match-test.example.com,DNS:*.wildcard.example.com,DNS:section-test.example.com,DNS:gateway-tls.test.com" \
   2>/dev/null
 
 if [ $? -eq 0 ]; then
@@ -161,3 +161,4 @@ log_info "  - tcp.example.com (TCP)"
 log_info "  - match-test.example.com (Match Tests)"
 log_info "  - *.wildcard.example.com (Wildcard)"
 log_info "  - section-test.example.com (SectionName)"
+log_info "  - gateway-tls.test.com (Gateway TLS)"

@@ -134,7 +134,7 @@ impl_resource_meta!(YourResource, |resource| {
 #### 3.1 更新 ConfigServer
 
 ```rust
-// src/core/conf_sync/conf_server/config_server.rs
+// src/core/conf_sync/conf_server_old/config_server.rs
 
 pub struct ConfigServer {
     // ... 现有字段 ...

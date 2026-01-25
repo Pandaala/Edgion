@@ -1,0 +1,22 @@
+# 不同 namespace 的 HTTPRoute（应拒绝）
+# Route 在 edgion-default namespace，Gateway 在 edgion-test namespace
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: diff-namespace-route
+  namespace: edgion-default  # 与 Gateway 不同 namespace
+spec:
+  parentRefs:
+    - name: allowed-routes-same-gateway
+      namespace: edgion-test
+  hostnames:
+    - "diff-ns.example.com"
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

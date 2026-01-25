@@ -1,6 +1,9 @@
+use crate::core::gateway::gateway::route_match::check_gateway_listener_match;
+use crate::core::gateway::gateway::GatewayInfo;
+use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use crate::types::resources::common::ParentReference;
-use crate::types::{HTTPRouteMatch, HTTPRouteRule, MatchInfo};
+use crate::types::{HTTPRouteRule, MatchInfo};
 use pingora_proxy::Session;
 use regex::Regex;
 use std::collections::HashMap;
@@ -34,17 +37,21 @@ impl HttpRouteRuleUnit {
         }
     }
 
-    /// Perform deep match (headers, query params, method, sectionName)
+    /// Perform deep match (headers, query params, method, sectionName/Gateway)
     /// For use with regex routes or when called directly
-    pub fn deep_match(&self, session: &Session, listener_name: &str) -> Result<bool, EdError> {
+    ///
+    /// # Parameters
+    /// - `session`: The HTTP session
+    /// - `ctx`: Request context containing hostname and other request info
+    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    pub fn deep_match(
+        &self,
+        session: &Session,
+        ctx: &EdgionHttpContext,
+        gateway_info: &GatewayInfo,
+    ) -> Result<bool, EdError> {
         let req_header = session.req_header();
-        Self::deep_match_common(
-            &self.matched_info.m,
-            req_header,
-            &self.identifier(),
-            &self.parent_refs,
-            listener_name,
-        )
+        Self::deep_match_common(&self.matched_info, req_header, &self.parent_refs, ctx, gateway_info)
     }
 
     /// Get route identifier
@@ -164,27 +171,32 @@ impl HttpRouteRuleUnit {
         }
     }
 
-    /// Common deep match logic for checking method, headers, query parameters, and sectionName
+    /// Common deep match logic for checking method, headers, query parameters, and Gateway/sectionName
+    ///
     /// This function is shared between HttpRouteRuleUnit and HttpRouteRuleRegexUnit
     pub(crate) fn deep_match_common(
-        match_item: &HTTPRouteMatch,
+        matched_info: &MatchInfo,
         req_header: &pingora_http::RequestHeader,
-        identifier: &str,
         parent_refs: &Option<Vec<ParentReference>>,
-        listener_name: &str,
+        ctx: &EdgionHttpContext,
+        gateway_info: &GatewayInfo,
     ) -> Result<bool, EdError> {
         let method = req_header.method.as_str();
+        let match_item = &matched_info.m;
 
         // Parse query parameters from URI (if present)
         let query_params = req_header.uri.query().map(Self::parse_query_string).unwrap_or_default();
 
-        // 0. Check SectionName (if parent_refs specify section_name)
+        // 0. Check Gateway/Listener constraints (sectionName, hostname, AllowedRoutes)
         if let Some(ref parent_refs) = parent_refs {
-            let matches = parent_refs
-                .iter()
-                .any(|pr| pr.section_name.as_ref().is_none_or(|name| name == listener_name));
-
-            if !matches {
+            if !check_gateway_listener_match(
+                parent_refs,
+                gateway_info,
+                &ctx.request_info.hostname,
+                &matched_info.rns,
+                "HTTPRoute",
+                &matched_info.rn,
+            ) {
                 return Ok(false);
             }
         }
@@ -195,7 +207,8 @@ impl HttpRouteRuleUnit {
                 tracing::trace!(
                     method = %method,
                     expected = %match_method,
-                    route = %identifier,
+                    route_ns = %matched_info.rns,
+                    route_name = %matched_info.rn,
                     "HTTP method mismatch"
                 );
                 return Ok(false);
@@ -208,7 +221,8 @@ impl HttpRouteRuleUnit {
                 if !Self::match_header(req_header, header_match)? {
                     tracing::trace!(
                         header = %header_match.name,
-                        route = %identifier,
+                        route_ns = %matched_info.rns,
+                        route_name = %matched_info.rn,
                         "Header match failed"
                     );
                     return Ok(false);
@@ -222,7 +236,8 @@ impl HttpRouteRuleUnit {
                 if !Self::match_query_param(&query_params, query_param_match)? {
                     tracing::trace!(
                         param = %query_param_match.name,
-                        route = %identifier,
+                        route_ns = %matched_info.rns,
+                        route_name = %matched_info.rn,
                         "Query parameter match failed"
                     );
                     return Ok(false);
@@ -232,7 +247,8 @@ impl HttpRouteRuleUnit {
 
         // All conditions matched
         tracing::debug!(
-            route = %identifier,
+            route_ns = %matched_info.rns,
+            route_name = %matched_info.rn,
             "Deep match succeeded"
         );
         Ok(true)

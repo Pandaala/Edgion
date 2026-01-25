@@ -1,10 +1,12 @@
 use kube::{Resource, ResourceExt};
+use serde::Serialize;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
 use super::store::EventStore;
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
+use crate::core::conf_sync::conf_server::{WatchObj, WatchResponseSimple};
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::utils;
 use crate::types::ResourceMeta;
@@ -12,8 +14,6 @@ use crate::types::ResourceMeta;
 pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
     // wait for init complete
     ready: RwLock<bool>,
-
-    version_fix_mode: RwLock<bool>,
 
     // Event storage
     store: Arc<RwLock<EventStore<T>>>,
@@ -32,15 +32,10 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     {
         Self {
             ready: RwLock::new(false),
-            version_fix_mode: RwLock::new(false),
             store: Arc::new(RwLock::new(EventStore::new(capacity as usize))),
             watchers: RwLock::new(Vec::new()),
             notify: Arc::new(Notify::new()),
         }
-    }
-
-    pub fn enable_version_fix_mode(&self) {
-        *self.version_fix_mode.write().unwrap() = true;
     }
 
     /// Get a clone of the shared notify for watchers
@@ -55,6 +50,24 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
 
     pub fn is_ready(&self) -> bool {
         *self.ready.read().unwrap()
+    }
+
+    /// Set cache to not ready state
+    /// Used during relink to prevent serving stale data
+    pub fn set_not_ready(&self) {
+        *self.ready.write().unwrap() = false;
+    }
+
+    /// Clear all data from the cache
+    /// Used during relink to remove stale data
+    pub fn clear(&self)
+    where
+        T: Clone,
+    {
+        let mut store_guard = self.store.write().unwrap();
+        store_guard.clear();
+        // Notify watchers that data has changed (they will get error on next fetch)
+        self.notify.notify_waiters();
     }
 
     /// List all data - returns all resources in the cache with resource version
@@ -73,8 +86,19 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         T: Clone,
     {
         let store_guard = self.store.read().unwrap();
-        let (data, resource_version) = store_guard.snapshot_owned();
-        ListData::new(data, resource_version)
+        let (data, sync_version) = store_guard.snapshot_owned();
+        ListData::new(data, sync_version)
+    }
+
+    /// Get a single resource by key
+    /// Key format: "namespace/name" for namespaced resources, or just "name" for cluster-scoped
+    /// Used by Worker to get "previous state" from conf_server_old cache
+    pub fn get_by_key(&self, key: &str) -> Option<T>
+    where
+        T: Clone,
+    {
+        let store_guard = self.store.read().unwrap();
+        store_guard.get_by_key(key)
     }
 
     /// Start a watcher task that listens for notifications and sends data
@@ -92,7 +116,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             loop {
                 let result = {
                     let store_guard = store.read().unwrap();
-                    store_guard.get_events_from_resource_version(from_version)
+                    store_guard.get_events_from_sync_version(from_version)
                 };
 
                 match result {
@@ -228,7 +252,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     }
 
     /// Add event to the circular queue
-    fn push_event(&self, event_type: EventType, resource: T, resource_version: u64)
+    fn push_event(&self, event_type: EventType, resource: T, sync_version: u64)
     where
         T: Clone + Send + 'static,
     {
@@ -245,7 +269,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
                 handle.spawn(async move {
                     {
                         let mut store_guard = store.write().unwrap();
-                        store_guard.apply_event(event_type, resource, resource_version);
+                        store_guard.apply_event(event_type, resource, sync_version);
                     }
                     notify.notify_waiters();
                 });
@@ -253,7 +277,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             Err(_) => {
                 {
                     let mut store_guard = self.store.write().unwrap();
-                    store_guard.apply_event(event_type, resource, resource_version);
+                    store_guard.apply_event(event_type, resource, sync_version);
                 }
                 self.notify.notify_waiters();
             }
@@ -261,48 +285,84 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     }
 }
 
+/// Implementation of WatchObj trait for ServerCache<T>
+/// This allows using ServerCache with the new ConfigSyncServer
+impl<T> WatchObj for ServerCache<T>
+where
+    T: ResourceMeta + Resource + Clone + Send + Sync + Serialize + 'static,
+{
+    fn kind_name(&self) -> &'static str {
+        T::kind_name()
+    }
+
+    fn list_json(&self) -> Result<(String, u64), String> {
+        let list_data = self.list_owned();
+        serde_json::to_string(&list_data.data)
+            .map(|json| (json, list_data.sync_version))
+            .map_err(|e| format!("Failed to serialize {} data: {}", T::kind_name(), e))
+    }
+
+    fn watch_json(
+        &self,
+        client_id: String,
+        client_name: String,
+        from_version: u64,
+    ) -> mpsc::Receiver<WatchResponseSimple> {
+        let typed_rx = self.watch(client_id, client_name, from_version);
+
+        // Create a new channel for the simplified response
+        let (simple_tx, simple_rx) = mpsc::channel(100);
+
+        // Spawn a task to convert WatchResponse<T> to WatchResponseSimple
+        tokio::spawn(async move {
+            let mut typed_rx = typed_rx;
+            while let Some(response) = typed_rx.recv().await {
+                let simple_response = match response.err {
+                    Some(err) => WatchResponseSimple::from_error(err, response.sync_version),
+                    None => match serde_json::to_string(&response.events) {
+                        Ok(json) => WatchResponseSimple::new(json, response.sync_version),
+                        Err(e) => WatchResponseSimple::from_error(
+                            format!("Serialization error: {}", e),
+                            response.sync_version,
+                        ),
+                    },
+                };
+
+                if simple_tx.send(simple_response).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        simple_rx
+    }
+
+    fn is_ready(&self) -> bool {
+        *self.ready.read().unwrap()
+    }
+
+    fn set_ready(&self) {
+        *self.ready.write().unwrap() = true;
+    }
+
+    fn set_not_ready(&self) {
+        *self.ready.write().unwrap() = false;
+    }
+
+    fn clear(&self) {
+        let mut store_guard = self.store.write().unwrap();
+        store_guard.clear();
+        self.notify.notify_waiters();
+    }
+}
+
 impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispatch<T> for ServerCache<T> {
-    fn apply_change(&self, change: ResourceChange, mut resource: T)
+    fn apply_change(&self, change: ResourceChange, resource: T)
     where
         T: Resource + Send + 'static,
     {
-        let mut version = resource.get_version();
-
-        let last_version = {
-            let store_guard = self.store.read().unwrap();
-            store_guard.get_last_resource_version()
-        };
-
-        if *self.version_fix_mode.read().unwrap() && resource.get_version() <= last_version {
-            tracing::warn!(
-                component = "cache_server",
-                event = "apply_change",
-                change = ?change,
-                kind = std::any::type_name::<T>(),
-                name = ?resource.name_any(),
-                namespace = ?resource.namespace(),
-                old_version = resource.get_version(),
-                new_version = version,
-                "old or same version detected, forcing new version"
-            );
-            version = utils::next_resource_version();
-            resource.meta_mut().resource_version = Some(version.to_string());
-        }
-
-        if change != ResourceChange::InitAdd && resource.get_version() <= last_version {
-            tracing::error!(
-                component = "cache_server",
-                event = "apply_change",
-                change = ?change,
-                kind = std::any::type_name::<T>(),
-                name = ?resource.name_any(),
-                namespace = ?resource.namespace(),
-                old_version = resource.get_version(),
-                new_version = version,
-                "old or same version detected, should some error"
-            );
-            return;
-        }
+        // Generate sync_version independently, no longer dependent on resource's version
+        let sync_version = utils::next_resource_version();
 
         tracing::info!(
             component = "cache_server",
@@ -311,23 +371,40 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
             kind = std::any::type_name::<T>(),
             name = ?resource.name_any(),
             namespace = ?resource.namespace(),
-            version = resource.get_version(),
+            sync_version = sync_version,
             "apply change"
         );
 
         match change {
+            ResourceChange::InitStart => {
+                // Signal only: log initialization start
+                tracing::info!(
+                    component = "cache_server",
+                    kind = std::any::type_name::<T>(),
+                    "Cache initialization started"
+                );
+            }
             ResourceChange::InitAdd => {
                 let mut store_guard = self.store.write().unwrap();
-                store_guard.init_add(version, resource);
+                store_guard.init_add(sync_version, resource);
+            }
+            ResourceChange::InitDone => {
+                // Signal: initialization complete, mark cache as ready
+                self.set_ready();
+                tracing::info!(
+                    component = "cache_server",
+                    kind = std::any::type_name::<T>(),
+                    "Cache initialization done, marked as ready"
+                );
             }
             ResourceChange::EventAdd => {
-                self.push_event(EventType::Add, resource, version);
+                self.push_event(EventType::Add, resource, sync_version);
             }
             ResourceChange::EventUpdate => {
-                self.push_event(EventType::Update, resource, version);
+                self.push_event(EventType::Update, resource, sync_version);
             }
             ResourceChange::EventDelete => {
-                self.push_event(EventType::Delete, resource, version);
+                self.push_event(EventType::Delete, resource, sync_version);
             }
         }
     }
@@ -435,7 +512,8 @@ mod tests {
         let snapshot = cache.list_owned();
         assert_eq!(snapshot.data.len(), 1);
         assert_eq!(snapshot.data[0], resource);
-        assert_eq!(snapshot.resource_version, resource.version);
+        // sync_version is now independently generated, just check it's non-zero
+        assert!(snapshot.sync_version > 0);
     }
 
     #[tokio::test]
@@ -461,7 +539,7 @@ mod tests {
         };
 
         // Set cache as ready before applying changes
-        cache.set_ready();
+        CacheEventDispatch::set_ready(&cache);
 
         cache.apply_change(ResourceChange::EventAdd, original.clone());
         wait_for_async_store_update().await;
@@ -472,7 +550,8 @@ mod tests {
         let snapshot = cache.list_owned();
         assert_eq!(snapshot.data.len(), 1);
         assert_eq!(snapshot.data[0], updated);
-        assert_eq!(snapshot.resource_version, updated.version);
+        // sync_version is now independently generated, just check it's non-zero
+        assert!(snapshot.sync_version > 0);
     }
 
     #[tokio::test]
@@ -499,7 +578,7 @@ mod tests {
         };
 
         // Set cache as ready before applying changes
-        cache.set_ready();
+        CacheEventDispatch::set_ready(&cache);
 
         cache.apply_change(ResourceChange::EventAdd, resource.clone());
         wait_for_async_store_update().await;
@@ -509,6 +588,7 @@ mod tests {
 
         let snapshot = cache.list_owned();
         assert!(snapshot.data.is_empty());
-        assert_eq!(snapshot.resource_version, resource_delete.version);
+        // sync_version is now independently generated, just check it's non-zero
+        assert!(snapshot.sync_version > 0);
     }
 }

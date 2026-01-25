@@ -1,0 +1,22 @@
+# Gateway TLS 测试 - 在 Gateway Listener 上直接配置 TLS 证书
+# 这是 Kubernetes Gateway API 标准方式，通过 certificateRefs 引用 Secret
+# 与 EdgionTls CRD 不同，这里直接在 Gateway Listener 上配置证书引用
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gateway-tls-test
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # HTTPS 监听器 - 通过 certificateRefs 引用 Secret 中的证书
+    - name: https
+      protocol: HTTPS
+      port: 31220
+      hostname: gateway-tls.test.com
+      tls:
+        mode: Terminate
+        certificateRefs:
+          # 复用 edge-tls Secret（由 generate_tls_certs.sh 生成）
+          - name: edge-tls
+            namespace: edgion-test

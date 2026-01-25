@@ -1,10 +1,17 @@
-mod conf_change_apply;
-mod config_server;
-mod grpc_server;
-mod secret_ref;
-pub mod secret_store;
+//! New simplified conf_server module
+//!
+//! This module provides a simplified ConfigSyncServer that only handles gRPC list/watch.
+//! The ServerCache<T> instances are managed by ResourceProcessor in conf_mgr.
+//!
+//! Key components:
+//! - `WatchObj` trait: Object-safe interface for list/watch operations
+//! - `ConfigSyncServer`: Simplified server that holds HashMap<kind, Arc<dyn WatchObj>>
+//! - `ConfigSyncGrpcServer`: gRPC service implementation
 
-pub use config_server::{ConfigServer, EventDataSimple, ListDataSimple, NsNameKey, ResourceItem};
-pub use grpc_server::ConfigSyncServer;
-pub use secret_ref::{RefManagerStats, ResourceRef, SecretRefManager};
-pub use secret_store::{get_secret_by_name, replace_all_secrets, update_secrets, SecretStore};
+mod config_sync_server;
+mod grpc_server;
+mod traits;
+
+pub use config_sync_server::ConfigSyncServer;
+pub use grpc_server::ConfigSyncGrpcServer;
+pub use traits::{WatchObj, WatchResponseSimple};

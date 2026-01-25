@@ -12,8 +12,19 @@
 
 # Configuration Variables
 IMAGE_REGISTRY ?= docker.io
-IMAGE_NAMESPACE ?= edgion
-VERSION ?= 0.1.0
+IMAGE_NAMESPACE ?= pandaala
+
+# Auto-detect version from git
+# Priority: 1. ENV var 2. git tag 3. "unknown"
+ifeq ($(VERSION),)
+  GIT_TAG := $(shell git describe --tags --exact-match 2>/dev/null)
+  ifneq ($(GIT_TAG),)
+    VERSION := $(patsubst v%,%,$(GIT_TAG))
+  else
+    VERSION := unknown
+  endif
+endif
+
 RUST_VERSION ?= 1.92
 FEATURES ?= default
 
@@ -21,10 +32,14 @@ FEATURES ?= default
 GATEWAY_IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-gateway:$(VERSION)
 CONTROLLER_IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-controller:$(VERSION)
 CTL_IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-ctl:$(VERSION)
+TEST_SERVER_IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-test-server:$(VERSION)
+TEST_CLIENT_IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-test-client:$(VERSION)
 
 GATEWAY_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-gateway:latest
 CONTROLLER_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-controller:latest
 CTL_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-ctl:latest
+TEST_SERVER_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-test-server:latest
+TEST_CLIENT_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-test-client:latest
 
 # Docker build common flags
 DOCKER_BUILD_FLAGS := --build-arg RUST_VERSION=$(RUST_VERSION) --build-arg FEATURES=$(FEATURES)
@@ -62,9 +77,10 @@ build-gateway: check-docker ## Build Gateway image
 	@echo "$(BLUE)Building Gateway image...$(NC)"
 	docker build $(DOCKER_BUILD_FLAGS) \
 		--build-arg BINARY=edgion-gateway \
+		--build-arg BUILD_TYPE=bin \
 		-t $(GATEWAY_IMAGE) \
 		-t $(GATEWAY_IMAGE_LATEST) \
-		-f Dockerfile .
+		-f docker/Dockerfile .
 	@echo "$(GREEN)✓ Gateway image built: $(GATEWAY_IMAGE)$(NC)"
 
 .PHONY: build-controller
@@ -72,9 +88,10 @@ build-controller: check-docker ## Build Controller image
 	@echo "$(BLUE)Building Controller image...$(NC)"
 	docker build $(DOCKER_BUILD_FLAGS) \
 		--build-arg BINARY=edgion-controller \
+		--build-arg BUILD_TYPE=bin \
 		-t $(CONTROLLER_IMAGE) \
 		-t $(CONTROLLER_IMAGE_LATEST) \
-		-f Dockerfile .
+		-f docker/Dockerfile .
 	@echo "$(GREEN)✓ Controller image built: $(CONTROLLER_IMAGE)$(NC)"
 
 .PHONY: build-ctl
@@ -82,13 +99,36 @@ build-ctl: check-docker ## Build CLI tool image
 	@echo "$(BLUE)Building CLI tool image...$(NC)"
 	docker build $(DOCKER_BUILD_FLAGS) \
 		--build-arg BINARY=edgion-ctl \
+		--build-arg BUILD_TYPE=bin \
 		-t $(CTL_IMAGE) \
 		-t $(CTL_IMAGE_LATEST) \
-		-f Dockerfile .
+		-f docker/Dockerfile .
 	@echo "$(GREEN)✓ CLI tool image built: $(CTL_IMAGE)$(NC)"
 
+.PHONY: build-test-server
+build-test-server: check-docker ## Build test server image
+	@echo "$(BLUE)Building test server image...$(NC)"
+	docker build $(DOCKER_BUILD_FLAGS) \
+		--build-arg BINARY=test_server \
+		--build-arg BUILD_TYPE=example \
+		-t $(TEST_SERVER_IMAGE) \
+		-t $(TEST_SERVER_IMAGE_LATEST) \
+		-f docker/Dockerfile .
+	@echo "$(GREEN)✓ Test server image built: $(TEST_SERVER_IMAGE)$(NC)"
+
+.PHONY: build-test-client
+build-test-client: check-docker ## Build test client image
+	@echo "$(BLUE)Building test client image...$(NC)"
+	docker build $(DOCKER_BUILD_FLAGS) \
+		--build-arg BINARY=test_client \
+		--build-arg BUILD_TYPE=example \
+		-t $(TEST_CLIENT_IMAGE) \
+		-t $(TEST_CLIENT_IMAGE_LATEST) \
+		-f docker/Dockerfile .
+	@echo "$(GREEN)✓ Test client image built: $(TEST_CLIENT_IMAGE)$(NC)"
+
 .PHONY: build-all
-build-all: build-gateway build-controller build-ctl ## Build all images
+build-all: build-gateway build-controller build-ctl build-test-server build-test-client ## Build all images (including test)
 	@echo "$(GREEN)✓ All images built successfully!$(NC)"
 
 .PHONY: push-gateway
@@ -112,8 +152,22 @@ push-ctl: ## Push CLI tool image to registry
 	docker push $(CTL_IMAGE_LATEST)
 	@echo "$(GREEN)✓ CLI tool image pushed$(NC)"
 
+.PHONY: push-test-server
+push-test-server: ## Push test server image to registry
+	@echo "$(BLUE)Pushing test server image...$(NC)"
+	docker push $(TEST_SERVER_IMAGE)
+	docker push $(TEST_SERVER_IMAGE_LATEST)
+	@echo "$(GREEN)✓ Test server image pushed$(NC)"
+
+.PHONY: push-test-client
+push-test-client: ## Push test client image to registry
+	@echo "$(BLUE)Pushing test client image...$(NC)"
+	docker push $(TEST_CLIENT_IMAGE)
+	docker push $(TEST_CLIENT_IMAGE_LATEST)
+	@echo "$(GREEN)✓ Test client image pushed$(NC)"
+
 .PHONY: push-all
-push-all: push-gateway push-controller push-ctl ## Push all images to registry
+push-all: push-gateway push-controller push-ctl push-test-server push-test-client ## Push all images to registry
 	@echo "$(GREEN)✓ All images pushed successfully!$(NC)"
 
 .PHONY: build-and-push-all
@@ -133,10 +187,11 @@ buildx-gateway: buildx-setup ## Build multi-platform Gateway image
 	docker buildx build $(DOCKER_BUILD_FLAGS) \
 		--platform $(DOCKER_BUILDX_PLATFORMS) \
 		--build-arg BINARY=edgion-gateway \
+		--build-arg BUILD_TYPE=bin \
 		-t $(GATEWAY_IMAGE) \
 		-t $(GATEWAY_IMAGE_LATEST) \
 		--push \
-		-f Dockerfile .
+		-f docker/Dockerfile .
 	@echo "$(GREEN)✓ Multi-platform Gateway image built and pushed$(NC)"
 
 .PHONY: buildx-controller
@@ -145,10 +200,11 @@ buildx-controller: buildx-setup ## Build multi-platform Controller image
 	docker buildx build $(DOCKER_BUILD_FLAGS) \
 		--platform $(DOCKER_BUILDX_PLATFORMS) \
 		--build-arg BINARY=edgion-controller \
+		--build-arg BUILD_TYPE=bin \
 		-t $(CONTROLLER_IMAGE) \
 		-t $(CONTROLLER_IMAGE_LATEST) \
 		--push \
-		-f Dockerfile .
+		-f docker/Dockerfile .
 	@echo "$(GREEN)✓ Multi-platform Controller image built and pushed$(NC)"
 
 .PHONY: buildx-all

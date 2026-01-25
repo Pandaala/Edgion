@@ -3,7 +3,6 @@ use crate::core::conf_sync::cache_client::ClientCache;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::conf_sync::types::ListData;
 use crate::core::routes::create_route_manager_handler;
-use crate::core::utils::format_resource_info;
 use crate::types::prelude_resources::*;
 use crate::types::{all_resource_type_names, GatewayBaseConf, ResourceMeta};
 use anyhow::Result;
@@ -37,93 +36,87 @@ pub struct ConfigClient {
 }
 
 impl ConfigClient {
-    /// Create a new ConfigClient with default options (relist_on_server_change = false)
-    pub fn new(client_id: String, client_name: String) -> Self {
-        Self::with_options(client_id, client_name, false)
-    }
-
-    /// Create a new ConfigClient with custom options
-    /// 
+    /// Create a new ConfigClient
+    ///
     /// # Arguments
     /// * `client_id` - Unique identifier for this client
     /// * `client_name` - Human-readable name for this client
-    /// * `relist_on_server_change` - Whether to trigger relist when server instance changes
-    pub fn with_options(client_id: String, client_name: String, relist_on_server_change: bool) -> Self {
+    pub fn new(client_id: String, client_name: String) -> Self {
         // Register RouteManager as the handler for HTTPRoute resources
-        let routes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let route_handler = create_route_manager_handler();
         routes_cache.set_conf_processor(route_handler);
 
         // Register ServiceStore as the handler for Service resources
-        let services_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let services_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let service_handler = create_service_handler();
         services_cache.set_conf_processor(service_handler);
 
         // Register EpSliceHandler as the handler for EndpointSlice resources
-        let endpoint_slices_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let endpoint_slices_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let ep_slice_handler = create_ep_slice_handler();
         endpoint_slices_cache.set_conf_processor(ep_slice_handler);
 
         // Register EndpointHandler as the handler for Endpoints resources
-        let endpoints_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let endpoints_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let endpoint_handler = create_endpoint_handler();
         endpoints_cache.set_conf_processor(endpoint_handler);
 
         // Register PluginStore as the handler for EdgionPlugins resources
-        let plugins_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let plugin_handler = crate::core::plugins::edgion_plugins::create_plugin_handler();
         plugins_cache.set_conf_processor(plugin_handler);
 
         // Register TcpRouteManager as the handler for TCPRoute resources
-        let tcp_routes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let tcp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tcp_route_handler = crate::core::routes::tcp_routes::create_tcp_route_handler();
         tcp_routes_cache.set_conf_processor(tcp_route_handler);
 
         // Register UdpRouteManager as the handler for UDPRoute resources
-        let udp_routes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let udp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let udp_route_handler = crate::core::routes::udp_routes::create_udp_route_handler();
         udp_routes_cache.set_conf_processor(udp_route_handler);
 
         // Register GrpcRouteManager as the handler for GRPCRoute resources
-        let grpc_routes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let grpc_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let grpc_route_handler = crate::core::routes::grpc_routes::create_grpc_route_handler();
         grpc_routes_cache.set_conf_processor(grpc_route_handler);
 
         // Register TlsRouteManager as the handler for TLSRoute resources
-        let tls_routes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let tls_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_route_handler = crate::core::routes::tls_routes::create_tls_route_handler();
         tls_routes_cache.set_conf_processor(tls_route_handler);
 
         // Register TlsStore as the handler for EdgionTls resources
-        let edgion_tls_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let edgion_tls_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_handler = crate::core::tls::create_tls_handler();
         edgion_tls_cache.set_conf_processor(tls_handler);
 
         // Register StreamPluginStore as the handler for EdgionStreamPlugins resources
-        let stream_plugins_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let stream_plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let stream_plugin_handler = crate::core::plugins::edgion_stream_plugins::create_stream_plugin_handler();
         stream_plugins_cache.set_conf_processor(stream_plugin_handler);
 
         // Register ReferenceGrantStore as the handler for ReferenceGrant resources
-        let reference_grants_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let reference_grants_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let reference_grant_handler = crate::core::ref_grant::create_reference_grant_handler();
         reference_grants_cache.set_conf_processor(reference_grant_handler);
 
         // Register BackendTLSPolicyStore as the handler for BackendTLSPolicy resources
-        let backend_tls_policies_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let backend_tls_policies_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let backend_tls_policy_handler = crate::core::backends::create_backend_tls_policy_handler();
         backend_tls_policies_cache.set_conf_processor(backend_tls_policy_handler);
 
         // Register handlers for base conf resources
-        let gateway_classes_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let gateway_classes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let gateway_class_handler = crate::core::gateway::gateway_class::create_gateway_class_handler();
         gateway_classes_cache.set_conf_processor(gateway_class_handler);
 
-        let gateways_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
-        let gateway_handler = crate::core::gateway::gateway_handler::create_gateway_handler();
+        let gateways_cache = ClientCache::new(client_id.clone(), client_name.clone());
+        let gateway_handler = crate::core::gateway::gateway::create_gateway_handler();
         gateways_cache.set_conf_processor(gateway_handler);
 
-        let edgion_gateway_configs_cache = ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change);
+        let edgion_gateway_configs_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let edgion_gateway_config_handler =
             crate::core::gateway::edgion_gateway_config::create_edgion_gateway_config_handler();
         edgion_gateway_configs_cache.set_conf_processor(edgion_gateway_config_handler);
@@ -139,7 +132,7 @@ impl ConfigClient {
             tcp_routes: tcp_routes_cache,
             udp_routes: udp_routes_cache,
             tls_routes: tls_routes_cache,
-            link_sys: ClientCache::with_options(client_id.clone(), client_name.clone(), relist_on_server_change),
+            link_sys: ClientCache::new(client_id.clone(), client_name.clone()),
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,
             endpoints: endpoints_cache,
@@ -148,8 +141,7 @@ impl ConfigClient {
             edgion_stream_plugins: stream_plugins_cache,
             reference_grants: reference_grants_cache,
             backend_tls_policies: backend_tls_policies_cache,
-            plugin_metadata: ClientCache::with_options(client_id, client_name, relist_on_server_change),
-            // secrets: ClientCache::with_options(client_id, client_name, relist_on_server_change),
+            plugin_metadata: ClientCache::new(client_id, client_name),
         }
     }
 
@@ -309,7 +301,7 @@ impl ConfigClient {
     }
 
     pub fn list(&self, _key: &String, kind: &ResourceKind) -> Result<ListDataSimple, String> {
-        let (data_json, resource_version) = match kind {
+        let (data_json, sync_version) = match kind {
             ResourceKind::Unspecified => return Err("Resource kind unspecified".to_string()),
             ResourceKind::GatewayClass => self.gateway_classes.list().to_json("GatewayClass")?,
             ResourceKind::EdgionGatewayConfig => self.edgion_gateway_configs.list().to_json("EdgionGatewayConfig")?,
@@ -334,7 +326,7 @@ impl ConfigClient {
 
         Ok(ListDataSimple {
             data: data_json,
-            resource_version,
+            sync_version,
         })
     }
 
@@ -435,196 +427,11 @@ impl ConfigClient {
     pub fn trigger_endpoint_slice_update_event(&self, key: &str) {
         self.endpoint_slices.trigger_update_event_by_key(key);
     }
-
-    /// Print all configuration
-    /// Format is identical to ConfigCenter::print_config
-    pub fn print_config(&self) {
-        println!("=== ConfigHub Config ===");
-
-        // GatewayClass resources from cache
-        let gateway_classes = self.list_gateway_classes();
-        if !gateway_classes.data.is_empty() {
-            println!(
-                "GatewayClasses (count: {}, version: {}):",
-                gateway_classes.data.len(),
-                gateway_classes.resource_version
-            );
-            for (idx, gc) in gateway_classes.data.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(gc));
-            }
-        } else {
-            println!("GatewayClasses: not found");
-        }
-
-        // EdgionGatewayConfig resources from cache
-        let edgion_gateway_configs = self.list_edgion_gateway_configs();
-        if !edgion_gateway_configs.data.is_empty() {
-            println!(
-                "EdgionGatewayConfigs (count: {}, version: {}):",
-                edgion_gateway_configs.data.len(),
-                edgion_gateway_configs.resource_version
-            );
-            for (idx, egwc) in edgion_gateway_configs.data.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(egwc));
-            }
-        } else {
-            println!("EdgionGatewayConfigs: not found");
-        }
-
-        // Gateway resources from cache
-        let gateways = self.list_gateways();
-        if !gateways.data.is_empty() {
-            println!(
-                "Gateways (count: {}, version: {}):",
-                gateways.data.len(),
-                gateways.resource_version
-            );
-            for (idx, gw) in gateways.data.iter().enumerate() {
-                println!("  [{}] {}", idx, format_resource_info(gw));
-            }
-        } else {
-            println!("Gateways: not found");
-        }
-
-        // HTTP Routes
-        let list_data = self.list_routes();
-        println!(
-            "HTTPRoutes (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, route) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(route));
-        }
-
-        // gRPC Routes
-        let list_data = self.list_grpc_routes();
-        println!(
-            "GRPCRoutes (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, route) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(route));
-        }
-
-        // TCP Routes
-        let list_data = self.list_tcp_routes();
-        println!(
-            "TCPRoutes (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, route) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(route));
-        }
-
-        // UDP Routes
-        let list_data = self.list_udp_routes();
-        println!(
-            "UDPRoutes (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, route) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(route));
-        }
-
-        // TLS Routes
-        let list_data = self.list_tls_routes();
-        println!(
-            "TLSRoutes (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, route) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(route));
-        }
-
-        // Services
-        let list_data = self.list_services();
-        println!(
-            "Services (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, svc) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(svc));
-        }
-
-        // Endpoint Slices
-        let list_data = self.list_endpoint_slices();
-        println!(
-            "EndpointSlices (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, es) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(es));
-        }
-
-        // Edgion TLS
-        let list_data = self.list_edgion_tls();
-        println!(
-            "EdgionTls (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, tls) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(tls));
-        }
-
-        // Edgion Plugins
-        let list_data = self.list_edgion_plugins();
-        println!(
-            "EdgionPlugins (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, plugin) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(plugin));
-        }
-
-        // Plugin Metadata
-        let list_data = self.list_plugin_metadata();
-        println!(
-            "PluginMetaData (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, metadata) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(metadata));
-        }
-
-        // LinkSys
-        let list_data = self.list_link_sys();
-        println!(
-            "LinkSys (count: {}, version: {}):",
-            list_data.data.len(),
-            list_data.resource_version
-        );
-        for (idx, link_sys) in list_data.data.iter().enumerate() {
-            println!("  [{}] {}", idx, format_resource_info(link_sys));
-        }
-
-        // // Secrets
-        // let list_data = self.list_secrets();
-        // println!(
-        //     "Secrets (count: {}, version: {}):",
-        //     list_data.data.len(),
-        //     list_data.resource_version
-        // );
-        // for (idx, secret) in list_data.data.iter().enumerate() {
-        //     println!("  [{}] {}", idx, format_resource_info(secret));
-        // }
-
-        println!("=== End ConfigHub Config ===\n");
-    }
 }
 
 pub struct ListDataSimple {
     pub data: String,
-    pub resource_version: u64,
+    pub sync_version: u64,
 }
 
 impl ConfigClientEventDispatcher for ConfigClient {

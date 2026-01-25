@@ -1,12 +1,26 @@
+use crate::core::conf_mgr::ConfWriterError;
 use crate::types::ResourceKind;
 use axum::http::StatusCode;
 
 /// Helper function to validate a resource against its schema
+///
+/// In K8s mode, validation is skipped (handled by K8s API Server)
 pub fn validate_resource<T: serde::Serialize>(
     validator: &crate::core::conf_mgr::SchemaValidator,
     kind: ResourceKind,
     resource: &T,
+    is_k8s_mode: bool,
 ) -> Result<(), StatusCode> {
+    // Skip validation in K8s mode - K8s API Server will validate
+    if is_k8s_mode {
+        tracing::debug!(
+            component = "unified_api",
+            kind = ?kind,
+            "K8s mode: skipping local schema validation"
+        );
+        return Ok(());
+    }
+
     let json_value = serde_json::to_value(resource).map_err(|e| {
         tracing::warn!(
             component = "unified_api",
@@ -27,6 +41,86 @@ pub fn validate_resource<T: serde::Serialize>(
     })?;
 
     Ok(())
+}
+
+/// Map ConfWriterError to HTTP StatusCode
+///
+/// Provides fine-grained error mapping for both K8s and non-K8s modes
+pub fn map_writer_error(e: ConfWriterError) -> StatusCode {
+    match e {
+        ConfWriterError::NotFound(msg) => {
+            tracing::warn!(
+                component = "unified_api",
+                error = %msg,
+                "Resource not found"
+            );
+            StatusCode::NOT_FOUND
+        }
+        ConfWriterError::AlreadyExists(msg) => {
+            tracing::warn!(
+                component = "unified_api",
+                error = %msg,
+                "Resource already exists"
+            );
+            StatusCode::CONFLICT
+        }
+        ConfWriterError::ValidationError(msg) => {
+            tracing::warn!(
+                component = "unified_api",
+                error = %msg,
+                "Validation error from backend"
+            );
+            StatusCode::BAD_REQUEST
+        }
+        ConfWriterError::PermissionDenied(msg) => {
+            tracing::warn!(
+                component = "unified_api",
+                error = %msg,
+                "Permission denied"
+            );
+            StatusCode::FORBIDDEN
+        }
+        ConfWriterError::Conflict(msg) => {
+            tracing::warn!(
+                component = "unified_api",
+                error = %msg,
+                "Conflict detected"
+            );
+            StatusCode::CONFLICT
+        }
+        ConfWriterError::ParseError(msg) => {
+            tracing::warn!(
+                component = "unified_api",
+                error = %msg,
+                "Parse error"
+            );
+            StatusCode::BAD_REQUEST
+        }
+        ConfWriterError::IOError(msg) => {
+            tracing::error!(
+                component = "unified_api",
+                error = %msg,
+                "IO error"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+        ConfWriterError::KubeError(msg) => {
+            tracing::error!(
+                component = "unified_api",
+                error = %msg,
+                "Kubernetes API error"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+        ConfWriterError::InternalError(msg) => {
+            tracing::error!(
+                component = "unified_api",
+                error = %msg,
+                "Internal error"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
 }
 
 /// Parse request body as either JSON or YAML
@@ -133,8 +227,8 @@ macro_rules! list_all_resources {
 #[macro_export]
 macro_rules! list_namespaced_resources {
     ($server:expr, $kind:expr, $ns:expr) => {{
-        use $crate::types::ResourceKind;
         use kube::ResourceExt;
+        use $crate::types::ResourceKind;
         let ns_str = $ns.as_str();
         match $kind {
             ResourceKind::HTTPRoute => {
@@ -306,8 +400,8 @@ macro_rules! list_namespaced_resources {
 #[macro_export]
 macro_rules! get_namespaced_resource {
     ($server:expr, $kind:expr, $ns:expr, $name:expr) => {{
-        use $crate::types::ResourceKind;
         use kube::ResourceExt;
+        use $crate::types::ResourceKind;
         let ns_str = $ns.as_str();
         let name_str = $name.as_str();
         match $kind {
@@ -432,8 +526,8 @@ macro_rules! get_namespaced_resource {
 #[macro_export]
 macro_rules! resource_exists_namespaced {
     ($server:expr, $kind:expr, $ns:expr, $name:expr) => {{
-        use $crate::types::ResourceKind;
         use kube::ResourceExt;
+        use $crate::types::ResourceKind;
         let ns_str = $ns.as_str();
         let name_str = $name.as_str();
         match $kind {

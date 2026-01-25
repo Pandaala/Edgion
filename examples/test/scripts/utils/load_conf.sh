@@ -88,7 +88,7 @@ show_help() {
 check_services() {
     log_info "Checkservicestatus..."
     
-    # Check controller
+    # Check controller health (liveness)
     if ! curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
         log_error "Controller 未Run (${CONTROLLER_URL})"
         return 1
@@ -99,37 +99,42 @@ check_services() {
 }
 
 # =============================================================================
-# copyconfigfile到 CONFIG_DIR（For Gateway Start前预Load）
+# Wait for controller to be ready (ConfigServer initialized)
 # =============================================================================
-copy_file_to_config() {
-    local file=$1
-    local filename=$(basename "$file")
-    local config_dir="${EDGION_WORK_DIR:-}/config"
+wait_for_ready() {
+    local max_attempts=${1:-30}
+    local attempt=0
     
-    if [ -z "$config_dir" ] || [ ! -d "$config_dir" ]; then
-        return 1
-    fi
+    log_info "等待 Controller ConfigServer 就绪..."
     
-    log_info "copy $filename 到 $config_dir"
-    cp "$file" "$config_dir/"
-    return 0
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -sf "${CONTROLLER_URL}/ready" > /dev/null 2>&1; then
+            log_success "Controller ConfigServer 已就绪"
+            return 0
+        fi
+        
+        attempt=$((attempt + 1))
+        if [ $attempt -lt $max_attempts ]; then
+            sleep 1
+        fi
+    done
+    
+    log_error "Controller ConfigServer 未就绪 (超时 ${max_attempts}s)"
+    return 1
 }
 
 # =============================================================================
 # use edgion-ctl Load单个file
+# 
+# FileSystemWriter 会自动使用 Kind_namespace_name.yaml 格式保存，
+# 因此不需要手动复制或重命名文件。
 # =============================================================================
 apply_file() {
     local file=$1
     local filename=$(basename "$file")
     
-    # 优先usefilecopy方式（Gateway Start前）
-    if copy_file_to_config "$file"; then
-        log_success "$filename copycompleted"
-        return 0
-    fi
-    
-    log_info "Load $filename..."
-    
+    # 使用 edgion-ctl apply 加载配置
+    log_info "Load $filename via API..."
     if "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$file" 2>&1; then
         log_success "$filename Loadsuccess"
         return 0
@@ -153,8 +158,16 @@ load_directory_recursive() {
         return 1
     fi
     
-    # 递归获取all yaml file
-    local files=$(find "$dir" -type f \( -name "*.yaml" -o -name "*.yml" \) | sort)
+    # 排除动态测试的 updates 和 delete 目录（仅加载 initial）
+    if [[ "$dir" =~ /DynamicTest/updates ]] || [[ "$dir" =~ /DynamicTest/delete ]]; then
+        log_info "Skipping dynamic update dir: $dir"
+        return 0
+    fi
+    
+    # 递归获取all yaml file，但排除 updates 和 delete 子目录
+    local files=$(find "$dir" -type f \( -name "*.yaml" -o -name "*.yml" \) \
+        -not -path "*/DynamicTest/updates/*" \
+        -not -path "*/DynamicTest/delete/*" | sort)
     
     if [ -z "$files" ]; then
         log_warn "$suite_name: 无configfile"
@@ -173,21 +186,6 @@ load_directory_recursive() {
         return 1
     else
         log_success "$suite_name: $count 个configLoadcompleted"
-        return 0
-    fi
-}
-
-# =============================================================================
-# triggerconfigreload
-# =============================================================================
-trigger_reload() {
-    log_info "trigger Controller configreload..."
-    
-    if curl -sf -X POST "${CONTROLLER_URL}/api/v1/reload" > /dev/null 2>&1; then
-        log_success "configreloadsuccess"
-        return 0
-    else
-        log_warn "无法triggerreload (may不need)"
         return 0
     fi
 }
@@ -296,6 +294,11 @@ main() {
         exit 1
     fi
     
+    # Wait for ConfigServer to be ready before loading configs
+    if ! wait_for_ready 30; then
+        exit 1
+    fi
+    
     # 处理 "all"
     if [ "$suites" = "all" ]; then
         suites=$(get_all_suites)
@@ -320,9 +323,6 @@ main() {
         log_info "Wait ${wait_time}s 让configtake effect..."
         sleep $wait_time
     fi
-    
-    # triggerreload
-    trigger_reload
     
     # verify
     if $do_verify; then

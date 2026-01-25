@@ -21,7 +21,7 @@ impl SecurityTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = format!("{}/health", ctx.http_url());
 
                     // Normal X-Forwarded-For: ~50 bytes
@@ -61,7 +61,7 @@ impl SecurityTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = format!("{}/health", ctx.http_url());
 
                     // Generate XFF > 200 bytes
@@ -119,7 +119,7 @@ impl SecurityTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = format!("{}/health", ctx.http_url());
 
                     // Generate XFF exactly 200 bytes
@@ -170,7 +170,7 @@ impl SecurityTestSuite {
         TestCase::new("no_xff_header", "Test no X-Forwarded-For header", |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
-                let client = reqwest::Client::new();
+                let client = reqwest::Client::builder().no_proxy().build().unwrap();
                 let url = format!("{}/health", ctx.http_url());
 
                 let mut request = client.get(&url);

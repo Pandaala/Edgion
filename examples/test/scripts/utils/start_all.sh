@@ -228,6 +228,7 @@ start_controller() {
     
     "${PROJECT_ROOT}/target/debug/edgion-controller" \
         -c "$CONTROLLER_CONFIG" \
+        --work-dir "$PROJECT_ROOT" \
         --conf-dir "$CONFIG_DIR" \
         --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}" \
         > "${LOG_DIR}/controller.log" 2>&1 &
@@ -347,6 +348,15 @@ main() {
     log_section "创建Workdirectory"
     mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR"
     log_success "Workdirectory创建completed: $WORK_DIR"
+    
+    # 第三步半: 复制 CRD schemas 到工作目录
+    if [ -d "${PROJECT_ROOT}/config/crd" ]; then
+        cp -r "${PROJECT_ROOT}/config/crd" "$CONFIG_DIR/"
+        log_success "CRD schemas 复制completed"
+    else
+        log_error "CRD schemas 目录不存在: ${PROJECT_ROOT}/config/crd"
+        exit 1
+    fi
     
     # 第四步: Prepareconfigfile
     prepare_config

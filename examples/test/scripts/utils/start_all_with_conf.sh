@@ -1,7 +1,10 @@
 #!/bin/bash
 # =============================================================================
 # Startall Edgion Testservice并Loadconfig
-# Start顺序: test_server -> controller -> certificateGenerate -> configLoad -> gateway -> verify
+# Start顺序: test_server -> controller -> 基础配置 -> 测试配置 -> gateway -> verify
+# 
+# 配置通过 Admin API (edgion-ctl apply) 加载，FileSystemWriter 会自动以
+# Kind_namespace_name.yaml 格式保存，避免同名文件覆盖问题。
 # =============================================================================
 
 set -e
@@ -195,7 +198,7 @@ wait_for_port() {
 }
 
 # =============================================================================
-# Wait HTTP healthCheck
+# Wait HTTP healthCheck (liveness)
 # =============================================================================
 wait_for_health() {
     local url=$1
@@ -216,6 +219,30 @@ wait_for_health() {
     done
     
     log_error "$service_name healthCheckfailed"
+    return 1
+}
+
+# =============================================================================
+# Wait for readiness check (ConfigServer ready)
+# =============================================================================
+wait_for_ready() {
+    local url=$1
+    local service_name=$2
+    local timeout=${3:-30}
+    local elapsed=0
+    
+    log_info "等待 $service_name ConfigServer 就绪..."
+    
+    while [ $elapsed -lt $timeout ]; do
+        if curl -sf "$url" >/dev/null 2>&1; then
+            log_success "$service_name ConfigServer 就绪"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    
+    log_error "$service_name ConfigServer 未就绪 (超时 ${timeout}s)"
     return 1
 }
 
@@ -315,10 +342,17 @@ start_gateway() {
     local pid=$!
     echo $pid > "${PID_DIR}/gateway.pid"
     
-    # Waitport
-    if ! wait_for_port $GATEWAY_HTTP_PORT "edgion-gateway" $pid 30; then
+    # Wait for Gateway Admin port (always 5900, regardless of test suite listener ports)
+    if ! wait_for_port $GATEWAY_ADMIN_PORT "edgion-gateway" $pid 30; then
         log_error "edgion-gateway Startfailed，viewlog: ${LOG_DIR}/gateway.log"
         tail -20 "${LOG_DIR}/gateway.log" 2>/dev/null || true
+        exit 1
+    fi
+    
+    # Wait for Gateway to be fully ready (all caches synced from Controller)
+    if ! wait_for_ready "http://127.0.0.1:${GATEWAY_ADMIN_PORT}/ready" "edgion-gateway" 60; then
+        log_error "edgion-gateway 缓存同步超时，viewlog: ${LOG_DIR}/gateway.log"
+        tail -30 "${LOG_DIR}/gateway.log" 2>/dev/null || true
         exit 1
     fi
     
@@ -326,24 +360,34 @@ start_gateway() {
 }
 
 # =============================================================================
-# Prepare基础configfile
+# 加载基础配置文件
+# 使用 edgion-ctl apply 通过 Admin API 加载，FileSystemWriter 会自动
+# 以 Kind_namespace_name.yaml 格式保存到 config 目录
 # =============================================================================
-prepare_base_config() {
-    log_section "Prepare基础configfile"
+load_base_config() {
+    log_section "加载基础配置文件"
     
     local conf_src="${PROJECT_ROOT}/examples/test/conf/base"
+    local edgion_ctl="${PROJECT_ROOT}/target/debug/edgion-ctl"
     
-    if [ -d "$conf_src" ]; then
-        for file in "$conf_src"/*.yaml; do
-            if [ -f "$file" ]; then
-                cp "$file" "$CONFIG_DIR/"
-                log_info "copy $(basename "$file")"
-            fi
-        done
-        log_success "基础configPreparecompleted"
-    else
+    if [ ! -d "$conf_src" ]; then
         log_warning "无基础configdirectory: $conf_src"
+        return 0
     fi
+    
+    for file in "$conf_src"/*.yaml; do
+        if [ -f "$file" ]; then
+            local filename=$(basename "$file")
+            log_info "Load $filename via API..."
+            if "$edgion_ctl" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1; then
+                log_success "$filename Loadsuccess"
+            else
+                log_warning "$filename Loadfailed"
+            fi
+        fi
+    done
+    
+    log_success "基础config加载completed"
 }
 
 # =============================================================================
@@ -427,8 +471,13 @@ get_suites_to_load() {
                         local has_deep_subdir=false
                         for deepdir in "$subdir"/*; do
                             if [ -d "$deepdir" ]; then
+                                local deepdir_name=$(basename "$deepdir")
+                                # Skip DynamicTest/updates and DynamicTest/delete
+                                if [[ "$subdir_name" == "DynamicTest" && ("$deepdir_name" == "updates" || "$deepdir_name" == "delete") ]]; then
+                                    continue
+                                fi
                                 has_deep_subdir=true
-                                suites="$suites ${resource_name}/${subdir_name}/$(basename "$deepdir")"
+                                suites="$suites ${resource_name}/${subdir_name}/${deepdir_name}"
                             fi
                         done
                         
@@ -473,20 +522,16 @@ load_configs() {
     
     for suite in $suites_to_load; do
         log_info "Load $suite config..."
-        if bash "$load_script" "$suite" > /dev/null 2>&1; then
+        # 使用 --wait 0 跳过每个 suite 的等待，最后统一等待一次
+        if bash "$load_script" --wait 0 "$suite" 2>&1 | tee -a "${LOG_DIR}/load_config.log"; then
             log_success "$suite configLoadcompleted"
         else
             log_warning "$suite configLoadfailed或为空"
         fi
     done
     
-    # Waitconfigtake effect
-    log_info "Waitconfigtake effect (3s)..."
-    sleep 3
-    
-    # trigger Controller configreload确保allresource都处理完毕
-    log_info "triggerconfigreload..."
-    curl -sf "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/reload" > /dev/null 2>&1 || true
+    # 所有配置加载完成后，等待一次即可（Controller 会自动监听目录变化）
+    log_info "Waitconfigtake effect (2s)..."
     sleep 2
     
     log_success "allconfigLoadcompleted"
@@ -507,7 +552,8 @@ verify_sync() {
     
     log_info "Run resource_diff verify Controller 和 Gateway resourcesync..."
     
-    # Retry logic: wait for gateway HTTP service to be fully ready
+    # Retry logic: wait for gateway to fully sync all resources from controller
+    # Gateway needs time to fetch data from controller via gRPC
     local max_retries=5
     local retry_delay=2
     local attempt=1
@@ -609,25 +655,40 @@ main() {
     mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR"
     log_success "Workdirectory创建completed: $WORK_DIR"
     
-    # 第四步: Generatecertificate（must在copyconfig前，因为willGenerate Secret file）
+    # 第三步半: 复制 CRD schemas 到工作目录
+    if [ -d "${PROJECT_ROOT}/config/crd" ]; then
+        cp -r "${PROJECT_ROOT}/config/crd" "$CONFIG_DIR/"
+        log_success "CRD schemas 复制completed"
+    else
+        log_error "CRD schemas 目录不存在: ${PROJECT_ROOT}/config/crd"
+        exit 1
+    fi
+    
+    # 第四步: Generatecertificate（must在加载config前，因为willGenerate Secret file）
     generate_certs
     
-    # 第五步: Prepare基础configfile（包含新Generate的 Secret）
-    prepare_base_config
-    
-    # 第六步: Start test_server
+    # 第五步: Start test_server
     start_test_server
     
-    # 第七步: Start controller
+    # 第六步: Start controller
     start_controller
     
-    # 第八步: LoadTestconfig
+    # 第七步: 等待 ConfigServer 就绪
+    if ! wait_for_ready "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/ready" "edgion-controller" 30; then
+        log_error "edgion-controller ConfigServer 未就绪"
+        exit 1
+    fi
+    
+    # 第八步: 加载基础配置文件（通过 API）
+    load_base_config
+    
+    # 第九步: LoadTestconfig（通过 API）
     load_configs
     
-    # 第九步: Start gateway
+    # 第十步: Start gateway
     start_gateway
     
-    # 第十步: verifyresourcesync
+    # 第十一步: verifyresourcesync
     verify_sync
     
     # 保存info

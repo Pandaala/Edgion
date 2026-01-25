@@ -46,6 +46,7 @@ impl LBPolicyTestSuite {
                     let client = reqwest::Client::builder()
                         .connect_timeout(std::time::Duration::from_secs(2))
                         .timeout(std::time::Duration::from_secs(5)) // > route timeout (2s)
+                        .no_proxy()
                         .build()
                         .expect("Failed to create HTTP client");
 

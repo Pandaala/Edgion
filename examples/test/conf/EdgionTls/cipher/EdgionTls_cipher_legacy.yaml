@@ -1,0 +1,25 @@
+# TLS 1.2 Legacy Cipher 配置
+# 配置支持弱算法（用于兼容老旧客户端）
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: cipher-legacy
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: cipher-gateway
+      namespace: edgion-test
+      sectionName: https-legacy
+  hosts:
+    - cipher-legacy.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test
+  # 最低 TLS 版本
+  minTlsVersion: TLS1_2
+  # 弱算法列表（OpenSSL 格式）
+  ciphers:
+    - "AES128-SHA"
+    - "AES256-SHA"
+    - "ECDHE-RSA-AES128-SHA"
+    - "ECDHE-RSA-AES256-SHA"

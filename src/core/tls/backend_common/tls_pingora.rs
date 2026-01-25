@@ -1,6 +1,6 @@
-use crate::core::conf_sync::conf_server::get_secret_by_name;
+use crate::core::conf_mgr::sync_runtime::resource_processor::get_secret_by_name;
+use crate::core::gateway::gateway::{match_gateway_tls, match_gateway_tls_with_port, GatewayTlsEntry};
 use crate::core::observe::ssl_log::{log_ssl, SslLogEntry};
-use crate::core::tls::gateway_tls_matcher::{match_gateway_tls, GatewayTlsEntry};
 use crate::core::tls::tls_cert_matcher::match_sni;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
@@ -16,7 +16,13 @@ use pingora_core::tls::x509::X509;
 use pingora_core::{Error as PingoraError, ErrorType};
 use std::sync::Arc;
 
+/// TLS callback handler for dynamic certificate loading
+///
+/// Supports port-based certificate lookup for Gateway API semantics.
 pub struct TlsCallback {
+    /// The listening port this callback serves
+    /// Used for port-dimension TLS certificate lookup
+    port: u16,
     edgion_gateway_config: Arc<EdgionGatewayConfig>,
 }
 
@@ -30,15 +36,30 @@ impl TlsAccept for TlsCallback {
 }
 
 impl TlsCallback {
-    pub fn new(edgion_gateway_config: Arc<EdgionGatewayConfig>) -> Self {
-        Self { edgion_gateway_config }
+    /// Create a new TlsCallback with port information
+    ///
+    /// # Parameters
+    /// - `port`: The listening port for this TLS service
+    /// - `edgion_gateway_config`: Gateway configuration for fallback behavior
+    pub fn new(port: u16, edgion_gateway_config: Arc<EdgionGatewayConfig>) -> Self {
+        Self {
+            port,
+            edgion_gateway_config,
+        }
     }
 
+    /// Create TLS settings with callback for the specified port
+    ///
+    /// # Parameters
+    /// - `port`: The listening port (used for port-dimension certificate lookup)
+    /// - `edgion_gateway_config`: Gateway configuration
+    /// - `enable_http2`: Whether to enable HTTP/2 ALPN negotiation
     pub fn new_tls_settings_with_callback(
+        port: u16,
         edgion_gateway_config: Arc<EdgionGatewayConfig>,
         enable_http2: bool,
     ) -> Result<TlsSettings> {
-        let callback = Box::new(TlsCallback::new(edgion_gateway_config));
+        let callback = Box::new(TlsCallback::new(port, edgion_gateway_config));
         let mut settings =
             TlsSettings::with_callbacks(callback).map_err(|e| anyhow!("Failed to create TLS settings: {}", e))?;
 
@@ -54,7 +75,7 @@ impl TlsCallback {
     ///
     /// Uses a layered lookup strategy:
     /// 1. First, try to match SNI against EdgionTls resources
-    /// 2. If not found, fallback to Gateway Listener TLS configurations (from Secret)
+    /// 2. If not found, fallback to Gateway Listener TLS configurations (with port dimension)
     async fn load_cert_from_sni(&self, ssl: &mut SslRef, entry: &mut SslLogEntry) {
         // Get SNI from SSL context, with fallback support
         let sni = match ssl.servername(NameType::HOST_NAME) {
@@ -76,22 +97,31 @@ impl TlsCallback {
         };
         entry.sni(&sni);
 
-        // Layer 1: Try to match against EdgionTls resources
+        // Layer 1: Try to match against EdgionTls resources (port-independent)
         if let Ok(edgion_tls) = match_sni(&sni) {
             self.apply_edgion_tls_cert(ssl, &edgion_tls, entry);
             return;
         }
 
-        // Layer 2: Fallback to Gateway Listener TLS configurations
-        if let Ok(gateway_tls) = match_gateway_tls(&sni) {
+        // Layer 2: Fallback to Gateway Listener TLS configurations (with port dimension)
+        // First try with port, then fallback to port-independent search
+        if let Ok(gateway_tls) = match_gateway_tls_with_port(self.port, &sni) {
             self.apply_gateway_tls_cert(ssl, &gateway_tls, entry);
             return;
         }
 
-        entry.error(format!(
-            "Certificate not found in EdgionTls or Gateway for SNI: {}",
-            sni
-        ));
+        // Layer 2b: Fallback without port (for backward compatibility)
+        if let Ok(gateway_tls) = match_gateway_tls(&sni) {
+            tracing::debug!(
+                port = self.port,
+                sni = %sni,
+                "Certificate found via port-independent fallback"
+            );
+            self.apply_gateway_tls_cert(ssl, &gateway_tls, entry);
+            return;
+        }
+
+        entry.error(format!("Certificate not found for port={}, SNI={}", self.port, sni));
     }
 
     /// Apply certificate from EdgionTls resource
@@ -179,27 +209,58 @@ impl TlsCallback {
         // Gateway TLS doesn't support mTLS by default
         entry.mtls(false);
 
+        // Priority 1: Use embedded Secret from GatewayTlsEntry (filled by Controller)
+        let secret = if let Some(secrets) = &gateway_tls.secrets {
+            if let Some(s) = secrets.first() {
+                s.clone()
+            } else {
+                // Fall back to SecretStore lookup
+                self.get_secret_from_store_or_error(gateway_tls, entry)
+            }
+        } else {
+            // Fall back to SecretStore lookup
+            self.get_secret_from_store_or_error(gateway_tls, entry)
+        };
+
+        // Extract and apply certificate from Secret
+        self.apply_secret_to_ssl(ssl, &secret, entry);
+    }
+
+    /// Helper: Get Secret from global SecretStore (fallback for legacy behavior)
+    fn get_secret_from_store_or_error(
+        &self,
+        gateway_tls: &GatewayTlsEntry,
+        entry: &mut SslLogEntry,
+    ) -> k8s_openapi::api::core::v1::Secret {
         // Get the first certificate ref (typically there's only one)
         let cert_ref = match gateway_tls.certificate_refs.first() {
             Some(r) => r,
             None => {
                 entry.error("No certificate refs in Gateway TLS config");
-                return;
+                return k8s_openapi::api::core::v1::Secret::default();
             }
         };
 
         // Resolve Secret namespace (use Gateway namespace if not specified)
         let secret_namespace = cert_ref.namespace.as_deref().unwrap_or(&gateway_tls.gateway_namespace);
 
-        // Load Secret
-        let secret = match get_secret_by_name(Some(secret_namespace), &cert_ref.name) {
+        // Load Secret from global store
+        match get_secret_by_name(Some(secret_namespace), &cert_ref.name) {
             Some(s) => s,
             None => {
                 entry.error(format!("Secret not found: {}/{}", secret_namespace, cert_ref.name));
-                return;
+                k8s_openapi::api::core::v1::Secret::default()
             }
-        };
+        }
+    }
 
+    /// Helper: Extract cert/key from Secret and apply to SSL
+    fn apply_secret_to_ssl(
+        &self,
+        ssl: &mut SslRef,
+        secret: &k8s_openapi::api::core::v1::Secret,
+        entry: &mut SslLogEntry,
+    ) {
         // Extract tls.crt and tls.key from Secret
         let data = match &secret.data {
             Some(d) => d,
@@ -263,12 +324,13 @@ impl TlsCallback {
             return;
         }
 
-        tracing::debug!(
-            gateway = %gateway_tls.gateway_name,
-            listener = %gateway_tls.listener_name,
-            secret = format!("{}/{}", secret_namespace, cert_ref.name),
-            "Applied certificate from Gateway TLS config"
-        );
+        // Log success - secret name from metadata
+        if let Some(name) = &secret.metadata.name {
+            tracing::debug!(
+                secret_name = %name,
+                "Applied certificate from Secret"
+            );
+        }
     }
 
     /// Configure mTLS (mutual TLS) client certificate verification

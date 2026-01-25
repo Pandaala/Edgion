@@ -3,9 +3,17 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ResourceChange {
+    /// Signal: initialization started (log only, no resource data)
+    InitStart,
+    /// Initial sync: adding resource during init
     InitAdd,
+    /// Signal: initialization done, cache can be marked as ready
+    InitDone,
+    /// Runtime event: resource added
     EventAdd,
+    /// Runtime event: resource updated
     EventUpdate,
+    /// Runtime event: resource deleted
     EventDelete,
 }
 

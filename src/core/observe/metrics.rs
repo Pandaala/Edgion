@@ -16,6 +16,10 @@ pub mod names {
     pub const SSL_LOG_DROPPED: &str = "edgion_ssl_log_dropped_total";
     pub const TCP_LOG_DROPPED: &str = "edgion_tcp_log_dropped_total";
     pub const UDP_LOG_DROPPED: &str = "edgion_udp_log_dropped_total";
+    // K8s Status update metrics
+    pub const STATUS_UPDATE_TOTAL: &str = "edgion_status_update_total";
+    pub const STATUS_UPDATE_FAILED: &str = "edgion_status_update_failed_total";
+    pub const STATUS_UPDATE_SKIPPED: &str = "edgion_status_update_skipped_total";
 }
 
 /// Global metrics singleton
@@ -47,6 +51,12 @@ pub struct GatewayMetrics {
     tcp_log_dropped: Counter,
     /// Total UDP logs dropped (channel full)
     udp_log_dropped: Counter,
+    /// Total K8s status updates attempted
+    status_update_total: Counter,
+    /// Total K8s status update failures
+    status_update_failed: Counter,
+    /// Total K8s status updates skipped (no change)
+    status_update_skipped: Counter,
 }
 
 impl GatewayMetrics {
@@ -61,6 +71,9 @@ impl GatewayMetrics {
             ssl_log_dropped: counter!(names::SSL_LOG_DROPPED),
             tcp_log_dropped: counter!(names::TCP_LOG_DROPPED),
             udp_log_dropped: counter!(names::UDP_LOG_DROPPED),
+            status_update_total: counter!(names::STATUS_UPDATE_TOTAL),
+            status_update_failed: counter!(names::STATUS_UPDATE_FAILED),
+            status_update_skipped: counter!(names::STATUS_UPDATE_SKIPPED),
         }
     }
 
@@ -112,5 +125,24 @@ impl GatewayMetrics {
     #[inline]
     pub fn udp_log_dropped(&self) {
         self.udp_log_dropped.increment(1);
+    }
+
+    /// Record a successful K8s status update
+    #[inline]
+    pub fn status_update_success(&self) {
+        self.status_update_total.increment(1);
+    }
+
+    /// Record a failed K8s status update
+    #[inline]
+    pub fn status_update_failed(&self) {
+        self.status_update_total.increment(1);
+        self.status_update_failed.increment(1);
+    }
+
+    /// Record a skipped K8s status update (no change needed)
+    #[inline]
+    pub fn status_update_skipped(&self) {
+        self.status_update_skipped.increment(1);
     }
 }

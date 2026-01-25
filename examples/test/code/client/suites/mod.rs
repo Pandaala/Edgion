@@ -20,7 +20,11 @@ pub use tcp_route::TcpTestSuite;
 pub use udp_route::UdpTestSuite;
 
 // EdgionTls tests
-pub use edgion_tls::{GrpcTlsTestSuite, HttpsTestSuite, MtlsTestSuite};
+pub use edgion_tls::{CipherTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTestSuite};
 
 // Gateway tests
-pub use gateway::{BackendTlsTestSuite, PluginLogsTestSuite, RealIpTestSuite, SecurityTestSuite};
+pub use gateway::{
+    AllowedRoutesAllNamespacesTestSuite, AllowedRoutesKindsTestSuite, AllowedRoutesSameNamespaceTestSuite,
+    BackendTlsTestSuite, CombinedScenariosTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite,
+    ListenerHostnameTestSuite, PluginLogsTestSuite, RealIpTestSuite, SecurityTestSuite, UpdatePhaseTestSuite,
+};

@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
-use rand::{thread_rng, RngCore};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,7 +17,7 @@ impl CsrfToken {
     /// Generate a new CSRF token with crypto-secure RNG
     pub fn generate(key: &str) -> Self {
         let mut random_bytes = [0u8; 32];
-        thread_rng().fill_bytes(&mut random_bytes);
+        rand::rng().fill_bytes(&mut random_bytes);
         let random = hex::encode(random_bytes);
 
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;

@@ -69,6 +69,10 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Test phase for dynamic tests (initial or update)
+    #[arg(long)]
+    phase: Option<String>,
+
     /// 兼容旧命令：直接指定测试类型
     #[arg(value_name = "COMMAND")]
     legacy_command: Option<String>,
@@ -134,17 +138,19 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/Security" | "Gateway" => "Gateway/Security",
         "Gateway/RealIP" => "Gateway/RealIP",
         "Gateway/TLS/BackendTLS" => "Gateway/TLS/BackendTLS",
+        "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
         "Gateway/Plugins" => "Gateway/Plugins",
         // EdgionTls
         "EdgionTls" | "EdgionTls/https" => "EdgionTls/https",
         "EdgionTls/grpctls" => "EdgionTls/grpctls",
         "EdgionTls/mTLS" => "EdgionTls/mTLS",
+        "EdgionTls/cipher" => "EdgionTls/cipher",
         _ => suite,
     }
 }
 
 /// 根据 suite Add test suite到 runner
-fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool) {
+fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, phase: Option<&str>) {
     match suite {
         // HTTPRoute 资源
         "HTTPRoute/Basic" | "HTTPRoute" => {
@@ -288,12 +294,77 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool) {
             }
             runner.add_suite(Box::new(suites::BackendTlsTestSuite));
         }
+        "Gateway/TLS/GatewayTLS" => {
+            if !gateway {
+                eprintln!("Error: Gateway/TLS/GatewayTLS tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GatewayTlsTestSuite));
+        }
         "Gateway/Plugins" => {
             if !gateway {
                 eprintln!("Error: Gateway/Plugins tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::PluginLogsTestSuite));
+        }
+        "Gateway/ListenerHostname" => {
+            if !gateway {
+                eprintln!("Error: Gateway/ListenerHostname tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ListenerHostnameTestSuite));
+        }
+        "Gateway/AllowedRoutes/Same" => {
+            if !gateway {
+                eprintln!("Error: Gateway/AllowedRoutes/Same tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::AllowedRoutesSameNamespaceTestSuite));
+        }
+        "Gateway/AllowedRoutes/All" => {
+            if !gateway {
+                eprintln!("Error: Gateway/AllowedRoutes/All tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::AllowedRoutesAllNamespacesTestSuite));
+        }
+        "Gateway/AllowedRoutes/Kinds" => {
+            if !gateway {
+                eprintln!("Error: Gateway/AllowedRoutes/Kinds tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::AllowedRoutesKindsTestSuite));
+        }
+        "Gateway/Combined" => {
+            if !gateway {
+                eprintln!("Error: Gateway/Combined tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CombinedScenariosTestSuite));
+        }
+        "Gateway/Dynamic" => {
+            if !gateway {
+                eprintln!("Error: Gateway/Dynamic tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::InitialPhaseTestSuite));
+                }
+                Some("update") => {
+                    runner.add_suite(Box::new(suites::UpdatePhaseTestSuite));
+                }
+                None => {
+                    // 默认运行两个阶段
+                    runner.add_suite(Box::new(suites::InitialPhaseTestSuite));
+                    runner.add_suite(Box::new(suites::UpdatePhaseTestSuite));
+                }
+                _ => {
+                    eprintln!("Error: Invalid phase '{}'. Use 'initial' or 'update'", phase.unwrap());
+                    std::process::exit(1);
+                }
+            }
         }
         // EdgionTls 资源
         "EdgionTls" => {
@@ -325,6 +396,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool) {
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::MtlsTestSuite));
+        }
+        "EdgionTls/cipher" => {
+            if !gateway {
+                eprintln!("Error: EdgionTls/cipher tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CipherTestSuite));
         }
         // 运行所有测试
         "all" => {
@@ -397,6 +475,11 @@ async fn main() -> Result<()> {
         match port_config::PortConfig::load() {
             Ok(config) => {
                 let ports = config.get_ports(port_key);
+                // Select http_host based on suite
+                let http_host = match suite.as_str() {
+                    "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
+                    _ => "test.example.com",
+                };
                 (
                     ports.http.unwrap_or(31000),
                     ports.grpc.unwrap_or(ports.http.unwrap_or(31000)),
@@ -406,7 +489,7 @@ async fn main() -> Result<()> {
                     ports.http.unwrap_or(31000),
                     ports.https.unwrap_or(ports.http.map(|p| p + 1).unwrap_or(31001)),
                     ports.grpc_tls.unwrap_or(31070),
-                    Some("test.example.com".to_string()),
+                    Some(http_host.to_string()),
                     Some("grpc.example.com".to_string()),
                 )
             }
@@ -476,7 +559,7 @@ async fn main() -> Result<()> {
     let mut runner = TestRunner::new(context);
 
     // Add test suite
-    add_suites_for_suite(&mut runner, &suite, cli.gateway);
+    add_suites_for_suite(&mut runner, &suite, cli.gateway, cli.phase.as_deref());
 
     let start_time = Instant::now();
     let results = runner.run().await;

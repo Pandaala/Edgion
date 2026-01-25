@@ -8,6 +8,7 @@ use pingora_proxy::{FailToProxy, ProxyHttp, Session};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::gateway::server_header::ServerHeaderOpts;
 use crate::core::observe::AccessLogger;
 use crate::core::routes::{grpc_routes::DomainGrpcRouteRules, DomainRouteRules};
@@ -15,6 +16,7 @@ use crate::types::{EdgionGatewayConfig, EdgionHttpContext, Listener};
 
 // Sub-modules
 pub mod parse_timeout;
+pub mod preflight_handler;
 
 // Pingora ProxyHttp trait implementation stages
 mod pg_connected_to_upstream;
@@ -33,14 +35,17 @@ mod pg_upstream_response_filter;
 
 // Re-exports
 pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};
+pub use preflight_handler::PreflightHandler;
 
 /// EdgionHttp proxy structure
 pub struct EdgionHttp {
     pub gateway_class_name: Option<String>,
-    pub gateway_namespace: Option<String>,
-    pub gateway_name: String,
 
     pub listener: Listener,
+
+    /// Pre-built GatewayInfo for route matching (avoids per-request allocation)
+    /// Contains: namespace, gateway_name, listener_name
+    pub gateway_info: GatewayInfo,
 
     pub server_start_time: SystemTime,
 
@@ -68,7 +73,7 @@ pub struct EdgionHttp {
     pub real_ip_extractor: Option<Arc<crate::core::utils::RealIpExtractor>>,
 
     /// Preflight request handler
-    pub preflight_handler: crate::core::gateway::PreflightHandler,
+    pub preflight_handler: PreflightHandler,
 }
 
 #[async_trait]

@@ -64,9 +64,17 @@ impl ListResponse {
     }
 }
 
-/// Health check endpoint
+/// Health check endpoint (liveness)
 async fn health_check() -> Json<ApiResponse<String>> {
     Json(ApiResponse::success("OK".to_string()))
+}
+
+/// Readiness check endpoint - returns OK only when all caches are ready
+async fn readiness_check(State(client): State<Arc<ConfigClient>>) -> axum::http::StatusCode {
+    match client.is_ready() {
+        Ok(()) => axum::http::StatusCode::OK,
+        Err(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE,
+    }
 }
 
 /// Helper macro to list all resources from ConfigClient
@@ -201,6 +209,7 @@ async fn get_resource(
 pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
     Router::new()
         .route("/health", get(health_check))
+        .route("/ready", get(readiness_check))
         // Dynamic endpoints for all resource types
         .route("/configclient/{kind}", get(get_resource))
         .route("/configclient/{kind}/list", get(list_resources))

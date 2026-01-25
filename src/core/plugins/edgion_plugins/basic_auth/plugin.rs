@@ -322,7 +322,7 @@ mod tests {
         // First run: Cache Miss -> Populate
         let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(auth.auth_cache.len() == 1);
+        assert_eq!(auth.auth_cache.len(), 1);
 
         // Second run: Cache Hit
         // We reuse the same mock calls, just ensuring it doesn't crash/fail

@@ -1,0 +1,22 @@
+# 组合测试 3: Same Namespace 但 Hostname 不匹配（负面测试）
+# Route 在同 namespace 但 hostname 不匹配应拒绝
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: combined-hostname-mismatch-same-ns
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: combined-test-gateway
+      namespace: edgion-test
+      sectionName: http-hostname-same-ns
+  hostnames:
+    - "other.example.com"  # 不匹配 *.combined.example.com
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          port: 30001

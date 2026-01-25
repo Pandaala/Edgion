@@ -21,6 +21,9 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 # Whether to cleanup at end
 DO_CLEANUP=true
 
+# Whether to run full tests including slow tests (default: false for faster iteration)
+FULL_TEST=false
+
 # Report file path (will be set after WORK_DIR is determined)
 REPORT_FILE=""
 
@@ -52,6 +55,32 @@ log_section() {
 }
 
 # =============================================================================
+# Slow test management
+# =============================================================================
+# Slow tests list (skipped by default, run with --full-test)
+SLOW_TESTS=(
+    "HTTPRoute_Backend_Timeout"
+)
+
+is_slow_test() {
+    local test_name=$1
+    for slow in "${SLOW_TESTS[@]}"; do
+        if [[ "$test_name" == "$slow" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+should_skip_test() {
+    local test_name=$1
+    if ! $FULL_TEST && is_slow_test "$test_name"; then
+        return 0  # Should skip
+    fi
+    return 1  # Don't skip
+}
+
+# =============================================================================
 # Report functions
 # =============================================================================
 init_report() {
@@ -60,6 +89,7 @@ init_report() {
     echo "Edgion Integration Test Report" >> "$REPORT_FILE"
     echo "Time: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "Work Dir: ${WORK_DIR}" >> "$REPORT_FILE"
+    echo "Full Test: ${FULL_TEST}" >> "$REPORT_FILE"
     echo "========================================" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 }
@@ -99,6 +129,84 @@ finalize_report() {
 }
 
 # =============================================================================
+# Dynamic Test function
+# =============================================================================
+run_dynamic_tests() {
+    local stage=${1:-0}  # 0=完整，1=仅初始，2=仅更新后
+    local edgion_ctl="${PROJECT_ROOT}/target/debug/edgion-ctl"
+    local conf_dir="${PROJECT_ROOT}/examples/test/conf"
+    local controller_url="http://127.0.0.1:5800"
+    local gateway_url="http://127.0.0.1:5900"
+    
+    log_section "🔄 Gateway 动态性测试"
+    
+    if [ $stage -eq 0 ] || [ $stage -eq 1 ]; then
+        log_info ">>> 阶段 1/2: 初始配置验证"
+        
+        # 运行初始阶段测试（验证约束生效）
+        run_test "Dynamic_Initial_Phase" \
+            "${PROJECT_ROOT}/target/debug/examples/test_client \
+             -g -r Gateway -i Dynamic --phase initial" || test_failed=true
+        
+        log_success "初始阶段测试完成"
+    fi
+    
+    if [ $stage -eq 0 ]; then
+        log_section "📦 加载动态更新配置"
+        
+        # 1. 加载更新配置
+        log_info "Applying updates from DynamicTest/updates/..."
+        "${edgion_ctl}" --server "${controller_url}" \
+            apply -f "${conf_dir}/Gateway/DynamicTest/updates/" || {
+            log_error "Failed to apply dynamic updates"
+            return 1
+        }
+        
+        # 2. 处理删除操作
+        if [ -f "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt" ]; then
+            log_info "Deleting resources..."
+            while IFS= read -r resource; do
+                [ -z "$resource" ] || [[ "$resource" =~ ^# ]] && continue
+                # 解析格式: Kind/Namespace/Name
+                IFS='/' read -r kind namespace name <<< "$resource"
+                if [ -n "$kind" ] && [ -n "$namespace" ] && [ -n "$name" ]; then
+                    log_info "Deleting: $kind/$namespace/$name"
+                    "${edgion_ctl}" --server "${controller_url}" delete "$kind" "$name" -n "$namespace" || true
+                fi
+            done < "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt"
+        fi
+        
+        # 3. 验证资源同步（不阻止阶段2执行）
+        log_info "Verifying resource synchronization..."
+        run_test "Resource_Diff_After_Dynamic_Update" \
+            "${PROJECT_ROOT}/target/debug/examples/resource_diff \
+             --controller-url ${controller_url} \
+             --gateway-url ${gateway_url}" || {
+            log_info "Resource sync has some issues (non-blocking, continuing...)"
+        }
+        
+        # 4. 等待配置生效
+        log_info "Waiting 3s for configuration to take effect..."
+        sleep 3
+        
+        log_success "动态配置加载完成"
+    fi
+    
+    if [ $stage -eq 0 ] || [ $stage -eq 2 ]; then
+        log_info ">>> 阶段 2/2: 动态更新后验证"
+        
+        # 运行更新后测试（验证约束变更生效）
+        run_test "Dynamic_After_Update_Phase" \
+            "${PROJECT_ROOT}/target/debug/examples/test_client \
+             -g -r Gateway -i Dynamic --phase update" || test_failed=true
+        
+        log_success "更新阶段测试完成"
+    fi
+    
+    log_section "✅ 动态性测试完成"
+}
+
+# =============================================================================
 # Cleanup function
 # =============================================================================
 cleanup() {
@@ -122,6 +230,9 @@ show_help() {
     echo "  --no-prepare           Skip build step"
     echo "  --no-start             Skip start step"
     echo "  --keep-alive           Keep services running after end (default will stop)"
+    echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
+    echo "  --dynamic-test         Run Gateway dynamic configuration tests"
+    echo "  --dynamic-stage <NUM>  Dynamic test stage: 1=initial, 2=update, 0=both (default: 0)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  -h, --help             Show help"
     echo ""
@@ -142,6 +253,8 @@ main() {
     local suites=""
     local resource=""
     local item=""
+    local dynamic_test=false
+    local dynamic_stage=0
     
     # Parse args
     while [[ $# -gt 0 ]]; do
@@ -166,6 +279,18 @@ main() {
             --keep-alive)
                 DO_CLEANUP=false
                 shift
+                ;;
+            --full-test)
+                FULL_TEST=true
+                shift
+                ;;
+            --dynamic-test)
+                dynamic_test=true
+                shift
+                ;;
+            --dynamic-stage)
+                dynamic_stage=$2
+                shift 2
                 ;;
             --suites)
                 suites="$2"
@@ -196,6 +321,11 @@ main() {
         if [ -n "$item" ]; then
             echo -e "Item: ${item}"
         fi
+    fi
+    if $FULL_TEST; then
+        echo -e "Mode: ${GREEN}Full Test${NC} (including slow tests)"
+    else
+        echo -e "Mode: ${YELLOW}Fast Test${NC} (slow tests skipped, use --full-test to include)"
     fi
     echo ""
     
@@ -325,8 +455,16 @@ main() {
                     run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
                     run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
                     run_test "Gateway_Plugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Plugins" || test_failed=true
+                    run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
+                    run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
+                    run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
                 else
-                    run_test "Gateway_${item}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ${item}" || test_failed=true
+                    # Replace / with _ in item name for log file
+                    local item_safe=$(echo "$item" | tr '/' '_')
+                    run_test "Gateway_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ${item}" || test_failed=true
                 fi
                 ;;
             EdgionTls)
@@ -334,6 +472,7 @@ main() {
                     run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i https" || test_failed=true
                     run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
                     run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
+                    run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
                 else
                     run_test "EdgionTls_${item}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${item}" || test_failed=true
                 fi
@@ -367,7 +506,11 @@ main() {
         run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-match" || test_failed=true
         run_test "HTTPRoute_Backend_LBPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-policy" || test_failed=true
         run_test "HTTPRoute_Backend_WeightedBackend" "${PROJECT_ROOT}/target/debug/examples/test_client -g weighted-backend" || test_failed=true
-        run_test "HTTPRoute_Backend_Timeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g timeout" || test_failed=true
+        if ! should_skip_test "HTTPRoute_Backend_Timeout"; then
+            run_test "HTTPRoute_Backend_Timeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g timeout" || test_failed=true
+        else
+            log_info "Skipping slow test: HTTPRoute_Backend_Timeout (use --full-test to run)"
+        fi
         run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-redirect" || test_failed=true
         run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-security" || test_failed=true
         run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g websocket" || test_failed=true
@@ -386,11 +529,28 @@ main() {
         run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
         run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
         run_test "Gateway_Plugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Plugins" || test_failed=true
+        run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
+        run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
+        run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
+        run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
+        run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
+        run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
         
         # EdgionTls Tests
         run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i https" || test_failed=true
         run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
         run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
+        run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
+        
+        # Gateway Dynamic Tests (if enabled)
+        if $dynamic_test; then
+            run_dynamic_tests $dynamic_stage
+        fi
+    fi
+    
+    # Run dynamic tests for Gateway resource (if specified and enabled)
+    if [ -n "$resource" ] && [ "$resource" = "Gateway" ] && $dynamic_test; then
+        run_dynamic_tests $dynamic_stage
     fi
     
     # Finalize report

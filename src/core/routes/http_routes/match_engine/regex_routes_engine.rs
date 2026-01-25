@@ -1,4 +1,6 @@
+use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::routes::http_routes::match_unit::HttpRouteRuleUnit;
+use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use pingora_proxy::Session;
 use regex::RegexSet;
@@ -79,10 +81,16 @@ impl RegexRoutesEngine {
     /// Match a route against the request path
     /// Returns the first matching Arc<HttpRouteRuleUnit>, or None if no route matches
     /// Routes are checked in order of pattern length (longest first)
+    ///
+    /// # Parameters
+    /// - `session`: The HTTP session
+    /// - `ctx`: Request context containing hostname and other request info
+    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
     pub fn match_route(
         &self,
         session: &mut Session,
-        listener_name: &str,
+        ctx: &EdgionHttpContext,
+        gateway_info: &GatewayInfo,
     ) -> Result<Option<Arc<HttpRouteRuleUnit>>, EdError> {
         let path = session.req_header().uri.path();
 
@@ -101,8 +109,8 @@ impl RegexRoutesEngine {
                 let regex_route = &self.routes[idx];
 
                 // Path already matched by RegexSet, now check deep match
-                // (headers, query params, method, sectionName)
-                if regex_route.deep_match(session, listener_name)? {
+                // (headers, query params, method, Gateway/sectionName)
+                if regex_route.deep_match(session, ctx, gateway_info)? {
                     tracing::debug!(
                         path = %path,
                         regex = %regex_route.path_regex.as_ref().map(|r| r.as_str()).unwrap_or(""),
@@ -115,8 +123,8 @@ impl RegexRoutesEngine {
             // Fallback path: Linear scan if RegexSet failed to build
             for regex_route in &self.routes {
                 if regex_route.matches_path(path) {
-                    // Path matches, check deep match (headers, query params, method, sectionName)
-                    if regex_route.deep_match(session, listener_name)? {
+                    // Path matches, check deep match (headers, query params, method, Gateway/sectionName)
+                    if regex_route.deep_match(session, ctx, gateway_info)? {
                         tracing::debug!(
                             path = %path,
                             regex = %regex_route.path_regex.as_ref().map(|r| r.as_str()).unwrap_or(""),
@@ -132,10 +140,6 @@ impl RegexRoutesEngine {
         Ok(None)
     }
 }
-
-// RegexRoutesEngine is thread-safe with lock-free reads!
-// The routes vector is immutable after initialization.
-unsafe impl Sync for RegexRoutesEngine {}
 
 #[cfg(test)]
 mod tests {

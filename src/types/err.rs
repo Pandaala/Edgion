@@ -4,6 +4,8 @@ use pingora_core::Error as PingoraError;
 pub const WATCH_ERR_VERSION_UNEXPECTED: &str = "VersionUnexpect";
 pub const WATCH_ERR_TOO_OLD_VERSION: &str = "TooOldVersion";
 pub const WATCH_ERR_EVENTS_LOST: &str = "EventsLost";
+pub const WATCH_ERR_NOT_READY: &str = "NotReady";
+pub const WATCH_ERR_SERVER_ID_MISMATCH: &str = "ServerIdMismatch";
 
 #[derive(Debug, thiserror::Error)]
 pub enum EdError {

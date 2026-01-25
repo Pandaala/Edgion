@@ -23,7 +23,7 @@ impl RealIpTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = format!("{}/headers", ctx.http_url());
 
                     // Simulate request through proxy chain:
@@ -121,7 +121,7 @@ impl RealIpTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let client = reqwest::Client::new();
+                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = format!("{}/headers", ctx.http_url());
 
                     let mut request = client.get(&url).header("x-trace-id", "test-real-ip-direct");
