@@ -5,9 +5,9 @@
 //!
 //! The event handling logic mirrors K8s mode's ResourceController:
 //! - Init -> processor.on_init()
-//! - InitApply(content) -> parse + processor.on_init_apply(obj)
+//! - InitApply { path, content } -> parse + processor.on_init_apply(obj)
 //! - InitDone -> processor.on_init_done()
-//! - Apply(content) -> parse + processor.on_apply(&obj)
+//! - Apply { path, content } -> parse + processor.on_apply(&obj)
 //! - Delete(info) -> processor.on_delete(&obj)
 
 use super::event::FileSystemEvent;
@@ -119,7 +119,7 @@ where
                                 self.processor.on_init();
                             }
                         }
-                        FileSystemEvent::InitApply(content) => {
+                        FileSystemEvent::InitApply { path, content } => {
                             // Parse YAML content to resource type
                             match serde_yaml::from_str::<K>(&content) {
                                 Ok(obj) => {
@@ -131,6 +131,7 @@ where
                                     tracing::warn!(
                                         component = "fs_resource_controller",
                                         kind = kind,
+                                        path = %path.display(),
                                         error = %e,
                                         "Failed to parse resource during init"
                                     );
@@ -165,7 +166,7 @@ where
                                 "Worker started, processing runtime events"
                             );
                         }
-                        FileSystemEvent::Apply(content) => {
+                        FileSystemEvent::Apply { path, content } => {
                             if !init_done {
                                 // During init phase, treat as InitApply
                                 match serde_yaml::from_str::<K>(&content) {
@@ -178,6 +179,7 @@ where
                                         tracing::warn!(
                                             component = "fs_resource_controller",
                                             kind = kind,
+                                            path = %path.display(),
                                             error = %e,
                                             "Failed to parse resource during apply"
                                         );
@@ -193,6 +195,7 @@ where
                                         tracing::warn!(
                                             component = "fs_resource_controller",
                                             kind = kind,
+                                            path = %path.display(),
                                             error = %e,
                                             "Failed to parse resource for apply"
                                         );

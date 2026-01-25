@@ -148,9 +148,12 @@ impl FileSystemWatcher {
 
                 // Send InitApply for each file
                 for (path, content) in files {
-                    // The content is sent as the event payload
+                    // The content is sent as the event payload with file path
                     // ResourceController will parse it to the actual type
-                    let _ = sender.send(FileSystemEvent::InitApply(content.clone()));
+                    let _ = sender.send(FileSystemEvent::InitApply {
+                        path: path.clone(),
+                        content: content.clone(),
+                    });
 
                     tracing::trace!(
                         component = "fs_watcher",
@@ -299,7 +302,10 @@ impl FileSystemWatcher {
             // File exists -> Apply event
             match std::fs::read_to_string(path) {
                 Ok(content) => {
-                    let _ = sender.send(FileSystemEvent::Apply(content));
+                    let _ = sender.send(FileSystemEvent::Apply {
+                        path: path.to_path_buf(),
+                        content,
+                    });
                     tracing::debug!(
                         component = "fs_watcher",
                         kind = %info.kind,
@@ -335,8 +341,15 @@ impl FileSystemWatcher {
 // Helper functions
 // ============================================================================
 
-/// Check if a path is a YAML file
+/// Check if a path is a YAML file (excluding .status files)
 fn is_yaml_file(path: &Path) -> bool {
+    // Skip .status files
+    if let Some(name) = path.file_name() {
+        if name.to_string_lossy().ends_with(".status") {
+            return false;
+        }
+    }
+
     path.extension()
         .map(|ext| ext == "yaml" || ext == "yml")
         .unwrap_or(false)

@@ -90,9 +90,6 @@ pub use conf_center::kubernetes::{
 // Leader election
 pub use conf_center::kubernetes::{LeaderElection, LeaderHandle, RelinkReason};
 
-// Status store
-pub use conf_center::status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, StatusStoreError};
-
 // ==================== Backward compatibility aliases ====================
 
 pub use conf_center::traits::ConfWriterError as ConfStoreError;

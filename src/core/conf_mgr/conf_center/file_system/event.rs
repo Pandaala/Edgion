@@ -4,21 +4,36 @@
 //! between Kubernetes and FileSystem modes.
 
 use std::fmt::Debug;
+use std::path::PathBuf;
 
 /// FileSystem event type (mirrors K8s watcher::Event)
 ///
 /// This allows the same event handling logic to be used for both
 /// Kubernetes and FileSystem modes.
+///
+/// Events include file path information to enable status file management.
 #[derive(Debug, Clone)]
 pub enum FileSystemEvent<K> {
     /// Initialization started (directory scan beginning)
     Init,
     /// Resource found during initialization (file scanned)
-    InitApply(K),
+    /// Contains the file path and content
+    InitApply {
+        /// Path to the configuration file
+        path: PathBuf,
+        /// File content (typically YAML string)
+        content: K,
+    },
     /// Initialization completed (directory scan done)
     InitDone,
     /// Resource created or modified (file created/changed)
-    Apply(K),
+    /// Contains the file path and content
+    Apply {
+        /// Path to the configuration file
+        path: PathBuf,
+        /// File content (typically YAML string)
+        content: K,
+    },
     /// Resource deleted (file removed)
     Delete(K),
 }
@@ -45,9 +60,9 @@ impl<K> From<FileSystemEvent<K>> for ResourceEvent<K> {
     fn from(event: FileSystemEvent<K>) -> Self {
         match event {
             FileSystemEvent::Init => ResourceEvent::Init,
-            FileSystemEvent::InitApply(obj) => ResourceEvent::InitApply(obj),
+            FileSystemEvent::InitApply { content, .. } => ResourceEvent::InitApply(content),
             FileSystemEvent::InitDone => ResourceEvent::InitDone,
-            FileSystemEvent::Apply(obj) => ResourceEvent::Apply(obj),
+            FileSystemEvent::Apply { content, .. } => ResourceEvent::Apply(content),
             FileSystemEvent::Delete(obj) => ResourceEvent::Delete(obj),
         }
     }
