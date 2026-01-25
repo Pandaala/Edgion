@@ -47,7 +47,7 @@ pub use ref_grant::{
     get_global_cross_ns_ref_manager, get_global_dispatcher, get_global_reference_grant_store, is_cross_ns_ref_allowed,
     trigger_full_cross_ns_revalidation, validate_grpc_route_if_enabled, validate_http_route_if_enabled,
     validate_tcp_route_if_enabled, validate_tls_route_if_enabled, validate_udp_route_if_enabled,
-    CrossNamespaceRefManager, CrossNamespaceValidator, CrossNsRevalidationListener, CrossNsResourceRef,
+    CrossNamespaceRefManager, CrossNamespaceValidator, CrossNsResourceRef, CrossNsRevalidationListener,
     ReferenceGrantChangedEvent, ReferenceGrantStore, RevalidationListener,
 };
 

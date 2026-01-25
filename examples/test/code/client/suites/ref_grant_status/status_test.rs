@@ -52,9 +52,7 @@ impl RefGrantStatusTestSuite {
             for parent in parents {
                 if let Some(conditions) = parent["conditions"].as_array() {
                     for cond in conditions {
-                        if cond["type"].as_str() == Some("ResolvedRefs")
-                            && cond["status"].as_str() == Some("True")
-                        {
+                        if cond["type"].as_str() == Some("ResolvedRefs") && cond["status"].as_str() == Some("True") {
                             return true;
                         }
                     }
@@ -172,9 +170,9 @@ impl RefGrantStatusTestSuite {
                             if let Some(parents) = route["status"]["parents"].as_array() {
                                 if parents.len() >= 2 {
                                     // Check that each parent has conditions
-                                    let all_have_conditions = parents.iter().all(|p| {
-                                        p["conditions"].as_array().map(|c| !c.is_empty()).unwrap_or(false)
-                                    });
+                                    let all_have_conditions = parents
+                                        .iter()
+                                        .all(|p| p["conditions"].as_array().map(|c| !c.is_empty()).unwrap_or(false));
 
                                     if all_have_conditions {
                                         TestResult::passed_with_message(
@@ -229,10 +227,7 @@ impl RefGrantStatusTestSuite {
                             };
 
                             if has_accepted {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Found Accepted condition".to_string(),
-                                )
+                                TestResult::passed_with_message(start.elapsed(), "Found Accepted condition".to_string())
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),

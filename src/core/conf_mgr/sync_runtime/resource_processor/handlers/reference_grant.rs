@@ -6,9 +6,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::super::ref_grant::{
-    get_global_dispatcher, get_global_reference_grant_store, ReferenceGrantChangedEvent,
-};
+use super::super::ref_grant::{get_global_dispatcher, get_global_reference_grant_store, ReferenceGrantChangedEvent};
 use super::super::{HandlerContext, ProcessResult, ProcessorHandler};
 use crate::types::prelude_resources::ReferenceGrant;
 

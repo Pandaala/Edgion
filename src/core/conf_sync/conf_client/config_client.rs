@@ -490,7 +490,10 @@ impl ConfigClientEventDispatcher for ConfigClient {
                 apply_change!(EdgionStreamPlugins, edgion_stream_plugins, "EdgionStreamPlugins")
             }
             ResourceKind::ReferenceGrant => {
-                tracing::debug!("skip resource change {:?} for ReferenceGrant (not synced to Gateway)", change)
+                tracing::debug!(
+                    "skip resource change {:?} for ReferenceGrant (not synced to Gateway)",
+                    change
+                )
             }
             ResourceKind::BackendTLSPolicy => apply_change!(BackendTLSPolicy, backend_tls_policies, "BackendTLSPolicy"),
             ResourceKind::Secret => tracing::warn!("skip resource change {:?} for Secret", change),

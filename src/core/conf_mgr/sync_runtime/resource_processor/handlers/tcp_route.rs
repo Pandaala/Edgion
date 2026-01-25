@@ -2,11 +2,11 @@
 //!
 //! Handles TCPRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
-use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler,
-};
 use super::super::ref_grant::{
     get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_tcp_route_if_enabled, CrossNsResourceRef,
+};
+use crate::core::conf_mgr::sync_runtime::resource_processor::{
+    set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler,
 };
 use crate::types::prelude_resources::TCPRoute;
 use crate::types::resources::common::RefDenied;

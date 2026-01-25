@@ -77,7 +77,10 @@ impl RouteRules {
             return Err(EdError::RefDenied {
                 target_namespace: denied.target_namespace.clone(),
                 target_name: denied.target_name.clone(),
-                reason: denied.reason.clone().unwrap_or_else(|| "NoMatchingReferenceGrant".to_string()),
+                reason: denied
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "NoMatchingReferenceGrant".to_string()),
             });
         }
 

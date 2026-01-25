@@ -30,8 +30,10 @@ use super::conf_center::kubernetes::KubernetesCenter;
 use super::conf_center::traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfWriterError, ListOptions, ListResult};
 use super::conf_center::ConfCenterConfig;
 use super::sync_runtime::ShutdownHandle;
+use crate::core::conf_mgr::sync_runtime::resource_processor::ref_grant::{
+    get_global_dispatcher, CrossNsRevalidationListener,
+};
 use crate::core::conf_sync::conf_server::ConfigSyncServer;
-use crate::core::conf_mgr::sync_runtime::resource_processor::ref_grant::{get_global_dispatcher, CrossNsRevalidationListener};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;

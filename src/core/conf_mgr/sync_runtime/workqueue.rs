@@ -494,25 +494,25 @@ mod tests {
 
         // Initial enqueue
         queue.enqueue("ns/resource".to_string()).await;
-        
+
         // Dequeue for processing
         let item = queue.dequeue().await.unwrap();
         assert_eq!(item.key, "ns/resource");
-        
+
         // Simulate: while processing, a new update arrives (cascading requeue)
         assert!(queue.enqueue("ns/resource".to_string()).await);
-        
+
         // Complete processing
         queue.done(&item.key);
-        
+
         // The resource should be in queue again, ready for reprocessing
         assert_eq!(queue.len(), 1);
-        
+
         // Dequeue and process the update
         let item2 = queue.dequeue().await.unwrap();
         assert_eq!(item2.key, "ns/resource");
         queue.done(&item2.key);
-        
+
         assert_eq!(queue.len(), 0);
     }
 }

@@ -194,7 +194,10 @@ impl CrossNamespaceRefManager {
             let mut res_map = self.resource_to_namespaces.write().unwrap();
             res_map.clear();
         }
-        tracing::info!(component = "cross_ns_ref_manager", "Cleared all cross-namespace references");
+        tracing::info!(
+            component = "cross_ns_ref_manager",
+            "Cleared all cross-namespace references"
+        );
     }
 }
 
@@ -244,11 +247,8 @@ mod tests {
     #[test]
     fn test_add_and_get_refs() {
         let manager = CrossNamespaceRefManager::new();
-        let resource = CrossNsResourceRef::new(
-            ResourceKind::HTTPRoute,
-            Some("app".to_string()),
-            "my-route".to_string(),
-        );
+        let resource =
+            CrossNsResourceRef::new(ResourceKind::HTTPRoute, Some("app".to_string()), "my-route".to_string());
 
         // Route in 'app' namespace references service in 'backend' namespace
         manager.add_cross_ns_ref("backend".to_string(), resource.clone());
@@ -267,11 +267,8 @@ mod tests {
     #[test]
     fn test_clear_resource_refs() {
         let manager = CrossNamespaceRefManager::new();
-        let resource = CrossNsResourceRef::new(
-            ResourceKind::HTTPRoute,
-            Some("app".to_string()),
-            "my-route".to_string(),
-        );
+        let resource =
+            CrossNsResourceRef::new(ResourceKind::HTTPRoute, Some("app".to_string()), "my-route".to_string());
 
         // Route references services in multiple namespaces
         manager.add_cross_ns_ref("backend1".to_string(), resource.clone());
@@ -294,16 +291,8 @@ mod tests {
     fn test_multiple_resources_same_target() {
         let manager = CrossNamespaceRefManager::new();
 
-        let route1 = CrossNsResourceRef::new(
-            ResourceKind::HTTPRoute,
-            Some("app1".to_string()),
-            "route1".to_string(),
-        );
-        let route2 = CrossNsResourceRef::new(
-            ResourceKind::HTTPRoute,
-            Some("app2".to_string()),
-            "route2".to_string(),
-        );
+        let route1 = CrossNsResourceRef::new(ResourceKind::HTTPRoute, Some("app1".to_string()), "route1".to_string());
+        let route2 = CrossNsResourceRef::new(ResourceKind::HTTPRoute, Some("app2".to_string()), "route2".to_string());
 
         // Both routes reference 'backend' namespace
         manager.add_cross_ns_ref("backend".to_string(), route1.clone());
@@ -323,11 +312,8 @@ mod tests {
     #[test]
     fn test_idempotent_add() {
         let manager = CrossNamespaceRefManager::new();
-        let resource = CrossNsResourceRef::new(
-            ResourceKind::HTTPRoute,
-            Some("app".to_string()),
-            "my-route".to_string(),
-        );
+        let resource =
+            CrossNsResourceRef::new(ResourceKind::HTTPRoute, Some("app".to_string()), "my-route".to_string());
 
         // Add same reference multiple times
         manager.add_cross_ns_ref("backend".to_string(), resource.clone());
@@ -342,16 +328,8 @@ mod tests {
     fn test_stats() {
         let manager = CrossNamespaceRefManager::new();
 
-        let route1 = CrossNsResourceRef::new(
-            ResourceKind::HTTPRoute,
-            Some("app1".to_string()),
-            "route1".to_string(),
-        );
-        let route2 = CrossNsResourceRef::new(
-            ResourceKind::HTTPRoute,
-            Some("app2".to_string()),
-            "route2".to_string(),
-        );
+        let route1 = CrossNsResourceRef::new(ResourceKind::HTTPRoute, Some("app1".to_string()), "route1".to_string());
+        let route2 = CrossNsResourceRef::new(ResourceKind::HTTPRoute, Some("app2".to_string()), "route2".to_string());
 
         manager.add_cross_ns_ref("backend1".to_string(), route1.clone());
         manager.add_cross_ns_ref("backend2".to_string(), route1.clone());

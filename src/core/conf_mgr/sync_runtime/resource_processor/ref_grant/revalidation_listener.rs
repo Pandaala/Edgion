@@ -147,8 +147,8 @@ impl RevalidationListener for CrossNsRevalidationListener {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::cross_ns_ref_manager::CrossNsResourceRef;
+    use super::*;
     use crate::types::ResourceKind;
     use std::collections::HashSet;
 
@@ -160,11 +160,7 @@ mod tests {
         manager.clear();
 
         // Add a resource that references 'backend' namespace
-        let route = CrossNsResourceRef::new(
-            ResourceKind::HTTPRoute,
-            Some("app".to_string()),
-            "my-route".to_string(),
-        );
+        let route = CrossNsResourceRef::new(ResourceKind::HTTPRoute, Some("app".to_string()), "my-route".to_string());
         manager.add_cross_ns_ref("backend".to_string(), route);
 
         // Simulate ReferenceGrant change for 'backend' namespace

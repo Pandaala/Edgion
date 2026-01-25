@@ -157,7 +157,11 @@ pub async fn select_http_backend(
             ctx.add_error(match &e {
                 EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
                 EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-                EdError::RefDenied { target_namespace, target_name, reason } => {
+                EdError::RefDenied {
+                    target_namespace,
+                    target_name,
+                    reason,
+                } => {
                     tracing::warn!(
                         target_namespace = %target_namespace,
                         target_name = %target_name,
