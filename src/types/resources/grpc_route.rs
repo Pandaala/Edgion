@@ -30,6 +30,7 @@ pub const GRPC_ROUTE_KIND: &str = "GRPCRoute";
     version = "v1",
     kind = "GRPCRoute",
     plural = "grpcroutes",
+    status = "GRPCRouteStatus",
     namespaced
 )]
 #[serde(rename_all = "camelCase")]
@@ -427,4 +428,19 @@ impl GRPCRoute {
             }
         }
     }
+}
+
+// ============================================================================
+// GRPCRoute Status (Gateway API standard)
+// ============================================================================
+
+use super::http_route::RouteParentStatus;
+
+/// GRPCRouteStatus describes the status of the GRPCRoute
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GRPCRouteStatus {
+    /// Parents describe the status of the route with respect to each parent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<RouteParentStatus>,
 }

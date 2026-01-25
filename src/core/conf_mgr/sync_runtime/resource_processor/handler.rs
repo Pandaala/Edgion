@@ -96,6 +96,23 @@ where
     ///
     /// Default: no-op
     fn on_change(&self, _obj: &K, _ctx: &HandlerContext) {}
+
+    /// Update resource status
+    ///
+    /// Called after parse() to update the resource's status field.
+    /// Handler should set Gateway API standard conditions:
+    /// - Accepted: Resource is syntactically and semantically valid
+    /// - ResolvedRefs: All references are resolved
+    /// - Programmed: Configuration has been sent to the data plane
+    /// - Ready: Data plane is ready to serve traffic
+    ///
+    /// # Arguments
+    /// * `obj` - Mutable reference to the resource (handler modifies obj.status)
+    /// * `ctx` - Handler context
+    /// * `validation_errors` - Errors from validate() method (e.g., ReferenceGrant failures)
+    ///
+    /// Default: no-op (for resources without status like Secret, Service)
+    fn update_status(&self, _obj: &mut K, _ctx: &HandlerContext, _validation_errors: &[String]) {}
 }
 
 /// Default handler that passes through all resources unchanged

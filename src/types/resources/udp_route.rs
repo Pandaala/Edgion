@@ -26,6 +26,7 @@ pub const UDP_ROUTE_KIND: &str = "UDPRoute";
     version = "v1alpha2",
     kind = "UDPRoute",
     plural = "udproutes",
+    status = "UDPRouteStatus",
     namespaced
 )]
 #[serde(rename_all = "camelCase")]
@@ -122,4 +123,19 @@ pub struct UDPBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
+}
+
+// ============================================================================
+// UDPRoute Status (Gateway API standard)
+// ============================================================================
+
+use super::http_route::RouteParentStatus;
+
+/// UDPRouteStatus describes the status of the UDPRoute
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UDPRouteStatus {
+    /// Parents describe the status of the route with respect to each parent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<RouteParentStatus>,
 }

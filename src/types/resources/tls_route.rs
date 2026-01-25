@@ -26,6 +26,7 @@ pub const TLS_ROUTE_KIND: &str = "TLSRoute";
     version = "v1alpha2",
     kind = "TLSRoute",
     plural = "tlsroutes",
+    status = "TLSRouteStatus",
     namespaced
 )]
 #[serde(rename_all = "camelCase")]
@@ -119,4 +120,19 @@ pub struct TLSBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
+}
+
+// ============================================================================
+// TLSRoute Status (Gateway API standard)
+// ============================================================================
+
+use super::http_route::RouteParentStatus;
+
+/// TLSRouteStatus describes the status of the TLSRoute
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TLSRouteStatus {
+    /// Parents describe the status of the route with respect to each parent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<RouteParentStatus>,
 }

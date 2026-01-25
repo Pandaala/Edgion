@@ -331,8 +331,11 @@ where
 
         // 5. Parse/preprocess
         match self.handler.parse(obj, ctx) {
-            ProcessResult::Continue(parsed_obj) => {
-                // 6. Call on_change
+            ProcessResult::Continue(mut parsed_obj) => {
+                // 6. Update status (handler sets Gateway API conditions)
+                self.handler.update_status(&mut parsed_obj, ctx, &warnings);
+
+                // 7. Call on_change
                 if !is_init {
                     self.handler.on_change(&parsed_obj, ctx);
                 }
@@ -346,7 +349,7 @@ where
                     "Resource processed and saving"
                 );
 
-                // 7. Save to cache
+                // 8. Save to cache
                 // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async)
                 if is_init {
                     self.cache.apply_change(ResourceChange::InitAdd, parsed_obj);

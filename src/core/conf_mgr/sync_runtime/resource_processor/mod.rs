@@ -17,10 +17,15 @@ mod handler;
 pub mod handlers;
 mod processor;
 pub mod secret_utils;
+pub mod status_utils;
 
 pub use context::HandlerContext;
 pub use handler::{ProcessResult, ProcessorHandler};
 pub use processor::{ProcessorObj, ResourceProcessor};
+pub use status_utils::{
+    accepted_condition, condition_false, condition_true, now_rfc3339, programmed_condition, ready_condition,
+    resolved_refs_condition, set_route_parent_conditions, update_condition,
+};
 
 // Re-export handlers
 pub use handlers::{

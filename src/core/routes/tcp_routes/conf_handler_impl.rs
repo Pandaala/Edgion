@@ -189,6 +189,7 @@ mod tests {
                     backend_finder: Default::default(),
                 }]),
             },
+            status: None,
         }
     }
 

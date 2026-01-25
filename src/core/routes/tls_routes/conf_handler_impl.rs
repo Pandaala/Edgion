@@ -192,6 +192,7 @@ mod tests {
                     plugin_runtime: Default::default(),
                 }]),
             },
+            status: None,
         }
     }
 

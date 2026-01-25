@@ -117,6 +117,7 @@ mod tests {
                 }]),
                 rules: Some(vec![]),
             },
+            status: None,
         }
     }
 

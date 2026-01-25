@@ -103,6 +103,7 @@ mod tests {
                 hostnames: Some(vec![hostname.to_string()]),
                 rules: Some(vec![]),
             },
+            status: None,
         }
     }
 

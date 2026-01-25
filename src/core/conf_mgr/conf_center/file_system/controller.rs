@@ -21,6 +21,7 @@
 
 use super::file_watcher::FileSystemWatcher;
 use super::resource_controller::FileSystemResourceController;
+use super::status::FileSystemStatusHandler;
 use crate::core::conf_mgr::conf_center::EndpointMode;
 use crate::core::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor, SecretRefManager};
 use crate::core::conf_mgr::sync_runtime::ShutdownSignal;
@@ -78,6 +79,26 @@ impl FileSystemController {
             conf_dir = %self.conf_dir.display(),
             "Starting FileSystemController"
         );
+
+        // Cleanup orphan .status files at startup
+        let status_handler = FileSystemStatusHandler::new(self.conf_dir.clone());
+        match status_handler.cleanup_orphans() {
+            Ok(count) if count > 0 => {
+                tracing::warn!(
+                    component = "fs_controller",
+                    cleaned = count,
+                    "Cleaned up orphan status files"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    component = "fs_controller",
+                    error = %e,
+                    "Failed to cleanup orphan status files"
+                );
+            }
+            _ => {}
+        }
 
         // Create shared components
         let secret_ref_manager = Arc::new(SecretRefManager::new());
