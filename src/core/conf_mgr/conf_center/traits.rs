@@ -7,7 +7,7 @@
 //! ```text
 //! ConfCenter (super trait)
 //! ├── CenterApi (CRUD operations)
-//! │   └── FileSystemWriter, KubernetesWriter
+//! │   └── FileSystemStorage, KubernetesStorage
 //! └── CenterLifeCycle (lifecycle management)
 //!     └── FileSystemCenter, KubernetesCenter
 //! ```

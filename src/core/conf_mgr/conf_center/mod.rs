@@ -8,11 +8,11 @@
 //! ConfCenter = CenterApi + CenterLifeCycle (super trait)
 //!     │
 //!     ├── FileSystemCenter (implements ConfCenter)
-//!     │   ├── CenterApi delegate -> FileSystemWriter
+//!     │   ├── CenterApi delegate -> FileSystemStorage
 //!     │   └── CenterLifeCycle impl (lifecycle logic)
 //!     │
 //!     └── KubernetesCenter (implements ConfCenter)
-//!         ├── CenterApi delegate -> KubernetesWriter
+//!         ├── CenterApi delegate -> KubernetesStorage
 //!         └── CenterLifeCycle impl (lifecycle logic)
 //! ```
 //!
@@ -45,11 +45,11 @@ pub mod kubernetes;
 pub use traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfEntry, ConfWriterError, ListOptions, ListResult};
 
 // Re-export FileSystem types
-pub use file_system::{FileSystemCenter, FileSystemConfig, FileSystemController, FileSystemWriter};
+pub use file_system::{FileSystemCenter, FileSystemConfig, FileSystemController, FileSystemStorage};
 
 // Re-export Kubernetes types
 pub use kubernetes::{
-    ControllerExitReason, KubernetesCenter, KubernetesConfig, KubernetesController, KubernetesWriter, LeaderElection,
+    ControllerExitReason, KubernetesCenter, KubernetesConfig, KubernetesController, KubernetesStorage, LeaderElection,
     LeaderHandle, LeaderElectionConfig, MetadataFilterConfig, NamespaceWatchMode, RelinkReason,
 };
 

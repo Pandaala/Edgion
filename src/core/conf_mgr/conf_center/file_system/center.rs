@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! FileSystemCenter
-//! ├── writer: FileSystemWriter (CRUD delegate)
+//! ├── writer: FileSystemStorage (CRUD delegate)
 //! ├── config: FileSystemConfig
 //! ├── config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>
 //! ├── shutdown_handle: Mutex<Option<ShutdownHandle>>
@@ -17,7 +17,7 @@
 use super::super::common::EndpointMode;
 use super::config::FileSystemConfig;
 use super::controller::FileSystemController;
-use super::writer::FileSystemWriter;
+use super::storage::FileSystemStorage;
 use crate::core::conf_mgr::conf_center::traits::{
     CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
@@ -39,7 +39,7 @@ pub struct FileSystemCenter {
     /// Configuration
     config: FileSystemConfig,
     /// Writer for CRUD operations (delegate)
-    writer: FileSystemWriter,
+    writer: FileSystemStorage,
     /// ConfigSyncServer instance for gRPC list/watch
     /// None: Not ready (startup, restart)
     /// Some: Ready to serve requests
@@ -60,7 +60,7 @@ impl FileSystemCenter {
             "Creating FileSystemCenter"
         );
 
-        let writer = FileSystemWriter::new(config.conf_dir());
+        let writer = FileSystemStorage::new(config.conf_dir());
 
         Ok(Self {
             config,
@@ -171,7 +171,7 @@ impl FileSystemCenter {
 }
 
 // ============================================================================
-// CenterApi implementation - delegates to FileSystemWriter
+// CenterApi implementation - delegates to FileSystemStorage
 // ============================================================================
 
 #[async_trait]

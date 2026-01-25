@@ -2,7 +2,7 @@
 //!
 //! Provides:
 //! - FileSystemCenter: unified configuration center implementing ConfCenter trait
-//! - FileSystemWriter: reading/writing local YAML files (used by Admin API)
+//! - FileSystemStorage: reading/writing local YAML files (used by Admin API)
 //! - FileSystemController: unified controller that spawns independent ResourceControllers
 //! - FileSystemWatcher: centralized file watching with event dispatch by kind
 //!
@@ -11,7 +11,7 @@
 //! ```text
 //! FileSystemCenter (implements ConfCenter = CenterApi + CenterLifeCycle)
 //!     │
-//!     ├── writer: FileSystemWriter (CenterApi delegate)
+//!     ├── writer: FileSystemStorage (CenterApi delegate)
 //!     │
 //!     └── lifecycle (CenterLifeCycle impl)
 //!             │
@@ -41,7 +41,7 @@ mod controller;
 mod event;
 mod file_watcher;
 mod resource_controller;
-mod writer;
+mod storage;
 
 pub use center::FileSystemCenter;
 pub use config::FileSystemConfig;
@@ -49,4 +49,4 @@ pub use controller::FileSystemController;
 pub use event::{FileSystemEvent, ResourceEvent};
 pub use file_watcher::FileSystemWatcher;
 pub use resource_controller::FileSystemResourceController;
-pub use writer::FileSystemWriter;
+pub use storage::FileSystemStorage;

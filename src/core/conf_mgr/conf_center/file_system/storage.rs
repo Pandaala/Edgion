@@ -1,4 +1,4 @@
-//! FileSystemWriter implementation
+//! FileSystemStorage implementation
 //!
 //! Implements the CenterApi trait using local file system as the backend.
 //! Stores resources as YAML files with naming convention: Kind_namespace_name.yaml
@@ -13,11 +13,11 @@ use tokio::fs;
 ///
 /// Stores resources as YAML files with naming convention: Kind_namespace_name.yaml
 /// or Kind__name.yaml for cluster-scoped resources.
-pub struct FileSystemWriter {
+pub struct FileSystemStorage {
     root: PathBuf,
 }
 
-impl FileSystemWriter {
+impl FileSystemStorage {
     /// Create a new file system writer with root directory path
     pub fn new<P: Into<PathBuf>>(root: P) -> Self {
         let root_path = root.into();
@@ -33,7 +33,7 @@ impl FileSystemWriter {
             component = "file_system_writer",
             event = "init",
             root = ?root_abs,
-            "Initialized FileSystemWriter"
+            "Initialized FileSystemStorage"
         );
 
         Self { root: root_abs }
@@ -46,7 +46,7 @@ impl FileSystemWriter {
 }
 
 #[async_trait]
-impl CenterApi for FileSystemWriter {
+impl CenterApi for FileSystemStorage {
     async fn set_one(
         &self,
         kind: &str,

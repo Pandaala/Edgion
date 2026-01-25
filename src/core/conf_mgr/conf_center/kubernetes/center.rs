@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! KubernetesCenter
-//! ├── writer: KubernetesWriter (CenterApi delegate)
+//! ├── writer: KubernetesStorage (CenterApi delegate)
 //! ├── config: KubernetesConfig
 //! ├── config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>
 //! ├── shutdown_handle: Mutex<Option<ShutdownHandle>>
@@ -19,7 +19,7 @@ use super::config::KubernetesConfig;
 use super::controller::{ControllerExitReason, KubernetesController};
 use super::leader_election::{LeaderElection, LeaderElectionConfig as InternalLeaderElectionConfig, LeaderHandle};
 use super::version_detection::resolve_endpoint_mode;
-use super::writer::KubernetesWriter;
+use super::storage::KubernetesStorage;
 use crate::core::conf_mgr::conf_center::traits::{
     CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
@@ -82,7 +82,7 @@ pub struct KubernetesCenter {
     /// Configuration
     config: KubernetesConfig,
     /// Writer for CRUD operations (delegate)
-    writer: KubernetesWriter,
+    writer: KubernetesStorage,
     /// ConfigSyncServer instance for gRPC list/watch
     /// None: Not ready (startup, restart, leadership loss)
     /// Some: Ready to serve requests
@@ -101,7 +101,7 @@ impl KubernetesCenter {
             "Creating KubernetesCenter"
         );
 
-        let writer = KubernetesWriter::new().await?;
+        let writer = KubernetesStorage::new().await?;
 
         Ok(Self {
             config,
@@ -491,7 +491,7 @@ impl KubernetesCenter {
 }
 
 // ============================================================================
-// CenterApi implementation - delegates to KubernetesWriter
+// CenterApi implementation - delegates to KubernetesStorage
 // ============================================================================
 
 #[async_trait]

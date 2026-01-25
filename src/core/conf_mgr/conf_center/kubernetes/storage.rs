@@ -1,4 +1,4 @@
-//! KubernetesWriter implementation
+//! KubernetesStorage implementation
 //!
 //! Implements the CenterApi trait by calling Kubernetes API.
 //! Similar to client-go, this allows creating/updating/deleting K8s resources via API.
@@ -15,18 +15,18 @@ use kube::{Api, Client};
 ///
 /// Implements ConfWriter by calling K8s API server.
 /// Uses dynamic client to support any resource type.
-pub struct KubernetesWriter {
+pub struct KubernetesStorage {
     client: Client,
 }
 
-impl KubernetesWriter {
-    /// Create a new KubernetesWriter with default client
+impl KubernetesStorage {
+    /// Create a new KubernetesStorage with default client
     pub async fn new() -> Result<Self> {
         let client = Client::try_default().await?;
         Ok(Self { client })
     }
 
-    /// Create a new KubernetesWriter with existing client
+    /// Create a new KubernetesStorage with existing client
     pub fn with_client(client: Client) -> Self {
         Self { client }
     }
@@ -200,7 +200,7 @@ impl KubernetesWriter {
 }
 
 #[async_trait]
-impl CenterApi for KubernetesWriter {
+impl CenterApi for KubernetesStorage {
     async fn set_one(
         &self,
         kind: &str,
