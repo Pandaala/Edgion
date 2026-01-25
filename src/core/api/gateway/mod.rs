@@ -92,7 +92,7 @@ macro_rules! list_client_resources {
             ResourceKind::EdgionTls => to_json_vec($client.edgion_tls().list().data),
             ResourceKind::EdgionPlugins => to_json_vec($client.edgion_plugins().list().data),
             ResourceKind::EdgionStreamPlugins => to_json_vec($client.edgion_stream_plugins().list().data),
-            ResourceKind::ReferenceGrant => to_json_vec($client.reference_grants().list().data),
+            ResourceKind::ReferenceGrant => vec![], // ReferenceGrant not synced to Gateway
             ResourceKind::BackendTLSPolicy => to_json_vec($client.backend_tls_policies().list().data),
             ResourceKind::PluginMetaData => to_json_vec($client.plugin_metadata().list().data),
             ResourceKind::LinkSys => to_json_vec($client.link_sys().list().data),
@@ -123,7 +123,7 @@ macro_rules! get_client_resource {
             ResourceKind::EdgionStreamPlugins => {
                 find_resource_alt($client.edgion_stream_plugins().list().data, ns_opt, name_str)
             }
-            ResourceKind::ReferenceGrant => find_resource_alt($client.reference_grants().list().data, ns_opt, name_str),
+            ResourceKind::ReferenceGrant => None, // ReferenceGrant not synced to Gateway
             ResourceKind::BackendTLSPolicy => {
                 find_resource_alt($client.backend_tls_policies().list().data, ns_opt, name_str)
             }

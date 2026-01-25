@@ -5,8 +5,11 @@
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler,
 };
-use crate::core::ref_grant::{get_global_cross_ns_ref_manager, validate_udp_route_if_enabled, CrossNsResourceRef};
+use crate::core::ref_grant::{
+    get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_udp_route_if_enabled, CrossNsResourceRef,
+};
 use crate::types::prelude_resources::UDPRoute;
+use crate::types::resources::common::RefDenied;
 use crate::types::resources::http_route::RouteParentStatus;
 use crate::types::resources::udp_route::UDPRouteStatus;
 use crate::types::ResourceKind;
@@ -68,9 +71,40 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
         validate_udp_route_if_enabled(route)
     }
 
-    fn parse(&self, route: UDPRoute, _ctx: &HandlerContext) -> ProcessResult<UDPRoute> {
+    fn parse(&self, mut route: UDPRoute, _ctx: &HandlerContext) -> ProcessResult<UDPRoute> {
         // Record cross-namespace references for revalidation when ReferenceGrant changes
         Self::record_cross_ns_refs(&route);
+
+        // Mark denied cross-namespace references
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        if let Some(rules) = &mut route.spec.rules {
+            for rule in rules {
+                if let Some(backend_refs) = &mut rule.backend_refs {
+                    for backend_ref in backend_refs {
+                        if let Some(backend_ns) = &backend_ref.namespace {
+                            if backend_ns != route_ns {
+                                let allowed = is_cross_ns_ref_allowed(
+                                    route_ns,
+                                    "UDPRoute",
+                                    backend_ns,
+                                    backend_ref.group.as_ref(),
+                                    backend_ref.kind.as_ref(),
+                                    &backend_ref.name,
+                                );
+                                if !allowed {
+                                    backend_ref.ref_denied = Some(RefDenied {
+                                        target_namespace: backend_ns.clone(),
+                                        target_name: backend_ref.name.clone(),
+                                        reason: Some("NoMatchingReferenceGrant".to_string()),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         ProcessResult::Continue(route)
     }
 

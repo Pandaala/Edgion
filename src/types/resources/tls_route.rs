@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
 
-use super::common::ParentReference;
+use super::common::{ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::lb::BackendSelector;
 use crate::core::plugins::PluginRuntime;
@@ -120,6 +120,12 @@ pub struct TLSBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
+
+    /// Cross-namespace reference denial info
+    /// Set by Controller when this backend's cross-namespace reference
+    /// is not permitted (no matching ReferenceGrant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ref_denied: Option<RefDenied>,
 }
 
 // ============================================================================

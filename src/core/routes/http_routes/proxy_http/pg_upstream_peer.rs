@@ -154,9 +154,18 @@ pub async fn select_http_backend(
         Ok(backend) => backend,
         Err(e) => {
             tracing::error!("Failed to select backend: {:?}", e);
-            ctx.add_error(match e {
+            ctx.add_error(match &e {
                 EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
                 EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
+                EdError::RefDenied { target_namespace, target_name, reason } => {
+                    tracing::warn!(
+                        target_namespace = %target_namespace,
+                        target_name = %target_name,
+                        reason = %reason,
+                        "Cross-namespace reference denied"
+                    );
+                    EdgionStatus::RefDenied
+                }
                 _ => EdgionStatus::Unknown,
             });
             end_response_500(session, ctx, &edgion_http.server_header_opts).await?;

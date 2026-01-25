@@ -72,6 +72,15 @@ impl RouteRules {
             _ => EdError::BackendNotFound(),
         })?;
 
+        // Check if this backend reference is denied (no matching ReferenceGrant)
+        if let Some(ref denied) = backend_ref.ref_denied {
+            return Err(EdError::RefDenied {
+                target_namespace: denied.target_namespace.clone(),
+                target_name: denied.target_name.clone(),
+                reason: denied.reason.clone().unwrap_or_else(|| "NoMatchingReferenceGrant".to_string()),
+            });
+        }
+
         // Note: BackendTLSPolicy query is performed in pg_upstream_peer.rs
         // where route namespace is available for proper namespace inheritance
 

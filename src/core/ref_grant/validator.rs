@@ -168,6 +168,36 @@ fn check_cross_namespace_ref(
     }
 }
 
+/// Check if a single cross-namespace reference is allowed
+/// Returns true if allowed, false otherwise
+/// Used by handlers to set ref_denied field on BackendRef
+pub fn is_cross_ns_ref_allowed(
+    route_namespace: &str,
+    route_kind: &str,
+    backend_namespace: &str,
+    backend_group: Option<&String>,
+    backend_kind: Option<&String>,
+    backend_name: &str,
+) -> bool {
+    if !is_validation_enabled() {
+        return true;
+    }
+
+    let validator = CrossNamespaceValidator::new();
+    let group = normalize_group(backend_group);
+    let kind = normalize_kind(backend_kind);
+
+    validator.store.check_reference_allowed(
+        route_namespace,
+        "gateway.networking.k8s.io",
+        route_kind,
+        backend_namespace,
+        group,
+        kind,
+        Some(backend_name),
+    )
+}
+
 /// Validate HTTPRoute with ReferenceGrant if validation is enabled
 pub fn validate_http_route_if_enabled(route: &crate::types::resources::HTTPRoute) -> Vec<String> {
     if !is_validation_enabled() {

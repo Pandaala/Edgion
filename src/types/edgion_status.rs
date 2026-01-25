@@ -95,4 +95,7 @@ pub enum EdgionStatus {
 
     /// gRPC backend refs not found
     GrpcUpstreamNotBackendRefs = 503_11,
+
+    /// Cross-namespace reference denied (no matching ReferenceGrant)
+    RefDenied = 503_12,
 }

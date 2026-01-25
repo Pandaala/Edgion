@@ -52,6 +52,25 @@ impl ParentReference {
     }
 }
 
+/// Cross-namespace reference denial info
+///
+/// Set by Controller when a cross-namespace reference is not permitted
+/// (no matching ReferenceGrant). This info is synced to Gateway and used
+/// to reject requests and log denial details to access log.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RefDenied {
+    /// The target namespace that was denied
+    pub target_namespace: String,
+
+    /// The target resource name that was denied
+    pub target_name: String,
+
+    /// Optional reason for denial (e.g., "NoMatchingReferenceGrant")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 /// Condition contains details for one aspect of the current state of this API Resource.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]

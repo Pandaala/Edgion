@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
 
-use super::common::ParentReference;
+use super::common::{ParentReference, RefDenied};
 use crate::core::lb::BackendSelector;
 use crate::core::plugins::StreamPluginRuntime;
 
@@ -105,6 +105,12 @@ pub struct TCPBackendRef {
     /// Kind is the kind of the referent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+
+    /// Cross-namespace reference denial info
+    /// Set by Controller when this backend's cross-namespace reference
+    /// is not permitted (no matching ReferenceGrant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ref_denied: Option<RefDenied>,
 }
 
 // ============================================================================

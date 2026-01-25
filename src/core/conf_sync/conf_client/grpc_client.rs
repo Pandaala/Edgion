@@ -80,7 +80,7 @@ impl ConfigSyncClient {
             .edgion_stream_plugins()
             .set_grpc_client(client.clone())
             .await;
-        config_client.reference_grants().set_grpc_client(client.clone()).await;
+        // ReferenceGrant is not synced to Gateway - validation is done on Controller
         config_client
             .backend_tls_policies()
             .set_grpc_client(client.clone())
@@ -154,7 +154,8 @@ impl ConfigSyncClient {
                 self.config_client.edgion_stream_plugins().start_watch().await?;
             }
             ReferenceGrant => {
-                self.config_client.reference_grants().start_watch().await?;
+                // ReferenceGrant is not synced to Gateway - validation is done on Controller
+                tracing::debug!("ReferenceGrant watch skipped - not synced to Gateway");
             }
             BackendTLSPolicy => {
                 self.config_client.backend_tls_policies().start_watch().await?;

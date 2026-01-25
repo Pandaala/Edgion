@@ -184,6 +184,7 @@ mod tests {
                         weight: Some(1),
                         group: None,
                         kind: None,
+                        ref_denied: None,
                     }]),
                     stream_plugin_runtime: Default::default(),
                     backend_finder: Default::default(),

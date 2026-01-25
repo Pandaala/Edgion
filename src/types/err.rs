@@ -47,4 +47,11 @@ pub enum EdError {
 
     #[error("HTTP/2 required for gRPC")]
     Http2Required,
+
+    #[error("Cross-namespace reference denied: {target_namespace}/{target_name} ({reason})")]
+    RefDenied {
+        target_namespace: String,
+        target_name: String,
+        reason: String,
+    },
 }
