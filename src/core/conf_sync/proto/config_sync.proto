@@ -4,6 +4,9 @@ package conf_sync;
 
 // ConfigSync service for listing and watching resources
 service ConfigSync {
+    // Get server information including endpoint mode and supported resource kinds
+    rpc GetServerInfo(ServerInfoRequest) returns (ServerInfoResponse);
+    
     // List all resources of a specific kind
     rpc List(ListRequest) returns (ListResponse);
     
@@ -60,5 +63,15 @@ message WatchResponse {
     uint64 sync_version = 2;
     string err = 3;
     string server_id = 4;  // Server instance ID for detecting server restarts
+}
+
+// Server info request
+message ServerInfoRequest {}
+
+// Server info response
+message ServerInfoResponse {
+    string server_id = 1;              // Server instance ID
+    string endpoint_mode = 2;          // "EndpointSlice", "Endpoint", or "Auto"
+    repeated string supported_kinds = 3;  // List of resource kinds supported by this server
 }
 

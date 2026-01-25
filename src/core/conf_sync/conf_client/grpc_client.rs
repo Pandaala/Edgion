@@ -1,5 +1,6 @@
 use crate::core::conf_sync::conf_client::ConfigClient;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
+use crate::core::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse};
 use crate::types::prelude_resources::*;
 use crate::types::ResourceKind::*;
 use std::sync::Arc;
@@ -11,7 +12,6 @@ use uuid::Uuid;
 /// gRPC conf_client for ConfigSync service
 pub struct ConfigSyncClient {
     config_client: Arc<ConfigClient>,
-    #[allow(dead_code)]
     conf_client_handle: ConfigSyncClientService<Channel>,
 }
 
@@ -175,7 +175,7 @@ impl ConfigSyncClient {
         Ok(())
     }
 
-    /// Start watching all resource types
+    /// Start watching all resource types (deprecated: use start_watch_kinds instead)
     pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
         // Watch all resources including base_conf resources
         let resource_kinds = vec![
@@ -203,6 +203,73 @@ impl ConfigSyncClient {
         for kind in resource_kinds {
             if let Err(e) = self.start_watch_sync(String::new(), kind).await {
                 tracing::error!(kind = ?kind, error = %e, "Failed to start watch");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get server information including endpoint mode and supported resource kinds
+    pub async fn get_server_info(&mut self) -> Result<ServerInfoResponse, tonic::Status> {
+        let response = self
+            .conf_client_handle
+            .get_server_info(ServerInfoRequest {})
+            .await?;
+
+        let info = response.into_inner();
+
+        tracing::info!(
+            server_id = %info.server_id,
+            endpoint_mode = %info.endpoint_mode,
+            supported_kinds = ?info.supported_kinds,
+            "Received server info"
+        );
+
+        Ok(info)
+    }
+
+    /// Start watching resource kinds based on server's supported kinds
+    ///
+    /// This method filters the supported_kinds from server and starts watches
+    /// only for the resources that the server actually supports.
+    pub async fn start_watch_kinds(&mut self, supported_kinds: &[String]) -> Result<(), tonic::Status> {
+        tracing::info!(
+            supported_kinds = ?supported_kinds,
+            "Starting watch for supported resource kinds"
+        );
+
+        // Map from server kind names to ResourceKind enum
+        for kind_name in supported_kinds {
+            let resource_kind = match kind_name.as_str() {
+                "GatewayClass" => Some(GatewayClass),
+                "EdgionGatewayConfig" => Some(EdgionGatewayConfig),
+                "Gateway" => Some(Gateway),
+                "HTTPRoute" => Some(HTTPRoute),
+                "GRPCRoute" => Some(GRPCRoute),
+                "TCPRoute" => Some(TCPRoute),
+                "UDPRoute" => Some(UDPRoute),
+                "TLSRoute" => Some(TLSRoute),
+                "LinkSys" => Some(LinkSys),
+                "Service" => Some(Service),
+                "EndpointSlice" => Some(EndpointSlice),
+                "Endpoints" => Some(Endpoint),
+                "EdgionTls" => Some(EdgionTls),
+                "EdgionPlugins" => Some(EdgionPlugins),
+                "EdgionStreamPlugins" => Some(EdgionStreamPlugins),
+                "ReferenceGrant" => Some(ReferenceGrant),
+                "BackendTLSPolicy" => Some(BackendTLSPolicy),
+                "PluginMetaData" => Some(PluginMetaData),
+                "Secret" => None, // Secret follows related resources
+                _ => {
+                    tracing::warn!(kind = %kind_name, "Unknown resource kind from server, skipping");
+                    None
+                }
+            };
+
+            if let Some(kind) = resource_kind {
+                if let Err(e) = self.start_watch_sync(String::new(), kind).await {
+                    tracing::error!(kind = ?kind, error = %e, "Failed to start watch");
+                }
             }
         }
 

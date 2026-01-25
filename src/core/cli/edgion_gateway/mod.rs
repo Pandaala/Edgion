@@ -162,19 +162,40 @@ impl EdgionGatewayCli {
         init_global_config_client(config_client.clone())
             .map_err(|e| anyhow!("Failed to initialize global config client: {}", e))?;
 
-        // 4.1. Initialize global endpoint mode
-        // For Gateway, we use EndpointSlice as default (modern K8s clusters)
-        // This can be made configurable in the future if needed
-        init_global_endpoint_mode(EndpointMode::EndpointSlice);
+        // 4.1. Get server info from Controller (includes EndpointMode and supported kinds)
+        let server_info = runtime
+            .block_on(sync_client.get_server_info())
+            .map_err(|e| anyhow!("Failed to get server info from Controller: {}", e))?;
+
+        // 4.2. Parse and initialize global endpoint mode from Controller
+        let endpoint_mode = match server_info.endpoint_mode.as_str() {
+            "EndpointSlice" => EndpointMode::EndpointSlice,
+            "Endpoint" => EndpointMode::Endpoint,
+            _ => {
+                tracing::warn!(
+                    component = "startup",
+                    endpoint_mode = %server_info.endpoint_mode,
+                    "Unknown endpoint mode from Controller, defaulting to EndpointSlice"
+                );
+                EndpointMode::EndpointSlice
+            }
+        };
+        init_global_endpoint_mode(endpoint_mode);
         tracing::info!(
             component = "startup",
-            endpoint_mode = "EndpointSlice",
-            "Global endpoint mode initialized"
+            endpoint_mode = ?endpoint_mode,
+            server_id = %server_info.server_id,
+            "Global endpoint mode initialized from Controller"
         );
 
-        // 5. Start watching all resources
-        runtime.block_on(sync_client.start_watch_all())?;
-        tracing::info!("Started watching all resources");
+        // 5. Start watching resources based on Controller's supported kinds
+        runtime
+            .block_on(sync_client.start_watch_kinds(&server_info.supported_kinds))
+            .map_err(|e| anyhow!("Failed to start watching resources: {}", e))?;
+        tracing::info!(
+            supported_kinds = ?server_info.supported_kinds,
+            "Started watching resources from Controller"
+        );
 
         // 6. Start auxiliary services
         runtime.block_on(Self::start_auxiliary_services(config_client.clone()));

@@ -62,6 +62,15 @@ pub fn get_global_endpoint_mode() -> EndpointMode {
         .expect("GLOBAL_ENDPOINT_MODE not initialized - call init_global_endpoint_mode first")
 }
 
+/// Try to get global endpoint mode without panicking.
+///
+/// Returns `None` if the endpoint mode has not been initialized yet.
+/// Useful for code that needs to check endpoint mode but may run before initialization.
+#[inline]
+pub fn try_get_global_endpoint_mode() -> Option<EndpointMode> {
+    GLOBAL_ENDPOINT_MODE.get().copied()
+}
+
 /// Check if using EndpointSlice mode.
 #[inline]
 pub fn is_endpoint_slice_mode() -> bool {

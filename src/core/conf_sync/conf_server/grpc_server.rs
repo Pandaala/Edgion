@@ -7,7 +7,7 @@ use tonic::{Request, Response, Status};
 
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
-    ListRequest, ListResponse, WatchRequest, WatchResponse,
+    ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, WatchRequest, WatchResponse,
 };
 use crate::types::prelude_resources::ResourceKind;
 use crate::types::WATCH_ERR_SERVER_ID_MISMATCH;
@@ -86,6 +86,32 @@ impl ConfigSyncGrpcServer {
 
 #[tonic::async_trait]
 impl ConfigSync for ConfigSyncGrpcServer {
+    async fn get_server_info(
+        &self,
+        _request: Request<ServerInfoRequest>,
+    ) -> Result<Response<ServerInfoResponse>, Status> {
+        let endpoint_mode = self
+            .server
+            .endpoint_mode()
+            .map(|m| format!("{:?}", m))
+            .unwrap_or_else(|| "Auto".to_string());
+
+        let supported_kinds = self.server.all_kinds();
+
+        tracing::debug!(
+            component = "grpc_server",
+            endpoint_mode = %endpoint_mode,
+            supported_kinds = ?supported_kinds,
+            "GetServerInfo request"
+        );
+
+        Ok(Response::new(ServerInfoResponse {
+            server_id: self.server.server_id(),
+            endpoint_mode,
+            supported_kinds,
+        }))
+    }
+
     async fn list(&self, request: Request<ListRequest>) -> Result<Response<ListResponse>, Status> {
         let req = request.into_inner();
 

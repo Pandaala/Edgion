@@ -10,6 +10,8 @@
 use std::sync::LazyLock;
 
 use super::{registry_resource_names, ALL_RESOURCE_INFOS};
+use crate::core::backends::try_get_global_endpoint_mode;
+use crate::core::conf_mgr::conf_center::EndpointMode;
 
 /// Metadata for a resource type
 ///
@@ -67,9 +69,35 @@ pub static RESOURCE_TYPES: LazyLock<Vec<ResourceTypeMetadata>> = LazyLock::new(|
 
 /// Get the list of all resource type names
 ///
-/// This function now delegates to `resource_defs::registry_resource_names()`.
+/// This function delegates to `resource_defs::registry_resource_names()` and filters
+/// based on the global endpoint mode:
+/// - `EndpointSlice` mode: excludes "endpoints"
+/// - `Endpoint` mode: excludes "endpoint_slices"
+/// - Not initialized: returns all resources (for early initialization phases)
 pub fn all_resource_type_names() -> Vec<&'static str> {
-    registry_resource_names()
+    let all_names = registry_resource_names();
+
+    // Filter based on endpoint mode if initialized
+    match try_get_global_endpoint_mode() {
+        Some(EndpointMode::EndpointSlice) => {
+            // In EndpointSlice mode, exclude legacy "endpoints"
+            all_names
+                .into_iter()
+                .filter(|name| *name != "endpoints")
+                .collect()
+        }
+        Some(EndpointMode::Endpoint) => {
+            // In Endpoint mode, exclude "endpoint_slices"
+            all_names
+                .into_iter()
+                .filter(|name| *name != "endpoint_slices")
+                .collect()
+        }
+        Some(EndpointMode::Auto) | None => {
+            // Auto mode or not initialized - return all (should be resolved before use)
+            all_names
+        }
+    }
 }
 
 /// Get the list of base configuration resource names
