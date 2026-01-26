@@ -20,6 +20,9 @@ pub mod names {
     pub const STATUS_UPDATE_TOTAL: &str = "edgion_status_update_total";
     pub const STATUS_UPDATE_FAILED: &str = "edgion_status_update_failed_total";
     pub const STATUS_UPDATE_SKIPPED: &str = "edgion_status_update_skipped_total";
+    // Config sync metrics (client side)
+    pub const CONFIG_RELOAD_SIGNALS: &str = "edgion_config_reload_signals_total";
+    pub const CONFIG_RELIST_TOTAL: &str = "edgion_config_relist_total";
 }
 
 /// Global metrics singleton
@@ -57,6 +60,10 @@ pub struct GatewayMetrics {
     status_update_failed: Counter,
     /// Total K8s status updates skipped (no change)
     status_update_skipped: Counter,
+    /// Total reload signals received from controller
+    config_reload_signals: Counter,
+    /// Total config relist operations
+    config_relist_total: Counter,
 }
 
 impl GatewayMetrics {
@@ -74,6 +81,8 @@ impl GatewayMetrics {
             status_update_total: counter!(names::STATUS_UPDATE_TOTAL),
             status_update_failed: counter!(names::STATUS_UPDATE_FAILED),
             status_update_skipped: counter!(names::STATUS_UPDATE_SKIPPED),
+            config_reload_signals: counter!(names::CONFIG_RELOAD_SIGNALS),
+            config_relist_total: counter!(names::CONFIG_RELIST_TOTAL),
         }
     }
 
@@ -144,5 +153,17 @@ impl GatewayMetrics {
     #[inline]
     pub fn status_update_skipped(&self) {
         self.status_update_skipped.increment(1);
+    }
+
+    /// Record a reload signal received from controller
+    #[inline]
+    pub fn config_reload_signal(&self) {
+        self.config_reload_signals.increment(1);
+    }
+
+    /// Record a config relist operation
+    #[inline]
+    pub fn config_relist(&self) {
+        self.config_relist_total.increment(1);
     }
 }

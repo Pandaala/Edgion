@@ -23,6 +23,7 @@ use super::version_detection::resolve_endpoint_mode;
 use crate::core::conf_mgr::conf_center::traits::{
     CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
+use crate::core::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::conf_mgr::sync_runtime::ShutdownHandle;
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::core::conf_sync::conf_server::ConfigSyncServer;
@@ -218,8 +219,20 @@ impl KubernetesCenter {
         const STABLE_RUN_DURATION: Duration = Duration::from_secs(300); // 5 minutes
 
         let mut consecutive_failures: u32 = 0;
+        let mut reload_start_time: Option<std::time::Instant> = None;
 
         loop {
+            // Record reload completion time if this is a reload iteration
+            if let Some(start_time) = reload_start_time.take() {
+                let duration = start_time.elapsed().as_secs_f64();
+                reload_metrics().reload_completed(duration);
+                tracing::info!(
+                    component = "kubernetes_center",
+                    duration_secs = duration,
+                    "Reload completed"
+                );
+            }
+
             // Check if still leader before starting iteration
             if !leader_handle.is_leader() {
                 self.set_config_sync_server(None);
@@ -341,13 +354,24 @@ impl KubernetesCenter {
                     return MainFlowExit::LostLeadership;
                 }
                 ControllerExitReason::RelinkRequested(reason) => {
-                    // 410 GONE - normal reconnection, don't count as failure
-                    tracing::info!(
-                        component = "kubernetes_center",
-                        mode = "kubernetes",
-                        reason = ?reason,
-                        "Relink requested (410 GONE), restarting immediately"
-                    );
+                    // Check if this is a manual reload request
+                    let is_reload = matches!(reason, super::resource_controller::RelinkReason::ReloadRequested);
+                    if is_reload {
+                        tracing::info!(
+                            component = "kubernetes_center",
+                            mode = "kubernetes",
+                            "Manual reload requested, restarting with new server_id"
+                        );
+                        reload_metrics().reload_started();
+                        reload_start_time = Some(std::time::Instant::now());
+                    } else {
+                        tracing::info!(
+                            component = "kubernetes_center",
+                            mode = "kubernetes",
+                            reason = ?reason,
+                            "Relink requested (410 GONE), restarting immediately"
+                        );
+                    }
                     consecutive_failures = 0;
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }

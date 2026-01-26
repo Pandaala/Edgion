@@ -21,6 +21,7 @@ use super::storage::FileSystemStorage;
 use crate::core::conf_mgr::conf_center::traits::{
     CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
+use crate::core::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::conf_mgr::sync_runtime::ShutdownHandle;
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::core::conf_sync::conf_server::ConfigSyncServer;
@@ -284,8 +285,22 @@ impl CenterLifeCycle for FileSystemCenter {
             "Using endpoint mode"
         );
 
+        // Track reload state for metrics
+        let mut reload_start_time: Option<Instant> = None;
+
         // Outer loop to support reload
         loop {
+            // Record reload completion time if this is a reload iteration
+            if let Some(start_time) = reload_start_time.take() {
+                let duration = start_time.elapsed().as_secs_f64();
+                reload_metrics().reload_completed(duration);
+                tracing::info!(
+                    component = "file_system_center",
+                    duration_secs = duration,
+                    "Reload completed"
+                );
+            }
+
             // 1. Create iteration-specific shutdown handle for controller
             let iteration_shutdown = ShutdownHandle::new();
 
@@ -393,6 +408,9 @@ impl CenterLifeCycle for FileSystemCenter {
                         mode = "file_system",
                         "Reload requested, restarting controller with new server_id"
                     );
+                    // Record reload start metrics
+                    reload_metrics().reload_started();
+                    reload_start_time = Some(Instant::now());
                     // Continue loop to restart
                     continue;
                 }

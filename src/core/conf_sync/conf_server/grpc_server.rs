@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
+use crate::core::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
     ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, WatchRequest, WatchResponse,
@@ -291,6 +292,8 @@ impl ConfigSync for ConfigSyncGrpcServer {
                                     server_id: new_server_id,
                                 };
                                 let _ = tx.send(Ok(response)).await;
+                                // Record metric for client notification
+                                reload_metrics().client_notified();
                                 break;
                             }
                         }

@@ -1,9 +1,10 @@
 use crate::core::conf_sync::cache_client::cache_data::CacheData;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
+use crate::core::observe::metrics::global_metrics;
 use crate::types::{
-    ResourceMeta, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_TOO_OLD_VERSION,
-    WATCH_ERR_VERSION_UNEXPECTED,
+    ResourceMeta, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD,
+    WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED,
 };
 use kube::{Resource, ResourceExt};
 use rand::Rng;
@@ -170,6 +171,9 @@ where
                             // Reset backoff on success
                             backoff_secs = BACKOFF_INIT_SECS;
 
+                            // Record relist metric
+                            global_metrics().config_relist();
+
                             let count = {
                                 let cache = cache_data.read().unwrap();
                                 cache.len()
@@ -261,6 +265,10 @@ where
                                         error = watch_response.err,
                                         "Received error signal from server, re-listing"
                                     );
+                                    // Record metric if this is a reload signal
+                                    if watch_response.err.contains(WATCH_ERR_SERVER_RELOAD) {
+                                        global_metrics().config_reload_signal();
+                                    }
                                     break 'watch_block;
                                 }
 
