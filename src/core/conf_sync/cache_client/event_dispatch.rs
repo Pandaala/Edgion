@@ -182,6 +182,11 @@ where
                                 "List completed, starting watch"
                             );
 
+                            // Update global ConfigClient's server_id
+                            if let Some(client) = crate::core::conf_sync::get_global_config_client() {
+                                client.set_current_server_id(list_result.server_id.clone());
+                            }
+
                             // Set ready after first successful list
                             if !is_ready {
                                 let mut cache = cache_data.write().unwrap();

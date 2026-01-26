@@ -219,10 +219,24 @@ cleanup() {
 # =============================================================================
 # Get server_id from controller
 # =============================================================================
-get_server_id() {
+get_controller_server_id() {
     local controller_url="${1:-http://127.0.0.1:5800}"
     # Use the /api/v1/server-info endpoint to get server_id
     local response=$(curl -s "${controller_url}/api/v1/server-info" 2>/dev/null)
+    local server_id=$(echo "$response" | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
+    if [ -z "$server_id" ]; then
+        server_id="unknown"
+    fi
+    echo "$server_id"
+}
+
+# =============================================================================
+# Get server_id from gateway (the server_id it received from controller)
+# =============================================================================
+get_gateway_server_id() {
+    local gateway_url="${1:-http://127.0.0.1:5900}"
+    # Use the /api/v1/server-info endpoint to get server_id
+    local response=$(curl -s "${gateway_url}/api/v1/server-info" 2>/dev/null)
     local server_id=$(echo "$response" | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
     if [ -z "$server_id" ]; then
         server_id="unknown"
@@ -626,9 +640,13 @@ main() {
         # ========== Round 1: Initial tests ==========
         log_section "📋 Round 1: Initial tests (before reload)"
         
-        # Get initial server_id
-        local server_id_before=$(get_server_id "$controller_url")
-        log_info "Initial server_id: ${server_id_before}"
+        local gateway_url="http://127.0.0.1:5900"
+        
+        # Get initial server_id from both Controller and Gateway
+        local controller_id_before=$(get_controller_server_id "$controller_url")
+        local gateway_id_before=$(get_gateway_server_id "$gateway_url")
+        log_info "Initial Controller server_id: ${controller_id_before}"
+        log_info "Initial Gateway server_id:    ${gateway_id_before}"
         
         # Run all tests (round 1)
         if ! run_all_tests "Round 1 (before reload)"; then
@@ -647,26 +665,56 @@ main() {
             exit 1
         fi
         
-        # Wait for reload to complete
-        log_info "Waiting 3 seconds for reload to complete..."
-        sleep 3
+        # Wait for reload to complete and Gateway to sync
+        log_info "Waiting 5 seconds for reload to complete and Gateway to sync..."
+        sleep 5
         
-        # ========== Verify server_id changed ==========
-        local server_id_after=$(get_server_id "$controller_url")
-        log_info "New server_id: ${server_id_after}"
+        # ========== Verify Controller server_id changed ==========
+        local controller_id_after=$(get_controller_server_id "$controller_url")
+        log_info "New Controller server_id: ${controller_id_after}"
         
-        if [ "$server_id_before" = "$server_id_after" ]; then
-            log_error "server_id did not change after reload!"
-            log_error "Before: ${server_id_before}"
-            log_error "After:  ${server_id_after}"
-            report_test "Reload_ServerID_Changed" "FAIL" "0"
+        if [ "$controller_id_before" = "$controller_id_after" ]; then
+            log_error "Controller server_id did not change after reload!"
+            log_error "Before: ${controller_id_before}"
+            log_error "After:  ${controller_id_after}"
+            report_test "Reload_Controller_ServerID_Changed" "FAIL" "0"
             finalize_report
             exit 1
         else
-            log_success "server_id changed successfully!"
-            log_info "Before: ${server_id_before}"
-            log_info "After:  ${server_id_after}"
-            report_test "Reload_ServerID_Changed" "PASS" "0"
+            log_success "Controller server_id changed successfully!"
+            log_info "Before: ${controller_id_before}"
+            log_info "After:  ${controller_id_after}"
+            report_test "Reload_Controller_ServerID_Changed" "PASS" "0"
+        fi
+        
+        # ========== Verify Gateway server_id changed ==========
+        local gateway_id_after=$(get_gateway_server_id "$gateway_url")
+        log_info "New Gateway server_id: ${gateway_id_after}"
+        
+        if [ "$gateway_id_before" = "$gateway_id_after" ]; then
+            log_error "Gateway server_id did not change after reload!"
+            log_error "Before: ${gateway_id_before}"
+            log_error "After:  ${gateway_id_after}"
+            log_error "This means Gateway did not detect the reload and re-sync!"
+            report_test "Reload_Gateway_ServerID_Changed" "FAIL" "0"
+            finalize_report
+            exit 1
+        else
+            log_success "Gateway server_id changed successfully!"
+            log_info "Before: ${gateway_id_before}"
+            log_info "After:  ${gateway_id_after}"
+            report_test "Reload_Gateway_ServerID_Changed" "PASS" "0"
+        fi
+        
+        # ========== Verify Gateway and Controller have same server_id ==========
+        if [ "$controller_id_after" != "$gateway_id_after" ]; then
+            log_error "Gateway server_id does not match Controller!"
+            log_error "Controller: ${controller_id_after}"
+            log_error "Gateway:    ${gateway_id_after}"
+            report_test "Reload_ServerID_Match" "FAIL" "0"
+        else
+            log_success "Gateway and Controller server_id match!"
+            report_test "Reload_ServerID_Match" "PASS" "0"
         fi
         
         # ========== Clear access log before Round 2 ==========

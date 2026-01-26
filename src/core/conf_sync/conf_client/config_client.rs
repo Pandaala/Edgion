@@ -13,6 +13,8 @@ use std::sync::RwLock;
 
 pub struct ConfigClient {
     pub base_conf: RwLock<Option<GatewayBaseConf>>,
+    /// Current server_id from Controller (updated on each list/watch response)
+    current_server_id: RwLock<String>,
     // Base conf resources now have dedicated caches
     gateway_classes: ClientCache<GatewayClass>,
     gateways: ClientCache<Gateway>,
@@ -117,6 +119,7 @@ impl ConfigClient {
 
         Self {
             base_conf: RwLock::new(None),
+            current_server_id: RwLock::new(String::new()),
             // Base conf caches with handlers registered
             gateway_classes: gateway_classes_cache,
             gateways: gateways_cache,
@@ -135,6 +138,25 @@ impl ConfigClient {
             edgion_stream_plugins: stream_plugins_cache,
             backend_tls_policies: backend_tls_policies_cache,
             plugin_metadata: ClientCache::new(client_id, client_name),
+        }
+    }
+
+    /// Get the current server_id from Controller
+    pub fn current_server_id(&self) -> String {
+        self.current_server_id.read().unwrap().clone()
+    }
+
+    /// Update the current server_id (called by cache when receiving list/watch responses)
+    pub fn set_current_server_id(&self, server_id: String) {
+        let mut current = self.current_server_id.write().unwrap();
+        if *current != server_id {
+            tracing::debug!(
+                component = "config_client",
+                old_server_id = %*current,
+                new_server_id = %server_id,
+                "Server ID updated"
+            );
+            *current = server_id;
         }
     }
 

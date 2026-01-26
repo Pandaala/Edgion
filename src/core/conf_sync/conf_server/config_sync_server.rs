@@ -180,16 +180,30 @@ impl ConfigSyncServer {
 
         tokio::spawn(async move {
             let mut simple_rx = simple_rx;
-            while let Some(response) = simple_rx.recv().await {
-                let event_data = EventDataSimple {
-                    data: response.data,
-                    sync_version: response.sync_version,
-                    err: response.err,
-                    server_id: server_id.clone(),
-                };
+            loop {
+                tokio::select! {
+                    // Forward data from upstream
+                    response = simple_rx.recv() => {
+                        match response {
+                            Some(response) => {
+                                let event_data = EventDataSimple {
+                                    data: response.data,
+                                    sync_version: response.sync_version,
+                                    err: response.err,
+                                    server_id: server_id.clone(),
+                                };
 
-                if tx.send(event_data).await.is_err() {
-                    break;
+                                if tx.send(event_data).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => break, // Upstream closed
+                        }
+                    }
+                    // Exit when downstream receiver is dropped
+                    _ = tx.closed() => {
+                        break;
+                    }
                 }
             }
         });

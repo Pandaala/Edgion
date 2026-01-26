@@ -146,6 +146,10 @@ impl ProcessorRegistry {
     /// - Restarting controller after failure
     /// - Losing leadership and re-election
     /// - Testing cleanup
+    ///
+    /// Note: This does NOT immediately notify watch clients. The gRPC layer detects
+    /// server_id changes after the new ConfigSyncServer is ready, ensuring clients
+    /// only relist when the new server is available.
     pub fn clear_registry(&self) {
         tracing::info!(component = "processor_registry", "Clearing all registered processors");
         self.processors.write().unwrap().clear();
