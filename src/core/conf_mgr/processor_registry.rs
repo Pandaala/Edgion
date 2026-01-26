@@ -14,12 +14,6 @@ use crate::core::conf_sync::conf_server::WatchObj;
 /// Global processor registry instance
 pub static PROCESSOR_REGISTRY: LazyLock<ProcessorRegistry> = LazyLock::new(ProcessorRegistry::new);
 
-/// Resource kinds that should NOT be synced to client (Gateway)
-///
-/// These resources are only processed on the Controller side.
-/// The client-side stores will exist but remain empty.
-const NO_SYNC_KINDS: &[&str] = &["ReferenceGrant", "Secret"];
-
 /// Registry that manages all ResourceProcessor instances
 ///
 /// This provides a central place to:
@@ -89,13 +83,16 @@ impl ProcessorRegistry {
     /// Get all WatchObjs for ConfigSyncServer registration
     ///
     /// Returns a HashMap that can be passed to ConfigSyncServer::register_all()
-    /// Filters out resources in NO_SYNC_KINDS (e.g., ReferenceGrant, Secret)
-    pub fn all_watch_objs(&self) -> HashMap<String, Arc<dyn WatchObj>> {
+    /// Filters out resources in no_sync_kinds (configurable, default: ReferenceGrant, Secret)
+    ///
+    /// # Arguments
+    /// * `no_sync_kinds` - List of resource kind names that should not be synced to Gateway
+    pub fn all_watch_objs(&self, no_sync_kinds: &[&str]) -> HashMap<String, Arc<dyn WatchObj>> {
         self.processors
             .read()
             .unwrap()
             .iter()
-            .filter(|(k, _)| !NO_SYNC_KINDS.contains(k))
+            .filter(|(k, _)| !no_sync_kinds.contains(k))
             .map(|(k, v)| (k.to_string(), v.as_watch_obj()))
             .collect()
     }

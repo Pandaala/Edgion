@@ -2,6 +2,7 @@ use crate::core::conf_mgr::{ConfCenterConfig, FileSystemConfig};
 use anyhow::{Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -20,6 +21,31 @@ pub fn is_reference_grant_validation_enabled() -> bool {
         .get()
         .map(|c| c.validation.enable_reference_grant_validation)
         .unwrap_or(true) // Default: enabled if config not initialized
+}
+
+/// Get the list of resource kinds that should not be synced to Gateway.
+/// This reads from the global controller configuration.
+/// Returns DEFAULT_NO_SYNC_KINDS if config not initialized or no_sync_kinds not set.
+pub fn get_no_sync_kinds() -> Vec<String> {
+    CONTROLLER_CONFIG
+        .get()
+        .map(|c| c.conf_sync.get_no_sync_kinds().iter().map(|s| s.to_string()).collect())
+        .unwrap_or_else(|| {
+            crate::types::DEFAULT_NO_SYNC_KINDS
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        })
+}
+
+/// Get the cache capacity for a specific resource kind.
+/// This reads from the global controller configuration.
+/// Returns default capacity (1000) if config not initialized or no override set.
+pub fn get_cache_capacity(kind_name: &str) -> usize {
+    CONTROLLER_CONFIG
+        .get()
+        .map(|c| c.conf_sync.get_capacity(kind_name) as usize)
+        .unwrap_or(1000) // Default if config not initialized
 }
 
 /// Edgion Controller configuration
@@ -162,128 +188,47 @@ fn default_reference_grant_validation() -> bool {
 /// Configuration synchronization configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
 pub struct ConfSyncConfig {
-    /// EventStore capacity for GatewayClass resources
+    /// Default EventStore capacity for all resource types
+    /// This is used when no specific override is configured
     #[arg(skip)]
-    #[serde(default = "default_small_capacity")]
-    pub gateway_classes_capacity: u32,
+    #[serde(default = "default_cache_capacity")]
+    pub default_capacity: u32,
 
-    /// EventStore capacity for Gateway resources
+    /// Override capacity for specific resource kinds
+    /// Key: resource kind name (e.g., "GatewayClass", "HTTPRoute")
+    /// Value: capacity for that resource type
     #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub gateways_capacity: u32,
+    #[serde(default)]
+    pub capacity_overrides: Option<HashMap<String, u32>>,
 
-    /// EventStore capacity for EdgionGatewayConfig resources
+    /// Resource kinds that should NOT be synced to Gateway.
+    /// If not configured, uses DEFAULT_NO_SYNC_KINDS from types module.
+    /// When configured, completely overrides the default list.
     #[arg(skip)]
-    #[serde(default = "default_small_capacity")]
-    pub edgion_gateway_configs_capacity: u32,
-
-    /// EventStore capacity for HTTPRoute resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub routes_capacity: u32,
-
-    /// EventStore capacity for GRPCRoute resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub grpc_routes_capacity: u32,
-
-    /// EventStore capacity for TCPRoute resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub tcp_routes_capacity: u32,
-
-    /// EventStore capacity for UDPRoute resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub udp_routes_capacity: u32,
-
-    /// EventStore capacity for TLSRoute resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub tls_routes_capacity: u32,
-
-    /// EventStore capacity for LinkSys resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub link_sys_capacity: u32,
-
-    /// EventStore capacity for Service resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub services_capacity: u32,
-
-    /// EventStore capacity for EndpointSlice resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub endpoint_slices_capacity: u32,
-
-    /// EventStore capacity for Endpoints resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub endpoints_capacity: u32,
-
-    /// EventStore capacity for EdgionTls resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub edgion_tls_capacity: u32,
-
-    /// EventStore capacity for EdgionPlugins resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub edgion_plugins_capacity: u32,
-
-    /// EventStore capacity for EdgionStreamPlugins resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub edgion_stream_plugins_capacity: u32,
-
-    /// EventStore capacity for ReferenceGrant resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub reference_grants_capacity: u32,
-
-    /// EventStore capacity for BackendTLSPolicy resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub backend_tls_policies_capacity: u32,
-
-    /// EventStore capacity for PluginMetadata resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub plugin_metadata_capacity: u32,
-
-    /// EventStore capacity for Secret resources
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub secrets_capacity: u32,
+    #[serde(default)]
+    pub no_sync_kinds: Option<Vec<String>>,
 }
 
 impl ConfSyncConfig {
-    /// Get the capacity for a specific resource kind
-    pub fn get_capacity(&self, kind: crate::types::ResourceKind) -> u32 {
-        use crate::types::ResourceKind;
-        match kind {
-            ResourceKind::Unspecified => 0,
-            ResourceKind::GatewayClass => self.gateway_classes_capacity,
-            ResourceKind::EdgionGatewayConfig => self.edgion_gateway_configs_capacity,
-            ResourceKind::Gateway => self.gateways_capacity,
-            ResourceKind::HTTPRoute => self.routes_capacity,
-            ResourceKind::GRPCRoute => self.grpc_routes_capacity,
-            ResourceKind::TCPRoute => self.tcp_routes_capacity,
-            ResourceKind::UDPRoute => self.udp_routes_capacity,
-            ResourceKind::TLSRoute => self.tls_routes_capacity,
-            ResourceKind::LinkSys => self.link_sys_capacity,
-            ResourceKind::PluginMetaData => self.plugin_metadata_capacity,
-            ResourceKind::Service => self.services_capacity,
-            ResourceKind::EndpointSlice => self.endpoint_slices_capacity,
-            ResourceKind::Endpoint => self.endpoints_capacity,
-            ResourceKind::EdgionTls => self.edgion_tls_capacity,
-            ResourceKind::EdgionPlugins => self.edgion_plugins_capacity,
-            ResourceKind::EdgionStreamPlugins => self.edgion_stream_plugins_capacity,
-            ResourceKind::ReferenceGrant => self.reference_grants_capacity,
-            ResourceKind::BackendTLSPolicy => self.backend_tls_policies_capacity,
-            ResourceKind::Secret => self.secrets_capacity,
+    /// Get the list of resource kinds that should not be synced to Gateway.
+    /// Returns configured list if set, otherwise returns DEFAULT_NO_SYNC_KINDS.
+    pub fn get_no_sync_kinds(&self) -> Vec<&str> {
+        match &self.no_sync_kinds {
+            Some(kinds) => kinds.iter().map(|s| s.as_str()).collect(),
+            None => crate::types::DEFAULT_NO_SYNC_KINDS.to_vec(),
         }
+    }
+
+    /// Get the capacity for a specific resource kind
+    ///
+    /// Checks capacity_overrides first, falls back to default_capacity.
+    /// The kind_name should match the ResourceKind variant name (e.g., "HTTPRoute", "GatewayClass").
+    pub fn get_capacity(&self, kind_name: &str) -> u32 {
+        self.capacity_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.get(kind_name))
+            .copied()
+            .unwrap_or(self.default_capacity)
     }
 }
 
@@ -294,10 +239,6 @@ fn default_grpc_listen() -> String {
 
 fn default_admin_listen() -> String {
     "0.0.0.0:8080".to_string()
-}
-
-fn default_small_capacity() -> u32 {
-    50 // GatewayClass and EdgionGatewayConfig are typically few in number
 }
 
 fn default_log_dir() -> String {
@@ -320,9 +261,10 @@ fn default_debug_enabled() -> bool {
     true
 }
 
-// Default capacity value for EventStore
-fn default_capacity() -> u32 {
-    200
+/// Default cache capacity for ResourceProcessor EventStore
+/// This matches the DEFAULT_CACHE_CAPACITY in controllers
+fn default_cache_capacity() -> u32 {
+    1000
 }
 
 impl Default for LoggingConfig {
@@ -348,25 +290,9 @@ impl Default for DebugConfig {
 impl Default for ConfSyncConfig {
     fn default() -> Self {
         Self {
-            gateway_classes_capacity: default_small_capacity(),
-            gateways_capacity: default_capacity(),
-            edgion_gateway_configs_capacity: default_small_capacity(),
-            routes_capacity: default_capacity(),
-            grpc_routes_capacity: default_capacity(),
-            tcp_routes_capacity: default_capacity(),
-            udp_routes_capacity: default_capacity(),
-            tls_routes_capacity: default_capacity(),
-            link_sys_capacity: default_capacity(),
-            services_capacity: default_capacity(),
-            endpoint_slices_capacity: default_capacity(),
-            endpoints_capacity: default_capacity(),
-            edgion_tls_capacity: default_capacity(),
-            edgion_plugins_capacity: default_capacity(),
-            edgion_stream_plugins_capacity: default_capacity(),
-            reference_grants_capacity: default_capacity(),
-            backend_tls_policies_capacity: default_capacity(),
-            plugin_metadata_capacity: default_capacity(),
-            secrets_capacity: default_capacity(),
+            default_capacity: default_cache_capacity(),
+            capacity_overrides: None,
+            no_sync_kinds: None, // Use DEFAULT_NO_SYNC_KINDS
         }
     }
 }

@@ -1,6 +1,7 @@
 use super::discovery_impl::EndpointSliceLoadBalancer;
 use crate::core::lb::ewma::Ewma;
 use crate::core::lb::leastconn::LeastConnection;
+use crate::types::constants::labels::k8s::SERVICE_NAME;
 use arc_swap::ArcSwap;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use pingora_load_balancing::selection::{BackendSelection, Consistent, RoundRobin};
@@ -251,36 +252,6 @@ where
         // 4. Atomically update service_lbs
         self.service_lbs.store(Arc::new(new_service_lbs));
     }
-
-    /// Legacy method for compatibility - deprecated
-    /// Use replace_all() or update_with_service_aggregation() instead
-    #[deprecated(note = "Use replace_all() or update_with_service_aggregation() instead")]
-    pub fn update(&self, add_or_update: HashMap<String, Arc<EndpointSliceLoadBalancer<S>>>, remove: &HashSet<String>) {
-        let current = self.service_lbs.load();
-        let mut new_map = (**current).clone();
-
-        for key in remove {
-            new_map.remove(key);
-        }
-        for (key, lb) in add_or_update {
-            new_map.insert(key, lb);
-        }
-
-        self.service_lbs.store(Arc::new(new_map));
-    }
-
-    /// Legacy method for compatibility - deprecated
-    /// Use replace_all() or update_with_service_aggregation() instead
-    #[deprecated(note = "Use replace_all() or update_with_service_aggregation() instead")]
-    pub fn apply_modifications<F>(&self, modify: F)
-    where
-        F: FnOnce(&mut HashMap<String, Arc<EndpointSliceLoadBalancer<S>>>),
-    {
-        let current = self.service_lbs.load();
-        let mut new_map = (**current).clone();
-        modify(&mut new_map);
-        self.service_lbs.store(Arc::new(new_map));
-    }
 }
 
 /// Extract service key from EndpointSlice label
@@ -290,12 +261,13 @@ fn extract_service_key(ep_slice: &EndpointSlice) -> String {
         .metadata
         .labels
         .as_ref()
-        .and_then(|labels| labels.get("kubernetes.io/service-name"))
+        .and_then(|labels| labels.get(SERVICE_NAME))
         .map(|s| s.as_str())
         .unwrap_or_else(|| {
             tracing::warn!(
                 endpointslice = %ep_slice.metadata.name.as_deref().unwrap_or(""),
-                "EndpointSlice missing kubernetes.io/service-name label, using name as fallback"
+                label = SERVICE_NAME,
+                "EndpointSlice missing service-name label, using name as fallback"
             );
             ep_slice.metadata.name.as_deref().unwrap_or("")
         });

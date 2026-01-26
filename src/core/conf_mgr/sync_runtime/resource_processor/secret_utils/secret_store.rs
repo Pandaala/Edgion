@@ -109,13 +109,14 @@ pub fn update_secrets(upsert: HashMap<String, Secret>, remove: &HashSet<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::constants::secret_keys::tls::{CERT, KEY};
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
 
     fn create_test_secret(namespace: &str, name: &str, cert: &str, key: &str) -> Secret {
         let mut data = std::collections::BTreeMap::new();
-        data.insert("tls.crt".to_string(), ByteString(cert.as_bytes().to_vec()));
-        data.insert("tls.key".to_string(), ByteString(key.as_bytes().to_vec()));
+        data.insert(CERT.to_string(), ByteString(cert.as_bytes().to_vec()));
+        data.insert(KEY.to_string(), ByteString(key.as_bytes().to_vec()));
 
         Secret {
             metadata: ObjectMeta {
@@ -150,7 +151,7 @@ mod tests {
 
         // Verify data
         let data = found.data.as_ref().unwrap();
-        let cert = data.get("tls.crt").unwrap();
+        let cert = data.get(CERT).unwrap();
         assert_eq!(String::from_utf8(cert.0.clone()).unwrap(), "cert-pem");
     }
 
@@ -183,7 +184,7 @@ mod tests {
         // Verify update
         let found = store.get(Some("prod"), "cert-1").unwrap();
         let data = found.data.as_ref().unwrap();
-        let cert = data.get("tls.crt").unwrap();
+        let cert = data.get(CERT).unwrap();
         assert_eq!(String::from_utf8(cert.0.clone()).unwrap(), "updated-cert");
 
         // Remove cert-2

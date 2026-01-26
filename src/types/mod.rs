@@ -1,14 +1,19 @@
+pub mod constants;
 pub mod ctx;
 pub mod edgion_status;
 pub mod err;
 pub mod filters;
 pub mod gateway_base_conf;
-pub mod global_def;
 pub mod observe;
 pub mod output;
 pub mod resources;
 pub mod schema;
 pub mod work_dir;
+
+// Backward compatibility: global_def re-exports from constants::app
+pub mod global_def {
+    pub use super::constants::app::*;
+}
 
 // Resource system core module (consolidated)
 #[macro_use]
@@ -26,10 +31,12 @@ pub mod link_sys {
 pub use self::resource::ResourceKind;
 pub use self::resource::ResourceMeta;
 pub use self::resource::{
-    all_resource_type_names, base_conf_resource_names, get_resource_metadata, ResourceTypeMetadata, RESOURCE_TYPES,
+    all_resource_type_names, base_conf_resource_names, get_resource_metadata, ResourceTypeMetadata,
+    DEFAULT_NO_SYNC_KINDS, RESOURCE_TYPES,
 };
 
 // Re-export from other modules
+pub use self::constants::app::*;
 pub use self::ctx::{BackendContext, BackendTlsInfo, EdgionHttpContext, MatchInfo, RequestInfo, UpstreamInfo};
 pub use self::edgion_status::EdgionStatus;
 pub use self::err::{
@@ -37,7 +44,6 @@ pub use self::err::{
     WATCH_ERR_VERSION_UNEXPECTED,
 };
 pub use self::gateway_base_conf::GatewayBaseConf;
-pub use self::global_def::*;
 pub use self::observe::{LogConfig, LogType};
 pub use self::resources::*;
 pub use self::schema::*;

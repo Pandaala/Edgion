@@ -293,6 +293,53 @@ fn select_from_endpoints(
     }
 }
 
+/// Extract TLS configuration from BackendTLSPolicy
+///
+/// Returns (use_tls, sni) tuple:
+/// - If policy exists: (true, hostname from policy)
+/// - Otherwise: (false, empty string)
+#[inline]
+fn extract_tls_config(policy: &Option<Arc<BackendTLSPolicy>>) -> (bool, String) {
+    policy
+        .as_ref()
+        .map(|p| (true, p.spec.validation.hostname.clone()))
+        .unwrap_or((false, String::new()))
+}
+
+/// Record TLS configuration to upstream context
+///
+/// Updates the current upstream's TLS info if use_tls is true.
+/// Called after extracting TLS config to record it for observability.
+#[inline]
+fn record_tls_to_upstream(ctx: &mut EdgionHttpContext, use_tls: bool, sni: &str) {
+    if use_tls {
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.tls = Some(crate::types::BackendTlsInfo {
+                sni: if sni.is_empty() { None } else { Some(sni.to_string()) },
+                handshake_ok: None, // Will be updated after connection
+                protocol: None,
+                cipher: None,
+            });
+        }
+    }
+}
+
+/// Validate backend address for security
+///
+/// Rejects localhost connections to prevent SSRF attacks.
+#[inline]
+fn validate_backend_addr(addr: &SocketAddr, service_key: &str) -> Result<(), EdgionStatus> {
+    if is_localhost(addr) {
+        tracing::error!(
+            addr = %addr,
+            service_key = %service_key,
+            "Rejected localhost backend for security reasons"
+        );
+        return Err(EdgionStatus::BackendLocalhostNotAllowed);
+    }
+    Ok(())
+}
+
 /// Internal: try to get peer, returns Result with EdgionStatus on error
 fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -> Result<Box<HttpPeer>, EdgionStatus> {
     // Extract needed fields from backend_ref to avoid clone and borrow checker issues
@@ -345,24 +392,21 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             }
 
             // Extract TLS configuration from BackendTLSPolicy
-            let (use_tls, sni) = if let Some(ref policy) = backend_tls_policy {
-                (true, policy.spec.validation.hostname.clone())
-            } else {
-                (false, String::new())
-            };
+            let (use_tls, sni) = extract_tls_config(backend_tls_policy);
+
+            // Clone lb_policy before mutable borrow of ctx
+            let lb_policy_clone = lb_policy.clone();
 
             // Store backend address, LB policy, and TLS info in context
-            let addr_clone = addr.clone();
-            let lb_policy_clone = lb_policy.clone();
             if let Some(upstream) = ctx.get_current_upstream_mut() {
-                upstream.backend_addr = Some(addr_clone);
+                upstream.backend_addr = Some(addr.clone());
                 upstream.lb_policy = lb_policy_clone;
 
-                // Record TLS configuration if enabled
+                // Record TLS configuration if enabled (inline to avoid double mutable borrow)
                 if use_tls {
                     upstream.tls = Some(crate::types::BackendTlsInfo {
                         sni: if sni.is_empty() { None } else { Some(sni.clone()) },
-                        handshake_ok: None, // Will be updated after connection
+                        handshake_ok: None,
                         protocol: None,
                         cipher: None,
                     });
@@ -402,33 +446,11 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
 
             // Security check: reject localhost connections
-            if is_localhost(&addr) {
-                tracing::error!(
-                    addr = %addr,
-                    service_key = %service_key,
-                    "Rejected localhost backend for security reasons"
-                );
-                return Err(EdgionStatus::BackendLocalhostNotAllowed);
-            }
+            validate_backend_addr(&addr, &service_key)?;
 
-            // Extract TLS configuration from BackendTLSPolicy
-            let (use_tls, sni) = if let Some(ref policy) = backend_tls_policy {
-                (true, policy.spec.validation.hostname.clone())
-            } else {
-                (false, String::new())
-            };
-
-            // Record TLS configuration if enabled
-            if use_tls {
-                if let Some(upstream) = ctx.get_current_upstream_mut() {
-                    upstream.tls = Some(crate::types::BackendTlsInfo {
-                        sni: if sni.is_empty() { None } else { Some(sni.clone()) },
-                        handshake_ok: None, // Will be updated after connection
-                        protocol: None,
-                        cipher: None,
-                    });
-                }
-            }
+            // Extract TLS configuration and record to upstream
+            let (use_tls, sni) = extract_tls_config(backend_tls_policy);
+            record_tls_to_upstream(ctx, use_tls, &sni);
 
             Ok(Box::new(HttpPeer::new(addr, use_tls, sni)))
         }
@@ -463,33 +485,11 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
 
             // Security check: reject localhost connections
-            if is_localhost(&addr) {
-                tracing::error!(
-                    addr = %addr,
-                    service_key = %service_key,
-                    "Rejected localhost backend for security reasons"
-                );
-                return Err(EdgionStatus::BackendLocalhostNotAllowed);
-            }
+            validate_backend_addr(&addr, &service_key)?;
 
-            // Extract TLS configuration from BackendTLSPolicy
-            let (use_tls, sni) = if let Some(ref policy) = backend_tls_policy {
-                (true, policy.spec.validation.hostname.clone())
-            } else {
-                (false, String::new())
-            };
-
-            // Record TLS configuration if enabled
-            if use_tls {
-                if let Some(upstream) = ctx.get_current_upstream_mut() {
-                    upstream.tls = Some(crate::types::BackendTlsInfo {
-                        sni: if sni.is_empty() { None } else { Some(sni.clone()) },
-                        handshake_ok: None, // Will be updated after connection
-                        protocol: None,
-                        cipher: None,
-                    });
-                }
-            }
+            // Extract TLS configuration and record to upstream
+            let (use_tls, sni) = extract_tls_config(backend_tls_policy);
+            record_tls_to_upstream(ctx, use_tls, &sni);
 
             Ok(Box::new(HttpPeer::new(addr, use_tls, sni)))
         }

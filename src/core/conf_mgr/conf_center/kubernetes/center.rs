@@ -422,6 +422,8 @@ impl KubernetesCenter {
         // 5. Spawn caches ready watcher task (monitors PROCESSOR_REGISTRY)
         let css = config_sync_server.clone();
         let tx = event_tx.clone();
+        // Get no_sync_kinds from global config (or use default)
+        let no_sync_kinds = crate::core::cli::config::get_no_sync_kinds();
         let caches_handle = tokio::spawn(async move {
             const CACHE_READY_TIMEOUT_SECS: u64 = 30;
             let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
@@ -434,7 +436,9 @@ impl KubernetesCenter {
 
             if PROCESSOR_REGISTRY.is_all_ready() {
                 // Register all WatchObjs to ConfigSyncServer
-                css.register_all(PROCESSOR_REGISTRY.all_watch_objs());
+                // Filter out resources configured in no_sync_kinds
+                let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
+                css.register_all(PROCESSOR_REGISTRY.all_watch_objs(&no_sync_refs));
 
                 // Trigger full cross-namespace revalidation
                 // This ensures Routes processed before ReferenceGrants are revalidated

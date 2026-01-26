@@ -63,9 +63,6 @@ use crate::core::conf_mgr::sync_runtime::resource_processor::{
     TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 
-/// Default cache capacity for each resource type
-const DEFAULT_CACHE_CAPACITY: usize = 1000;
-
 /// Context for spawn functions
 struct SpawnContext {
     watcher_config: watcher::Config,
@@ -95,10 +92,11 @@ where
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
     H: ProcessorHandler<K> + 'static,
 {
-    // 1. Create ResourceProcessor
+    // 1. Create ResourceProcessor with capacity from config
+    let capacity = crate::core::cli::config::get_cache_capacity(kind);
     let processor = Arc::new(ResourceProcessor::new(
         kind,
-        DEFAULT_CACHE_CAPACITY,
+        capacity,
         Arc::new(handler),
         ctx.secret_ref_manager.clone(),
     ));
@@ -145,10 +143,11 @@ where
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
     H: ProcessorHandler<K> + 'static,
 {
-    // 1. Create ResourceProcessor
+    // 1. Create ResourceProcessor with capacity from config
+    let capacity = crate::core::cli::config::get_cache_capacity(kind);
     let processor = Arc::new(ResourceProcessor::new(
         kind,
-        DEFAULT_CACHE_CAPACITY,
+        capacity,
         Arc::new(handler),
         ctx.secret_ref_manager.clone(),
     ));

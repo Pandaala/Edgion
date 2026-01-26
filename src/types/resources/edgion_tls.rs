@@ -1,6 +1,7 @@
 use super::common::ParentReference;
 use super::gateway::SecretObjectReference;
 use super::http_route::RouteParentStatus;
+use crate::types::constants::secret_keys::tls::{CERT, KEY};
 use k8s_openapi::api::core::v1::Secret;
 use kube::CustomResource;
 use schemars::JsonSchema;
@@ -268,8 +269,8 @@ impl EdgionTls {
             .ok_or_else(|| anyhow::anyhow!("Secret data not found"))?;
 
         let cert_pem = data
-            .get("tls.crt")
-            .ok_or_else(|| anyhow::anyhow!("Secret data tls.crt not found"))?;
+            .get(CERT)
+            .ok_or_else(|| anyhow::anyhow!("Secret data {} not found", CERT))?;
 
         String::from_utf8(cert_pem.0.clone()).map_err(|e| anyhow::anyhow!("Failed to decode cert PEM: {}", e))
     }
@@ -288,8 +289,8 @@ impl EdgionTls {
             .ok_or_else(|| anyhow::anyhow!("Secret data not found"))?;
 
         let key_pem = data
-            .get("tls.key")
-            .ok_or_else(|| anyhow::anyhow!("Secret data tls.key not found"))?;
+            .get(KEY)
+            .ok_or_else(|| anyhow::anyhow!("Secret data {} not found", KEY))?;
 
         String::from_utf8(key_pem.0.clone()).map_err(|e| anyhow::anyhow!("Failed to decode key PEM: {}", e))
     }

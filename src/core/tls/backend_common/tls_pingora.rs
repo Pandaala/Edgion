@@ -2,6 +2,7 @@ use crate::core::conf_mgr::sync_runtime::resource_processor::get_secret_by_name;
 use crate::core::gateway::gateway::{match_gateway_tls, match_gateway_tls_with_port, GatewayTlsEntry};
 use crate::core::observe::ssl_log::{log_ssl, SslLogEntry};
 use crate::core::tls::tls_cert_matcher::match_sni;
+use crate::types::constants::secret_keys::tls::{CERT, KEY};
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
 use anyhow::anyhow;
@@ -270,30 +271,30 @@ impl TlsCallback {
             }
         };
 
-        let cert_pem = match data.get("tls.crt") {
+        let cert_pem = match data.get(CERT) {
             Some(bytes) => match String::from_utf8(bytes.0.clone()) {
                 Ok(s) => s,
                 Err(e) => {
-                    entry.error(format!("Invalid tls.crt encoding: {}", e));
+                    entry.error(format!("Invalid {} encoding: {}", CERT, e));
                     return;
                 }
             },
             None => {
-                entry.error("Secret missing tls.crt");
+                entry.error(format!("Secret missing {}", CERT));
                 return;
             }
         };
 
-        let key_pem = match data.get("tls.key") {
+        let key_pem = match data.get(KEY) {
             Some(bytes) => match String::from_utf8(bytes.0.clone()) {
                 Ok(s) => s,
                 Err(e) => {
-                    entry.error(format!("Invalid tls.key encoding: {}", e));
+                    entry.error(format!("Invalid {} encoding: {}", KEY, e));
                     return;
                 }
             },
             None => {
-                entry.error("Secret missing tls.key");
+                entry.error(format!("Secret missing {}", KEY));
                 return;
             }
         };

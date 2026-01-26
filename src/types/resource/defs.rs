@@ -20,6 +20,11 @@
 
 // The macro is imported via #[macro_use] in mod.rs, no explicit use needed
 
+/// Default resource kinds that should NOT be synced to Gateway.
+/// These resources are only processed on the Controller side.
+/// This can be overridden via configuration file.
+pub const DEFAULT_NO_SYNC_KINDS: &[&str] = &["ReferenceGrant", "Secret"];
+
 define_resources! {
     // ==================== Base Configuration Resources ====================
     GatewayClass {

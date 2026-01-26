@@ -7,10 +7,9 @@ use axum::{
 };
 use std::sync::Arc;
 
-use super::common::{
-    is_cluster_scoped, map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource,
-};
+use super::common::{map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource};
 use super::types::*;
+use crate::types::resource::is_kind_cluster_scoped;
 
 /// List all cluster-scoped resources of a kind
 pub async fn list_cluster(
@@ -19,7 +18,7 @@ pub async fn list_cluster(
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    if !is_cluster_scoped(&kind) {
+    if !is_kind_cluster_scoped(kind) {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -34,7 +33,7 @@ pub async fn get_cluster(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    if !is_cluster_scoped(&kind) {
+    if !is_kind_cluster_scoped(kind) {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -50,7 +49,7 @@ pub async fn create_cluster(
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    if !is_cluster_scoped(&kind) {
+    if !is_kind_cluster_scoped(kind) {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -106,7 +105,7 @@ pub async fn update_cluster(
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    if !is_cluster_scoped(&kind) {
+    if !is_kind_cluster_scoped(kind) {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -158,7 +157,7 @@ pub async fn delete_cluster(
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    if !is_cluster_scoped(&kind) {
+    if !is_kind_cluster_scoped(kind) {
         return Err(StatusCode::BAD_REQUEST);
     }
 

@@ -307,7 +307,10 @@ impl CenterLifeCycle for FileSystemCenter {
         // 6. Create ConfigSyncServer and register all WatchObjs
         let config_sync_server = Arc::new(ConfigSyncServer::new());
         config_sync_server.set_endpoint_mode(endpoint_mode);
-        config_sync_server.register_all(PROCESSOR_REGISTRY.all_watch_objs());
+        // Get no_sync_kinds from global config (or use default)
+        let no_sync_kinds = crate::core::cli::config::get_no_sync_kinds();
+        let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
+        config_sync_server.register_all(PROCESSOR_REGISTRY.all_watch_objs(&no_sync_refs));
 
         // 7. Set config_sync_server = Some (services become available)
         self.set_config_sync_server(Some(config_sync_server));

@@ -47,9 +47,6 @@ use crate::core::conf_mgr::sync_runtime::resource_processor::{
     TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 
-/// Default cache capacity for each resource type
-const DEFAULT_CACHE_CAPACITY: usize = 1000;
-
 /// FileSystemController - Top-level controller for FileSystem mode
 pub struct FileSystemController {
     conf_dir: PathBuf,
@@ -367,10 +364,11 @@ where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
     H: ProcessorHandler<K> + 'static,
 {
-    // 1. Create ResourceProcessor
+    // 1. Create ResourceProcessor with capacity from config
+    let capacity = crate::core::cli::config::get_cache_capacity(kind);
     let processor = Arc::new(ResourceProcessor::new(
         kind,
-        DEFAULT_CACHE_CAPACITY,
+        capacity,
         Arc::new(handler),
         secret_ref_manager.clone(),
     ));
