@@ -52,6 +52,39 @@ async fn readiness_check(State(state): State<Arc<AdminState>>) -> Result<Json<Ap
     }
 }
 
+/// Server info response
+#[derive(Serialize)]
+struct ServerInfoResponse {
+    server_id: String,
+    ready: bool,
+}
+
+/// Get server info including server_id
+///
+/// This endpoint returns the current server_id which changes on reload.
+/// Useful for verifying that reload has taken effect.
+async fn get_server_info(
+    State(state): State<Arc<AdminState>>,
+) -> Result<Json<ApiResponse<ServerInfoResponse>>, StatusCode> {
+    match state.config_sync_server() {
+        Ok(server) => {
+            let info = ServerInfoResponse {
+                server_id: server.server_id(),
+                ready: true,
+            };
+            Ok(Json(ApiResponse::success(info)))
+        }
+        Err(_) => {
+            // Server not ready yet
+            let info = ServerInfoResponse {
+                server_id: String::new(),
+                ready: false,
+            };
+            Ok(Json(ApiResponse::success(info)))
+        }
+    }
+}
+
 /// Reload all resources - triggers a full restart of the configuration center
 ///
 /// This endpoint triggers a full reload:
@@ -143,6 +176,7 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
             delete(namespaced_handlers::delete_namespaced),
         )
         // Special operations
+        .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))
         // ConfigServer endpoints (for edgion-ctl --target server)
         .route("/configserver/{kind}/list", get(configserver_handlers::list_resources))
