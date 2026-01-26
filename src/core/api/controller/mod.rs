@@ -52,28 +52,45 @@ async fn readiness_check(State(state): State<Arc<AdminState>>) -> Result<Json<Ap
     }
 }
 
-/// Reload all resources from storage (FileSystem mode only)
+/// Reload all resources - triggers a full restart of the configuration center
 ///
-/// TODO: Reload functionality is currently disabled.
-/// The FileSystemWatcher automatically detects file changes, so manual reload
-/// is not necessary in most cases. If full reload is needed in the future,
-/// the implementation should:
-/// 1. Only run init_phase (not runtime_phase)
-/// 2. Not interfere with the running watcher
+/// This endpoint triggers a full reload:
+/// 1. Stop current controllers
+/// 2. Clear PROCESSOR_REGISTRY
+/// 3. Create new ConfigSyncServer (new server_id)
+/// 4. Restart controllers (full Init -> InitApply -> InitDone flow)
 ///
-/// For now, this endpoint returns a message indicating reload is not needed.
+/// Gateway clients will detect the server_id change and re-list all resources.
 async fn reload_all_resources(
-    State(_state): State<Arc<AdminState>>,
+    State(state): State<Arc<AdminState>>,
 ) -> Result<Json<types::ApiResponse<String>>, StatusCode> {
     tracing::info!(
         component = "admin_api",
-        event = "reload_skipped",
-        "Reload requested but not needed - FileSystemWatcher handles changes automatically"
+        event = "reload_requested",
+        "Reload requested via Admin API"
     );
 
-    Ok(Json(types::ApiResponse::success(
-        "Reload not needed - file changes are detected automatically".to_string(),
-    )))
+    match state.conf_mgr.request_reload() {
+        Ok(()) => {
+            tracing::info!(
+                component = "admin_api",
+                event = "reload_initiated",
+                "Reload initiated successfully"
+            );
+            Ok(Json(types::ApiResponse::success(
+                "Reload initiated - controllers will restart with new server_id".to_string(),
+            )))
+        }
+        Err(e) => {
+            tracing::warn!(
+                component = "admin_api",
+                event = "reload_failed",
+                error = %e,
+                "Reload request failed"
+            );
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
 }
 
 // ============= Router Setup =============

@@ -183,6 +183,7 @@ pub trait CenterApi: Send + Sync {
 /// - Handle graceful shutdown
 /// - Provide readiness status
 /// - Access to ConfigSyncServer for gRPC services
+/// - Support reload (re-initialize all processors and stores)
 #[async_trait]
 pub trait CenterLifeCycle: Send + Sync {
     /// Start the configuration center with an external shutdown handle
@@ -204,6 +205,18 @@ pub trait CenterLifeCycle: Send + Sync {
 
     /// Check if running in Kubernetes mode
     fn is_k8s_mode(&self) -> bool;
+
+    /// Request a reload (re-initialize all processors and stores)
+    ///
+    /// This triggers a full restart of the configuration center:
+    /// 1. Stop current controllers
+    /// 2. Clear PROCESSOR_REGISTRY
+    /// 3. Create new ConfigSyncServer (new server_id)
+    /// 4. Restart controllers (full Init -> InitApply -> InitDone flow)
+    ///
+    /// Returns Ok(()) if the reload request was accepted (reload happens asynchronously).
+    /// Returns Err if the center is not started or not ready.
+    fn request_reload(&self) -> Result<(), String>;
 }
 
 // ============================================================================

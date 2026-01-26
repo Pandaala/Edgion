@@ -55,6 +55,8 @@ pub enum RelinkReason {
     GoneError,
     /// Watcher reconnected (detected by Event::Init after init_done)
     WatcherReconnected,
+    /// Manual reload requested via Admin API
+    ReloadRequested,
 }
 
 /// Generic ResourceController that encapsulates the complete lifecycle for a single resource type

@@ -129,6 +129,19 @@ impl ConfMgr {
     pub fn is_k8s_mode(&self) -> bool {
         self.conf_center.is_k8s_mode()
     }
+
+    /// Request a reload (re-initialize all processors and stores)
+    ///
+    /// This triggers a full restart of the configuration center:
+    /// 1. Stop current controllers
+    /// 2. Clear PROCESSOR_REGISTRY
+    /// 3. Create new ConfigSyncServer (new server_id)
+    /// 4. Restart controllers (full Init -> InitApply -> InitDone flow)
+    ///
+    /// Returns Ok(()) if the reload request was accepted (reload happens asynchronously).
+    pub fn request_reload(&self) -> Result<(), String> {
+        self.conf_center.request_reload()
+    }
 }
 
 // ============================================================================
@@ -221,6 +234,10 @@ impl CenterLifeCycle for ConfMgr {
 
     fn is_k8s_mode(&self) -> bool {
         self.conf_center.is_k8s_mode()
+    }
+
+    fn request_reload(&self) -> Result<(), String> {
+        self.conf_center.request_reload()
     }
 }
 

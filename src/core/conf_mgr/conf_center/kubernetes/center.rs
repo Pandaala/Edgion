@@ -52,6 +52,8 @@ enum LifecycleEvent {
     LeadershipLost,
     /// Controller exited
     ControllerExit(ControllerExitReason),
+    /// Manual reload requested via Admin API
+    ReloadRequested,
 }
 
 /// Handles for all watcher tasks
@@ -59,6 +61,7 @@ struct WatcherHandles {
     controller: JoinHandle<()>,
     caches: JoinHandle<()>,
     leader: JoinHandle<()>,
+    reload: JoinHandle<()>,
 }
 
 impl WatcherHandles {
@@ -67,10 +70,12 @@ impl WatcherHandles {
         self.controller.abort();
         self.caches.abort();
         self.leader.abort();
+        self.reload.abort();
 
         let _ = self.controller.await;
         let _ = self.caches.await;
         let _ = self.leader.await;
+        let _ = self.reload.await;
     }
 }
 
@@ -89,6 +94,8 @@ pub struct KubernetesCenter {
     config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>,
     /// Shutdown handle for stopping sync tasks
     shutdown_handle: Mutex<Option<ShutdownHandle>>,
+    /// Reload signal sender (for triggering reload via Admin API)
+    reload_tx: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 impl KubernetesCenter {
@@ -108,6 +115,7 @@ impl KubernetesCenter {
             writer,
             config_sync_server: RwLock::new(None),
             shutdown_handle: Mutex::new(None),
+            reload_tx: Mutex::new(None),
         })
     }
 
@@ -140,6 +148,11 @@ impl KubernetesCenter {
     fn set_shutdown_handle(&self, handle: ShutdownHandle) {
         let mut shutdown_handle = self.shutdown_handle.lock().unwrap();
         *shutdown_handle = Some(handle);
+    }
+
+    /// Set reload signal sender
+    fn set_reload_tx(&self, tx: Option<mpsc::Sender<()>>) {
+        *self.reload_tx.lock().unwrap() = tx;
     }
 
     /// Create internal LeaderElectionConfig from KubernetesConfig
@@ -286,6 +299,16 @@ impl KubernetesCenter {
                             "Controller exited"
                         );
                         break reason;
+                    }
+                    Some(LifecycleEvent::ReloadRequested) => {
+                        tracing::info!(
+                            component = "kubernetes_center",
+                            mode = "kubernetes",
+                            "Reload requested via Admin API, restarting controllers"
+                        );
+                        break ControllerExitReason::RelinkRequested(
+                            super::resource_controller::RelinkReason::ReloadRequested,
+                        );
                     }
                     None => {
                         tracing::error!(
@@ -466,7 +489,7 @@ impl KubernetesCenter {
 
         // 6. Spawn leadership loss watcher task
         let lh = leader_handle.clone();
-        let tx = event_tx;
+        let tx = event_tx.clone();
         let leader_watcher_handle = tokio::spawn(async move {
             while lh.is_leader() {
                 tokio::time::sleep(Duration::from_millis(200)).await;
@@ -474,11 +497,23 @@ impl KubernetesCenter {
             let _ = tx.send(LifecycleEvent::LeadershipLost).await;
         });
 
+        // 7. Create reload channel and spawn reload watcher task
+        let (reload_tx, mut reload_rx) = mpsc::channel::<()>(1);
+        self.set_reload_tx(Some(reload_tx));
+
+        let tx = event_tx;
+        let reload_watcher_handle = tokio::spawn(async move {
+            if reload_rx.recv().await.is_some() {
+                let _ = tx.send(LifecycleEvent::ReloadRequested).await;
+            }
+        });
+
         Ok((
             WatcherHandles {
                 controller: controller_handle,
                 caches: caches_handle,
                 leader: leader_watcher_handle,
+                reload: reload_watcher_handle,
             },
             config_sync_server,
         ))
@@ -669,6 +704,16 @@ impl CenterLifeCycle for KubernetesCenter {
     /// Check if running in Kubernetes mode
     fn is_k8s_mode(&self) -> bool {
         true
+    }
+
+    /// Request a reload (re-initialize all processors and stores)
+    fn request_reload(&self) -> Result<(), String> {
+        if let Some(tx) = self.reload_tx.lock().unwrap().as_ref() {
+            tx.try_send(())
+                .map_err(|e| format!("Failed to send reload signal: {}", e))
+        } else {
+            Err("Center not started or not ready for reload".to_string())
+        }
     }
 }
 
