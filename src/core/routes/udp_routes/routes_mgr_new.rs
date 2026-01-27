@@ -179,17 +179,33 @@ impl UdpRouteManager {
             );
         }
         
-        // Clear routes for gateways that exist in map but have no routes
-        for entry in self.gateway_udp_routes_map.iter() {
-            let gateway_key = entry.key();
-            if !gateway_routes.contains_key(gateway_key.as_str()) {
-                // This gateway has no routes, clear it
+        // Remove stale gateway entries that no longer have any routes
+        // This prevents memory leaks after relist
+        // First clear the routes data (for any existing Arc references), then remove from map
+        let new_gateway_keys: HashSet<&String> = gateway_routes.keys().collect();
+        let stale_keys: Vec<String> = self
+            .gateway_udp_routes_map
+            .iter()
+            .filter(|entry| !new_gateway_keys.contains(entry.key()))
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for key in &stale_keys {
+            // Clear routes first (for any existing Arc references)
+            if let Some(entry) = self.gateway_udp_routes_map.get(key) {
                 entry.value().update_routes(HashMap::new());
-                tracing::debug!(
-                    gateway_key = %gateway_key,
-                    "Cleared GatewayUdpRoutes (no routes)"
-                );
             }
+            // Then remove from map
+            self.gateway_udp_routes_map.remove(key);
+            tracing::debug!(gateway_key = %key, "Removed stale GatewayUdpRoutes");
+        }
+
+        if !stale_keys.is_empty() {
+            tracing::info!(
+                component = "udp_route_manager",
+                stale = stale_keys.len(),
+                "cleaned up stale gateway entries"
+            );
         }
     }
     

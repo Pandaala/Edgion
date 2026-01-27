@@ -198,6 +198,37 @@ impl GrpcRouteManager {
                 "Updated gRPC routes for gateway"
             );
         }
+
+        // Clean up stale gateway entries that no longer have any routes
+        // This prevents memory leaks after relist
+        let stale_keys: Vec<String> = self
+            .gateway_routes_map
+            .iter()
+            .filter(|entry| !affected_gateways.contains(entry.key()))
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for key in &stale_keys {
+            // Clear routes first (for any existing Arc references)
+            if let Some(entry) = self.gateway_routes_map.get(key) {
+                entry.value().grpc_routes.store(Arc::new(GrpcRouteRules::new()));
+            }
+            // Then remove from map
+            self.gateway_routes_map.remove(key);
+            tracing::debug!(
+                component = "grpc_route_manager",
+                gateway_key = %key,
+                "Removed stale gateway entry"
+            );
+        }
+
+        if !stale_keys.is_empty() {
+            tracing::info!(
+                component = "grpc_route_manager",
+                stale = stale_keys.len(),
+                "cleaned up stale gateway entries"
+            );
+        }
     }
 
     /// partial_update implementation
