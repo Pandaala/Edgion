@@ -105,7 +105,7 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2.2"
 x509-parser = "0.18"  # Certificate parsing and validation
 tonic-reflection = "0.12"
-prost = "0.13"
+prost = "0.14"
 
 # File system monitoring
 notify = "8.2"
