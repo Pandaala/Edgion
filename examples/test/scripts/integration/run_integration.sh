@@ -400,7 +400,8 @@ run_all_tests() {
         # HTTPRoute Tests
         run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g http" || test_failed=true
         run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-match" || test_failed=true
-        run_test "HTTPRoute_Backend_LBPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-policy" || test_failed=true
+        run_test "HTTPRoute_Backend_LBRoundRobin" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-rr" || test_failed=true
+        run_test "HTTPRoute_Backend_LBConsistentHash" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-ch" || test_failed=true
         run_test "HTTPRoute_Backend_WeightedBackend" "${PROJECT_ROOT}/target/debug/examples/test_client -g weighted-backend" || test_failed=true
         if ! should_skip_test "HTTPRoute_Backend_Timeout"; then
             run_test "HTTPRoute_Backend_Timeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g timeout" || test_failed=true

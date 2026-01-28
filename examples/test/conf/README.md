@@ -19,7 +19,8 @@ conf/
 ├── http-match/             # HTTP 匹配规则测试
 ├── grpc-match/             # gRPC 匹配规则测试
 ├── grpc-tls/               # gRPC TLS 测试
-├── lb-policy/              # 负载均衡策略测试
+├── lb-roundrobin/          # RoundRobin 负载均衡测试
+├── lb-consistenthash/      # ConsistentHash 一致性哈希测试
 ├── weighted-backend/       # 权重后端测试
 ├── timeout/                # 超时测试
 ├── plugins/                # 插件测试
@@ -91,11 +92,47 @@ conf/
 
 - **GRPCRoute_edge_test-grpc-https.yaml**: gRPC over TLS 路由
 
-### lb-policy/
+### lb-roundrobin/
 
-- **Service_default_lb-rr-test.yaml**: 负载均衡服务定义
-- **EndpointSlice_default_lb-rr-test.yaml**: 多后端服务发现
-- **HTTPRoute_default_lb-rr-noretry.yaml**: 轮询负载均衡路由
+RoundRobin 轮询负载均衡测试，验证请求均匀分布到所有后端。
+
+- **Gateway.yaml**: RoundRobin 测试网关（端口 31120）
+- **Service_default_lb-rr.yaml**: 负载均衡服务定义
+- **EndpointSlice_default_lb-rr.yaml**: 单 slice 后端（3 endpoints）
+- **Endpoints_default_lb-rr.yaml**: Endpoints 资源（用于 EP 模式测试）
+- **HTTPRoute_default_lb-rr-eps.yaml**: EndpointSlice 模式路由
+- **HTTPRoute_default_lb-rr-ep.yaml**: Endpoints 模式路由（kind: ServiceEndpoint）
+- **Service_default_lb-rr-multi.yaml**: 多 slice 测试服务
+- **EndpointSlice_default_lb-rr-multi-1/2.yaml**: 多 slice 后端（2 slices, 4 endpoints）
+- **HTTPRoute_default_lb-rr-multi.yaml**: 多 slice 测试路由
+
+测试场景：
+1. EndpointSlice 模式（默认）- 单 slice，验证轮询分布
+2. Endpoints 模式 - 使用 ServiceEndpoint kind
+3. 多 slice 模式 - 跨多个 EndpointSlice 的轮询
+
+### lb-consistenthash/
+
+ConsistentHash 一致性哈希测试，验证相同 key 始终路由到相同后端。
+
+- **Gateway.yaml**: ConsistentHash 测试网关（端口 31121）
+- **Service_default_lb-ch.yaml**: 服务定义
+- **EndpointSlice_default_lb-ch.yaml**: 单 slice 后端
+- **Endpoints_default_lb-ch.yaml**: Endpoints 资源
+- **HTTPRoute_default_lb-ch-header-eps.yaml**: Header 哈希 + EndpointSlice
+- **HTTPRoute_default_lb-ch-header-ep.yaml**: Header 哈希 + Endpoints
+- **HTTPRoute_default_lb-ch-cookie.yaml**: Cookie 哈希
+- **HTTPRoute_default_lb-ch-arg.yaml**: Query 参数哈希
+- **Service_default_lb-ch-multi.yaml**: 多 slice 测试服务
+- **EndpointSlice_default_lb-ch-multi-1/2.yaml**: 多 slice 后端
+- **HTTPRoute_default_lb-ch-multi.yaml**: 多 slice 一致性哈希
+
+测试场景：
+1. Header 哈希 - 基于 x-user-id header
+2. Cookie 哈希 - 基于 session-id cookie
+3. Query 参数哈希 - 基于 user_id 参数
+4. EPS vs EP 模式对比
+5. 多 slice 一致性验证
 
 ### weighted-backend/
 

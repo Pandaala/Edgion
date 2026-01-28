@@ -8,8 +8,11 @@
       "http": 31020,
       "https": 31021
     },
-    "HTTPRoute/Backend/LBPolicy": {
+    "HTTPRoute/Backend/LBRoundRobin": {
       "http": 31120
+    },
+    "HTTPRoute/Backend/LBConsistentHash": {
+      "http": 31121
     },
     "HTTPRoute/Backend/WeightedBackend": {
       "http": 31130

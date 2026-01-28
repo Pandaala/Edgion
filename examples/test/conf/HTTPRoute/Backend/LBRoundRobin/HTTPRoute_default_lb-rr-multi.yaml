@@ -1,16 +1,17 @@
+# RoundRobin + 多 EndpointSlice 模式
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: lb-rr-endpoint
+  name: lb-rr-multi
   namespace: edgion-default
   annotations:
     edgion.io/max-retries: "0"
 spec:
   parentRefs:
-    - name: lb-policy-gateway
+    - name: lb-rr-gateway
       namespace: edgion-test
   hostnames:
-    - "lb-rr-endpoint.example.com"
+    - "lb-rr-multi.example.com"
   rules:
     - matches:
         - path:
@@ -20,6 +21,5 @@ spec:
         request: 2s
         backendRequest: 1s
       backendRefs:
-        - name: lb-rr-test-service
-          kind: ServiceEndpoint
+        - name: lb-rr-multi-service
           port: 8080

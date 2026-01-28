@@ -14,7 +14,7 @@ mod protocol;
 pub use basic::HttpTestSuite;
 
 // Export sub-module tests
-pub use backend::{LBPolicyTestSuite, TimeoutTestSuite, WeightedBackendTestSuite};
+pub use backend::{LBConsistentHashTestSuite, LBRoundRobinTestSuite, TimeoutTestSuite, WeightedBackendTestSuite};
 pub use filters::{HttpRedirectTestSuite, HttpSecurityTestSuite};
 pub use protocol::WebSocketTestSuite;
 pub use r#match::HttpMatchTestSuite;

@@ -93,7 +93,8 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "http-security" | "httpsecurity" => "HTTPRoute/Filters/Security".to_string(),
             "https" => "EdgionTls/https".to_string(),
             "websocket" => "HTTPRoute/Protocol/WebSocket".to_string(),
-            "lb-policy" | "lbpolicy" => "HTTPRoute/Backend/LBPolicy".to_string(),
+            "lb-rr" | "lbrr" | "lb-roundrobin" => "HTTPRoute/Backend/LBRoundRobin".to_string(),
+            "lb-ch" | "lbch" | "lb-consistenthash" => "HTTPRoute/Backend/LBConsistentHash".to_string(),
             "weighted-backend" | "weightedbackend" => "HTTPRoute/Backend/WeightedBackend".to_string(),
             "timeout" => "HTTPRoute/Backend/Timeout".to_string(),
             "grpc" => "GRPCRoute/Basic".to_string(),
@@ -125,7 +126,8 @@ fn suite_to_port_key(suite: &str) -> &str {
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => "HTTPRoute/Basic",
         "HTTPRoute/Match" => "HTTPRoute/Match",
-        "HTTPRoute/Backend" | "HTTPRoute/Backend/LBPolicy" => "HTTPRoute/Backend/LBPolicy",
+        "HTTPRoute/Backend" | "HTTPRoute/Backend/LBRoundRobin" => "HTTPRoute/Backend/LBRoundRobin",
+        "HTTPRoute/Backend/LBConsistentHash" => "HTTPRoute/Backend/LBConsistentHash",
         "HTTPRoute/Backend/WeightedBackend" => "HTTPRoute/Backend/WeightedBackend",
         "HTTPRoute/Backend/Timeout" => "HTTPRoute/Backend/Timeout",
         "HTTPRoute/Filters" | "HTTPRoute/Filters/Redirect" => "HTTPRoute/Filters/Redirect",
@@ -172,16 +174,24 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 eprintln!("Error: HTTPRoute/Backend tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::LBPolicyTestSuite));
+            runner.add_suite(Box::new(suites::LBRoundRobinTestSuite));
+            runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
             runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
             runner.add_suite(Box::new(suites::TimeoutTestSuite));
         }
-        "HTTPRoute/Backend/LBPolicy" => {
+        "HTTPRoute/Backend/LBRoundRobin" => {
             if !gateway {
-                eprintln!("Error: LB Policy tests require --gateway flag");
+                eprintln!("Error: LB RoundRobin tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::LBPolicyTestSuite));
+            runner.add_suite(Box::new(suites::LBRoundRobinTestSuite));
+        }
+        "HTTPRoute/Backend/LBConsistentHash" => {
+            if !gateway {
+                eprintln!("Error: LB ConsistentHash tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
         }
         "HTTPRoute/Backend/WeightedBackend" => {
             if !gateway {
@@ -432,7 +442,8 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
                 runner.add_suite(Box::new(suites::HttpRedirectTestSuite));
                 runner.add_suite(Box::new(suites::PluginLogsTestSuite));
-                runner.add_suite(Box::new(suites::LBPolicyTestSuite));
+                runner.add_suite(Box::new(suites::LBRoundRobinTestSuite));
+                runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
                 runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
                 runner.add_suite(Box::new(suites::TimeoutTestSuite));
                 runner.add_suite(Box::new(suites::MtlsTestSuite));

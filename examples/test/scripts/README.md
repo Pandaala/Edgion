@@ -80,7 +80,7 @@ scripts/
 - 路由匹配：`http-match`, `grpc-match`
 - HTTP 功能：`http-redirect`, `http-security`
 - TLS：`mtls`, `backend-tls`
-- 负载均衡：`lb-policy`, `weighted-backend`
+- 负载均衡：`lb-rr` (RoundRobin), `lb-ch` (ConsistentHash), `weighted-backend`
 - 高级功能：`timeout`, `real-ip`, `security`, `plugin-logs`
 
 ## 工具脚本

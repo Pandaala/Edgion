@@ -117,6 +117,14 @@ impl MetricsClient {
         let metrics = self.fetch_backend_metrics_by_key(test_key).await?;
         analyze_lb_distribution(&metrics)
     }
+
+    /// Analyze consistent hash consistency for a specific test_key
+    ///
+    /// Verifies that the same hash_key always routes to the same backend.
+    pub async fn analyze_chash_consistency(&self, test_key: &str) -> Result<ConsistentHashAnalysis> {
+        let metrics = self.fetch_backend_metrics_by_key(test_key).await?;
+        analyze_chash_consistency(&metrics)
+    }
 }
 
 /// LB distribution analysis result
@@ -134,6 +142,23 @@ pub struct LbDistributionAnalysis {
     pub is_balanced: bool,
     /// Maximum variance from expected distribution
     pub max_variance: f64,
+}
+
+/// Consistent hash analysis result
+#[derive(Debug, Clone)]
+pub struct ConsistentHashAnalysis {
+    /// Total request count
+    pub total_requests: u64,
+    /// Number of unique hash keys
+    pub unique_keys: usize,
+    /// Map of hash_key -> backend endpoint (ip:port)
+    pub key_to_endpoint: HashMap<String, String>,
+    /// Whether all requests with same hash_key went to same backend
+    pub is_consistent: bool,
+    /// Consistency rate (0.0 - 1.0)
+    pub consistency_rate: f64,
+    /// Inconsistent keys (if any)
+    pub inconsistent_keys: Vec<String>,
 }
 
 /// Parse backend metrics from Prometheus text format
@@ -318,6 +343,79 @@ fn analyze_lb_distribution(metrics: &[BackendMetric]) -> Result<LbDistributionAn
         ratio_by_endpoint,
         is_balanced,
         max_variance,
+    })
+}
+
+/// Analyze consistent hash consistency from metrics
+///
+/// Verifies that the same hash_key always routes to the same backend.
+fn analyze_chash_consistency(metrics: &[BackendMetric]) -> Result<ConsistentHashAnalysis> {
+    let mut total_requests: u64 = 0;
+    // Map: hash_key -> (endpoint, count)
+    let mut key_mapping: HashMap<String, HashMap<String, u64>> = HashMap::new();
+
+    for metric in metrics {
+        total_requests += metric.count;
+
+        if let Some(ref test_data) = metric.test_data {
+            // Need both hash_key and endpoint (ip:port)
+            if let (Some(hash_key), Some(ip), Some(port)) =
+                (&test_data.hash_key, &test_data.ip, test_data.port)
+            {
+                if !hash_key.is_empty() {
+                    let endpoint = format!("{}:{}", ip, port);
+                    let endpoints = key_mapping.entry(hash_key.clone()).or_insert_with(HashMap::new);
+                    *endpoints.entry(endpoint).or_insert(0) += metric.count;
+                }
+            }
+        }
+    }
+
+    // Analyze consistency
+    let unique_keys = key_mapping.len();
+    let mut key_to_endpoint: HashMap<String, String> = HashMap::new();
+    let mut inconsistent_keys: Vec<String> = Vec::new();
+    let mut consistent_count: u64 = 0;
+    let mut total_keyed_requests: u64 = 0;
+
+    for (hash_key, endpoints) in &key_mapping {
+        // Count total requests for this key
+        let key_total: u64 = endpoints.values().sum();
+        total_keyed_requests += key_total;
+
+        if endpoints.len() == 1 {
+            // All requests for this key went to same endpoint - consistent
+            let endpoint = endpoints.keys().next().unwrap().clone();
+            key_to_endpoint.insert(hash_key.clone(), endpoint);
+            consistent_count += key_total;
+        } else {
+            // Multiple endpoints for same key - inconsistent
+            // Use the most common endpoint as the "expected" one
+            let (primary_endpoint, primary_count) = endpoints
+                .iter()
+                .max_by_key(|(_, count)| *count)
+                .unwrap();
+            key_to_endpoint.insert(hash_key.clone(), primary_endpoint.clone());
+            inconsistent_keys.push(hash_key.clone());
+            consistent_count += primary_count;
+        }
+    }
+
+    let consistency_rate = if total_keyed_requests > 0 {
+        consistent_count as f64 / total_keyed_requests as f64
+    } else {
+        1.0 // No keyed requests means technically consistent
+    };
+
+    let is_consistent = inconsistent_keys.is_empty() && unique_keys > 0;
+
+    Ok(ConsistentHashAnalysis {
+        total_requests,
+        unique_keys,
+        key_to_endpoint,
+        is_consistent,
+        consistency_rate,
+        inconsistent_keys,
     })
 }
 
