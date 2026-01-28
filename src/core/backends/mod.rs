@@ -78,10 +78,19 @@ pub fn is_endpoint_slice_mode() -> bool {
 }
 
 /// Select backend using round-robin based on endpoint mode.
+/// Uses DCL pattern to lazily create LB if not exists.
 pub fn select_roundrobin_backend(service_key: &str) -> Option<pingora_load_balancing::Backend> {
     match get_global_endpoint_mode() {
-        EndpointMode::EndpointSlice => get_roundrobin_store().select_peer(service_key, b"", 256),
-        EndpointMode::Endpoint => get_endpoint_roundrobin_store().select_peer(service_key, b"", 256),
+        EndpointMode::EndpointSlice => {
+            // Use DCL pattern: get or create LB, then select
+            let lb = get_roundrobin_store().get_or_create(service_key)?;
+            lb.load_balancer().select(b"", 256)
+        }
+        EndpointMode::Endpoint => {
+            // Use DCL pattern: get or create LB, then select
+            let lb = get_endpoint_roundrobin_store().get_or_create(service_key)?;
+            lb.load_balancer().select(b"", 256)
+        }
         EndpointMode::Auto => unreachable!("EndpointMode::Auto should be resolved at startup"),
     }
 }
@@ -216,37 +225,64 @@ fn select_from_endpoint_slice(
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
 ) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
+    // Get RoundRobin store for shared data layer
+    let roundrobin_store = get_roundrobin_store();
+
     match lb_policy {
         None => {
-            let ep_store = get_roundrobin_store();
-            ep_store
-                .select_peer(service_key, b"", 256)
+            // DCL: Get or create LB from RoundRobin store
+            let lb = roundrobin_store
+                .get_or_create(service_key)
+                .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault)?;
+            lb.load_balancer()
+                .select(b"", 256)
                 .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault)
         }
         Some(ParsedLBPolicy::ConsistentHash(_)) => {
             let hash_key = extract_hash_key(session, lb_policy);
             if hash_key.is_empty() {
-                let ep_store = get_roundrobin_store();
-                ep_store
-                    .select_peer(service_key, b"", 256)
+                // Fallback to RoundRobin
+                let lb = roundrobin_store
+                    .get_or_create(service_key)
+                    .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin)?;
+                lb.load_balancer()
+                    .select(b"", 256)
                     .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin)
             } else {
-                let ep_store = get_consistent_store();
-                ep_store
-                    .select_peer(service_key, &hash_key, 256)
+                // DCL: Get or create Consistent LB with data from RoundRobin store
+                let consistent_store = get_consistent_store();
+                let lb = consistent_store
+                    .get_or_create_with_provider(service_key, |key| {
+                        roundrobin_store.get_slices_for_service(key)
+                    })
+                    .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByConsistent)?;
+                lb.load_balancer()
+                    .select(&hash_key, 256)
                     .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByConsistent)
             }
         }
         Some(ParsedLBPolicy::LeastConn) => {
-            let ep_store = get_leastconn_store();
-            ep_store
-                .select_peer(service_key, b"", 256)
+            // DCL: Get or create LeastConn LB with data from RoundRobin store
+            let leastconn_store = get_leastconn_store();
+            let lb = leastconn_store
+                .get_or_create_with_provider(service_key, |key| {
+                    roundrobin_store.get_slices_for_service(key)
+                })
+                .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByLeastConn)?;
+            lb.load_balancer()
+                .select(b"", 256)
                 .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByLeastConn)
         }
         Some(ParsedLBPolicy::Ewma) => {
-            let ep_store = get_ewma_store();
-            ep_store
-                .select_peer(service_key, b"", 256)
+            // DCL: Get or create EWMA LB with data from RoundRobin store
+            let ewma_store = get_ewma_store();
+            let lb = ewma_store
+                .get_or_create_with_provider(service_key, |key| {
+                    roundrobin_store.get_slices_for_service(key)
+                })
+                .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByEwma)?;
+            lb.load_balancer()
+                .select(b"", 256)
                 .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByEwma)
         }
     }
@@ -257,37 +293,64 @@ fn select_from_endpoints(
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
 ) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
+    // Get RoundRobin store for shared data layer
+    let roundrobin_store = get_endpoint_roundrobin_store();
+
     match lb_policy {
         None => {
-            let ep_store = get_endpoint_roundrobin_store();
-            ep_store
-                .select_peer(service_key, b"", 256)
+            // DCL: Get or create LB from RoundRobin store
+            let lb = roundrobin_store
+                .get_or_create(service_key)
+                .ok_or(EdgionStatus::BackendEndpointNotFoundByRoundRobinDefault)?;
+            lb.load_balancer()
+                .select(b"", 256)
                 .ok_or(EdgionStatus::BackendEndpointNotFoundByRoundRobinDefault)
         }
         Some(ParsedLBPolicy::ConsistentHash(_)) => {
             let hash_key = extract_hash_key(session, lb_policy);
             if hash_key.is_empty() {
-                let ep_store = get_endpoint_roundrobin_store();
-                ep_store
-                    .select_peer(service_key, b"", 256)
+                // Fallback to RoundRobin
+                let lb = roundrobin_store
+                    .get_or_create(service_key)
+                    .ok_or(EdgionStatus::BackendEndpointNotFoundByRoundRobin)?;
+                lb.load_balancer()
+                    .select(b"", 256)
                     .ok_or(EdgionStatus::BackendEndpointNotFoundByRoundRobin)
             } else {
-                let ep_store = get_endpoint_consistent_store();
-                ep_store
-                    .select_peer(service_key, &hash_key, 256)
+                // DCL: Get or create Consistent LB with data from RoundRobin store
+                let consistent_store = get_endpoint_consistent_store();
+                let lb = consistent_store
+                    .get_or_create_with_provider(service_key, |key| {
+                        roundrobin_store.get_endpoint_for_service(key)
+                    })
+                    .ok_or(EdgionStatus::BackendEndpointNotFoundByConsistent)?;
+                lb.load_balancer()
+                    .select(&hash_key, 256)
                     .ok_or(EdgionStatus::BackendEndpointNotFoundByConsistent)
             }
         }
         Some(ParsedLBPolicy::LeastConn) => {
-            let ep_store = get_endpoint_leastconn_store();
-            ep_store
-                .select_peer(service_key, b"", 256)
+            // DCL: Get or create LeastConn LB with data from RoundRobin store
+            let leastconn_store = get_endpoint_leastconn_store();
+            let lb = leastconn_store
+                .get_or_create_with_provider(service_key, |key| {
+                    roundrobin_store.get_endpoint_for_service(key)
+                })
+                .ok_or(EdgionStatus::BackendEndpointNotFoundByLeastConn)?;
+            lb.load_balancer()
+                .select(b"", 256)
                 .ok_or(EdgionStatus::BackendEndpointNotFoundByLeastConn)
         }
         Some(ParsedLBPolicy::Ewma) => {
-            let ep_store = get_endpoint_ewma_store();
-            ep_store
-                .select_peer(service_key, b"", 256)
+            // DCL: Get or create EWMA LB with data from RoundRobin store
+            let ewma_store = get_endpoint_ewma_store();
+            let lb = ewma_store
+                .get_or_create_with_provider(service_key, |key| {
+                    roundrobin_store.get_endpoint_for_service(key)
+                })
+                .ok_or(EdgionStatus::BackendEndpointNotFoundByEwma)?;
+            lb.load_balancer()
+                .select(b"", 256)
                 .ok_or(EdgionStatus::BackendEndpointNotFoundByEwma)
         }
     }
