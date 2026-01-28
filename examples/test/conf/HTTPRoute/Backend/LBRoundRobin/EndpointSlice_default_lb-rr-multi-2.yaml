@@ -9,7 +9,7 @@ metadata:
 addressType: IPv4
 ports:
   - name: http
-    port: 9999
+    port: 30001
     protocol: TCP
 endpoints:
   - addresses:

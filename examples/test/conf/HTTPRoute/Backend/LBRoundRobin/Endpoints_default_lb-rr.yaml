@@ -11,5 +11,5 @@ subsets:
       - ip: "127.0.0.3"
     ports:
       - name: http
-        port: 9999
+        port: 30001
         protocol: TCP

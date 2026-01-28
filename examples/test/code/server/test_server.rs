@@ -145,8 +145,8 @@ async fn main() -> Result<()> {
 // ============================================================================
 
 async fn start_http_server(port: u16) -> Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let server_addr_str = format!("127.0.0.1:{}", port);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let server_addr_str = format!("0.0.0.0:{}", port);
 
     let app = Router::new()
         .route("/health", get(health_handler))
@@ -314,8 +314,8 @@ impl TestService for TestServiceImpl {
 }
 
 async fn start_grpc_server(port: u16) -> Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let server_addr_str = format!("127.0.0.1:{}", port);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let server_addr_str = format!("0.0.0.0:{}", port);
 
     let service = TestServiceImpl::new(server_addr_str);
 
@@ -336,7 +336,7 @@ async fn start_grpc_server(port: u16) -> Result<()> {
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 
 async fn start_websocket_server(port: u16) -> Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     let app = Router::new().route("/ws", get(ws_handler));
 
@@ -381,7 +381,7 @@ async fn handle_socket(mut socket: WebSocket) {
 // ============================================================================
 
 async fn start_tcp_server(port: u16) -> Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
 
     info!("✓ TCP server listening on tcp://{}", addr);
@@ -418,7 +418,7 @@ async fn start_tcp_server(port: u16) -> Result<()> {
 // ============================================================================
 
 async fn start_udp_server(port: u16) -> Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let socket = UdpSocket::bind(addr).await?;
 
     info!("✓ UDP server listening on udp://{}", addr);
@@ -447,8 +447,8 @@ async fn start_udp_server(port: u16) -> Result<()> {
 use axum_server::tls_rustls::RustlsConfig;
 
 async fn start_https_backend_server(port: u16, cert_path: String, key_path: String) -> Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let server_addr_str = format!("127.0.0.1:{}", port);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let server_addr_str = format!("0.0.0.0:{}", port);
 
     // Load TLS configuration
     let tls_config = match RustlsConfig::from_pem_file(&cert_path, &key_path).await {
