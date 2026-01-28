@@ -571,6 +571,7 @@ verify_sync() {
     local attempt=1
     
     while [ $attempt -le $max_retries ]; do
+        # Note: resource_diff now skips ReferenceGrant and Secret by default (--skip-kinds)
         if "$resource_diff" \
             --controller-url "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" \
             --gateway-url "http://127.0.0.1:${GATEWAY_ADMIN_PORT}" \
@@ -586,8 +587,9 @@ verify_sync() {
         ((attempt++))
     done
     
-    log_warning "resourcesyncverifyfailed after $max_retries attempts，viewlog: ${LOG_DIR}/resource_diff.log"
-    tail -10 "${LOG_DIR}/resource_diff.log" 2>/dev/null || true
+    log_error "resourcesyncverifyfailed after $max_retries attempts，viewlog: ${LOG_DIR}/resource_diff.log"
+    tail -20 "${LOG_DIR}/resource_diff.log" 2>/dev/null || true
+    exit 1
 }
 
 # =============================================================================
