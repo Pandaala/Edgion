@@ -360,6 +360,14 @@ start_gateway() {
         exit 1
     fi
     
+    # Verify LB preload completed
+    if ! grep -q "LB preload completed" "${LOG_DIR}/gateway.log"; then
+        log_error "edgion-gateway LB preload 日志未找到"
+        tail -50 "${LOG_DIR}/gateway.log" 2>/dev/null || true
+        exit 1
+    fi
+    log_info "LB preload 日志验证通过"
+    
     log_success "edgion-gateway Startsuccess (PID: $pid)"
 }
 

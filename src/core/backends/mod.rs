@@ -1,6 +1,7 @@
 pub mod backend_tls;
 pub mod endpoint;
 pub mod endpoint_slice;
+pub mod preload;
 pub mod services;
 
 pub use backend_tls::{create_backend_tls_policy_handler, get_global_backend_tls_policy_store, BackendTLSPolicyStore};
@@ -12,6 +13,7 @@ pub use endpoint_slice::{
     create_ep_slice_handler, get_consistent_store, get_ewma_store, get_leastconn_store, get_roundrobin_store,
     EpSliceStore,
 };
+pub use preload::preload_load_balancers;
 pub use services::{create_service_handler, get_global_service_store, ServiceStore};
 
 use std::sync::OnceLock;
