@@ -8,6 +8,7 @@
 //! without requiring server restart.
 
 use crate::core::matcher::HashHost;
+use crate::core::observe::test_metrics::TestType;
 use crate::types::resources::gateway::AllowedRoutes;
 use crate::types::Gateway;
 use arc_swap::ArcSwap;
@@ -25,7 +26,7 @@ use std::sync::{Arc, LazyLock};
 ///
 /// Note: Listener configuration (hostname, allowedRoutes) is queried dynamically
 /// from GatewayConfigStore to support hot-reload of Gateway configuration.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct GatewayInfo {
     /// Gateway namespace (None for cluster-scoped or default namespace)
     pub namespace: Option<String>,
@@ -33,15 +34,29 @@ pub struct GatewayInfo {
     pub name: String,
     /// Current listener name (required for listener-specific config lookup)
     pub listener_name: Option<String>,
+
+    // ========== Test metrics fields (from Gateway annotations) ==========
+    /// Test key for metrics filtering (from edgion.io/metrics-test-key annotation)
+    pub metrics_test_key: Option<String>,
+    /// Test type for metrics collection (from edgion.io/metrics-test-type annotation)
+    pub metrics_test_type: Option<TestType>,
 }
 
 impl GatewayInfo {
     /// Create a new GatewayInfo
-    pub fn new(namespace: Option<String>, name: String, listener_name: Option<String>) -> Self {
+    pub fn new(
+        namespace: Option<String>,
+        name: String,
+        listener_name: Option<String>,
+        metrics_test_key: Option<String>,
+        metrics_test_type: Option<TestType>,
+    ) -> Self {
         Self {
             namespace,
             name,
             listener_name,
+            metrics_test_key,
+            metrics_test_type,
         }
     }
 
@@ -57,6 +72,18 @@ impl GatewayInfo {
             Some(ns) if !ns.is_empty() => format!("{}/{}", ns, self.name),
             _ => self.name.clone(),
         }
+    }
+
+    /// Get gateway namespace for metrics (returns empty string if None)
+    #[inline]
+    pub fn gateway_namespace(&self) -> &str {
+        self.namespace.as_deref().unwrap_or("")
+    }
+
+    /// Get gateway name for metrics
+    #[inline]
+    pub fn gateway_name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -375,12 +402,20 @@ mod tests {
             Some("default".to_string()),
             "my-gateway".to_string(),
             Some("https".to_string()),
+            None,
+            None,
         );
         assert_eq!(info.gateway_key(), "default/my-gateway");
         assert_eq!(info.namespace_str(), "default");
         assert_eq!(info.listener_name, Some("https".to_string()));
 
-        let info_no_ns = GatewayInfo::new(None, "my-gateway".to_string(), None);
+        let info_no_ns = GatewayInfo::new(
+            None,
+            "my-gateway".to_string(),
+            None,
+            None,
+            None,
+        );
         assert_eq!(info_no_ns.gateway_key(), "my-gateway");
         assert_eq!(info_no_ns.namespace_str(), "");
         assert_eq!(info_no_ns.listener_name, None);

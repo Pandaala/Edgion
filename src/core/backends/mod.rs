@@ -207,6 +207,7 @@ fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Ve
     }
 }
 
+
 /// Select backend based on endpoint mode and LB policy.
 fn select_backend_by_policy(
     service_key: &str,
@@ -459,6 +460,15 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
 
             // Clone lb_policy before mutable borrow of ctx
             let lb_policy_clone = lb_policy.clone();
+
+            // Extract hash_key for test metrics before mutable borrow (if test mode enabled)
+            // Hash key is saved to ctx for logging stage to build test data
+            if ctx.gateway_info.metrics_test_type.is_some()
+                && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
+            {
+                let hash_key_bytes = extract_hash_key(session, lb_policy);
+                ctx.hash_key = String::from_utf8(hash_key_bytes).ok();
+            }
 
             // Store backend address, LB policy, and TLS info in context
             if let Some(upstream) = ctx.get_current_upstream_mut() {

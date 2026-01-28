@@ -10,6 +10,14 @@ pub mod edgion {
     pub const HTTP_TO_HTTPS_REDIRECT: &str = "edgion.io/http-to-https-redirect";
     /// Target port for HTTPS redirect
     pub const HTTPS_REDIRECT_PORT: &str = "edgion.io/https-redirect-port";
+
+    // ========== Test metrics annotations ==========
+    /// Test identifier for metrics filtering
+    /// Example: edgion.io/metrics-test-key: "lb-test-001"
+    pub const METRICS_TEST_KEY: &str = "edgion.io/metrics-test-key";
+    /// Test type for metrics collection (lb/retry/latency)
+    /// Example: edgion.io/metrics-test-type: "lb"
+    pub const METRICS_TEST_TYPE: &str = "edgion.io/metrics-test-type";
 }
 
 /// Standard Kubernetes annotations

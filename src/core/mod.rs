@@ -3,7 +3,7 @@ pub mod backends;
 pub mod cli;
 pub mod conf_mgr;
 pub mod conf_sync;
-mod gateway;
+pub mod gateway;
 pub mod lb;
 pub mod link_sys;
 pub mod matcher;

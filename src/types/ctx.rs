@@ -1,3 +1,4 @@
+use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::plugins::PluginLogs;
 use crate::core::routes::grpc_routes::GrpcRouteRuleUnit;
 use crate::core::routes::HttpRouteRuleUnit;
@@ -186,6 +187,9 @@ pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
 
+    /// Gateway information (copied from EdgionHttp for easy access)
+    pub gateway_info: GatewayInfo,
+
     /// Request information (hostname, path, x-trace-id)
     pub request_info: RequestInfo,
 
@@ -226,6 +230,9 @@ pub struct EdgionHttpContext {
     /// Time when first upstream connection was initiated
     /// Set only once on first connection attempt
     pub upstream_start_time: Option<Instant>,
+
+    /// Hash key used for consistent hashing (for test metrics)
+    pub hash_key: Option<String>,
 }
 
 impl Default for EdgionHttpContext {
@@ -238,6 +245,7 @@ impl EdgionHttpContext {
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),
+            gateway_info: GatewayInfo::default(),
             request_info: RequestInfo::default(),
             edgion_status: Vec::with_capacity(5),
             route_unit: None,
@@ -251,6 +259,7 @@ impl EdgionHttpContext {
             plugin_running_result: PluginRunningResult::Nothing,
             try_cnt: 0,
             upstream_start_time: None,
+            hash_key: None,
         }
     }
 
