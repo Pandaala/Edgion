@@ -57,12 +57,22 @@ pub async fn logging(
 /// Record HTTP request metrics for monitoring and testing
 ///
 /// Records request information to Prometheus for each completed request.
-/// Test fields (test_key, test_data) are empty in production mode.
+/// Test fields (test_key, test_data) are only populated when --test-mode is enabled
+/// AND the Gateway has the corresponding annotations set.
 #[inline]
 fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>) {
     // Get gateway information
     let gateway_ns = ctx.gateway_info.gateway_namespace();
     let gateway_name = ctx.gateway_info.gateway_name();
+
+    // Get matched route information (HTTP or gRPC)
+    let (route_ns, route_name) = if let Some(ref route_unit) = ctx.route_unit {
+        (route_unit.matched_info.rns.as_str(), route_unit.matched_info.rn.as_str())
+    } else if let Some(ref grpc_unit) = ctx.grpc_route_unit {
+        (grpc_unit.matched_info.route_ns.as_str(), grpc_unit.matched_info.route_name.as_str())
+    } else {
+        ("unknown", "unknown")
+    };
 
     // Get backend information
     let (backend_ns, backend_name) = ctx
@@ -78,14 +88,22 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
         .as_deref()
         .unwrap_or("http");
 
-    // Get test metrics (empty strings if not in test mode)
-    let test_key = ctx.gateway_info.metrics_test_key.as_deref().unwrap_or("");
-    let test_data = build_test_data(ctx, error);
+    // Get test metrics only when test_mode is enabled
+    // This prevents processing test annotations in production
+    let (test_key, test_data) = if crate::core::cli::config::is_test_mode() {
+        let key = ctx.gateway_info.metrics_test_key.as_deref().unwrap_or("");
+        let data = build_test_data(ctx, error);
+        (key, data)
+    } else {
+        ("", String::new())
+    };
 
     // Record the metric
     record_backend_request(
         gateway_ns,
         gateway_name,
+        route_ns,
+        route_name,
         backend_ns,
         backend_name,
         protocol,
@@ -109,14 +127,10 @@ fn build_test_data(ctx: &EdgionHttpContext, error: Option<&PingoraError>) -> Str
 
     match test_type {
         TestType::Lb => {
-            // LB test: collect backend IP, port, and hash key
+            // LB test: collect backend IP, port from UpstreamInfo (saved by push_upstream)
             if let Some(upstream) = ctx.get_current_upstream() {
-                if let Some(addr) = &upstream.backend_addr {
-                    if let Some(inet) = addr.as_inet() {
-                        test_data.ip = Some(inet.ip().to_string());
-                        test_data.port = Some(inet.port());
-                    }
-                }
+                test_data.ip = upstream.ip.clone();
+                test_data.port = upstream.port;
             }
             test_data.hash_key = ctx.hash_key.clone();
         }

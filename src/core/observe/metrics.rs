@@ -178,6 +178,8 @@ impl GatewayMetrics {
 /// # Arguments
 /// * `gateway_ns` - Gateway namespace
 /// * `gateway_name` - Gateway name
+/// * `route_ns` - Matched route namespace
+/// * `route_name` - Matched route name
 /// * `backend_ns` - Backend service namespace
 /// * `backend_name` - Backend service name
 /// * `protocol` - Protocol (http/grpc/websocket, from discover_protocol)
@@ -188,6 +190,8 @@ impl GatewayMetrics {
 pub fn record_backend_request(
     gateway_ns: &str,
     gateway_name: &str,
+    route_ns: &str,
+    route_name: &str,
     backend_ns: &str,
     backend_name: &str,
     protocol: &str,
@@ -199,6 +203,8 @@ pub fn record_backend_request(
         names::BACKEND_REQUESTS_TOTAL,
         "gateway_namespace" => gateway_ns.to_string(),
         "gateway_name" => gateway_name.to_string(),
+        "route_namespace" => route_ns.to_string(),
+        "route_name" => route_name.to_string(),
         "backend_namespace" => backend_ns.to_string(),
         "backend_name" => backend_name.to_string(),
         "protocol" => protocol.to_string(),

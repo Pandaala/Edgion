@@ -19,6 +19,8 @@
 mod framework;
 #[path = "../client/log_analyzer.rs"]
 mod log_analyzer;
+#[path = "../client/metrics_helper.rs"]
+pub mod metrics_helper;
 #[path = "../client/reporter.rs"]
 mod reporter;
 #[path = "../client/suites/mod.rs"]

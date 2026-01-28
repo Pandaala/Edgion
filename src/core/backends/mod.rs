@@ -79,33 +79,45 @@ pub fn is_endpoint_slice_mode() -> bool {
 
 /// Select backend using round-robin based on endpoint mode.
 /// Uses DCL pattern to lazily create LB if not exists.
+///
+/// EndpointMode only controls which resources are synced:
+/// - Auto/Both/EndpointSlice: use EndpointSlice for backend selection
+/// - Endpoint: use Endpoints for backend selection
+///
+/// Use `ServiceEndpoint` or `ServiceEndpointSlice` in BackendRef.kind to override.
 pub fn select_roundrobin_backend(service_key: &str) -> Option<pingora_load_balancing::Backend> {
     match get_global_endpoint_mode() {
-        EndpointMode::EndpointSlice => {
-            // Use DCL pattern: get or create LB, then select
+        // EndpointSlice, Both, Auto all default to EndpointSlice
+        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
             let lb = get_roundrobin_store().get_or_create(service_key)?;
             lb.load_balancer().select(b"", 256)
         }
+        // Only explicit Endpoint mode uses Endpoints
         EndpointMode::Endpoint => {
-            // Use DCL pattern: get or create LB, then select
             let lb = get_endpoint_roundrobin_store().get_or_create(service_key)?;
             lb.load_balancer().select(b"", 256)
         }
-        EndpointMode::Auto => unreachable!("EndpointMode::Auto should be resolved at startup"),
     }
 }
 
 /// EdgionService defines the types of backend services
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgionService {
-    /// Standard Kubernetes Service
+    /// Standard Kubernetes Service (default behavior based on endpoint_mode)
+    /// In Both mode: tries EndpointSlice first, falls back to Endpoint
     Service,
-    /// Service with ClusterIP
+    /// Service with ClusterIP (direct connection, no LB)
     ServiceClusterIp,
     /// ServiceImport for multi-cluster
     ServiceImport,
     /// Service with ExternalName
     ServiceExternalName,
+    /// Force use Endpoints resource for backend discovery
+    /// Useful in Both mode to explicitly select Endpoint over EndpointSlice
+    ServiceEndpoint,
+    /// Force use EndpointSlice resource for backend discovery
+    /// Useful in Both mode to explicitly select EndpointSlice
+    ServiceEndpointSlice,
 }
 
 impl EdgionService {
@@ -119,6 +131,9 @@ impl EdgionService {
                 "ServiceClusterIp" => EdgionService::ServiceClusterIp,
                 "ServiceImport" => EdgionService::ServiceImport,
                 "ServiceExternalName" => EdgionService::ServiceExternalName,
+                // Explicit endpoint mode selection (for Both mode)
+                "ServiceEndpoint" | "Endpoint" => EdgionService::ServiceEndpoint,
+                "ServiceEndpointSlice" | "EndpointSlice" => EdgionService::ServiceEndpointSlice,
                 _ => EdgionService::Service, // Default to Service for unknown types
             },
         }
@@ -209,15 +224,24 @@ fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Ve
 
 
 /// Select backend based on endpoint mode and LB policy.
+///
+/// EndpointMode only controls which resources are synced:
+/// - Auto/Both/EndpointSlice: use EndpointSlice for backend selection
+/// - Endpoint: use Endpoints for backend selection
+///
+/// Use `ServiceEndpoint` or `ServiceEndpointSlice` in BackendRef.kind to override.
 fn select_backend_by_policy(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
 ) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
     match get_global_endpoint_mode() {
-        EndpointMode::EndpointSlice => select_from_endpoint_slice(service_key, lb_policy, session),
+        // EndpointSlice, Both, Auto all default to EndpointSlice
+        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
+            select_from_endpoint_slice(service_key, lb_policy, session)
+        }
+        // Only explicit Endpoint mode uses Endpoints
         EndpointMode::Endpoint => select_from_endpoints(service_key, lb_policy, session),
-        EndpointMode::Auto => unreachable!("EndpointMode::Auto should be resolved at startup"),
     }
 }
 
@@ -571,6 +595,78 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             tracing::warn!(service_key = %service_key, "ServiceImport is not yet implemented");
             Err(EdgionStatus::BackendServiceImportNotImplemented)
         }
+
+        EdgionService::ServiceEndpoint => {
+            // Force use Endpoints (ignore EndpointSlice even in Both mode)
+            let backend = select_from_endpoints(&service_key, lb_policy, session)?;
+
+            let mut addr = backend.addr;
+            if let Some(port) = br_port {
+                addr.set_port(port as u16);
+            }
+
+            let (use_tls, sni) = extract_tls_config(backend_tls_policy);
+            let lb_policy_clone = lb_policy.clone();
+
+            // Extract hash_key for test metrics
+            if ctx.gateway_info.metrics_test_type.is_some()
+                && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
+            {
+                let hash_key_bytes = extract_hash_key(session, lb_policy);
+                ctx.hash_key = String::from_utf8(hash_key_bytes).ok();
+            }
+
+            if let Some(upstream) = ctx.get_current_upstream_mut() {
+                upstream.backend_addr = Some(addr.clone());
+                upstream.lb_policy = lb_policy_clone;
+                if use_tls {
+                    upstream.tls = Some(crate::types::BackendTlsInfo {
+                        sni: if sni.is_empty() { None } else { Some(sni.clone()) },
+                        handshake_ok: None,
+                        protocol: None,
+                        cipher: None,
+                    });
+                }
+            }
+
+            Ok(Box::new(HttpPeer::new(addr, use_tls, sni)))
+        }
+
+        EdgionService::ServiceEndpointSlice => {
+            // Force use EndpointSlice (ignore Endpoint even in Both mode)
+            let backend = select_from_endpoint_slice(&service_key, lb_policy, session)?;
+
+            let mut addr = backend.addr;
+            if let Some(port) = br_port {
+                addr.set_port(port as u16);
+            }
+
+            let (use_tls, sni) = extract_tls_config(backend_tls_policy);
+            let lb_policy_clone = lb_policy.clone();
+
+            // Extract hash_key for test metrics
+            if ctx.gateway_info.metrics_test_type.is_some()
+                && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
+            {
+                let hash_key_bytes = extract_hash_key(session, lb_policy);
+                ctx.hash_key = String::from_utf8(hash_key_bytes).ok();
+            }
+
+            if let Some(upstream) = ctx.get_current_upstream_mut() {
+                upstream.backend_addr = Some(addr.clone());
+                upstream.lb_policy = lb_policy_clone;
+                if use_tls {
+                    upstream.tls = Some(crate::types::BackendTlsInfo {
+                        sni: if sni.is_empty() { None } else { Some(sni.clone()) },
+                        handshake_ok: None,
+                        protocol: None,
+                        cipher: None,
+                    });
+                }
+            }
+
+            Ok(Box::new(HttpPeer::new(addr, use_tls, sni)))
+        }
     }
 }
 
@@ -610,5 +706,79 @@ pub async fn get_peer(
             let _ = end_response_503(session, ctx, &server_header_opts).await;
             Err(PingoraError::new(ErrorType::InternalError))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_edgion_service_from_kind_default() {
+        // None or empty string should default to Service
+        assert_eq!(EdgionService::from_kind(None), EdgionService::Service);
+        assert_eq!(
+            EdgionService::from_kind(Some(&String::new())),
+            EdgionService::Service
+        );
+    }
+
+    #[test]
+    fn test_edgion_service_from_kind_standard() {
+        assert_eq!(
+            EdgionService::from_kind(Some(&"Service".to_string())),
+            EdgionService::Service
+        );
+        assert_eq!(
+            EdgionService::from_kind(Some(&"ServiceClusterIp".to_string())),
+            EdgionService::ServiceClusterIp
+        );
+        assert_eq!(
+            EdgionService::from_kind(Some(&"ServiceImport".to_string())),
+            EdgionService::ServiceImport
+        );
+        assert_eq!(
+            EdgionService::from_kind(Some(&"ServiceExternalName".to_string())),
+            EdgionService::ServiceExternalName
+        );
+    }
+
+    #[test]
+    fn test_edgion_service_from_kind_explicit_endpoint() {
+        // ServiceEndpoint and Endpoint should map to ServiceEndpoint
+        assert_eq!(
+            EdgionService::from_kind(Some(&"ServiceEndpoint".to_string())),
+            EdgionService::ServiceEndpoint
+        );
+        assert_eq!(
+            EdgionService::from_kind(Some(&"Endpoint".to_string())),
+            EdgionService::ServiceEndpoint
+        );
+    }
+
+    #[test]
+    fn test_edgion_service_from_kind_explicit_endpoint_slice() {
+        // ServiceEndpointSlice and EndpointSlice should map to ServiceEndpointSlice
+        assert_eq!(
+            EdgionService::from_kind(Some(&"ServiceEndpointSlice".to_string())),
+            EdgionService::ServiceEndpointSlice
+        );
+        assert_eq!(
+            EdgionService::from_kind(Some(&"EndpointSlice".to_string())),
+            EdgionService::ServiceEndpointSlice
+        );
+    }
+
+    #[test]
+    fn test_edgion_service_from_kind_unknown() {
+        // Unknown kinds should default to Service
+        assert_eq!(
+            EdgionService::from_kind(Some(&"UnknownKind".to_string())),
+            EdgionService::Service
+        );
+        assert_eq!(
+            EdgionService::from_kind(Some(&"RandomString".to_string())),
+            EdgionService::Service
+        );
     }
 }

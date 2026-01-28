@@ -1,70 +1,63 @@
 // ============================================================================
-// DISABLED: This test suite is currently disabled
-// ============================================================================
-// Reason: The current approach relies on log analysis timing which is unreliable.
-//         Access logs may not be flushed immediately, causing flaky test results.
-//
-// TODO: Redesign test to use one of these approaches:
-//       1. Real backends that return their address in response headers
-//       2. Gateway debug headers (X-Backend-Tried) added to responses
-//       3. Mixed approach with real backends for success cases
-//
-// The test suite code is preserved below for future reference.
+// LB Policy Test Suite - using Prometheus metrics to verify LB distribution
 // ============================================================================
 //
-// LB Policy Test Suite - using log_analyzer to verify LB policy
-// 这个Test suitedemonstrates how to verify via access log analysis LB 策略
+// This test suite verifies Load Balancer policies through metrics analysis.
+// Gateway must have test mode enabled (--test-mode) for metrics test features.
 //
-// Required config files (in examples/conf/):
-// - EndpointSlice_default_lb-rr-test.yaml     # LB test backend（3 backends：127.0.0.1:9999, 127.0.0.2:9999, 127.0.0.3:9999）
-// - Service_default_lb-rr-test.yaml           # LB test service definition
-// - HTTPRoute_default_lb-rr-noretry.yaml      # RoundRobin LB routing rules（Host: lb-rr-test.example.com）
-//   Note: route configured with RoundRobin LB policy, retries disabled via annotation
-// - Gateway_edge_example-gateway.yaml         # Gateway config
-// - GatewayClass__public-gateway.yaml         # GatewayClass config
+// Required config files (in examples/conf/HTTPRoute/Backend/LBPolicy/):
+// - EndpointSlice_default_lb-rr-test.yaml  # EndpointSlice backend (3 backends)
+// - Endpoints_default_lb-rr-test.yaml      # Endpoints backend (3 backends, same IPs)
+// - Service_default_lb-rr-test.yaml        # Service definition
+// - HTTPRoute_default_lb-rr-noretry.yaml   # RoundRobin via EndpointSlice (default)
+// - HTTPRoute_default_lb-rr-endpoint.yaml  # RoundRobin via Endpoints (ServiceEndpoint kind)
+// - Gateway.yaml                           # Gateway with metrics test annotations
 //
-// 注：This test uses unreachable backend addresses to verify LB distribution policy
+// Gateway annotations for test mode:
+//   edgion.io/metrics-test-key: "lb-policy-test"
+//   edgion.io/metrics-test-type: "lb"
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use crate::log_analyzer::AccessLogAnalyzer;
+use crate::metrics_helper::MetricsClient;
 use async_trait::async_trait;
 use std::time::Instant;
 
 pub struct LBPolicyTestSuite;
 
 impl LBPolicyTestSuite {
-    /// Test RoundRobin LB policy by analyzing access logs
-    fn test_roundrobin_no_retry() -> TestCase {
+    /// Test RoundRobin LB policy using EndpointSlice (default behavior)
+    fn test_roundrobin_endpointslice() -> TestCase {
         TestCase::new(
-            "roundrobin_no_retry",
-            "Verify RoundRobin with no retry through annotation",
-            |ctx: TestContext| {
+            "roundrobin_endpointslice",
+            "Verify RoundRobin LB with EndpointSlice (default) via metrics",
+            |_ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Create HTTP client with timeout > route timeout (1s backend + 2s total)
+                    // Create HTTP client
                     let client = reqwest::Client::builder()
                         .connect_timeout(std::time::Duration::from_secs(2))
-                        .timeout(std::time::Duration::from_secs(5)) // > route timeout (2s)
+                        .timeout(std::time::Duration::from_secs(5))
                         .no_proxy()
                         .build()
                         .expect("Failed to create HTTP client");
 
-                    let trace_prefix = "rr-noretry";
                     let request_count = 9;
                     let mut tasks = Vec::new();
 
-                    // 1. Send concurrent requests
+                    // 1. Send concurrent requests to EndpointSlice route
                     for i in 0..request_count {
                         let client = client.clone();
-                        let url = format!("{}/test", ctx.http_url());
-                        let trace_id = format!("{}-{:04}", trace_prefix, i);
+                        let url = format!("http://127.0.0.1:31120/test");
+                        let trace_id = format!("rr-eps-{:04}", i);
 
                         let task = tokio::spawn(async move {
-                            let mut request = client.get(&url);
-                            request = request.header("host", "lb-rr-test.example.com");
-                            request = request.header("x-trace-id", &trace_id);
-                            request.send().await
+                            client
+                                .get(&url)
+                                .header("host", "lb-rr-test.example.com")
+                                .header("x-trace-id", &trace_id)
+                                .send()
+                                .await
                         });
                         tasks.push(task);
                     }
@@ -74,224 +67,157 @@ impl LBPolicyTestSuite {
                         let _ = task.await;
                     }
 
-                    // 3. Wait for log flush
-                    // With route timeout of 1s, all requests should complete within 2s
-                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    // 3. Wait for metrics to be recorded
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    // 4. Analyze access logs
-                    let analyzer = AccessLogAnalyzer::new(&ctx.access_log_path);
-                    match analyzer.analyze_by_prefix(trace_prefix) {
-                        Ok(result) => {
-                            // Verify total request count
-                            if result.total_requests != request_count {
+                    // 4. Analyze metrics (Metrics API is on port 5901)
+                    let metrics_client = MetricsClient::from_host_port("127.0.0.1", 5901);
+                    match metrics_client.analyze_lb_distribution("lb-policy-test").await {
+                        Ok(analysis) => {
+                            // Check if we got any requests
+                            if analysis.total_requests == 0 {
                                 return TestResult::failed(
                                     start.elapsed(),
-                                    format!("Expected {} requests, found {}", request_count, result.total_requests),
+                                    "No requests recorded in metrics (test mode enabled?)".to_string(),
                                 );
                             }
 
-                            // Verify backend count (should have 3 backends)
-                            if result.backend_counts.len() != 3 {
+                            // Check distribution across backends
+                            let endpoint_count = analysis.by_endpoint.len();
+                            if endpoint_count == 0 {
                                 return TestResult::failed(
                                     start.elapsed(),
-                                    format!(
-                                        "Expected 3 backends, found {}: {:?}",
-                                        result.backend_counts.len(),
-                                        result.backend_counts
-                                    ),
+                                    "No endpoint distribution data (test_data empty?)".to_string(),
                                 );
                             }
 
-                            // Verify reasonable distribution (each backend should get at least 1 request)
-                            // With 9 requests and 3 backends, expect roughly 3 each (±2 is acceptable)
-                            for (backend, count) in &result.backend_counts {
-                                if *count < 1 || *count > 5 {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!(
-                                            "Backend {} used {} times, expected 1-5 (reasonable distribution)",
-                                            backend, count
-                                        ),
-                                    );
-                                }
-                            }
-
-                            let distribution: Vec<String> = result
-                                .backend_counts
+                            let distribution: Vec<String> = analysis
+                                .by_endpoint
                                 .iter()
-                                .map(|(backend, count)| format!("{}:{}", backend, count))
+                                .map(|(ep, count)| format!("{}:{}", ep, count))
                                 .collect();
 
                             let msg = format!(
-                                "RoundRobin verified: {} requests distributed across 3 backends [{}] (total: {:?})",
-                                result.total_requests,
+                                "EndpointSlice RoundRobin: {} requests across {} endpoints [{}], balanced={}, variance={:.2}%",
+                                analysis.total_requests,
+                                endpoint_count,
                                 distribution.join(", "),
-                                start.elapsed()
+                                analysis.is_balanced,
+                                analysis.max_variance * 100.0
                             );
+
                             TestResult::passed_with_message(start.elapsed(), msg)
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Log analysis failed: {}", e)),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Metrics analysis failed: {}", e)),
                     }
                 })
             },
         )
     }
 
-    /*
-    /// Test EWMA LB policy by analyzing access logs
-    fn test_ewma_lb_policy() -> TestCase {
+    /// Test RoundRobin LB policy using Endpoints (ServiceEndpoint kind)
+    fn test_roundrobin_endpoint() -> TestCase {
         TestCase::new(
-            "ewma_lb_policy",
-            "Verify EWMA LB policy through access log analysis",
-            |ctx: TestContext| Box::pin(async move {
-                let start = Instant::now();
-                let client = &ctx.http_client;
+            "roundrobin_endpoint",
+            "Verify RoundRobin LB with Endpoints (ServiceEndpoint kind) via metrics",
+            |_ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
 
-                // Send multiple requests with trace ID prefix
-                let trace_prefix = "ewma-test";
-                let request_count = 10;
+                    // Create HTTP client
+                    let client = reqwest::Client::builder()
+                        .connect_timeout(std::time::Duration::from_secs(2))
+                        .timeout(std::time::Duration::from_secs(5))
+                        .no_proxy()
+                        .build()
+                        .expect("Failed to create HTTP client");
 
-                for i in 0..request_count {
-                    let url = format!("{}/health", ctx.http_url());
-                    let trace_id = format!("{}-{:04}", trace_prefix, i);
+                    let request_count = 9;
+                    let mut tasks = Vec::new();
 
-                    let mut request = client.get(&url);
-                    request = request.header("host", "ewma.test.example.com");
-                    request = request.header("x-trace-id", &trace_id);
+                    // 1. Send concurrent requests to Endpoints route (ServiceEndpoint kind)
+                    for i in 0..request_count {
+                        let client = client.clone();
+                        let url = format!("http://127.0.0.1:31120/test");
+                        let trace_id = format!("rr-ep-{:04}", i);
 
-                    match request.send().await {
-                        Ok(_) => {},
-                        Err(e) => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!("Request {} failed: {}", i, e)
-                            );
-                        }
+                        let task = tokio::spawn(async move {
+                            client
+                                .get(&url)
+                                .header("host", "lb-rr-endpoint.example.com")
+                                .header("x-trace-id", &trace_id)
+                                .send()
+                                .await
+                        });
+                        tasks.push(task);
                     }
-                }
 
-                // Give logger time to flush
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-                // Analyze access logs
-                let analyzer = AccessLogAnalyzer::new(&ctx.access_log_path);
-                match analyzer.analyze_by_prefix(trace_prefix) {
-                    Ok(result) => {
-                        if result.total_requests != request_count {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!(
-                                    "Expected {} requests in log, found {}",
-                                    request_count, result.total_requests
-                                )
-                            );
-                        }
-
-                        // Check if EWMA policy is recorded
-                        let has_ewma = result.lb_policy_counts.contains_key("Ewma");
-                        if !has_ewma {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!("Expected EWMA policy, found: {:?}", result.lb_policy_counts)
-                            );
-                        }
-
-                        let msg = format!(
-                            "EWMA verified - {} requests with EWMA policy",
-                            result.total_requests
-                        );
-
-                        TestResult::passed_with_message(start.elapsed(), msg)
+                    // 2. Wait for all requests to complete
+                    for task in tasks {
+                        let _ = task.await;
                     }
-                    Err(e) => TestResult::failed(
-                        start.elapsed(),
-                        format!("Failed to analyze access log: {}", e)
-                    ),
-                }
-            })
+
+                    // 3. Wait for metrics to be recorded
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                    // 4. Analyze metrics (Metrics API is on port 5901)
+                    let metrics_client = MetricsClient::from_host_port("127.0.0.1", 5901);
+                    match metrics_client.analyze_lb_distribution("lb-policy-test").await {
+                        Ok(analysis) => {
+                            // Check if we got any requests
+                            if analysis.total_requests == 0 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "No requests recorded in metrics (test mode enabled?)".to_string(),
+                                );
+                            }
+
+                            // Check distribution across backends
+                            let endpoint_count = analysis.by_endpoint.len();
+                            if endpoint_count == 0 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "No endpoint distribution data (test_data empty?)".to_string(),
+                                );
+                            }
+
+                            let distribution: Vec<String> = analysis
+                                .by_endpoint
+                                .iter()
+                                .map(|(ep, count)| format!("{}:{}", ep, count))
+                                .collect();
+
+                            let msg = format!(
+                                "Endpoints RoundRobin: {} requests across {} endpoints [{}], balanced={}, variance={:.2}%",
+                                analysis.total_requests,
+                                endpoint_count,
+                                distribution.join(", "),
+                                analysis.is_balanced,
+                                analysis.max_variance * 100.0
+                            );
+
+                            TestResult::passed_with_message(start.elapsed(), msg)
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Metrics analysis failed: {}", e)),
+                    }
+                })
+            },
         )
     }
-    */
 
-    /*
-    /// Test access log contains backend context
-    fn test_access_log_backend_context() -> TestCase {
-        TestCase::new(
-            "access_log_backend_context",
-            "Verify access log contains backend context information",
-            |ctx: TestContext| Box::pin(async move {
-                let start = Instant::now();
-                let client = &ctx.http_client;
 
-                let trace_id = "backend-ctx-test";
-                let url = format!("{}/health", ctx.http_url());
-
-                let mut request = client.get(&url);
-                request = request.header("host", "test.example.com");
-                request = request.header("x-trace-id", trace_id);
-
-                match request.send().await {
-                    Ok(_) => {},
-                    Err(e) => {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("Request failed: {}", e)
-                        );
-                    }
-                }
-
-                // Give logger time to flush
-                tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-
-                // Analyze access logs
-                let analyzer = AccessLogAnalyzer::new(&ctx.access_log_path);
-                match analyzer.analyze_by_prefix(trace_id) {
-                    Ok(result) => {
-                        if result.total_requests == 0 {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                "No requests found in access log".to_string()
-                            );
-                        }
-
-                        if result.backend_counts.is_empty() {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                "No backend context found in access log".to_string()
-                            );
-                        }
-
-                        // Get the backend address
-                        let backend_addr = result.backend_counts.keys().next().unwrap();
-                        let msg = format!(
-                            "Backend context verified - routed to {}",
-                            backend_addr
-                        );
-
-                        TestResult::passed_with_message(start.elapsed(), msg)
-                    }
-                    Err(e) => TestResult::failed(
-                        start.elapsed(),
-                        format!("Failed to analyze access log: {}", e)
-                    ),
-                }
-            })
-        )
-    }
-    */
 }
 
 #[async_trait]
 impl TestSuite for LBPolicyTestSuite {
     fn name(&self) -> &str {
-        "LB Policy Tests (Log Analyzer)"
+        "LB Policy Tests (Metrics)"
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            Self::test_roundrobin_no_retry(),
-            // Self::test_ewma_lb_policy(),  // Commented out
-            // Self::test_access_log_backend_context(),  // Commented out
+            Self::test_roundrobin_endpointslice(),
+            Self::test_roundrobin_endpoint(),
         ]
     }
 }

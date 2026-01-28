@@ -171,6 +171,7 @@ impl EdgionGatewayCli {
         let endpoint_mode = match server_info.endpoint_mode.as_str() {
             "EndpointSlice" => EndpointMode::EndpointSlice,
             "Endpoint" => EndpointMode::Endpoint,
+            "Both" => EndpointMode::Both,
             _ => {
                 tracing::warn!(
                     component = "startup",
@@ -181,9 +182,16 @@ impl EdgionGatewayCli {
             }
         };
         init_global_endpoint_mode(endpoint_mode);
+
+        // 4.3. Initialize test mode if Controller is in Both mode
+        // Both mode indicates test-mode is enabled on Controller
+        let test_mode_enabled = endpoint_mode == EndpointMode::Both;
+        crate::core::cli::config::init_global_test_mode(test_mode_enabled);
+
         tracing::info!(
             component = "startup",
             endpoint_mode = ?endpoint_mode,
+            test_mode = test_mode_enabled,
             server_id = %server_info.server_id,
             "Global endpoint mode initialized from Controller"
         );

@@ -269,10 +269,17 @@ impl CenterLifeCycle for FileSystemCenter {
         // Get configuration
         let conf_dir = self.config.conf_dir();
 
-        // Resolve endpoint mode (Auto -> EndpointSlice in FileSystem mode)
-        let endpoint_mode = match self.config.endpoint_mode() {
-            EndpointMode::Auto => EndpointMode::EndpointSlice,
-            mode => mode,
+        // Resolve endpoint mode:
+        // - test_mode: force Both (sync both Endpoints and EndpointSlice)
+        // - Auto: defaults to EndpointSlice in FileSystem mode
+        // - Others: use as configured
+        let endpoint_mode = if crate::core::cli::config::is_test_mode() {
+            EndpointMode::Both
+        } else {
+            match self.config.endpoint_mode() {
+                EndpointMode::Auto => EndpointMode::EndpointSlice,
+                mode => mode,
+            }
         };
 
         crate::core::backends::init_global_endpoint_mode(endpoint_mode);
@@ -281,6 +288,7 @@ impl CenterLifeCycle for FileSystemCenter {
             component = "file_system_center",
             mode = "file_system",
             endpoint_mode = ?endpoint_mode,
+            test_mode = crate::core::cli::config::is_test_mode(),
             conf_dir = %conf_dir.display(),
             "Using endpoint mode"
         );

@@ -231,6 +231,7 @@ start_controller() {
         --work-dir "$PROJECT_ROOT" \
         --conf-dir "$CONFIG_DIR" \
         --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}" \
+        --test-mode \
         > "${LOG_DIR}/controller.log" 2>&1 &
     
     local pid=$!
@@ -337,6 +338,7 @@ main() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "Project:  ${PROJECT_ROOT}"
     echo -e "Work Dir: ${WORK_DIR}"
+    echo -e "Test Mode: ${GREEN}enabled${NC} (Both endpoint mode + metrics test)"
     
     # 第一步: Cleanupall旧process
     kill_all_processes

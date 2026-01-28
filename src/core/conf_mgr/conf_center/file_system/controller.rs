@@ -198,36 +198,41 @@ impl FileSystemController {
             .await,
         );
 
-        match self.endpoint_mode {
-            EndpointMode::Endpoint => {
-                tracing::info!(
-                    component = "fs_controller",
-                    "Registering Endpoints controller (legacy mode)"
-                );
-                handles.push(
-                    spawn::<Endpoints, _>(
-                        "Endpoints",
-                        EndpointsHandler::new(),
-                        watcher,
-                        secret_ref_manager,
-                        shutdown_signal.clone(),
-                    )
-                    .await,
-                );
-            }
-            EndpointMode::EndpointSlice | EndpointMode::Auto => {
-                tracing::info!(component = "fs_controller", "Registering EndpointSlice controller");
-                handles.push(
-                    spawn::<EndpointSlice, _>(
-                        "EndpointSlice",
-                        EndpointSliceHandler::new(),
-                        watcher,
-                        secret_ref_manager,
-                        shutdown_signal.clone(),
-                    )
-                    .await,
-                );
-            }
+        // Register endpoint handlers based on endpoint mode
+        if self.endpoint_mode.uses_endpoint() {
+            tracing::info!(
+                component = "fs_controller",
+                mode = ?self.endpoint_mode,
+                "Registering Endpoints controller"
+            );
+            handles.push(
+                spawn::<Endpoints, _>(
+                    "Endpoints",
+                    EndpointsHandler::new(),
+                    watcher,
+                    secret_ref_manager,
+                    shutdown_signal.clone(),
+                )
+                .await,
+            );
+        }
+
+        if self.endpoint_mode.uses_endpoint_slice() {
+            tracing::info!(
+                component = "fs_controller",
+                mode = ?self.endpoint_mode,
+                "Registering EndpointSlice controller"
+            );
+            handles.push(
+                spawn::<EndpointSlice, _>(
+                    "EndpointSlice",
+                    EndpointSliceHandler::new(),
+                    watcher,
+                    secret_ref_manager,
+                    shutdown_signal.clone(),
+                )
+                .await,
+            );
         }
 
         // TLS related

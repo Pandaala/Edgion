@@ -430,14 +430,24 @@ impl KubernetesCenter {
         event_tx: mpsc::Sender<LifecycleEvent>,
     ) -> Result<(WatcherHandles, Arc<ConfigSyncServer>)> {
         // 1. Resolve endpoint mode before creating controller
-        let config_endpoint_mode = self.config.endpoint_mode();
-
-        let resolved_mode = resolve_endpoint_mode(client, config_endpoint_mode).await?;
+        // - test_mode: force Both (sync both Endpoints and EndpointSlice)
+        // - Auto: detect based on K8s API capabilities
+        // - Others: use as configured
+        let resolved_mode = if crate::core::cli::config::is_test_mode() {
+            tracing::info!(
+                component = "kubernetes_center",
+                "Test mode enabled, forcing endpoint_mode=Both"
+            );
+            EndpointMode::Both
+        } else {
+            let config_endpoint_mode = self.config.endpoint_mode();
+            resolve_endpoint_mode(client, config_endpoint_mode).await?
+        };
 
         tracing::info!(
             component = "kubernetes_center",
-            config_mode = ?config_endpoint_mode,
             resolved_mode = ?resolved_mode,
+            test_mode = crate::core::cli::config::is_test_mode(),
             "Endpoint mode resolved"
         );
 

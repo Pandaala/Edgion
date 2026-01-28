@@ -300,11 +300,15 @@ start_test_server() {
 start_controller() {
     log_section "Start edgion-controller"
     
+    # Start controller with --test-mode to enable:
+    # - Both endpoint mode (sync both Endpoints and EndpointSlice)
+    # - Metrics test features (test_key, test_data)
     "${PROJECT_ROOT}/target/debug/edgion-controller" \
         -c "$CONTROLLER_CONFIG" \
         --work-dir "${WORK_DIR}" \
         --conf-dir "$CONFIG_DIR" \
         --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}" \
+        --test-mode \
         > "${LOG_DIR}/controller.log" 2>&1 &
     
     local pid=$!
@@ -638,6 +642,7 @@ main() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "Project:  ${PROJECT_ROOT}"
     echo -e "Work Dir: ${WORK_DIR}"
+    echo -e "Test Mode: ${GREEN}enabled${NC} (Both endpoint mode + metrics test)"
     if [ -n "$SUITES" ]; then
         echo -e "Suites:   ${SUITES}"
     else

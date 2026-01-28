@@ -251,7 +251,7 @@ pub fn update_peer_metrics(_edgion_http: &EdgionHttp, peer: &HttpPeer, ctx: &mut
     // Increment try count
     ctx.try_cnt += 1;
 
-    // Extract and push upstream info
+    // Extract and push upstream info (ip/port saved for logging stage)
     let (ip, port) = peer
         .address()
         .as_inet()

@@ -6,6 +6,7 @@
 
 mod framework;
 mod log_analyzer;
+pub mod metrics_helper;
 mod port_config;
 mod reporter;
 mod suites;

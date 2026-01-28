@@ -302,29 +302,34 @@ impl KubernetesController {
 
         // Backend resources
         h.push(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
-        match self.endpoint_mode {
-            EndpointMode::Endpoint => {
-                tracing::info!(
-                    component = "k8s_controller",
-                    "Registering Endpoints controller (legacy mode)"
-                );
-                h.push(spawn::<Endpoints, _>(self, "Endpoints", EndpointsHandler::new(), &ctx));
-            }
-            EndpointMode::EndpointSlice => {
-                tracing::info!(
-                    component = "k8s_controller",
-                    "Registering EndpointSlice controller (modern mode)"
-                );
-                h.push(spawn::<EndpointSlice, _>(
-                    self,
-                    "EndpointSlice",
-                    EndpointSliceHandler::new(),
-                    &ctx,
-                ));
-            }
-            EndpointMode::Auto => {
-                unreachable!("EndpointMode::Auto should be resolved before run_controllers");
-            }
+
+        // Register endpoint handlers based on endpoint mode
+        if self.endpoint_mode.uses_endpoint() {
+            tracing::info!(
+                component = "k8s_controller",
+                mode = ?self.endpoint_mode,
+                "Registering Endpoints controller"
+            );
+            h.push(spawn::<Endpoints, _>(self, "Endpoints", EndpointsHandler::new(), &ctx));
+        }
+
+        if self.endpoint_mode.uses_endpoint_slice() {
+            tracing::info!(
+                component = "k8s_controller",
+                mode = ?self.endpoint_mode,
+                "Registering EndpointSlice controller"
+            );
+            h.push(spawn::<EndpointSlice, _>(
+                self,
+                "EndpointSlice",
+                EndpointSliceHandler::new(),
+                &ctx,
+            ));
+        }
+
+        // Safety check: Auto mode should have been resolved
+        if self.endpoint_mode.is_auto() {
+            unreachable!("EndpointMode::Auto should be resolved before run_controllers");
         }
 
         // TLS related (special processing)

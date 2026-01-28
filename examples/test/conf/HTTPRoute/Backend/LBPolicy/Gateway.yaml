@@ -4,6 +4,10 @@ kind: Gateway
 metadata:
   name: lb-policy-gateway
   namespace: edgion-test
+  annotations:
+    # Enable metrics test mode for LB distribution verification
+    edgion.io/metrics-test-key: "lb-policy-test"
+    edgion.io/metrics-test-type: "lb"
 spec:
   gatewayClassName: public-gateway
   listeners:

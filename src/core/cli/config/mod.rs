@@ -9,6 +9,25 @@ use std::sync::OnceLock;
 /// Global controller configuration for runtime access
 static CONTROLLER_CONFIG: OnceLock<EdgionControllerConfig> = OnceLock::new();
 
+/// Global test mode flag
+/// When enabled:
+/// - endpoint_mode is forced to Both (sync both Endpoints and EndpointSlice)
+/// - metrics test_key/test_type annotations are processed
+static GLOBAL_TEST_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Initialize global test mode (called once at startup)
+pub fn init_global_test_mode(enabled: bool) {
+    GLOBAL_TEST_MODE.store(enabled, std::sync::atomic::Ordering::SeqCst);
+    if enabled {
+        tracing::info!(component = "test_mode", "Test mode enabled: endpoint_mode=Both, metrics test features active");
+    }
+}
+
+/// Check if test mode is enabled
+pub fn is_test_mode() -> bool {
+    GLOBAL_TEST_MODE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Initialize global controller configuration (called once at startup)
 pub fn init_controller_config(config: EdgionControllerConfig) {
     let _ = CONTROLLER_CONFIG.set(config);
@@ -81,6 +100,14 @@ pub struct EdgionControllerConfig {
     #[arg(long, value_name = "DIR")]
     #[serde(skip)]
     pub conf_dir: Option<PathBuf>,
+
+    /// Enable test mode for integration testing
+    /// When enabled:
+    /// - endpoint_mode is forced to Both (sync both Endpoints and EndpointSlice)
+    /// - metrics test_key/test_type Gateway annotations are processed
+    #[arg(long, help = "Enable test mode (Both endpoint mode + metrics test features)")]
+    #[serde(skip)]
+    pub test_mode: bool,
 
     #[command(flatten)]
     #[serde(default)]
