@@ -271,7 +271,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 };
 
                 // Set Conflicted condition based on ListenerPortManager
-                if let Some((reason, _)) = conflicts.get(&listener.name) {
+                let is_conflicted = if let Some((reason, _)) = conflicts.get(&listener.name) {
                     let cond = condition_true(
                         condition_types::CONFLICTED,
                         condition_reasons::LISTENER_CONFLICT,
@@ -279,6 +279,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                         generation,
                     );
                     update_gateway_condition(&mut ls.conditions, cond);
+                    true
                 } else {
                     let cond = condition_false(
                         condition_types::CONFLICTED,
@@ -287,10 +288,11 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                         generation,
                     );
                     update_gateway_condition(&mut ls.conditions, cond);
-                }
+                    false
+                };
 
-                // Update other listener conditions
-                update_listener_conditions(ls, validation_errors, generation);
+                // Update other listener conditions (pass conflict status for Programmed/Ready)
+                update_listener_conditions(ls, validation_errors, generation, is_conflicted);
             }
         }
     }
@@ -316,8 +318,19 @@ fn update_gateway_condition(
 }
 
 /// Update listener conditions
-fn update_listener_conditions(ls: &mut ListenerStatus, validation_errors: &[String], generation: Option<i64>) {
-    // Accepted
+///
+/// # Arguments
+/// * `ls` - Listener status to update
+/// * `validation_errors` - Any validation errors from parsing
+/// * `generation` - Resource generation for condition tracking
+/// * `is_conflicted` - Whether this listener has port conflicts
+fn update_listener_conditions(
+    ls: &mut ListenerStatus,
+    validation_errors: &[String],
+    generation: Option<i64>,
+    is_conflicted: bool,
+) {
+    // Accepted: True if no validation errors (conflict doesn't affect Accepted)
     if validation_errors.is_empty() {
         let cond = accepted_condition(generation);
         update_gateway_condition(&mut ls.conditions, cond);
@@ -331,14 +344,24 @@ fn update_listener_conditions(ls: &mut ListenerStatus, validation_errors: &[Stri
         update_gateway_condition(&mut ls.conditions, cond);
     }
 
-    // Programmed
-    let programmed = condition_true(
-        condition_types::PROGRAMMED,
-        "Programmed",
-        "Listener configuration programmed",
-        generation,
-    );
-    update_gateway_condition(&mut ls.conditions, programmed);
+    // Programmed: False if conflicted (not actually bound to port)
+    if is_conflicted {
+        let programmed = condition_false(
+            condition_types::PROGRAMMED,
+            condition_reasons::LISTENER_CONFLICT,
+            "Listener not programmed due to port conflict",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, programmed);
+    } else {
+        let programmed = condition_true(
+            condition_types::PROGRAMMED,
+            "Programmed",
+            "Listener configuration programmed",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, programmed);
+    }
 
     // ResolvedRefs: True (TLS secrets resolved in parse phase)
     let resolved = condition_true(
@@ -349,9 +372,19 @@ fn update_listener_conditions(ls: &mut ListenerStatus, validation_errors: &[Stri
     );
     update_gateway_condition(&mut ls.conditions, resolved);
 
-    // Ready
-    let ready = condition_true(condition_types::READY, "Ready", "Listener is ready", generation);
-    update_gateway_condition(&mut ls.conditions, ready);
+    // Ready: False if conflicted (not ready to serve traffic)
+    if is_conflicted {
+        let ready = condition_false(
+            condition_types::READY,
+            condition_reasons::LISTENER_CONFLICT,
+            "Listener not ready due to port conflict",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, ready);
+    } else {
+        let ready = condition_true(condition_types::READY, "Ready", "Listener is ready", generation);
+        update_gateway_condition(&mut ls.conditions, ready);
+    }
 }
 
 /// Get supported route kinds for a protocol
