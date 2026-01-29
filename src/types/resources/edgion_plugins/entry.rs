@@ -1,5 +1,6 @@
 //! Plugin entry types with enable/disable functionality
 
+use crate::core::plugins::plugins_com::PluginConditions;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -60,11 +61,22 @@ impl ConditionEnable {
 ///       add:
 ///         - name: X-Response
 ///           value: added
-///   - conditionEnable:                # conditional enable
+///   - conditionEnable:                # simple conditional enable (legacy)
 ///       timeBefore: "2024-12-31T23:59:59Z"
 ///     type: requestRedirect
 ///     config:
 ///       hostname: example.com
+///   - conditions:                     # advanced conditions
+///       skip:
+///         - keyExist:
+///             source: header
+///             key: "X-Internal"
+///       run:
+///         - timeRange:
+///             after: "2024-01-01T00:00:00Z"
+///     type: ipRestriction
+///     config:
+///       allow: ["10.0.0.0/8"]
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -73,9 +85,14 @@ pub struct PluginEntry {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enable: bool,
 
-    /// Conditional enable configuration
+    /// Simple conditional enable configuration (legacy, use `conditions` for advanced use)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition_enable: Option<ConditionEnable>,
+
+    /// Advanced plugin conditions for conditional execution
+    /// Supports skip/run conditions with various matchers
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<PluginConditions>,
 
     /// The actual plugin configuration
     #[serde(flatten)]
@@ -88,6 +105,7 @@ impl PluginEntry {
         Self {
             enable: true,
             condition_enable: None,
+            conditions: None,
             plugin,
         }
     }
@@ -97,29 +115,53 @@ impl PluginEntry {
         Self {
             enable,
             condition_enable: None,
+            conditions: None,
             plugin,
         }
     }
 
-    /// Create a new plugin entry with condition enable
+    /// Create a new plugin entry with simple condition enable
     pub fn with_condition(plugin: EdgionPlugin, condition: ConditionEnable) -> Self {
         Self {
             enable: true,
             condition_enable: Some(condition),
+            conditions: None,
             plugin,
         }
     }
 
-    /// Check if this plugin is enabled (considering both enable flag and condition)
+    /// Create a new plugin entry with advanced conditions
+    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
+        Self {
+            enable: true,
+            condition_enable: None,
+            conditions: Some(conditions),
+            plugin,
+        }
+    }
+
+    /// Check if this plugin is enabled (considering enable flag and simple condition)
+    /// Note: This only checks basic enable state. For advanced conditions,
+    /// use `conditions()` and evaluate with request context at runtime.
     pub fn is_enabled(&self) -> bool {
         if !self.enable {
             return false;
         }
-        // Check condition if present
+        // Check simple condition if present
         if let Some(condition) = &self.condition_enable {
             return condition.is_satisfied();
         }
         true
+    }
+
+    /// Get the advanced conditions for runtime evaluation
+    pub fn conditions(&self) -> Option<&PluginConditions> {
+        self.conditions.as_ref()
+    }
+
+    /// Check if this entry has advanced conditions defined
+    pub fn has_conditions(&self) -> bool {
+        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
@@ -140,9 +182,13 @@ pub struct RequestFilterEntry {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enable: bool,
 
-    /// Conditional enable configuration
+    /// Simple conditional enable configuration (legacy)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition_enable: Option<ConditionEnable>,
+
+    /// Advanced plugin conditions for conditional execution
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<PluginConditions>,
 
     /// The actual plugin configuration
     #[serde(flatten)]
@@ -155,6 +201,7 @@ impl RequestFilterEntry {
         Self {
             enable: true,
             condition_enable: None,
+            conditions: None,
             plugin,
         }
     }
@@ -164,29 +211,51 @@ impl RequestFilterEntry {
         Self {
             enable,
             condition_enable: None,
+            conditions: None,
             plugin,
         }
     }
 
-    /// Create a new plugin entry with condition enable
+    /// Create a new plugin entry with simple condition enable
     pub fn with_condition(plugin: EdgionPlugin, condition: ConditionEnable) -> Self {
         Self {
             enable: true,
             condition_enable: Some(condition),
+            conditions: None,
             plugin,
         }
     }
 
-    /// Check if this plugin is enabled (considering both enable flag and condition)
+    /// Create a new plugin entry with advanced conditions
+    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
+        Self {
+            enable: true,
+            condition_enable: None,
+            conditions: Some(conditions),
+            plugin,
+        }
+    }
+
+    /// Check if this plugin is enabled (considering enable flag and simple condition)
     pub fn is_enabled(&self) -> bool {
         if !self.enable {
             return false;
         }
-        // Check condition if present
+        // Check simple condition if present
         if let Some(condition) = &self.condition_enable {
             return condition.is_satisfied();
         }
         true
+    }
+
+    /// Get the advanced conditions for runtime evaluation
+    pub fn conditions(&self) -> Option<&PluginConditions> {
+        self.conditions.as_ref()
+    }
+
+    /// Check if this entry has advanced conditions defined
+    pub fn has_conditions(&self) -> bool {
+        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
@@ -206,9 +275,13 @@ pub struct UpstreamResponseFilterEntry {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enable: bool,
 
-    /// Conditional enable configuration
+    /// Simple conditional enable configuration (legacy)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition_enable: Option<ConditionEnable>,
+
+    /// Advanced plugin conditions for conditional execution
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<PluginConditions>,
 
     /// The actual plugin configuration
     #[serde(flatten)]
@@ -221,6 +294,7 @@ impl UpstreamResponseFilterEntry {
         Self {
             enable: true,
             condition_enable: None,
+            conditions: None,
             plugin,
         }
     }
@@ -230,29 +304,51 @@ impl UpstreamResponseFilterEntry {
         Self {
             enable,
             condition_enable: None,
+            conditions: None,
             plugin,
         }
     }
 
-    /// Create a new plugin entry with condition enable
+    /// Create a new plugin entry with simple condition enable
     pub fn with_condition(plugin: EdgionPlugin, condition: ConditionEnable) -> Self {
         Self {
             enable: true,
             condition_enable: Some(condition),
+            conditions: None,
             plugin,
         }
     }
 
-    /// Check if this plugin is enabled (considering both enable flag and condition)
+    /// Create a new plugin entry with advanced conditions
+    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
+        Self {
+            enable: true,
+            condition_enable: None,
+            conditions: Some(conditions),
+            plugin,
+        }
+    }
+
+    /// Check if this plugin is enabled (considering enable flag and simple condition)
     pub fn is_enabled(&self) -> bool {
         if !self.enable {
             return false;
         }
-        // Check condition if present
+        // Check simple condition if present
         if let Some(condition) = &self.condition_enable {
             return condition.is_satisfied();
         }
         true
+    }
+
+    /// Get the advanced conditions for runtime evaluation
+    pub fn conditions(&self) -> Option<&PluginConditions> {
+        self.conditions.as_ref()
+    }
+
+    /// Check if this entry has advanced conditions defined
+    pub fn has_conditions(&self) -> bool {
+        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
@@ -271,9 +367,13 @@ pub struct UpstreamResponseEntry {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enable: bool,
 
-    /// Conditional enable configuration
+    /// Simple conditional enable configuration (legacy)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition_enable: Option<ConditionEnable>,
+
+    /// Advanced plugin conditions for conditional execution
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<PluginConditions>,
 
     /// The actual plugin configuration
     #[serde(flatten)]
@@ -286,6 +386,7 @@ impl UpstreamResponseEntry {
         Self {
             enable: true,
             condition_enable: None,
+            conditions: None,
             plugin,
         }
     }
@@ -295,29 +396,51 @@ impl UpstreamResponseEntry {
         Self {
             enable,
             condition_enable: None,
+            conditions: None,
             plugin,
         }
     }
 
-    /// Create a new plugin entry with condition enable
+    /// Create a new plugin entry with simple condition enable
     pub fn with_condition(plugin: EdgionPlugin, condition: ConditionEnable) -> Self {
         Self {
             enable: true,
             condition_enable: Some(condition),
+            conditions: None,
             plugin,
         }
     }
 
-    /// Check if this plugin is enabled (considering both enable flag and condition)
+    /// Create a new plugin entry with advanced conditions
+    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
+        Self {
+            enable: true,
+            condition_enable: None,
+            conditions: Some(conditions),
+            plugin,
+        }
+    }
+
+    /// Check if this plugin is enabled (considering enable flag and simple condition)
     pub fn is_enabled(&self) -> bool {
         if !self.enable {
             return false;
         }
-        // Check condition if present
+        // Check simple condition if present
         if let Some(condition) = &self.condition_enable {
             return condition.is_satisfied();
         }
         true
+    }
+
+    /// Get the advanced conditions for runtime evaluation
+    pub fn conditions(&self) -> Option<&PluginConditions> {
+        self.conditions.as_ref()
+    }
+
+    /// Check if this entry has advanced conditions defined
+    pub fn has_conditions(&self) -> bool {
+        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
