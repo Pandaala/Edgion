@@ -146,6 +146,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/TLS/BackendTLS" => "Gateway/TLS/BackendTLS",
         "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
         "Gateway/Plugins" => "Gateway/Plugins",
+        "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
         "EdgionTls" | "EdgionTls/https" => "EdgionTls/https",
         "EdgionTls/grpctls" => "EdgionTls/grpctls",
@@ -356,6 +357,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::CombinedScenariosTestSuite));
+        }
+        "Gateway/PortConflict" => {
+            if !gateway {
+                eprintln!("Error: Gateway/PortConflict tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PortConflictTestSuite));
         }
         "Gateway/Dynamic" => {
             if !gateway {

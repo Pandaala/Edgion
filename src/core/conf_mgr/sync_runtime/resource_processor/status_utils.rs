@@ -18,6 +18,10 @@ pub mod condition_types {
     pub const PROGRAMMED: &str = "Programmed";
     /// Data plane is ready to serve traffic
     pub const READY: &str = "Ready";
+    /// Listener conflicts with another Listener (port/hostname collision)
+    pub const CONFLICTED: &str = "Conflicted";
+    /// Gateway has listeners that are not valid (used at Gateway level)
+    pub const LISTENERS_NOT_VALID: &str = "ListenersNotValid";
 }
 
 /// Standard Gateway API condition reasons
@@ -41,6 +45,10 @@ pub mod condition_reasons {
     // Ready reasons
     pub const READY: &str = "Ready";
     pub const PENDING: &str = "Pending";
+
+    // Conflicted reasons (for Listener port conflicts)
+    pub const LISTENER_CONFLICT: &str = "ListenerConflict";
+    pub const NO_CONFLICTS: &str = "NoConflicts";
 }
 
 /// Get current time in RFC3339 format

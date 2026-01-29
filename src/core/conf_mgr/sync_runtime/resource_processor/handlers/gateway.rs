@@ -4,11 +4,15 @@
 //! - Filter by gateway_class_name
 //! - TLS Secret reference resolution
 //! - SecretRefManager registration for cascading updates
+//! - ListenerPortManager registration for port conflict detection
 //! - Gateway API standard status management
 
+use std::collections::HashSet;
+
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    accepted_condition, condition_false, condition_true, condition_types, format_secret_key, get_secret,
-    HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    accepted_condition, condition_false, condition_true, condition_types, condition_reasons,
+    format_secret_key, get_listener_port_manager, get_secret, make_port_key, HandlerContext,
+    ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::gateway::{GatewayStatus, ListenerStatus, RouteGroupKind};
@@ -20,7 +24,10 @@ use crate::types::ResourceKind;
 /// - filter: Filter by gateway_class_name (optional, None means no filter)
 /// - parse: Parse TLS certificateRefs -> fill tls.secrets
 /// - parse: Register Secret references to SecretRefManager
-/// - on_delete: Clear SecretRefManager references
+/// - parse: Register listeners to ListenerPortManager for conflict detection
+/// - on_change: Requeue conflicting Gateways for bidirectional conflict marking
+/// - on_delete: Clear SecretRefManager and ListenerPortManager references
+/// - update_status: Set Conflicted/ListenersNotValid conditions based on port conflicts
 pub struct GatewayHandler {
     /// If Some, only process Gateways with matching gatewayClassName
     /// If None, process all Gateways (used by FileSystem mode)
@@ -57,6 +64,18 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         // Process all Listeners and resolve TLS certificates from global secret store
         if let Some(ref mut listeners) = g.spec.listeners {
+            // Collect listener ports for ListenerPortManager registration
+            let listener_ports: Vec<(String, String)> = listeners
+                .iter()
+                .map(|l| {
+                    let port_key = make_port_key(l.port, &l.protocol, l.hostname.as_deref());
+                    (l.name.clone(), port_key)
+                })
+                .collect();
+
+            // Register to ListenerPortManager for port conflict detection
+            get_listener_port_manager().register_gateway(&resource_ref.key(), &listener_ports);
+
             for listener in listeners.iter_mut() {
                 let tls_config = match &mut listener.tls {
                     Some(tls) => tls,
@@ -110,16 +129,62 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         ProcessResult::Continue(g)
     }
 
+    fn on_change(&self, gateway: &Gateway, ctx: &HandlerContext) {
+        // Bidirectional conflict marking: when conflicts are detected, requeue all conflicting Gateways
+        // This ensures all conflicting Listeners are marked as Conflicted (no winner picked)
+        let gateway_key = format!(
+            "{}/{}",
+            gateway.metadata.namespace.as_deref().unwrap_or(""),
+            gateway.metadata.name.as_deref().unwrap_or("")
+        );
+
+        let conflicting_gateways = get_listener_port_manager().get_conflicting_gateways(&gateway_key);
+
+        let mut requeued = HashSet::new();
+        for conflicting_gateway_key in conflicting_gateways {
+            if !requeued.contains(&conflicting_gateway_key) {
+                ctx.requeue("Gateway", conflicting_gateway_key.clone());
+                requeued.insert(conflicting_gateway_key.clone());
+                tracing::info!(
+                    gateway = %gateway_key,
+                    conflicting_gateway = %conflicting_gateway_key,
+                    "Requeue conflicting Gateway for Conflicted status update"
+                );
+            }
+        }
+    }
+
     fn on_delete(&self, g: &Gateway, ctx: &HandlerContext) {
         let resource_ref = ResourceRef::new(
             ResourceKind::Gateway,
             g.metadata.namespace.clone(),
             g.metadata.name.clone().unwrap_or_default(),
         );
+        let gateway_key = resource_ref.key();
+
+        // Clear SecretRefManager references
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+
+        // Get conflicting gateways BEFORE unregistering (they need to be requeued)
+        let conflicting_gateways = get_listener_port_manager().get_conflicting_gateways(&gateway_key);
+
+        // Clear ListenerPortManager registration
+        get_listener_port_manager().unregister_gateway(&gateway_key);
+
+        // Requeue previously conflicting Gateways so they can update their Conflicted status
+        // (change from Conflicted=True to Conflicted=False)
+        for conflicting_gateway_key in conflicting_gateways {
+            ctx.requeue("Gateway", conflicting_gateway_key.clone());
+            tracing::info!(
+                deleted_gateway = %gateway_key,
+                conflicting_gateway = %conflicting_gateway_key,
+                "Requeue previously conflicting Gateway to clear Conflicted status"
+            );
+        }
+
         tracing::debug!(
-            gateway = %resource_ref.key(),
-            "Cleared secret references on Gateway delete"
+            gateway = %gateway_key,
+            "Cleared secret and port manager references on Gateway delete"
         );
     }
 
@@ -131,6 +196,14 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         // Initialize conditions if not present
         let conditions = status.conditions.get_or_insert_with(Vec::new);
+
+        // Detect port conflicts from ListenerPortManager
+        let gateway_key = format!(
+            "{}/{}",
+            gateway.metadata.namespace.as_deref().unwrap_or(""),
+            gateway.metadata.name.as_deref().unwrap_or("")
+        );
+        let conflicts = get_listener_port_manager().detect_conflicts(&gateway_key);
 
         // Set Gateway-level conditions
         // Accepted: True if no validation errors
@@ -145,6 +218,21 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 generation,
             );
             update_gateway_condition(conditions, cond);
+        }
+
+        // ListenersNotValid: True if any listener has port conflicts
+        if !conflicts.is_empty() {
+            let conflicting_names: Vec<&String> = conflicts.keys().collect();
+            let cond = condition_true(
+                condition_types::LISTENERS_NOT_VALID,
+                condition_reasons::LISTENER_CONFLICT,
+                format!("Listeners have port conflicts: {:?}", conflicting_names),
+                generation,
+            );
+            update_gateway_condition(conditions, cond);
+        } else {
+            // Remove ListenersNotValid condition if no conflicts
+            conditions.retain(|c| c.type_ != condition_types::LISTENERS_NOT_VALID);
         }
 
         // Programmed: Always True after parsing (configuration accepted)
@@ -168,20 +256,41 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 // Find or create listener status
                 let listener_status = listener_statuses.iter_mut().find(|ls| ls.name == listener.name);
 
-                if let Some(ls) = listener_status {
-                    // Update existing listener status
-                    update_listener_conditions(ls, validation_errors, generation);
+                let ls = if let Some(ls) = listener_status {
+                    ls
                 } else {
                     // Create new listener status
-                    let mut ls = ListenerStatus {
+                    let new_ls = ListenerStatus {
                         name: listener.name.clone(),
                         supported_kinds: get_supported_kinds_for_protocol(&listener.protocol),
                         attached_routes: 0,
                         conditions: Vec::new(),
                     };
-                    update_listener_conditions(&mut ls, validation_errors, generation);
-                    listener_statuses.push(ls);
+                    listener_statuses.push(new_ls);
+                    listener_statuses.last_mut().unwrap()
+                };
+
+                // Set Conflicted condition based on ListenerPortManager
+                if let Some((reason, _)) = conflicts.get(&listener.name) {
+                    let cond = condition_true(
+                        condition_types::CONFLICTED,
+                        condition_reasons::LISTENER_CONFLICT,
+                        reason.clone(),
+                        generation,
+                    );
+                    update_gateway_condition(&mut ls.conditions, cond);
+                } else {
+                    let cond = condition_false(
+                        condition_types::CONFLICTED,
+                        condition_reasons::NO_CONFLICTS,
+                        "No port conflicts",
+                        generation,
+                    );
+                    update_gateway_condition(&mut ls.conditions, cond);
                 }
+
+                // Update other listener conditions
+                update_listener_conditions(ls, validation_errors, generation);
             }
         }
     }

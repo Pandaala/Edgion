@@ -27,7 +27,8 @@ pub use edgion_tls::{CipherTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTest
 pub use gateway::{
     AllowedRoutesAllNamespacesTestSuite, AllowedRoutesKindsTestSuite, AllowedRoutesSameNamespaceTestSuite,
     BackendTlsTestSuite, CombinedScenariosTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite,
-    ListenerHostnameTestSuite, PluginLogsTestSuite, RealIpTestSuite, SecurityTestSuite, UpdatePhaseTestSuite,
+    ListenerHostnameTestSuite, PluginLogsTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite,
+    UpdatePhaseTestSuite,
 };
 
 // ReferenceGrant Status tests

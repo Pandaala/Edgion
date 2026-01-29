@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 
-use super::sync_runtime::resource_processor::ProcessorObj;
+use super::sync_runtime::resource_processor::{get_listener_port_manager, ProcessorObj};
 use crate::core::conf_sync::conf_server::WatchObj;
 
 /// Global processor registry instance
@@ -140,12 +140,15 @@ impl ProcessorRegistry {
         }
     }
 
-    /// Clear all registered processors
+    /// Clear all registered processors and related global state
     ///
     /// Used when:
     /// - Restarting controller after failure
     /// - Losing leadership and re-election
     /// - Testing cleanup
+    ///
+    /// This also clears:
+    /// - ListenerPortManager: Global port tracking for conflict detection
     ///
     /// Note: This does NOT immediately notify watch clients. The gRPC layer detects
     /// server_id changes after the new ConfigSyncServer is ready, ensuring clients
@@ -153,6 +156,10 @@ impl ProcessorRegistry {
     pub fn clear_registry(&self) {
         tracing::info!(component = "processor_registry", "Clearing all registered processors");
         self.processors.write().unwrap().clear();
+
+        // Clear ListenerPortManager to avoid stale port conflict data
+        get_listener_port_manager().clear();
+        tracing::info!(component = "processor_registry", "Cleared ListenerPortManager");
     }
 }
 

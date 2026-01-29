@@ -1,5 +1,5 @@
 {
-  "current_max": 31252,
+  "current_max": 31262,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -71,6 +71,11 @@
     },
     "Gateway/Dynamic": {
       "http": 31250
+    },
+    "Gateway/PortConflict": {
+      "internal_conflict": 31260,
+      "cross_conflict": 31261,
+      "no_conflict_hostname": 31262
     }
   }
 }

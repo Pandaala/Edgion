@@ -15,6 +15,7 @@
 mod context;
 mod handler;
 pub mod handlers;
+pub mod listener_port_manager;
 mod processor;
 pub mod ref_grant;
 pub mod secret_utils;
@@ -24,8 +25,8 @@ pub use context::HandlerContext;
 pub use handler::{ProcessResult, ProcessorHandler};
 pub use processor::{extract_status_value, ProcessorObj, ResourceProcessor, WorkItemResult};
 pub use status_utils::{
-    accepted_condition, condition_false, condition_true, condition_types, now_rfc3339, programmed_condition,
-    ready_condition, resolved_refs_condition, set_route_parent_conditions, update_condition,
+    accepted_condition, condition_false, condition_true, condition_reasons, condition_types, now_rfc3339,
+    programmed_condition, ready_condition, resolved_refs_condition, set_route_parent_conditions, update_condition,
 };
 
 // Re-export handlers
@@ -50,6 +51,9 @@ pub use ref_grant::{
     CrossNamespaceRefManager, CrossNamespaceValidator, CrossNsResourceRef, CrossNsRevalidationListener,
     ReferenceGrantChangedEvent, ReferenceGrantStore, RevalidationListener,
 };
+
+// Re-export listener_port_manager utilities
+pub use listener_port_manager::{get_listener_port_manager, make_port_key, ListenerPortManager, ListenerRef};
 
 // ============================================================================
 // Utility functions (previously in old conf_mgr)
