@@ -14,29 +14,10 @@ service ConfigSync {
     rpc Watch(WatchRequest) returns (stream WatchResponse);
 }
 
-// Resource kind enumeration
-enum ResourceKind {
-    RESOURCE_KIND_UNSPECIFIED = 0;
-    RESOURCE_KIND_GATEWAY_CLASS = 1;
-    RESOURCE_KIND_GATEWAY_CLASS_SPEC = 2;
-    RESOURCE_KIND_GATEWAY = 3;
-    RESOURCE_KIND_HTTP_ROUTE = 4;
-    RESOURCE_KIND_SERVICE = 5;
-    RESOURCE_KIND_ENDPOINT_SLICE = 6;
-    RESOURCE_KIND_EDGION_TLS = 7;
-    RESOURCE_KIND_SECRET = 8;
-    RESOURCE_KIND_GRPC_ROUTE = 10;
-    RESOURCE_KIND_TCP_ROUTE = 11;
-    RESOURCE_KIND_UDP_ROUTE = 12;
-    RESOURCE_KIND_PLUGIN_METADATA = 13;
-    RESOURCE_KIND_TLS_ROUTE = 14;
-    RESOURCE_KIND_LINK_SYS = 15;
-}
-
 // List request
 message ListRequest {
     string key = 1;
-    ResourceKind kind = 2;
+    string kind = 2;  // Resource kind as string, e.g. "Gateway", "HTTPRoute"
     string expected_server_id = 3;  // Expected server ID for server instance validation
 }
 
@@ -50,7 +31,7 @@ message ListResponse {
 // Watch request
 message WatchRequest {
     string key = 1;
-    ResourceKind kind = 2;
+    string kind = 2;  // Resource kind as string, e.g. "Gateway", "HTTPRoute"
     string client_id = 3;
     string client_name = 4;
     uint64 from_version = 5;

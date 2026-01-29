@@ -10,7 +10,6 @@ use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
     ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, WatchRequest, WatchResponse,
 };
-use crate::types::prelude_resources::ResourceKind;
 use crate::types::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 
 use super::ConfigSyncServer;
@@ -163,13 +162,14 @@ impl ConfigSync for ConfigSyncGrpcServer {
             }
         }
 
-        // Convert proto ResourceKind to string kind name
-        let kind_name =
-            parse_resource_kind_to_name(req.kind).ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
+        // Validate kind is not empty
+        if req.kind.is_empty() {
+            return Err(Status::invalid_argument("Resource kind is required"));
+        }
 
-        // Call list on ConfigSyncServer
+        // Call list on ConfigSyncServer with string kind directly
         let list_data = server
-            .list(kind_name)
+            .list(&req.kind)
             .map_err(|e| Status::internal(format!("Failed to list resources: {}", e)))?;
 
         Ok(Response::new(ListResponse {
@@ -200,31 +200,33 @@ impl ConfigSync for ConfigSyncGrpcServer {
             }
         }
 
-        // Convert proto ResourceKind to string kind name
-        let kind_name =
-            parse_resource_kind_to_name(req.kind).ok_or_else(|| Status::invalid_argument("Invalid resource kind"))?;
+        // Validate kind is not empty
+        if req.kind.is_empty() {
+            return Err(Status::invalid_argument("Resource kind is required"));
+        }
 
+        let kind_name = &req.kind;
         let client_id_log = req.client_id.clone();
         let client_name_log = req.client_name.clone();
 
         tracing::info!(
             component = "grpc_server",
             key = %req.key,
-            kind = kind_name,
+            kind = %kind_name,
             client_id = %client_id_log,
             client_name = %client_name_log,
             from_version = req.from_version,
             "Watch request received"
         );
 
-        // Call watch on ConfigSyncServer
+        // Call watch on ConfigSyncServer with string kind directly
         let receiver = server
             .watch(kind_name, req.client_id, req.client_name, req.from_version)
             .map_err(|e| {
                 tracing::error!(
                     component = "grpc_server",
                     key = %req.key,
-                    kind = kind_name,
+                    kind = %kind_name,
                     client_id = %client_id_log,
                     client_name = %client_name_log,
                     error = %e,
@@ -236,7 +238,7 @@ impl ConfigSync for ConfigSyncGrpcServer {
         tracing::info!(
             component = "grpc_server",
             key = %req.key,
-            kind = kind_name,
+            kind = %kind_name,
             client_id = %client_id_log,
             client_name = %client_name_log,
             "Watch established"
@@ -307,15 +309,3 @@ impl ConfigSync for ConfigSyncGrpcServer {
     }
 }
 
-/// Convert proto ResourceKind (i32) to string kind name
-fn parse_resource_kind_to_name(kind: i32) -> Option<&'static str> {
-    let resource_kind = ResourceKind::try_from(kind).ok()?;
-
-    match resource_kind {
-        ResourceKind::Unspecified => None,
-        // Handle special case: ResourceKind::Endpoint maps to "Endpoints" in kind_names
-        ResourceKind::Endpoint => Some("Endpoints"),
-        // For all others, use as_str() which returns the enum variant name
-        _ => Some(resource_kind.as_str()),
-    }
-}

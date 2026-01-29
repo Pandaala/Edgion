@@ -63,14 +63,14 @@ impl GatewayBase {
 
         tracing::info!("Configuring {} Gateway resources", gateways.len());
 
-        // 1. Add all gateways to the global gateway store
+        // 1. Ensure all gateways are in the global gateway store
+        // Use update_gateway (idempotent) instead of add_gateway to avoid warnings
+        // when GatewayHandler has already added them via full_set/partial_update
         let gateway_store = get_global_gateway_store();
         {
             let mut store_guard = gateway_store.write().unwrap();
             for gateway in gateways.iter() {
-                if let Err(e) = store_guard.add_gateway(gateway.clone()) {
-                    tracing::warn!("Failed to add gateway to store: {}", e);
-                }
+                store_guard.update_gateway(gateway.clone());
             }
         }
 

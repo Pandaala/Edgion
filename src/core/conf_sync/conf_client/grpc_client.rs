@@ -1,13 +1,27 @@
 use crate::core::conf_sync::conf_client::ConfigClient;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse};
-use crate::types::prelude_resources::*;
-use crate::types::ResourceKind::*;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;
 use tracing;
 use uuid::Uuid;
+
+/// Error type for watch start operations
+enum WatchStartError {
+    /// Unknown resource kind (client doesn't recognize it)
+    UnknownKind,
+    /// Watch skipped for a known reason
+    Skipped(&'static str),
+    /// Watch failed with an error
+    Failed(tonic::Status),
+}
+
+impl From<tonic::Status> for WatchStartError {
+    fn from(e: tonic::Status) -> Self {
+        WatchStartError::Failed(e)
+    }
+}
 
 /// gRPC conf_client for ConfigSync service
 pub struct ConfigSyncClient {
@@ -99,111 +113,77 @@ impl ConfigSyncClient {
         self.config_client.clone()
     }
 
-    /// Start watching a specific resource kind and automatically sync to ConfigHub
-    pub async fn start_watch_sync(&mut self, _key: String, kind: ResourceKind) -> Result<(), tonic::Status> {
+    /// Try to start watch for a specific resource kind by name
+    ///
+    /// Returns Ok(()) if watch started successfully, or WatchStartError otherwise.
+    async fn try_start_watch_for_kind(&self, kind: &str) -> Result<(), WatchStartError> {
         match kind {
-            Unspecified => {
-                return Err(tonic::Status::invalid_argument(
-                    "Cannot watch unspecified resource kind",
-                ));
-            }
-            // Base conf resources can now be watched
-            GatewayClass => {
-                self.config_client.gateway_classes().start_watch().await?;
-            }
-            EdgionGatewayConfig => {
-                self.config_client.edgion_gateway_configs().start_watch().await?;
-            }
-            Gateway => {
-                self.config_client.gateways().start_watch().await?;
-            }
-            HTTPRoute => {
-                self.config_client.routes().start_watch().await?;
-            }
-            GRPCRoute => {
-                self.config_client.grpc_routes().start_watch().await?;
-            }
-            TCPRoute => {
-                self.config_client.tcp_routes().start_watch().await?;
-            }
-            UDPRoute => {
-                self.config_client.udp_routes().start_watch().await?;
-            }
-            TLSRoute => {
-                self.config_client.tls_routes().start_watch().await?;
-            }
-            LinkSys => {
-                self.config_client.link_sys().start_watch().await?;
-            }
-            Service => {
-                self.config_client.services().start_watch().await?;
-            }
-            EndpointSlice => {
-                self.config_client.endpoint_slices().start_watch().await?;
-            }
-            Endpoint => {
-                self.config_client.endpoints().start_watch().await?;
-            }
-            EdgionTls => {
-                self.config_client.edgion_tls().start_watch().await?;
-            }
-            EdgionPlugins => {
-                self.config_client.edgion_plugins().start_watch().await?;
-            }
-            EdgionStreamPlugins => {
-                self.config_client.edgion_stream_plugins().start_watch().await?;
-            }
-            ReferenceGrant => {
-                // ReferenceGrant is not synced to Gateway - validation is done on Controller
-                tracing::debug!("ReferenceGrant watch skipped - not synced to Gateway");
-            }
-            BackendTLSPolicy => {
-                self.config_client.backend_tls_policies().start_watch().await?;
-            }
-            PluginMetaData => {
-                self.config_client.plugin_metadata().start_watch().await?;
-            }
-            Secret => {
-                // Secret now follows related resources, not watched separately
-                return Err(tonic::Status::invalid_argument(
-                    "Secret resources are not watched separately",
-                ));
-            } // Secret => {
-              //     self.config_client.secrets().start_watch().await?;
-              // }
+            "GatewayClass" => self.config_client.gateway_classes().start_watch().await?,
+            "EdgionGatewayConfig" => self.config_client.edgion_gateway_configs().start_watch().await?,
+            "Gateway" => self.config_client.gateways().start_watch().await?,
+            "HTTPRoute" => self.config_client.routes().start_watch().await?,
+            "GRPCRoute" => self.config_client.grpc_routes().start_watch().await?,
+            "TCPRoute" => self.config_client.tcp_routes().start_watch().await?,
+            "UDPRoute" => self.config_client.udp_routes().start_watch().await?,
+            "TLSRoute" => self.config_client.tls_routes().start_watch().await?,
+            "LinkSys" => self.config_client.link_sys().start_watch().await?,
+            "Service" => self.config_client.services().start_watch().await?,
+            "EndpointSlice" => self.config_client.endpoint_slices().start_watch().await?,
+            "Endpoints" => self.config_client.endpoints().start_watch().await?,
+            "EdgionTls" => self.config_client.edgion_tls().start_watch().await?,
+            "EdgionPlugins" => self.config_client.edgion_plugins().start_watch().await?,
+            "EdgionStreamPlugins" => self.config_client.edgion_stream_plugins().start_watch().await?,
+            "BackendTLSPolicy" => self.config_client.backend_tls_policies().start_watch().await?,
+            "PluginMetaData" => self.config_client.plugin_metadata().start_watch().await?,
+            // Resources that should not be watched separately
+            "ReferenceGrant" => return Err(WatchStartError::Skipped("not synced to Gateway")),
+            "Secret" => return Err(WatchStartError::Skipped("follows related resources")),
+            // Unknown kind - client doesn't recognize it (forward compatibility)
+            _ => return Err(WatchStartError::UnknownKind),
         }
-
         Ok(())
     }
 
     /// Start watching all resource types (deprecated: use start_watch_kinds instead)
+    #[allow(dead_code)]
     pub async fn start_watch_all(&mut self) -> Result<(), tonic::Status> {
         // Watch all resources including base_conf resources
-        let resource_kinds = vec![
-            GatewayClass,
-            EdgionGatewayConfig,
-            Gateway,
-            HTTPRoute,
-            GRPCRoute,
-            TCPRoute,
-            UDPRoute,
-            TLSRoute,
-            LinkSys,
-            Service,
-            EndpointSlice,
-            Endpoint,
-            EdgionTls,
-            EdgionPlugins,
-            EdgionStreamPlugins,
-            ReferenceGrant,
-            BackendTLSPolicy,
-            PluginMetaData,
-            Secret,
+        let all_kinds = vec![
+            "GatewayClass",
+            "EdgionGatewayConfig",
+            "Gateway",
+            "HTTPRoute",
+            "GRPCRoute",
+            "TCPRoute",
+            "UDPRoute",
+            "TLSRoute",
+            "LinkSys",
+            "Service",
+            "EndpointSlice",
+            "Endpoints",
+            "EdgionTls",
+            "EdgionPlugins",
+            "EdgionStreamPlugins",
+            "ReferenceGrant",
+            "BackendTLSPolicy",
+            "PluginMetaData",
+            "Secret",
         ];
 
-        for kind in resource_kinds {
-            if let Err(e) = self.start_watch_sync(String::new(), kind).await {
-                tracing::error!(kind = ?kind, error = %e, "Failed to start watch");
+        for kind in all_kinds {
+            match self.try_start_watch_for_kind(kind).await {
+                Ok(_) => {
+                    tracing::info!(kind = kind, "Watch started successfully");
+                }
+                Err(WatchStartError::Skipped(reason)) => {
+                    tracing::debug!(kind = kind, reason = reason, "Watch skipped");
+                }
+                Err(WatchStartError::UnknownKind) => {
+                    tracing::warn!(kind = kind, "Unknown resource kind, skipping");
+                }
+                Err(WatchStartError::Failed(e)) => {
+                    tracing::error!(kind = kind, error = %e, "Failed to start watch");
+                }
             }
         }
 
@@ -230,43 +210,27 @@ impl ConfigSyncClient {
     ///
     /// This method filters the supported_kinds from server and starts watches
     /// only for the resources that the server actually supports.
+    /// Unknown kinds are logged and skipped (forward compatibility with newer servers).
     pub async fn start_watch_kinds(&mut self, supported_kinds: &[String]) -> Result<(), tonic::Status> {
         tracing::info!(
             supported_kinds = ?supported_kinds,
             "Starting watch for supported resource kinds"
         );
 
-        // Map from server kind names to ResourceKind enum
         for kind_name in supported_kinds {
-            let resource_kind = match kind_name.as_str() {
-                "GatewayClass" => Some(GatewayClass),
-                "EdgionGatewayConfig" => Some(EdgionGatewayConfig),
-                "Gateway" => Some(Gateway),
-                "HTTPRoute" => Some(HTTPRoute),
-                "GRPCRoute" => Some(GRPCRoute),
-                "TCPRoute" => Some(TCPRoute),
-                "UDPRoute" => Some(UDPRoute),
-                "TLSRoute" => Some(TLSRoute),
-                "LinkSys" => Some(LinkSys),
-                "Service" => Some(Service),
-                "EndpointSlice" => Some(EndpointSlice),
-                "Endpoints" => Some(Endpoint),
-                "EdgionTls" => Some(EdgionTls),
-                "EdgionPlugins" => Some(EdgionPlugins),
-                "EdgionStreamPlugins" => Some(EdgionStreamPlugins),
-                "ReferenceGrant" => Some(ReferenceGrant),
-                "BackendTLSPolicy" => Some(BackendTLSPolicy),
-                "PluginMetaData" => Some(PluginMetaData),
-                "Secret" => None, // Secret follows related resources
-                _ => {
-                    tracing::warn!(kind = %kind_name, "Unknown resource kind from server, skipping");
-                    None
+            match self.try_start_watch_for_kind(kind_name).await {
+                Ok(_) => {
+                    tracing::info!(kind = %kind_name, "Watch started successfully");
                 }
-            };
-
-            if let Some(kind) = resource_kind {
-                if let Err(e) = self.start_watch_sync(String::new(), kind).await {
-                    tracing::error!(kind = ?kind, error = %e, "Failed to start watch");
+                Err(WatchStartError::Skipped(reason)) => {
+                    tracing::debug!(kind = %kind_name, reason = reason, "Watch skipped");
+                }
+                Err(WatchStartError::UnknownKind) => {
+                    // Forward compatibility: old client doesn't recognize new resource types
+                    tracing::warn!(kind = %kind_name, "Unknown resource kind from server, skipping");
+                }
+                Err(WatchStartError::Failed(e)) => {
+                    tracing::error!(kind = %kind_name, error = %e, "Failed to start watch");
                 }
             }
         }
