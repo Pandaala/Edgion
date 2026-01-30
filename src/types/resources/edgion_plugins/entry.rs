@@ -1,6 +1,6 @@
 //! Plugin entry types with enable/disable functionality
 
-use crate::core::plugins::plugins_com::PluginConditions;
+use crate::core::plugins::plugins_cond::PluginConditions;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 
 use super::log::PluginLog;
 use super::traits::{PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseFilter};
-use crate::core::plugins::plugins_com::{ConditionContext, EvaluationResult, PluginConditions};
+use crate::core::plugins::plugins_cond::{ConditionContext, EvaluationResult, PluginConditions};
 use crate::types::filters::PluginRunningResult;
 
 // ==================== ConditionContext Adapter ====================
@@ -231,7 +231,7 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugins::plugins_com::{Condition, ConditionSource, IncludeCondition, KeyExistCondition};
+    use crate::core::plugins::plugins_cond::{Condition, ConditionSource, IncludeCondition, KeyExistCondition};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -653,7 +653,7 @@ mod tests {
         assert_eq!(c2.cond_detail(), "mtd");
 
         // Test probability
-        let c3 = Condition::Probability(crate::core::plugins::plugins_com::ProbabilityCondition {
+        let c3 = Condition::Probability(crate::core::plugins::plugins_cond::ProbabilityCondition {
             ratio: 0.1,
             key: None,
             key_source: None,
