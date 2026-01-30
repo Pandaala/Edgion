@@ -7,6 +7,7 @@ use crate::types::resources::http_route_preparse::ParsedLBPolicy;
 use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};
 use pingora_core::protocols::l4::socket::SocketAddr;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -233,6 +234,10 @@ pub struct EdgionHttpContext {
 
     /// Hash key used for consistent hashing (for test metrics)
     pub hash_key: Option<String>,
+
+    /// Context variables map for plugin communication
+    /// Plugins can set values (e.g., KeySet plugin) and conditions can read them
+    pub ctx_map: HashMap<String, String>,
 }
 
 impl Default for EdgionHttpContext {
@@ -260,6 +265,7 @@ impl EdgionHttpContext {
             try_cnt: 0,
             upstream_start_time: None,
             hash_key: None,
+            ctx_map: HashMap::new(),
         }
     }
 
@@ -331,5 +337,27 @@ impl EdgionHttpContext {
     /// Whether the stack already contains the given reference key (for cycle detection)
     pub fn has_plugin_ref(&self, key: &str) -> bool {
         self.plugin_ref_stack.iter().any(|k| k == key)
+    }
+
+    // ========== Context variable methods ==========
+
+    /// Get a context variable by key
+    pub fn get_ctx_var(&self, key: &str) -> Option<&str> {
+        self.ctx_map.get(key).map(|s| s.as_str())
+    }
+
+    /// Set a context variable (for plugins like KeySet)
+    pub fn set_ctx_var(&mut self, key: String, value: String) {
+        self.ctx_map.insert(key, value);
+    }
+
+    /// Remove a context variable
+    pub fn remove_ctx_var(&mut self, key: &str) -> Option<String> {
+        self.ctx_map.remove(key)
+    }
+
+    /// Check if a context variable exists
+    pub fn has_ctx_var(&self, key: &str) -> bool {
+        self.ctx_map.contains_key(key)
     }
 }

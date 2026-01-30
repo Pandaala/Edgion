@@ -114,6 +114,11 @@ pub struct PluginLog {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_cost: Option<u64>,
 
+    /// Condition skip reason, None if not skipped
+    /// e.g., "skip:keyExist,hdr:X-Internal"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cond_skip: Option<String>,
+
     /// Fixed-size log buffer (recommended for most plugins)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log: Option<LogBuffer>,
@@ -136,6 +141,7 @@ impl PluginLog {
         Self {
             name: n,
             time_cost: None,
+            cond_skip: None,
             log: None,
             ulog: None,
             log_full: false,
@@ -177,6 +183,19 @@ impl PluginLog {
             }
         }
         false
+    }
+
+    /// Set condition skip reason
+    /// Format: "action:type,detail" e.g., "skip:keyExist,hdr:X-Internal"
+    #[inline]
+    pub fn set_cond_skip(&mut self, reason: String) {
+        self.cond_skip = Some(reason);
+    }
+
+    /// Check if plugin was skipped by condition
+    #[inline]
+    pub fn is_cond_skipped(&self) -> bool {
+        self.cond_skip.is_some()
     }
 
     /// Legacy method for backward compatibility (deprecated, use push() instead)

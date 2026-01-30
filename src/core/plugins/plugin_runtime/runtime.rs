@@ -10,6 +10,9 @@ use crate::types::resources::{
 use crate::types::resources::{RequestFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry};
 use crate::types::EdgionHttpContext;
 
+use super::conditional_filter::{
+    ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseFilter,
+};
 use super::log::{PluginLog, PluginLogs};
 use super::session_adapter::PingoraSessionAdapter;
 use super::traits::{RequestFilter, UpstreamResponse, UpstreamResponseFilter};
@@ -140,33 +143,49 @@ impl PluginRuntime {
     }
 
     /// Add request filters from entries (only enabled)
+    ///
+    /// Filters are wrapped with ConditionalRequestFilter to support condition-based execution.
+    /// Gateway API filters (via add_from_httproute_filters) are NOT wrapped to maintain compatibility.
     pub fn add_from_request_filters(&mut self, entries: &[RequestFilterEntry], namespace: &str) {
         for entry in entries {
             if entry.is_enabled() {
                 if let Some(filter) = Self::create_request_filter_from_edgion(&entry.plugin, namespace) {
-                    self.add_request_filter(filter);
+                    // Wrap with ConditionalRequestFilter to support condition evaluation
+                    let conditional_filter =
+                        ConditionalRequestFilter::new(filter, entry.conditions.clone());
+                    self.add_request_filter(Box::new(conditional_filter));
                 }
             }
         }
     }
 
     /// Add upstream response filters from entries (only enabled)
+    ///
+    /// Filters are wrapped with ConditionalUpstreamResponseFilter to support condition-based execution.
     pub fn add_from_upstream_response_filters(&mut self, entries: &[UpstreamResponseFilterEntry], namespace: &str) {
         for entry in entries {
             if entry.is_enabled() {
                 if let Some(filter) = Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace) {
-                    self.add_upstream_response_filter(filter);
+                    // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
+                    let conditional_filter =
+                        ConditionalUpstreamResponseFilter::new(filter, entry.conditions.clone());
+                    self.add_upstream_response_filter(Box::new(conditional_filter));
                 }
             }
         }
     }
 
     /// Add upstream response handlers from entries (only enabled)
+    ///
+    /// Filters are wrapped with ConditionalUpstreamResponse to support condition-based execution.
     pub fn add_from_upstream_responses(&mut self, entries: &[UpstreamResponseEntry], namespace: &str) {
         for entry in entries {
             if entry.is_enabled() {
                 if let Some(filter) = Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
-                    self.add_upstream_response(filter);
+                    // Wrap with ConditionalUpstreamResponse to support condition evaluation
+                    let conditional_filter =
+                        ConditionalUpstreamResponse::new(filter, entry.conditions.clone());
+                    self.add_upstream_response(Box::new(conditional_filter));
                 }
             }
         }

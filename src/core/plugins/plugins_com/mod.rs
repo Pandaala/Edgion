@@ -10,4 +10,4 @@ pub use conditions::{
     Condition, ConditionSource, ExcludeCondition, IncludeCondition, KeyExistCondition,
     KeyMatchCondition, PluginConditions, ProbabilityCondition, TimeRangeCondition,
 };
-pub use evaluator::{ConditionContext, EvaluationResult};
+pub use evaluator::{ConditionContext, ConditionEvalResult, EvaluationResult};

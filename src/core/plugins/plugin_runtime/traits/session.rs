@@ -11,9 +11,28 @@ pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait PluginSession: Send {
-    fn header_value(&mut self, name: &str) -> Option<String>;
+    /// Get a request header value by name
+    fn header_value(&self, name: &str) -> Option<String>;
 
+    /// Get the HTTP method (returns owned String for compatibility)
     fn method(&self) -> String;
+
+    // ========== Condition evaluation methods (read-only) ==========
+
+    /// Get a query parameter value by name
+    fn get_query_param(&self, name: &str) -> Option<String>;
+
+    /// Get a cookie value by name
+    fn get_cookie(&self, name: &str) -> Option<String>;
+
+    /// Get the request path
+    fn get_path(&self) -> &str;
+
+    /// Get the HTTP method as &str (more efficient than method())
+    fn get_method(&self) -> &str;
+
+    /// Get a context variable by key (set by plugins like KeySet)
+    fn get_ctx_var(&self, key: &str) -> Option<String>;
 
     async fn write_response_header(
         &mut self,

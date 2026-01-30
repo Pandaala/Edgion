@@ -47,37 +47,57 @@ pub enum EvaluationResult {
     Skip,
 }
 
+/// Result of condition evaluation with matched condition info
+pub struct ConditionEvalResult<'a> {
+    pub result: EvaluationResult,
+    /// The action that caused skip: "skip" or "!run"
+    pub action: &'static str,
+    /// The condition that matched (for logging)
+    pub matched: Option<&'a Condition>,
+}
+
 impl PluginConditions {
     /// Evaluate whether the plugin should run based on conditions
-    ///
-    /// Evaluation logic:
-    /// 1. If any `skip` condition is satisfied (OR), return Skip
-    /// 2. If `run` conditions exist and not all are satisfied (AND), return Skip
-    /// 3. Otherwise, return Run
     pub fn evaluate<C: ConditionContext>(&self, ctx: &C) -> EvaluationResult {
-        // Check skip conditions (OR logic)
+        self.evaluate_detail(ctx).result
+    }
+
+    /// Evaluate conditions and return matched condition for logging
+    pub fn evaluate_detail<C: ConditionContext>(&self, ctx: &C) -> ConditionEvalResult<'_> {
+        // Check skip conditions (OR logic) - any match causes skip
         if let Some(skip_conditions) = &self.skip {
             for condition in skip_conditions {
                 if condition.evaluate(ctx) {
-                    return EvaluationResult::Skip;
+                    return ConditionEvalResult {
+                        result: EvaluationResult::Skip,
+                        action: "skip",
+                        matched: Some(condition),
+                    };
                 }
             }
         }
 
-        // Check run conditions (AND logic)
+        // Check run conditions (AND logic) - all must match to run
         if let Some(run_conditions) = &self.run {
             for condition in run_conditions {
                 if !condition.evaluate(ctx) {
-                    return EvaluationResult::Skip;
+                    return ConditionEvalResult {
+                        result: EvaluationResult::Skip,
+                        action: "!run",
+                        matched: Some(condition),
+                    };
                 }
             }
         }
 
-        EvaluationResult::Run
+        ConditionEvalResult {
+            result: EvaluationResult::Run,
+            action: "",
+            matched: None,
+        }
     }
 
     /// Check if conditions should be evaluated
-    /// Returns false if no conditions are defined (always run)
     pub fn should_evaluate(&self) -> bool {
         !self.is_empty()
     }
@@ -93,6 +113,30 @@ impl Condition {
             Condition::Probability(c) => c.evaluate(ctx),
             Condition::Include(c) => c.evaluate(ctx),
             Condition::Exclude(c) => c.evaluate(ctx),
+        }
+    }
+
+    /// Get condition type name
+    pub fn cond_type(&self) -> &'static str {
+        match self {
+            Condition::KeyExist(_) => "keyExist",
+            Condition::KeyMatch(_) => "keyMatch",
+            Condition::TimeRange(_) => "timeRange",
+            Condition::Probability(_) => "prob",
+            Condition::Include(_) => "include",
+            Condition::Exclude(_) => "exclude",
+        }
+    }
+
+    /// Get brief condition detail: "source:key" or key info
+    pub fn cond_detail(&self) -> String {
+        match self {
+            Condition::KeyExist(c) => format!("{}:{}", c.source.as_str(), c.key),
+            Condition::KeyMatch(c) => format!("{}:{}", c.source.as_str(), c.key),
+            Condition::TimeRange(_) => "time".to_string(),
+            Condition::Probability(c) => format!("{:.0}%", c.ratio * 100.0),
+            Condition::Include(c) => c.source.as_str().to_string(),
+            Condition::Exclude(c) => c.source.as_str().to_string(),
         }
     }
 }

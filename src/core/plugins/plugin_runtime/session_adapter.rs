@@ -45,7 +45,7 @@ impl<'a> PingoraSessionAdapter<'a> {
 
 #[async_trait]
 impl<'a> PluginSession for PingoraSessionAdapter<'a> {
-    fn header_value(&mut self, name: &str) -> Option<String> {
+    fn header_value(&self, name: &str) -> Option<String> {
         self.inner
             .req_header()
             .headers
@@ -56,6 +56,52 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn method(&self) -> String {
         self.inner.req_header().method.to_string()
+    }
+
+    fn get_query_param(&self, name: &str) -> Option<String> {
+        self.inner.req_header().uri.query().and_then(|query| {
+            // Parse query string manually: "key1=value1&key2=value2"
+            query.split('&').find_map(|pair| {
+                let mut parts = pair.splitn(2, '=');
+                let key = parts.next()?;
+                if key == name {
+                    parts.next().map(|v| v.to_string())
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
+    fn get_cookie(&self, name: &str) -> Option<String> {
+        self.inner
+            .req_header()
+            .headers
+            .get("Cookie")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|cookies| {
+                cookies.split(';').find_map(|pair| {
+                    let mut parts = pair.trim().splitn(2, '=');
+                    let key = parts.next()?;
+                    if key == name {
+                        parts.next().map(|v| v.to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+    }
+
+    fn get_path(&self) -> &str {
+        self.inner.req_header().uri.path()
+    }
+
+    fn get_method(&self) -> &str {
+        self.inner.req_header().method.as_str()
+    }
+
+    fn get_ctx_var(&self, key: &str) -> Option<String> {
+        self.ctx.get_ctx_var(key).map(|s| s.to_string())
     }
 
     async fn write_response_header(

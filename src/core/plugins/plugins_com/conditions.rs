@@ -122,6 +122,21 @@ pub enum ConditionSource {
     Ctx,
 }
 
+impl ConditionSource {
+    /// Get a short string representation for logging
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConditionSource::Header => "hdr",
+            ConditionSource::Query => "qry",
+            ConditionSource::Cookie => "cke",
+            ConditionSource::Path => "path",
+            ConditionSource::ClientIp => "ip",
+            ConditionSource::Method => "mtd",
+            ConditionSource::Ctx => "ctx",
+        }
+    }
+}
+
 /// Key existence condition
 ///
 /// Checks if a specified key exists in the given source.
