@@ -21,7 +21,7 @@ pub mod plugin_configs;
 mod tests;
 
 // Re-exports
-pub use entry::{ConditionEnable, PluginEntry, RequestFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry};
+pub use entry::{PluginEntry, RequestFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry};
 pub use gateway_api_plugins::EdgionPlugin;
 pub use plugin_configs::{
     BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, DefaultAction, IpRestrictionConfig,
