@@ -91,7 +91,8 @@ spec:
           - type: keyMatch
             source: header
             key: "User-Agent"
-            regex: "^TestBot.*"
+            regex:
+              - "^TestBot.*"
 
     # 2.3 KeyMatch query param (run when version=v2)
     - enable: true
@@ -106,6 +107,41 @@ spec:
             source: query
             key: "version"
             value: "v2"
+
+    # 2.4 KeyMatch with multiple regex patterns (run when UA matches Mozilla OR Chrome OR Safari)
+    - enable: true
+      type: Mock
+      config:
+        statusCode: 200
+        headers:
+          X-KeyMatch-MultiRegex-Ran: "true"
+      conditions:
+        run:
+          - type: keyMatch
+            source: header
+            key: "User-Agent"
+            regex:
+              - "^Mozilla.*"
+              - "^Chrome.*"
+              - "(?i:^safari.*)"   # case-insensitive
+
+    # 2.5 KeyMatch with multiple exact values (run when X-Region is us-east OR us-west OR eu-west)
+    - enable: true
+      type: Mock
+      config:
+        statusCode: 200
+        headers:
+          X-KeyMatch-MultiValues-Ran: "true"
+      conditions:
+        run:
+          - type: keyMatch
+            source: header
+            key: "X-Region"
+            values:
+              - "us-east"
+              - "us-west"
+              - "eu-west"
+              - "ap-northeast"
 
     # =========================================================================
     # 3. TimeRange Tests - 时间范围检查
@@ -213,6 +249,23 @@ spec:
               - "POST"
               - "PUT"
 
+    # 5.3 Include with regex patterns (run for /api/v[0-9]+/* or /internal/*)
+    - enable: true
+      type: Mock
+      config:
+        statusCode: 200
+        headers:
+          X-Include-Regex-Ran: "true"
+      conditions:
+        run:
+          - type: include
+            source: path
+            values:
+              - "/static/*"
+            regex:
+              - "^/api/v[0-9]+/.*"
+              - "(?i:^/internal/.*)"   # case-insensitive
+
     # =========================================================================
     # 6. Exclude Tests - 排除条件
     # =========================================================================
@@ -246,6 +299,23 @@ spec:
             source: method
             values:
               - "OPTIONS"
+
+    # 6.3 Exclude with regex patterns (skip for /debug/* or /admin/*)
+    - enable: true
+      type: Mock
+      config:
+        statusCode: 200
+        headers:
+          X-Exclude-Regex-Ran: "true"
+      conditions:
+        skip:
+          - type: exclude
+            source: path
+            values:
+              - "/health"
+            regex:
+              - "^/debug/.*"
+              - "^/admin/.*"
 
   # DebugAccessLogToHeader - 必须放在 upstreamResponseFilterPlugins 中
   # 用于获取插件执行日志

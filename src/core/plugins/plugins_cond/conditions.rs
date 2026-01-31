@@ -46,6 +46,11 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+
+/// Threshold for pre-compiling values into a HashSet for O(1) lookup.
+/// When values.len() > this threshold, a HashSet will be built during compilation.
+pub const VALUES_HASHSET_THRESHOLD: usize = 16;
 
 /// Plugin conditions configuration
 ///
@@ -165,9 +170,9 @@ pub struct KeyExistCondition {
 /// Key match condition
 ///
 /// Checks if a key's value matches a specific value or regex pattern.
-/// At least one of `value` or `regex` must be specified.
+/// At least one of `value`, `values`, or `regex` must be specified.
 ///
-/// ## Example (exact match)
+/// ## Example (exact match - single, backward compatible)
 /// ```yaml
 /// keyMatch:
 ///   source: header
@@ -175,12 +180,25 @@ pub struct KeyExistCondition {
 ///   value: "production"
 /// ```
 ///
-/// ## Example (regex match)
+/// ## Example (exact match - multiple values)
+/// ```yaml
+/// keyMatch:
+///   source: header
+///   key: "X-Environment"
+///   values:
+///     - "production"
+///     - "staging"
+/// ```
+///
+/// ## Example (regex match - multiple patterns)
 /// ```yaml
 /// keyMatch:
 ///   source: header
 ///   key: "User-Agent"
-///   regex: "^Mozilla.*"
+///   regex:
+///     - "^Mozilla.*"
+///     - "^Chrome.*"
+///     - "(?i:^safari.*)"  # case-insensitive
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -191,15 +209,25 @@ pub struct KeyMatchCondition {
     /// The key name to match
     pub key: String,
 
-    /// Exact value to match (case-sensitive)
+    /// Exact value to match (case-sensitive, backward compatible)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
 
-    /// Regex pattern to match against the value
+    /// Multiple exact values to match (any match satisfies, OR logic)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub regex: Option<String>,
+    pub values: Option<Vec<String>>,
 
-    /// Compiled regex (runtime only, not serialized)
+    /// Regex patterns to match (merged into single regex with | operator)
+    /// Use (?i:pattern) for case-insensitive matching of specific patterns
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regex: Option<Vec<String>>,
+
+    /// Pre-compiled HashSet for O(1) lookup when values.len() > 16
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub values_set: Option<HashSet<String>>,
+
+    /// Compiled regex (runtime only, merged from all patterns)
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_regex: Option<regex::Regex>,
@@ -267,10 +295,11 @@ pub struct ProbabilityCondition {
 
 /// Include condition
 ///
-/// Condition is satisfied if the source value matches ANY value in the list.
+/// Condition is satisfied if the source value matches ANY value in the list
+/// or any regex pattern.
 /// For path matching, supports prefix matching with `*` suffix.
 ///
-/// ## Example (path include)
+/// ## Example (path include with wildcards)
 /// ```yaml
 /// include:
 ///   source: path
@@ -285,19 +314,46 @@ pub struct ProbabilityCondition {
 ///   source: method
 ///   values: ["GET", "POST"]
 /// ```
+///
+/// ## Example (with regex patterns)
+/// ```yaml
+/// include:
+///   source: path
+///   values:
+///     - "/static/*"
+///   regex:
+///     - "^/api/v[0-9]+/.*"
+///     - "(?i:^/internal/.*)"  # case-insensitive
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IncludeCondition {
     /// Where to get the value to check
     pub source: ConditionSource,
 
-    /// List of values to match against (any match satisfies the condition)
-    pub values: Vec<String>,
+    /// List of values/patterns to match against (supports wildcards: *, prefix*, *suffix)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<String>>,
+
+    /// Regex patterns to match (merged into single regex with | operator)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regex: Option<Vec<String>>,
+
+    /// Pre-compiled HashSet for O(1) lookup of exact values (no wildcards)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub values_set: Option<HashSet<String>>,
+
+    /// Compiled regex (runtime only, merged from all patterns)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub compiled_regex: Option<regex::Regex>,
 }
 
 /// Exclude condition
 ///
-/// Condition is satisfied if the source value does NOT match ANY value in the list.
+/// Condition is satisfied if the source value does NOT match ANY value in the list
+/// or any regex pattern.
 /// This is the inverse of IncludeCondition.
 ///
 /// ## Example (exclude health check paths)
@@ -309,14 +365,40 @@ pub struct IncludeCondition {
 ///     - "/ready"
 ///     - "/metrics"
 /// ```
+///
+/// ## Example (with regex patterns)
+/// ```yaml
+/// exclude:
+///   source: path
+///   values:
+///     - "/internal/*"
+///   regex:
+///     - "^/debug/.*"
+///     - "^/admin/.*"
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExcludeCondition {
     /// Where to get the value to check
     pub source: ConditionSource,
 
-    /// List of values to exclude (any match means condition is NOT satisfied)
-    pub values: Vec<String>,
+    /// List of values/patterns to exclude (supports wildcards: *, prefix*, *suffix)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<String>>,
+
+    /// Regex patterns to exclude (merged into single regex with | operator)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regex: Option<Vec<String>>,
+
+    /// Pre-compiled HashSet for O(1) lookup of exact values (no wildcards)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub values_set: Option<HashSet<String>>,
+
+    /// Compiled regex (runtime only, merged from all patterns)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub compiled_regex: Option<regex::Regex>,
 }
 
 impl PluginConditions {
@@ -345,12 +427,86 @@ impl PluginConditions {
 }
 
 impl KeyMatchCondition {
-    /// Compile the regex pattern if specified
-    /// Returns Err if the regex is invalid
-    pub fn compile_regex(&mut self) -> Result<(), regex::Error> {
-        if let Some(pattern) = &self.regex {
-            self.compiled_regex = Some(regex::Regex::new(pattern)?);
+    /// Compile the condition: merge regex patterns and build HashSet for large value lists
+    /// Returns Err if any regex pattern is invalid
+    pub fn compile(&mut self) -> Result<(), regex::Error> {
+        // 1. Merge multiple regex patterns into a single regex with | operator
+        if let Some(patterns) = &self.regex {
+            if !patterns.is_empty() {
+                let combined = patterns.join("|");
+                self.compiled_regex = Some(regex::Regex::new(&combined)?);
+            }
         }
+
+        // 2. Build HashSet for O(1) lookup when values exceed threshold
+        if let Some(values) = &self.values {
+            if values.len() > VALUES_HASHSET_THRESHOLD {
+                self.values_set = Some(values.iter().cloned().collect());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Backward compatible alias for compile()
+    #[deprecated(note = "Use compile() instead")]
+    pub fn compile_regex(&mut self) -> Result<(), regex::Error> {
+        self.compile()
+    }
+}
+
+impl IncludeCondition {
+    /// Compile the condition: merge regex patterns and build HashSet for exact values
+    /// Returns Err if any regex pattern is invalid
+    pub fn compile(&mut self) -> Result<(), regex::Error> {
+        // 1. Merge multiple regex patterns into a single regex with | operator
+        if let Some(patterns) = &self.regex {
+            if !patterns.is_empty() {
+                let combined = patterns.join("|");
+                self.compiled_regex = Some(regex::Regex::new(&combined)?);
+            }
+        }
+
+        // 2. Extract exact values (without wildcards) and build HashSet if above threshold
+        if let Some(values) = &self.values {
+            let exact_values: Vec<_> = values
+                .iter()
+                .filter(|v| !v.contains('*'))
+                .cloned()
+                .collect();
+            if exact_values.len() > VALUES_HASHSET_THRESHOLD {
+                self.values_set = Some(exact_values.into_iter().collect());
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl ExcludeCondition {
+    /// Compile the condition: merge regex patterns and build HashSet for exact values
+    /// Returns Err if any regex pattern is invalid
+    pub fn compile(&mut self) -> Result<(), regex::Error> {
+        // 1. Merge multiple regex patterns into a single regex with | operator
+        if let Some(patterns) = &self.regex {
+            if !patterns.is_empty() {
+                let combined = patterns.join("|");
+                self.compiled_regex = Some(regex::Regex::new(&combined)?);
+            }
+        }
+
+        // 2. Extract exact values (without wildcards) and build HashSet if above threshold
+        if let Some(values) = &self.values {
+            let exact_values: Vec<_> = values
+                .iter()
+                .filter(|v| !v.contains('*'))
+                .cloned()
+                .collect();
+            if exact_values.len() > VALUES_HASHSET_THRESHOLD {
+                self.values_set = Some(exact_values.into_iter().collect());
+            }
+        }
+
         Ok(())
     }
 }
@@ -406,21 +562,144 @@ mod tests {
     }
 
     #[test]
-    fn test_key_match_compile_regex() {
+    fn test_key_match_compile_single_regex() {
         let mut condition = KeyMatchCondition {
             source: ConditionSource::Header,
             key: "User-Agent".to_string(),
             value: None,
-            regex: Some(r"^Mozilla.*".to_string()),
+            values: None,
+            regex: Some(vec![r"^Mozilla.*".to_string()]),
+            values_set: None,
             compiled_regex: None,
         };
 
-        assert!(condition.compile_regex().is_ok());
+        assert!(condition.compile().is_ok());
         assert!(condition.compiled_regex.is_some());
 
-        let regex = condition.compiled_regex.unwrap();
+        let regex = condition.compiled_regex.as_ref().unwrap();
         assert!(regex.is_match("Mozilla/5.0"));
         assert!(!regex.is_match("Chrome/100.0"));
+    }
+
+    #[test]
+    fn test_key_match_compile_multi_regex() {
+        let mut condition = KeyMatchCondition {
+            source: ConditionSource::Header,
+            key: "User-Agent".to_string(),
+            value: None,
+            values: None,
+            regex: Some(vec![
+                r"^Mozilla.*".to_string(),
+                r"^Chrome.*".to_string(),
+                r"(?i:^safari.*)".to_string(), // case-insensitive
+            ]),
+            values_set: None,
+            compiled_regex: None,
+        };
+
+        assert!(condition.compile().is_ok());
+        assert!(condition.compiled_regex.is_some());
+
+        let regex = condition.compiled_regex.as_ref().unwrap();
+        // Should match Mozilla
+        assert!(regex.is_match("Mozilla/5.0"));
+        // Should match Chrome
+        assert!(regex.is_match("Chrome/100.0"));
+        // Should match Safari (case-insensitive)
+        assert!(regex.is_match("Safari/605.1"));
+        assert!(regex.is_match("safari/605.1"));
+        assert!(regex.is_match("SAFARI/605.1"));
+        // Should not match curl
+        assert!(!regex.is_match("curl/7.64.1"));
+    }
+
+    #[test]
+    fn test_key_match_compile_hashset() {
+        // Create more than 16 values to trigger HashSet compilation
+        let values: Vec<String> = (0..20).map(|i| format!("value{}", i)).collect();
+
+        let mut condition = KeyMatchCondition {
+            source: ConditionSource::Header,
+            key: "X-Test".to_string(),
+            value: None,
+            values: Some(values.clone()),
+            regex: None,
+            values_set: None,
+            compiled_regex: None,
+        };
+
+        assert!(condition.compile().is_ok());
+        assert!(condition.values_set.is_some());
+
+        let set = condition.values_set.as_ref().unwrap();
+        assert_eq!(set.len(), 20);
+        assert!(set.contains("value0"));
+        assert!(set.contains("value19"));
+        assert!(!set.contains("value20"));
+    }
+
+    #[test]
+    fn test_key_match_no_hashset_below_threshold() {
+        // Create exactly 16 values (threshold, should NOT trigger HashSet)
+        let values: Vec<String> = (0..16).map(|i| format!("value{}", i)).collect();
+
+        let mut condition = KeyMatchCondition {
+            source: ConditionSource::Header,
+            key: "X-Test".to_string(),
+            value: None,
+            values: Some(values),
+            regex: None,
+            values_set: None,
+            compiled_regex: None,
+        };
+
+        assert!(condition.compile().is_ok());
+        assert!(condition.values_set.is_none()); // Should NOT be compiled
+    }
+
+    #[test]
+    fn test_include_compile_regex() {
+        let mut condition = IncludeCondition {
+            source: ConditionSource::Path,
+            values: Some(vec!["/static/*".to_string()]),
+            regex: Some(vec![
+                r"^/api/v[0-9]+/.*".to_string(),
+                r"^/internal/.*".to_string(),
+            ]),
+            values_set: None,
+            compiled_regex: None,
+        };
+
+        assert!(condition.compile().is_ok());
+        assert!(condition.compiled_regex.is_some());
+
+        let regex = condition.compiled_regex.as_ref().unwrap();
+        assert!(regex.is_match("/api/v1/users"));
+        assert!(regex.is_match("/api/v2/orders"));
+        assert!(regex.is_match("/internal/debug"));
+        assert!(!regex.is_match("/public/index.html"));
+    }
+
+    #[test]
+    fn test_exclude_compile_regex() {
+        let mut condition = ExcludeCondition {
+            source: ConditionSource::Path,
+            values: Some(vec!["/health".to_string()]),
+            regex: Some(vec![
+                r"^/debug/.*".to_string(),
+                r"^/metrics/.*".to_string(),
+            ]),
+            values_set: None,
+            compiled_regex: None,
+        };
+
+        assert!(condition.compile().is_ok());
+        assert!(condition.compiled_regex.is_some());
+
+        let regex = condition.compiled_regex.as_ref().unwrap();
+        assert!(regex.is_match("/debug/pprof"));
+        assert!(regex.is_match("/metrics/prometheus"));
+        assert!(!regex.is_match("/api/v1/users"));
     }
 
     #[test]

@@ -626,6 +626,226 @@ impl AllConditionsTestSuite {
         )
     }
 
+    /// Test 2.6: KeyMatch multi-regex - plugin runs when User-Agent matches any of Mozilla/Chrome/Safari
+    fn test_key_match_multi_regex_run() -> TestCase {
+        TestCase::new(
+            "key_match_multi_regex_run",
+            "KeyMatch: Run when UA matches multiple regex patterns (Mozilla|Chrome|Safari)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = build_url(&ctx, "/test");
+
+                    // Test Mozilla
+                    match send_request_and_get_log(
+                        &ctx.http_client,
+                        &url,
+                        TEST_HOST,
+                        vec![("User-Agent", "Mozilla/5.0 Firefox")],
+                        "GET",
+                    )
+                    .await
+                    {
+                        Ok(access_log) => {
+                            let ran_count = count_mock_plugins_ran(&access_log);
+                            if ran_count == 0 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "Expected plugin to run with Mozilla UA".to_string(),
+                                );
+                            }
+                        }
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    }
+
+                    // Test Chrome
+                    match send_request_and_get_log(
+                        &ctx.http_client,
+                        &url,
+                        TEST_HOST,
+                        vec![("User-Agent", "Chrome/100.0")],
+                        "GET",
+                    )
+                    .await
+                    {
+                        Ok(access_log) => {
+                            let ran_count = count_mock_plugins_ran(&access_log);
+                            if ran_count == 0 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "Expected plugin to run with Chrome UA".to_string(),
+                                );
+                            }
+                        }
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    }
+
+                    // Test Safari (case-insensitive - (?i:^safari.*))
+                    match send_request_and_get_log(
+                        &ctx.http_client,
+                        &url,
+                        TEST_HOST,
+                        vec![("User-Agent", "SAFARI/605.1")],
+                        "GET",
+                    )
+                    .await
+                    {
+                        Ok(access_log) => {
+                            let ran_count = count_mock_plugins_ran(&access_log);
+                            if ran_count > 0 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Multi-regex KeyMatch works for Mozilla, Chrome, Safari (case-insensitive)".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    "Expected plugin to run with SAFARI UA (case-insensitive)".to_string(),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test 2.7: KeyMatch multi-regex - plugin skipped when User-Agent doesn't match any pattern
+    fn test_key_match_multi_regex_skip() -> TestCase {
+        TestCase::new(
+            "key_match_multi_regex_skip",
+            "KeyMatch: Skip when UA doesn't match any of Mozilla/Chrome/Safari",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = build_url(&ctx, "/test");
+
+                    match send_request_and_get_log(
+                        &ctx.http_client,
+                        &url,
+                        TEST_HOST,
+                        vec![("User-Agent", "curl/7.64.1")], // Doesn't match any pattern
+                        "GET",
+                    )
+                    .await
+                    {
+                        Ok(access_log) => {
+                            let skipped_count = count_mock_plugins_skipped(&access_log);
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!(
+                                    "Multi-regex correctly skips non-matching UA - {} skipped",
+                                    skipped_count
+                                ),
+                            )
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test 2.8: KeyMatch multi-values - plugin runs when X-Region matches any of the values
+    fn test_key_match_multi_values_run() -> TestCase {
+        TestCase::new(
+            "key_match_multi_values_run",
+            "KeyMatch: Run when X-Region matches any value in list",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = build_url(&ctx, "/test");
+
+                    // Test us-east
+                    match send_request_and_get_log(
+                        &ctx.http_client,
+                        &url,
+                        TEST_HOST,
+                        vec![("X-Region", "us-east")],
+                        "GET",
+                    )
+                    .await
+                    {
+                        Ok(access_log) => {
+                            let ran_count = count_mock_plugins_ran(&access_log);
+                            if ran_count == 0 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "Expected plugin to run with X-Region: us-east".to_string(),
+                                );
+                            }
+                        }
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    }
+
+                    // Test eu-west
+                    match send_request_and_get_log(
+                        &ctx.http_client,
+                        &url,
+                        TEST_HOST,
+                        vec![("X-Region", "eu-west")],
+                        "GET",
+                    )
+                    .await
+                    {
+                        Ok(access_log) => {
+                            let ran_count = count_mock_plugins_ran(&access_log);
+                            if ran_count > 0 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Multi-values KeyMatch works for us-east, eu-west".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    "Expected plugin to run with X-Region: eu-west".to_string(),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test 2.9: KeyMatch multi-values - plugin skipped when X-Region doesn't match
+    fn test_key_match_multi_values_skip() -> TestCase {
+        TestCase::new(
+            "key_match_multi_values_skip",
+            "KeyMatch: Skip when X-Region doesn't match any value",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = build_url(&ctx, "/test");
+
+                    match send_request_and_get_log(
+                        &ctx.http_client,
+                        &url,
+                        TEST_HOST,
+                        vec![("X-Region", "unknown-region")],
+                        "GET",
+                    )
+                    .await
+                    {
+                        Ok(access_log) => {
+                            let skipped_count = count_mock_plugins_skipped(&access_log);
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!(
+                                    "Multi-values correctly skips unknown region - {} skipped",
+                                    skipped_count
+                                ),
+                            )
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
     // =========================================================================
     // TimeRange Tests
     // =========================================================================
@@ -1077,6 +1297,92 @@ impl AllConditionsTestSuite {
         )
     }
 
+    /// Test 5.5: Include regex - plugin runs for /api/v1/* paths (regex)
+    fn test_include_regex_match() -> TestCase {
+        TestCase::new(
+            "include_regex_match",
+            "Include: Plugin runs for /api/v1/* (regex: ^/api/v[0-9]+/.*)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = build_url(&ctx, "/api/v1/users");
+
+                    match send_request_and_get_log(
+                        &ctx.http_client,
+                        &url,
+                        TEST_HOST,
+                        vec![],
+                        "GET",
+                    )
+                    .await
+                    {
+                        Ok(access_log) => {
+                            let ran_count = count_mock_plugins_ran(&access_log);
+                            if ran_count > 0 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!(
+                                        "Include regex works - {} plugins ran for /api/v1/users",
+                                        ran_count
+                                    ),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    "Expected plugin to run for /api/v1/* (regex match)".to_string(),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test 5.6: Include regex - plugin runs for /INTERNAL/* (case-insensitive regex)
+    fn test_include_regex_case_insensitive() -> TestCase {
+        TestCase::new(
+            "include_regex_case_insensitive",
+            "Include: Plugin runs for /INTERNAL/* (case-insensitive regex)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = build_url(&ctx, "/INTERNAL/debug");
+
+                    match send_request_and_get_log(
+                        &ctx.http_client,
+                        &url,
+                        TEST_HOST,
+                        vec![],
+                        "GET",
+                    )
+                    .await
+                    {
+                        Ok(access_log) => {
+                            let ran_count = count_mock_plugins_ran(&access_log);
+                            if ran_count > 0 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!(
+                                        "Include regex case-insensitive works - {} plugins ran for /INTERNAL/debug",
+                                        ran_count
+                                    ),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    "Expected plugin to run for /INTERNAL/* (case-insensitive)".to_string(),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
     // =========================================================================
     // Exclude Tests
     // =========================================================================
@@ -1234,6 +1540,105 @@ impl AllConditionsTestSuite {
             },
         )
     }
+
+    /// Test 6.4: Exclude regex - plugin skipped for /debug/* paths (regex)
+    fn test_exclude_regex_skip() -> TestCase {
+        TestCase::new(
+            "exclude_regex_skip",
+            "Exclude: Plugin skipped for /debug/* (regex: ^/debug/.*)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = build_url(&ctx, "/debug/pprof");
+
+                    match send_request_and_get_log(
+                        &ctx.http_client,
+                        &url,
+                        TEST_HOST,
+                        vec![],
+                        "GET",
+                    )
+                    .await
+                    {
+                        Ok(access_log) => {
+                            let found_skipped = access_log
+                                .stage_logs
+                                .iter()
+                                .flat_map(|stage| &stage.edgion_plugins)
+                                .flat_map(|ep| &ep.logs)
+                                .any(|log| {
+                                    log.name == "Mock"
+                                        && log
+                                            .cond_skip
+                                            .as_ref()
+                                            .map_or(false, |s| s.contains("skip:exclude"))
+                                });
+
+                            if found_skipped {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Exclude regex correctly skips /debug/pprof".to_string(),
+                                )
+                            } else {
+                                let skipped_count = count_mock_plugins_skipped(&access_log);
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!(
+                                        "Exclude regex check done - {} plugins skipped for /debug/pprof",
+                                        skipped_count
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test 6.5: Exclude regex - plugin runs for non-matching path
+    fn test_exclude_regex_run() -> TestCase {
+        TestCase::new(
+            "exclude_regex_run",
+            "Exclude: Plugin runs for path not matching exclude regex",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = build_url(&ctx, "/api/v1/data");
+
+                    match send_request_and_get_log(
+                        &ctx.http_client,
+                        &url,
+                        TEST_HOST,
+                        vec![],
+                        "GET",
+                    )
+                    .await
+                    {
+                        Ok(access_log) => {
+                            let ran_count = count_mock_plugins_ran(&access_log);
+                            if ran_count > 0 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!(
+                                        "Exclude regex works - {} plugins ran for /api/v1/data (not excluded)",
+                                        ran_count
+                                    ),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    "Expected plugin to run for path not matching exclude regex".to_string(),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for AllConditionsTestSuite {
@@ -1249,12 +1654,16 @@ impl TestSuite for AllConditionsTestSuite {
             Self::test_key_exist_query_skip(),
             Self::test_key_exist_cookie_run(),
             Self::test_key_exist_cookie_skip(),
-            // KeyMatch Tests (5 tests)
+            // KeyMatch Tests (9 tests - including multi-regex and multi-values)
             Self::test_key_match_exact_run(),
             Self::test_key_match_exact_skip(),
             Self::test_key_match_regex_run(),
             Self::test_key_match_regex_skip(),
             Self::test_key_match_query_run(),
+            Self::test_key_match_multi_regex_run(),
+            Self::test_key_match_multi_regex_skip(),
+            Self::test_key_match_multi_values_run(),
+            Self::test_key_match_multi_values_skip(),
             // TimeRange Tests (2 tests)
             Self::test_time_range_valid(),
             Self::test_time_range_expired(),
@@ -1262,15 +1671,19 @@ impl TestSuite for AllConditionsTestSuite {
             Self::test_probability_100(),
             Self::test_probability_0(),
             Self::test_probability_deterministic(),
-            // Include Tests (4 tests)
+            // Include Tests (6 tests - including regex)
             Self::test_include_path_match(),
             Self::test_include_path_no_match(),
             Self::test_include_method_match(),
             Self::test_include_method_no_match(),
-            // Exclude Tests (3 tests)
+            Self::test_include_regex_match(),
+            Self::test_include_regex_case_insensitive(),
+            // Exclude Tests (5 tests - including regex)
             Self::test_exclude_path_run(),
             Self::test_exclude_path_skip(),
             Self::test_exclude_method_skip(),
+            Self::test_exclude_regex_skip(),
+            Self::test_exclude_regex_run(),
         ]
     }
 }

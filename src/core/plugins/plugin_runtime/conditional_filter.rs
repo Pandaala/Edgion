@@ -489,7 +489,10 @@ mod tests {
             skip: None,
             run: Some(vec![Condition::Include(IncludeCondition {
                 source: ConditionSource::Method,
-                values: vec!["POST".to_string()],
+                values: Some(vec!["POST".to_string()]),
+                regex: None,
+                values_set: None,
+                compiled_regex: None,
             })]),
         };
 
@@ -513,7 +516,10 @@ mod tests {
             skip: None,
             run: Some(vec![Condition::Include(IncludeCondition {
                 source: ConditionSource::Method,
-                values: vec!["POST".to_string()],
+                values: Some(vec!["POST".to_string()]),
+                regex: None,
+                values_set: None,
+                compiled_regex: None,
             })]),
         };
 
@@ -630,7 +636,10 @@ mod tests {
             skip: None,
             run: Some(vec![Condition::Include(IncludeCondition {
                 source: ConditionSource::Method,
-                values: vec!["POST".to_string()],
+                values: Some(vec!["POST".to_string()]),
+                regex: None,
+                values_set: None,
+                compiled_regex: None,
             })]),
         };
 
@@ -660,7 +669,10 @@ mod tests {
         // Test include
         let c2 = Condition::Include(IncludeCondition {
             source: ConditionSource::Method,
-            values: vec!["GET".to_string(), "POST".to_string()],
+            values: Some(vec!["GET".to_string(), "POST".to_string()]),
+            regex: None,
+            values_set: None,
+            compiled_regex: None,
         });
         assert_eq!(c2.cond_type(), "include");
         assert_eq!(c2.cond_detail(), "mtd");

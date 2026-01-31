@@ -341,6 +341,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::PluginConditionTestSuite));
+            runner.add_suite(Box::new(suites::AllConditionsTestSuite));
         }
         "EdgionPlugins/PluginCondition/AllConditions" => {
             if !gateway {

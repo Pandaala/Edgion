@@ -156,24 +156,39 @@ impl KeyMatchCondition {
             None => return false,
         };
 
-        // Check exact match first
+        // 1. Check single value (backward compatible)
         if let Some(expected) = &self.value {
             if &value == expected {
                 return true;
             }
         }
 
-        // Check regex match
+        // 2. Check HashSet first for O(1) lookup (when values > 16)
+        if let Some(set) = &self.values_set {
+            if set.contains(&value) {
+                return true;
+            }
+        } else if let Some(values) = &self.values {
+            // 3. Iterate Vec for small lists (O(n))
+            for expected in values {
+                if &value == expected {
+                    return true;
+                }
+            }
+        }
+
+        // 4. Check compiled regex (merged from all patterns)
         if let Some(compiled) = &self.compiled_regex {
             if compiled.is_match(&value) {
                 return true;
             }
         }
 
-        // If regex is specified but not compiled, try to compile and match
-        if let Some(pattern) = &self.regex {
-            if self.compiled_regex.is_none() {
-                if let Ok(re) = regex::Regex::new(pattern) {
+        // 5. Fallback: if regex patterns exist but not compiled, compile and match
+        if let Some(patterns) = &self.regex {
+            if self.compiled_regex.is_none() && !patterns.is_empty() {
+                let combined = patterns.join("|");
+                if let Ok(re) = regex::Regex::new(&combined) {
                     return re.is_match(&value);
                 }
             }
@@ -244,13 +259,40 @@ impl ProbabilityCondition {
 
 impl IncludeCondition {
     /// Evaluate include condition
-    /// Returns true if value matches ANY item in the list
+    /// Returns true if value matches ANY item in the list or any regex pattern
     pub fn evaluate<C: ConditionContext>(&self, ctx: &C) -> bool {
         let value = get_source_value_direct(ctx, &self.source);
 
-        for pattern in &self.values {
-            if matches_pattern(&value, pattern) {
+        // 1. Check HashSet first for O(1) exact match lookup
+        if let Some(set) = &self.values_set {
+            if set.contains(&value) {
                 return true;
+            }
+        }
+
+        // 2. Check wildcard patterns
+        if let Some(patterns) = &self.values {
+            for pattern in patterns {
+                if matches_pattern(&value, pattern) {
+                    return true;
+                }
+            }
+        }
+
+        // 3. Check compiled regex (merged from all patterns)
+        if let Some(compiled) = &self.compiled_regex {
+            if compiled.is_match(&value) {
+                return true;
+            }
+        }
+
+        // 4. Fallback: if regex patterns exist but not compiled, compile and match
+        if let Some(patterns) = &self.regex {
+            if self.compiled_regex.is_none() && !patterns.is_empty() {
+                let combined = patterns.join("|");
+                if let Ok(re) = regex::Regex::new(&combined) {
+                    return re.is_match(&value);
+                }
             }
         }
 
@@ -260,17 +302,46 @@ impl IncludeCondition {
 
 impl ExcludeCondition {
     /// Evaluate exclude condition
-    /// Returns true if value does NOT match ANY item in the list
+    /// Returns true if value does NOT match ANY item in the list or any regex pattern
     pub fn evaluate<C: ConditionContext>(&self, ctx: &C) -> bool {
         let value = get_source_value_direct(ctx, &self.source);
 
-        for pattern in &self.values {
-            if matches_pattern(&value, pattern) {
-                return false;
+        // 1. Check HashSet first for O(1) exact match lookup
+        if let Some(set) = &self.values_set {
+            if set.contains(&value) {
+                return false; // Excluded
             }
         }
 
-        true
+        // 2. Check wildcard patterns
+        if let Some(patterns) = &self.values {
+            for pattern in patterns {
+                if matches_pattern(&value, pattern) {
+                    return false; // Excluded
+                }
+            }
+        }
+
+        // 3. Check compiled regex (merged from all patterns)
+        if let Some(compiled) = &self.compiled_regex {
+            if compiled.is_match(&value) {
+                return false; // Excluded
+            }
+        }
+
+        // 4. Fallback: if regex patterns exist but not compiled, compile and match
+        if let Some(patterns) = &self.regex {
+            if self.compiled_regex.is_none() && !patterns.is_empty() {
+                let combined = patterns.join("|");
+                if let Ok(re) = regex::Regex::new(&combined) {
+                    if re.is_match(&value) {
+                        return false; // Excluded
+                    }
+                }
+            }
+        }
+
+        true // Not excluded
     }
 }
 
@@ -444,7 +515,10 @@ mod tests {
                 }),
                 Condition::Include(IncludeCondition {
                     source: ConditionSource::Method,
-                    values: vec!["GET".to_string(), "POST".to_string()],
+                    values: Some(vec!["GET".to_string(), "POST".to_string()]),
+                    regex: None,
+                    values_set: None,
+                    compiled_regex: None,
                 }),
             ]),
         };
@@ -468,7 +542,10 @@ mod tests {
                 }),
                 Condition::Include(IncludeCondition {
                     source: ConditionSource::Method,
-                    values: vec!["POST".to_string()],
+                    values: Some(vec!["POST".to_string()]),
+                    regex: None,
+                    values_set: None,
+                    compiled_regex: None,
                 }),
             ]),
         };
@@ -487,7 +564,9 @@ mod tests {
             source: ConditionSource::Header,
             key: "X-Environment".to_string(),
             value: Some("production".to_string()),
+            values: None,
             regex: None,
+            values_set: None,
             compiled_regex: None,
         };
 
@@ -503,21 +582,118 @@ mod tests {
     }
 
     #[test]
+    fn test_key_match_multi_values() {
+        let condition = KeyMatchCondition {
+            source: ConditionSource::Header,
+            key: "X-Environment".to_string(),
+            value: None,
+            values: Some(vec![
+                "production".to_string(),
+                "staging".to_string(),
+                "development".to_string(),
+            ]),
+            regex: None,
+            values_set: None,
+            compiled_regex: None,
+        };
+
+        let mut ctx = MockContext::new();
+        ctx.headers
+            .insert("X-Environment".to_string(), "production".to_string());
+        assert!(condition.evaluate(&ctx));
+
+        ctx.headers
+            .insert("X-Environment".to_string(), "staging".to_string());
+        assert!(condition.evaluate(&ctx));
+
+        ctx.headers
+            .insert("X-Environment".to_string(), "testing".to_string());
+        assert!(!condition.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_key_match_hashset_lookup() {
+        // Create more than 16 values to trigger HashSet usage
+        let values: Vec<String> = (0..20).map(|i| format!("value{}", i)).collect();
+
+        let mut condition = KeyMatchCondition {
+            source: ConditionSource::Header,
+            key: "X-Value".to_string(),
+            value: None,
+            values: Some(values),
+            regex: None,
+            values_set: None,
+            compiled_regex: None,
+        };
+        condition.compile().unwrap();
+
+        assert!(condition.values_set.is_some());
+
+        let mut ctx = MockContext::new();
+        ctx.headers.insert("X-Value".to_string(), "value5".to_string());
+        assert!(condition.evaluate(&ctx));
+
+        ctx.headers.insert("X-Value".to_string(), "value19".to_string());
+        assert!(condition.evaluate(&ctx));
+
+        ctx.headers.insert("X-Value".to_string(), "value99".to_string());
+        assert!(!condition.evaluate(&ctx));
+    }
+
+    #[test]
     fn test_key_match_regex() {
         let mut condition = KeyMatchCondition {
             source: ConditionSource::Header,
             key: "User-Agent".to_string(),
             value: None,
-            regex: Some(r"^Mozilla.*".to_string()),
+            values: None,
+            regex: Some(vec![r"^Mozilla.*".to_string()]),
+            values_set: None,
             compiled_regex: None,
         };
-        condition.compile_regex().unwrap();
+        condition.compile().unwrap();
 
         let mut ctx = MockContext::new();
         ctx.headers
             .insert("User-Agent".to_string(), "Mozilla/5.0".to_string());
 
         assert!(condition.evaluate(&ctx));
+
+        ctx.headers
+            .insert("User-Agent".to_string(), "curl/7.64.1".to_string());
+        assert!(!condition.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_key_match_multi_regex() {
+        let mut condition = KeyMatchCondition {
+            source: ConditionSource::Header,
+            key: "User-Agent".to_string(),
+            value: None,
+            values: None,
+            regex: Some(vec![
+                r"^Mozilla.*".to_string(),
+                r"^Chrome.*".to_string(),
+                r"(?i:^safari.*)".to_string(),
+            ]),
+            values_set: None,
+            compiled_regex: None,
+        };
+        condition.compile().unwrap();
+
+        let mut ctx = MockContext::new();
+
+        ctx.headers
+            .insert("User-Agent".to_string(), "Mozilla/5.0".to_string());
+        assert!(condition.evaluate(&ctx));
+
+        ctx.headers
+            .insert("User-Agent".to_string(), "Chrome/100.0".to_string());
+        assert!(condition.evaluate(&ctx));
+
+        ctx.headers
+            .insert("User-Agent".to_string(), "SAFARI/605.1".to_string());
+        assert!(condition.evaluate(&ctx)); // case-insensitive
 
         ctx.headers
             .insert("User-Agent".to_string(), "curl/7.64.1".to_string());
@@ -590,7 +766,10 @@ mod tests {
     fn test_include_path() {
         let condition = IncludeCondition {
             source: ConditionSource::Path,
-            values: vec!["/api/*".to_string(), "/admin/*".to_string()],
+            values: Some(vec!["/api/*".to_string(), "/admin/*".to_string()]),
+            regex: None,
+            values_set: None,
+            compiled_regex: None,
         };
 
         let mut ctx = MockContext::new();
@@ -606,10 +785,53 @@ mod tests {
     }
 
     #[test]
+    fn test_include_regex() {
+        let mut condition = IncludeCondition {
+            source: ConditionSource::Path,
+            values: Some(vec!["/static/*".to_string()]),
+            regex: Some(vec![
+                r"^/api/v[0-9]+/.*".to_string(),
+                r"(?i:^/internal/.*)".to_string(),
+            ]),
+            values_set: None,
+            compiled_regex: None,
+        };
+        condition.compile().unwrap();
+
+        let mut ctx = MockContext::new();
+
+        // Match wildcard pattern
+        ctx.path = "/static/css/style.css".to_string();
+        assert!(condition.evaluate(&ctx));
+
+        // Match regex pattern
+        ctx.path = "/api/v1/users".to_string();
+        assert!(condition.evaluate(&ctx));
+
+        ctx.path = "/api/v2/orders".to_string();
+        assert!(condition.evaluate(&ctx));
+
+        // Match case-insensitive regex
+        ctx.path = "/INTERNAL/debug".to_string();
+        assert!(condition.evaluate(&ctx));
+
+        // No match
+        ctx.path = "/public/index.html".to_string();
+        assert!(!condition.evaluate(&ctx));
+    }
+
+    #[test]
     fn test_exclude_path() {
         let condition = ExcludeCondition {
             source: ConditionSource::Path,
-            values: vec!["/health".to_string(), "/ready".to_string(), "/metrics".to_string()],
+            values: Some(vec![
+                "/health".to_string(),
+                "/ready".to_string(),
+                "/metrics".to_string(),
+            ]),
+            regex: None,
+            values_set: None,
+            compiled_regex: None,
         };
 
         let mut ctx = MockContext::new();
@@ -622,6 +844,38 @@ mod tests {
 
         ctx.path = "/ready".to_string();
         assert!(!condition.evaluate(&ctx)); // Excluded
+    }
+
+    #[test]
+    fn test_exclude_regex() {
+        let mut condition = ExcludeCondition {
+            source: ConditionSource::Path,
+            values: Some(vec!["/health".to_string()]),
+            regex: Some(vec![
+                r"^/debug/.*".to_string(),
+                r"^/metrics/.*".to_string(),
+            ]),
+            values_set: None,
+            compiled_regex: None,
+        };
+        condition.compile().unwrap();
+
+        let mut ctx = MockContext::new();
+
+        // Not excluded
+        ctx.path = "/api/users".to_string();
+        assert!(condition.evaluate(&ctx));
+
+        // Excluded by exact value
+        ctx.path = "/health".to_string();
+        assert!(!condition.evaluate(&ctx));
+
+        // Excluded by regex
+        ctx.path = "/debug/pprof".to_string();
+        assert!(!condition.evaluate(&ctx));
+
+        ctx.path = "/metrics/prometheus".to_string();
+        assert!(!condition.evaluate(&ctx));
     }
 
     #[test]
