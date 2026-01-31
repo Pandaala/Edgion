@@ -26,6 +26,9 @@
     "HTTPRoute/Filters/Security": {
       "http": 31030
     },
+    "HTTPRoute/Filters/HeaderModifier": {
+      "http": 31045
+    },
     "HTTPRoute/Protocol/WebSocket": {
       "http": 31080
     },

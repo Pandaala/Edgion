@@ -217,6 +217,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::HttpRedirectTestSuite));
             runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
+            runner.add_suite(Box::new(suites::HeaderModifierTestSuite));
         }
         "HTTPRoute/Filters/Redirect" => {
             if !gateway {
@@ -231,6 +232,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
+        }
+        "HTTPRoute/Filters/HeaderModifier" => {
+            if !gateway {
+                eprintln!("Error: HTTP Header Modifier tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HeaderModifierTestSuite));
         }
         "HTTPRoute/Protocol" => {
             runner.add_suite(Box::new(suites::WebSocketTestSuite));

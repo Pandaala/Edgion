@@ -1,0 +1,12 @@
+# HTTP Filters 测试套件共享 Gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: filters-test-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31045
