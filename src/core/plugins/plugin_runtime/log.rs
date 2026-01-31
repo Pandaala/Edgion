@@ -1,7 +1,7 @@
 use serde::Serialize;
 use smallvec::SmallVec;
 
-use crate::types::resources::LocalObjectReference;
+// LocalObjectReference no longer needed - refer_to is now just a String
 
 /// Default capacity for plugin name string.
 pub const NAME_CAPACITY: usize = 36;
@@ -128,9 +128,9 @@ pub struct PluginLog {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_full: Option<bool>,
 
-    /// ExtensionRef reference info (for ExtensionRef filter only)
+    /// ExtensionRef reference name (for ExtensionRef filter only)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub refer_to: Option<LocalObjectReference>,
+    pub refer_to: Option<String>,
 }
 
 impl PluginLog {
@@ -200,10 +200,10 @@ impl PluginLog {
         self.cond_skip.is_some()
     }
 
-    /// Set ExtensionRef reference info (for ExtensionRef filter only)
+    /// Set ExtensionRef reference name (for ExtensionRef filter only)
     #[inline]
-    pub fn set_refer_to(&mut self, refer_to: LocalObjectReference) {
-        self.refer_to = Some(refer_to);
+    pub fn set_refer_to(&mut self, name: String) {
+        self.refer_to = Some(name);
     }
 
     /// Legacy method for backward compatibility (deprecated, use push() instead)
@@ -430,11 +430,8 @@ mod tests {
             stage: "request_filters",
             filters: vec![{
                 let mut log = PluginLog::new("ExtensionRef");
-                log.set_refer_to(LocalObjectReference {
-                    group: String::new(),
-                    kind: "EdgionPlugins".to_string(),
-                    name: "auth-plugins".to_string(),
-                });
+                // refer_to is now simplified to just the name string
+                log.set_refer_to("auth-plugins".to_string());
                 log
             }],
             edgion_plugins: vec![EdgionPluginsLog {
@@ -451,10 +448,11 @@ mod tests {
         let json = serde_json::to_string(&stage).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        // Check filters
+        // Check filters - refer_to is now just a string
         assert_eq!(parsed["filters"][0]["name"], "ExtensionRef");
-        assert_eq!(parsed["filters"][0]["refer_to"]["kind"], "EdgionPlugins");
-        assert_eq!(parsed["filters"][0]["refer_to"]["name"], "auth-plugins");
+        assert_eq!(parsed["filters"][0]["refer_to"], "auth-plugins");
+        // ExtensionRef should not have time_cost
+        assert!(parsed["filters"][0].get("time_cost").is_none());
 
         // Check edgion_plugins
         assert_eq!(parsed["edgion_plugins"][0]["name"], "auth-plugins");

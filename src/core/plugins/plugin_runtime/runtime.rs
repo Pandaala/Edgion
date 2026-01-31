@@ -302,7 +302,10 @@ impl PluginRuntime {
 
             let result = filter.run_request(&mut session_adapter, &mut plugin_log).await;
 
-            plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+            // Skip time_cost for ExtensionRef (identified by refer_to being set)
+            if plugin_log.refer_to.is_none() {
+                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+            }
             filter_logs.push(plugin_log);
 
             if ErrTerminateRequest == result {
@@ -338,7 +341,10 @@ impl PluginRuntime {
 
             let result = filter.run_upstream_response_filter(&mut session_adapter, &mut plugin_log);
 
-            plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+            // Skip time_cost for ExtensionRef (identified by refer_to being set)
+            if plugin_log.refer_to.is_none() {
+                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+            }
             filter_logs.push(plugin_log);
 
             if ErrTerminateRequest == result {
@@ -376,7 +382,10 @@ impl PluginRuntime {
                 .run_upstream_response(&mut session_adapter, &mut plugin_log)
                 .await;
 
-            plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+            // Skip time_cost for ExtensionRef (identified by refer_to being set)
+            if plugin_log.refer_to.is_none() {
+                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+            }
             filter_logs.push(plugin_log);
 
             if ErrTerminateRequest == result {

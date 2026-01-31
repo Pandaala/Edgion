@@ -64,8 +64,8 @@ impl ExtensionRefFilter {
             return PluginRunningResult::GoodNext;
         }
 
-        // Set refer_to on the ExtensionRef log
-        log.set_refer_to(self.ext_ref.clone());
+        // Set refer_to name on the ExtensionRef log (simplified from full LocalObjectReference)
+        log.set_refer_to(self.ext_ref.name.clone());
 
         let key = self.plugin_key();
         let store = get_global_plugin_store();
@@ -136,8 +136,8 @@ impl ExtensionRefFilter {
             return PluginRunningResult::GoodNext;
         }
 
-        // Set refer_to on the ExtensionRef log
-        log.set_refer_to(self.ext_ref.clone());
+        // Set refer_to name on the ExtensionRef log (simplified from full LocalObjectReference)
+        log.set_refer_to(self.ext_ref.name.clone());
 
         let key = self.plugin_key();
         let store = get_global_plugin_store();
@@ -338,9 +338,8 @@ mod tests {
         let mut log = PluginLog::new("test");
         let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
         assert_eq!(result, PluginRunningResult::GoodNext);
-        // Verify refer_to is set
+        // Verify refer_to is set (now just the name string)
         assert!(log.refer_to.is_some());
-        assert_eq!(log.refer_to.as_ref().unwrap().kind, "EdgionPlugins");
-        assert_eq!(log.refer_to.as_ref().unwrap().name, "p1");
+        assert_eq!(log.refer_to.as_ref().unwrap(), "p1");
     }
 }
