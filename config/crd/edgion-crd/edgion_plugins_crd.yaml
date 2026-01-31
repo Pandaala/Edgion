@@ -240,6 +240,8 @@ spec:
                         type: string
                         enum:
                           - ResponseHeaderModifier
+                          - DebugAccessLogToHeader
+                          - ExtensionRef
                       config:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true

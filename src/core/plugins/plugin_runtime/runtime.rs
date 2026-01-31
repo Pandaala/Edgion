@@ -13,7 +13,7 @@ use crate::types::EdgionHttpContext;
 use super::conditional_filter::{
     ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseFilter,
 };
-use super::log::{PluginLog, PluginLogs};
+use super::log::{PluginLog, StageLogs};
 use super::session_adapter::PingoraSessionAdapter;
 use super::traits::{RequestFilter, UpstreamResponse, UpstreamResponseFilter};
 use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
@@ -257,6 +257,21 @@ impl PluginRuntime {
         self.request_plugins.len() + self.upstream_response_plugins.len() + self.upstream_response_async_plugins.len()
     }
 
+    /// Get request stage plugin count
+    pub fn request_plugins_count(&self) -> usize {
+        self.request_plugins.len()
+    }
+
+    /// Get upstream_response_filter stage plugin count (sync)
+    pub fn upstream_response_plugins_count(&self) -> usize {
+        self.upstream_response_plugins.len()
+    }
+
+    /// Get upstream_response stage plugin count (async)
+    pub fn upstream_response_async_plugins_count(&self) -> usize {
+        self.upstream_response_async_plugins.len()
+    }
+
     /// Iterate over request stage filters
     pub fn request_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn RequestFilter>> {
         self.request_plugins.iter()
@@ -278,7 +293,7 @@ impl PluginRuntime {
             return;
         }
 
-        let mut stage_logs = Vec::with_capacity(self.request_plugins.len());
+        let mut filter_logs = Vec::with_capacity(self.request_plugins.len());
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.request_plugins {
@@ -288,7 +303,7 @@ impl PluginRuntime {
             let result = filter.run_request(&mut session_adapter, &mut plugin_log).await;
 
             plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
-            stage_logs.push(plugin_log);
+            filter_logs.push(plugin_log);
 
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
@@ -296,9 +311,10 @@ impl PluginRuntime {
             }
         }
 
-        ctx.plugin_logs.push(PluginLogs {
+        ctx.stage_logs.push(StageLogs {
             stage: "request_filters",
-            logs: stage_logs,
+            filters: filter_logs,
+            edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
         });
     }
 
@@ -313,7 +329,7 @@ impl PluginRuntime {
             return;
         }
 
-        let mut stage_logs = Vec::with_capacity(self.upstream_response_plugins.len());
+        let mut filter_logs = Vec::with_capacity(self.upstream_response_plugins.len());
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_plugins {
@@ -323,7 +339,7 @@ impl PluginRuntime {
             let result = filter.run_upstream_response_filter(&mut session_adapter, &mut plugin_log);
 
             plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
-            stage_logs.push(plugin_log);
+            filter_logs.push(plugin_log);
 
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
@@ -331,9 +347,10 @@ impl PluginRuntime {
             }
         }
 
-        ctx.plugin_logs.push(PluginLogs {
+        ctx.stage_logs.push(StageLogs {
             stage: "upstream_response_filters",
-            logs: stage_logs,
+            filters: filter_logs,
+            edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
         });
     }
 
@@ -348,7 +365,7 @@ impl PluginRuntime {
             return;
         }
 
-        let mut stage_logs = Vec::with_capacity(self.upstream_response_async_plugins.len());
+        let mut filter_logs = Vec::with_capacity(self.upstream_response_async_plugins.len());
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_async_plugins {
@@ -360,7 +377,7 @@ impl PluginRuntime {
                 .await;
 
             plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
-            stage_logs.push(plugin_log);
+            filter_logs.push(plugin_log);
 
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
@@ -368,9 +385,10 @@ impl PluginRuntime {
             }
         }
 
-        ctx.plugin_logs.push(PluginLogs {
+        ctx.stage_logs.push(StageLogs {
             stage: "upstream_responses",
-            logs: stage_logs,
+            filters: filter_logs,
+            edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
         });
     }
 }

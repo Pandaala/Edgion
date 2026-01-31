@@ -1,5 +1,5 @@
 use crate::core::gateway::gateway::GatewayInfo;
-use crate::core::plugins::PluginLogs;
+use crate::core::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::routes::grpc_routes::GrpcRouteRuleUnit;
 use crate::core::routes::HttpRouteRuleUnit;
 use crate::types::filters::PluginRunningResult;
@@ -216,8 +216,11 @@ pub struct EdgionHttpContext {
     /// Backend context containing service info and upstream attempts
     pub backend_context: Option<BackendContext>,
 
-    /// Plugin execution logs (grouped by stage)
-    pub plugin_logs: Vec<PluginLogs>,
+    /// Stage execution logs (grouped by stage)
+    pub stage_logs: Vec<StageLogs>,
+
+    /// Pending EdgionPlugins logs (collected during current stage, merged at stage end)
+    pub pending_edgion_plugins_logs: Vec<EdgionPluginsLog>,
 
     /// Tracking stack for nested plugin references to prevent cycles
     pub plugin_ref_stack: Vec<String>,
@@ -259,7 +262,8 @@ impl EdgionHttpContext {
             selected_grpc_backend: None,
             is_grpc_route_matched: false,
             backend_context: None,
-            plugin_logs: Vec::with_capacity(3),
+            stage_logs: Vec::with_capacity(3),
+            pending_edgion_plugins_logs: Vec::new(),
             plugin_ref_stack: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
             try_cnt: 0,

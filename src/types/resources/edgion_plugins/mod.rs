@@ -126,9 +126,11 @@ impl EdgionPlugins {
         self.spec.upstream_response_plugins.as_deref().unwrap_or(&[])
     }
 
-    /// Initialize plugin runtime from edgion_plugins
-    /// This should be called after deserialization to populate the runtime field
-    pub fn init_plugin_runtime(&mut self) {
+    /// Preparse after deserialization to populate runtime fields
+    ///
+    /// This method should be called after deserializing EdgionPlugins from YAML/JSON
+    /// to populate the runtime-only plugin_runtime field.
+    pub fn preparse(&mut self) {
         let mut runtime = PluginRuntime::new();
         let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
 

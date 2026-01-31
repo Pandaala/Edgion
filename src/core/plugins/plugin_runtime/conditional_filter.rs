@@ -430,6 +430,19 @@ mod tests {
         fn has_plugin_ref(&self, _key: &str) -> bool {
             false
         }
+        fn push_edgion_plugins_log(&mut self, _log: crate::core::plugins::plugin_runtime::log::EdgionPluginsLog) {}
+        fn start_edgion_plugins_log(
+            &mut self,
+            _name: String,
+        ) -> crate::core::plugins::plugin_runtime::log::EdgionPluginsLogToken {
+            crate::core::plugins::plugin_runtime::log::EdgionPluginsLogToken::new(0, 0)
+        }
+        fn push_to_edgion_plugins_log(
+            &mut self,
+            _token: &crate::core::plugins::plugin_runtime::log::EdgionPluginsLogToken,
+            _log: crate::core::plugins::plugin_runtime::log::PluginLog,
+        ) {
+        }
     }
 
     // ==================== Tests ====================

@@ -106,7 +106,8 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "security" => "Gateway/Security".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
-            "plugin-logs" | "pluginlogs" => "Gateway/Plugins".to_string(),
+            "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
+            "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -145,7 +146,8 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/RealIP" => "Gateway/RealIP",
         "Gateway/TLS/BackendTLS" => "Gateway/TLS/BackendTLS",
         "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
-        "Gateway/Plugins" => "Gateway/Plugins",
+        "EdgionPlugins/DebugAccessLog" => "EdgionPlugins",
+        "EdgionPlugins/PluginCondition" => "EdgionPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
         "EdgionTls" | "EdgionTls/https" => "EdgionTls/https",
@@ -316,12 +318,19 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::GatewayTlsTestSuite));
         }
-        "Gateway/Plugins" => {
+        "EdgionPlugins/DebugAccessLog" => {
             if !gateway {
-                eprintln!("Error: Gateway/Plugins tests require --gateway flag");
+                eprintln!("Error: EdgionPlugins/DebugAccessLog tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::PluginLogsTestSuite));
+        }
+        "EdgionPlugins/PluginCondition" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PluginCondition tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PluginConditionTestSuite));
         }
         "Gateway/ListenerHostname" => {
             if !gateway {

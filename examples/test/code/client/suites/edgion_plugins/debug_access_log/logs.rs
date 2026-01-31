@@ -1,13 +1,12 @@
-// Plugin Logs Test Suite
+// DebugAccessLog Plugin Test Suite
 //
-// Required config files (in examples/conf/):
-// - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
-// - Service_edge_test-http.yaml               # HTTP service definition
-// - HTTPRoute_default_plugin-logs-test.yaml   # Plugin logs routing rules（Host: plugin-test.example.com）
-// - EdgionPlugins_default_debug-access-log.yaml  # Debug access log 插件config
-//   Note: this plugin enables CORS、CSRF、ResponseHeaderModifier 和 DebugAccessLogToHeader
-// - Gateway_edge_example-gateway.yaml         # Gateway config
-// - GatewayClass__public-gateway.yaml         # GatewayClass config
+// Required config files (in examples/test/conf/EdgionPlugins/DebugAccessLog/):
+// - EdgionPlugins_default_debug-access-log.yaml  # Debug access log plugin config
+//   Note: this plugin enables CORS, CSRF, ResponseHeaderModifier and DebugAccessLogToHeader
+// - HTTPRoute_default_plugin-logs-test.yaml      # Plugin logs routing rules (Host: plugin-test.example.com)
+//
+// Also requires base config (in examples/test/conf/EdgionPlugins/base/):
+// - Gateway.yaml                                 # Gateway config for EdgionPlugins tests
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use serde::{Deserialize, Serialize};
@@ -19,14 +18,22 @@ pub struct PluginLogsTestSuite;
 #[derive(Debug, Deserialize, Serialize)]
 struct AccessLog {
     #[serde(default)]
-    plugin_logs: Vec<StagePluginLogs>,
+    stage_logs: Vec<StageLogs>,
     #[serde(flatten)]
     other: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct StagePluginLogs {
+struct StageLogs {
     stage: String,
+    filters: Vec<PluginLog>,
+    #[serde(default)]
+    edgion_plugins: Vec<EdgionPluginsLog>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct EdgionPluginsLog {
+    name: String,
     logs: Vec<PluginLog>,
 }
 
@@ -39,6 +46,12 @@ struct PluginLog {
     log: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     log_full: Option<bool>,
+    /// Condition skip reason, e.g., "skip:keyExist,hdr:X-Skip-Cors"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cond_skip: Option<String>,
+    /// ExtensionRef reference info
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refer_to: Option<serde_json::Value>,
 }
 
 impl PluginLogsTestSuite {
@@ -66,18 +79,18 @@ impl PluginLogsTestSuite {
                                         // Try to parse as JSON
                                         match serde_json::from_str::<AccessLog>(json_str) {
                                             Ok(access_log) => {
-                                                // Verify plugin_logs is an array with at least 1 stage
-                                                if access_log.plugin_logs.is_empty() {
+                                                // Verify stage_logs is an array with at least 1 stage
+                                                if access_log.stage_logs.is_empty() {
                                                     TestResult::failed(
                                                         start.elapsed(),
-                                                        "plugin_logs array is empty".to_string(),
+                                                        "stage_logs array is empty".to_string(),
                                                     )
                                                 } else {
                                                     TestResult::passed_with_message(
                                                         start.elapsed(),
                                                         format!(
                                                             "Array structure verified, {} stages found",
-                                                            access_log.plugin_logs.len()
+                                                            access_log.stage_logs.len()
                                                         ),
                                                     )
                                                 }
@@ -124,31 +137,31 @@ impl PluginLogsTestSuite {
                                     if let Ok(access_log) = serde_json::from_str::<AccessLog>(json_str) {
                                         // Find request_filters stage
                                         if let Some(stage) =
-                                            access_log.plugin_logs.iter().find(|s| s.stage == "request_filters")
+                                            access_log.stage_logs.iter().find(|s| s.stage == "request_filters")
                                         {
-                                            // Check if it has at least 1 plugin
-                                            if stage.logs.is_empty() {
+                                            // Check if it has at least 1 filter
+                                            if stage.filters.is_empty() {
                                                 return TestResult::failed(
                                                     start.elapsed(),
-                                                    "No plugins found in request_filters stage".to_string(),
+                                                    "No filters found in request_filters stage".to_string(),
                                                 );
                                             }
 
-                                            // Check time_cost exists for all plugins
-                                            for plugin in &stage.logs {
+                                            // Check time_cost exists for all filters
+                                            for plugin in &stage.filters {
                                                 if plugin.time_cost.is_none() {
                                                     return TestResult::failed(
                                                         start.elapsed(),
-                                                        format!("Plugin '{}' missing time_cost", plugin.name),
+                                                        format!("Filter '{}' missing time_cost", plugin.name),
                                                     );
                                                 }
                                             }
 
                                             let plugin_names: Vec<&str> =
-                                                stage.logs.iter().map(|p| p.name.as_str()).collect();
+                                                stage.filters.iter().map(|p| p.name.as_str()).collect();
                                             TestResult::passed_with_message(
                                                 start.elapsed(),
-                                                format!("Plugins executed: {:?}", plugin_names),
+                                                format!("Filters executed: {:?}", plugin_names),
                                             )
                                         } else {
                                             TestResult::failed(
@@ -234,7 +247,7 @@ impl PluginLogsTestSuite {
                             if let Some(debug_header) = response.headers().get("x-debug-access-log") {
                                 if let Ok(json_str) = debug_header.to_str() {
                                     if let Ok(access_log) = serde_json::from_str::<AccessLog>(json_str) {
-                                        if access_log.plugin_logs.is_empty() {
+                                        if access_log.stage_logs.is_empty() {
                                             return TestResult::failed(
                                                 start.elapsed(),
                                                 "No plugin stages found".to_string(),
@@ -242,7 +255,7 @@ impl PluginLogsTestSuite {
                                         }
 
                                         // Verify each stage has valid structure
-                                        for stage in &access_log.plugin_logs {
+                                        for stage in &access_log.stage_logs {
                                             if stage.stage.is_empty() {
                                                 return TestResult::failed(
                                                     start.elapsed(),
@@ -252,7 +265,7 @@ impl PluginLogsTestSuite {
                                         }
 
                                         let stage_names: Vec<&str> =
-                                            access_log.plugin_logs.iter().map(|s| s.stage.as_str()).collect();
+                                            access_log.stage_logs.iter().map(|s| s.stage.as_str()).collect();
                                         TestResult::passed_with_message(
                                             start.elapsed(),
                                             format!("Stages found: {:?}", stage_names),
@@ -296,7 +309,7 @@ impl PluginLogsTestSuite {
                             if let Some(debug_header) = response.headers().get("x-debug-access-log") {
                                 if let Ok(json_str) = debug_header.to_str() {
                                     if let Ok(access_log) = serde_json::from_str::<AccessLog>(json_str) {
-                                        if access_log.plugin_logs.is_empty() {
+                                        if access_log.stage_logs.is_empty() {
                                             TestResult::passed_with_message(
                                                 start.elapsed(),
                                                 "Empty logs handled correctly (empty array)".to_string(),
@@ -306,7 +319,7 @@ impl PluginLogsTestSuite {
                                                 start.elapsed(),
                                                 format!(
                                                     "Expected empty plugin_logs, got {} stages",
-                                                    access_log.plugin_logs.len()
+                                                    access_log.stage_logs.len()
                                                 ),
                                             )
                                         }
@@ -352,13 +365,13 @@ impl PluginLogsTestSuite {
                                         let mut all_valid = true;
                                         let mut error_msg = String::new();
 
-                                        for stage in &access_log.plugin_logs {
-                                            for plugin in &stage.logs {
+                                        for stage in &access_log.stage_logs {
+                                            for plugin in &stage.filters {
                                                 match plugin.time_cost {
                                                     None => {
                                                         all_valid = false;
                                                         error_msg = format!(
-                                                            "Plugin '{}' in stage '{}' missing time_cost",
+                                                            "Filter '{}' in stage '{}' missing time_cost",
                                                             plugin.name, stage.stage
                                                         );
                                                         break;
@@ -368,7 +381,7 @@ impl PluginLogsTestSuite {
                                                         if tc > 1_000_000 {
                                                             all_valid = false;
                                                             error_msg = format!(
-                                                                "Plugin '{}' has unreasonable time_cost: {} us",
+                                                                "Filter '{}' has unreasonable time_cost: {} us",
                                                                 plugin.name, tc
                                                             );
                                                             break;
@@ -382,11 +395,11 @@ impl PluginLogsTestSuite {
                                         }
 
                                         if all_valid {
-                                            let total_plugins: usize =
-                                                access_log.plugin_logs.iter().map(|s| s.logs.len()).sum();
+                                            let total_filters: usize =
+                                                access_log.stage_logs.iter().map(|s| s.filters.len()).sum();
                                             TestResult::passed_with_message(
                                                 start.elapsed(),
-                                                format!("All {} plugins have valid time_cost", total_plugins),
+                                                format!("All {} filters have valid time_cost", total_filters),
                                             )
                                         } else {
                                             TestResult::failed(start.elapsed(), error_msg)
@@ -411,7 +424,7 @@ impl PluginLogsTestSuite {
 
 impl TestSuite for PluginLogsTestSuite {
     fn name(&self) -> &str {
-        "Plugin Logs Tests"
+        "DebugAccessLog Plugin Tests"
     }
 
     fn test_cases(&self) -> Vec<TestCase> {

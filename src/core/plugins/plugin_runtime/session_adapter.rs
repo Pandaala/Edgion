@@ -4,6 +4,7 @@ use http::Uri;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
+use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 use crate::types::filters::PluginRunningResult;
 use crate::types::EdgionHttpContext;
@@ -232,5 +233,32 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn has_plugin_ref(&self, key: &str) -> bool {
         self.ctx.has_plugin_ref(key)
+    }
+
+    fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog) {
+        self.ctx.pending_edgion_plugins_logs.push(log);
+    }
+
+    fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken {
+        let idx = self.ctx.pending_edgion_plugins_logs.len();
+        let depth = self.ctx.plugin_ref_depth();
+        self.ctx.pending_edgion_plugins_logs.push(EdgionPluginsLog {
+            name,
+            logs: Vec::new(),
+        });
+        EdgionPluginsLogToken::new(idx, depth)
+    }
+
+    fn push_to_edgion_plugins_log(&mut self, token: &EdgionPluginsLogToken, log: PluginLog) {
+        debug_assert_eq!(
+            self.ctx.plugin_ref_depth(),
+            token.depth(),
+            "EdgionPluginsLogToken used in wrong scope: expected depth {}, got {}",
+            token.depth(),
+            self.ctx.plugin_ref_depth()
+        );
+        if let Some(edgion_log) = self.ctx.pending_edgion_plugins_logs.get_mut(token.idx()) {
+            edgion_log.logs.push(log);
+        }
     }
 }

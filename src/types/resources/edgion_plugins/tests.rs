@@ -15,7 +15,7 @@ fn create_edgion_plugins_with_request_filters(plugins: Option<Vec<RequestFilterE
         },
         status: None,
     };
-    ep.init_plugin_runtime();
+    ep.preparse();
     ep
 }
 
@@ -127,7 +127,7 @@ fn test_enabled_plugins_filter() {
         },
         status: None,
     };
-    ep.init_plugin_runtime();
+    ep.preparse();
 
     assert_eq!(ep.plugin_count(), 3);
 

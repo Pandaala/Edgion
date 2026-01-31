@@ -51,7 +51,7 @@
     "Gateway/TLS/BackendTLS": {
       "http": 31170
     },
-    "Gateway/Plugins": {
+    "EdgionPlugins": {
       "http": 31180
     },
     "EdgionTls/https": {

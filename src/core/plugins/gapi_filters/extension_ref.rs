@@ -64,6 +64,9 @@ impl ExtensionRefFilter {
             return PluginRunningResult::GoodNext;
         }
 
+        // Set refer_to on the ExtensionRef log
+        log.set_refer_to(self.ext_ref.clone());
+
         let key = self.plugin_key();
         let store = get_global_plugin_store();
 
@@ -90,16 +93,20 @@ impl ExtensionRefFilter {
         // Get the pre-compiled plugin runtime
         let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
 
+        // Start EdgionPlugins log with token (ensures correct order for nested refs)
+        let log_token = session.start_edgion_plugins_log(self.ext_ref.name.clone());
+
         // Run edgion_plugins based on stage
-        let result = match stage {
+        match stage {
             PluginRunningStage::Request => {
                 log.push("Warning: Request stage should use async path");
-                PluginRunningResult::GoodNext
+                Self::finish(session, PluginRunningResult::GoodNext)
             }
             PluginRunningStage::UpstreamResponseFilter => {
                 for plugin in plugin_runtime.upstream_response_plugins_iter() {
                     let mut inner_log = PluginLog::new(plugin.name());
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
+                    session.push_to_edgion_plugins_log(&log_token, inner_log);
 
                     if result == PluginRunningResult::ErrTerminateRequest {
                         return Self::finish(session, result);
@@ -111,16 +118,7 @@ impl ExtensionRefFilter {
                 // Not executed in sync path
                 Self::finish(session, PluginRunningResult::GoodNext)
             }
-        };
-
-        log.push(&format!(
-            "EdgionPlugins '{}' executed successfully (req={}, resp_sync={}, resp_async={})",
-            key,
-            plugin_runtime.request_plugins_iter().count(),
-            plugin_runtime.upstream_response_plugins_iter().count(),
-            plugin_runtime.upstream_response_async_plugins_iter().count()
-        ));
-        result
+        }
     }
 
     /// Async version for stages that require it
@@ -137,6 +135,9 @@ impl ExtensionRefFilter {
             ));
             return PluginRunningResult::GoodNext;
         }
+
+        // Set refer_to on the ExtensionRef log
+        log.set_refer_to(self.ext_ref.clone());
 
         let key = self.plugin_key();
         let store = get_global_plugin_store();
@@ -161,11 +162,15 @@ impl ExtensionRefFilter {
 
         let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
 
-        let result = match stage {
+        // Start EdgionPlugins log with token (ensures correct order for nested refs)
+        let log_token = session.start_edgion_plugins_log(self.ext_ref.name.clone());
+
+        match stage {
             PluginRunningStage::Request => {
                 for plugin in plugin_runtime.request_plugins_iter() {
                     let mut inner_log = PluginLog::new(plugin.name());
                     let result = plugin.run_request(session, &mut inner_log).await;
+                    session.push_to_edgion_plugins_log(&log_token, inner_log);
 
                     if result == PluginRunningResult::ErrTerminateRequest {
                         return Self::finish(session, result);
@@ -177,6 +182,7 @@ impl ExtensionRefFilter {
                 for plugin in plugin_runtime.upstream_response_async_plugins_iter() {
                     let mut inner_log = PluginLog::new(plugin.name());
                     let result = plugin.run_upstream_response(session, &mut inner_log).await;
+                    session.push_to_edgion_plugins_log(&log_token, inner_log);
 
                     if result == PluginRunningResult::ErrTerminateRequest {
                         return Self::finish(session, result);
@@ -188,6 +194,7 @@ impl ExtensionRefFilter {
                 for plugin in plugin_runtime.upstream_response_plugins_iter() {
                     let mut inner_log = PluginLog::new(plugin.name());
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
+                    session.push_to_edgion_plugins_log(&log_token, inner_log);
 
                     if result == PluginRunningResult::ErrTerminateRequest {
                         return Self::finish(session, result);
@@ -195,16 +202,7 @@ impl ExtensionRefFilter {
                 }
                 Self::finish(session, PluginRunningResult::GoodNext)
             }
-        };
-
-        log.push(&format!(
-            "EdgionPlugins '{}' executed successfully (req={}, resp_sync={}, resp_async={})",
-            key,
-            plugin_runtime.request_plugins_iter().count(),
-            plugin_runtime.upstream_response_plugins_iter().count(),
-            plugin_runtime.upstream_response_async_plugins_iter().count()
-        ));
-        result
+        }
     }
 }
 
@@ -267,7 +265,7 @@ mod tests {
             },
             status: None,
         };
-        ep.init_plugin_runtime();
+        ep.preparse();
 
         let mut map = HashMap::new();
         map.insert(format!("{}/{}", key_ns, name), ep);
@@ -313,6 +311,8 @@ mod tests {
 
     #[test]
     fn test_depth_within_limit_runs() {
+        use crate::core::plugins::plugin_runtime::log::EdgionPluginsLogToken;
+
         // Prepare store with plugin
         make_plugin("ns", "p1");
 
@@ -321,6 +321,10 @@ mod tests {
         session.expect_plugin_ref_depth().return_const(0usize);
         session.expect_push_plugin_ref().return_const(());
         session.expect_pop_plugin_ref().return_const(());
+        session
+            .expect_start_edgion_plugins_log()
+            .returning(|_| EdgionPluginsLogToken::new(0, 0));
+        session.expect_push_to_edgion_plugins_log().return_const(());
 
         let filter = ExtensionRefFilter::new(
             "ns".to_string(),
@@ -334,5 +338,9 @@ mod tests {
         let mut log = PluginLog::new("test");
         let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
         assert_eq!(result, PluginRunningResult::GoodNext);
+        // Verify refer_to is set
+        assert!(log.refer_to.is_some());
+        assert_eq!(log.refer_to.as_ref().unwrap().kind, "EdgionPlugins");
+        assert_eq!(log.refer_to.as_ref().unwrap().name, "p1");
     }
 }

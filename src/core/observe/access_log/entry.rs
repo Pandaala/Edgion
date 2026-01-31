@@ -1,6 +1,6 @@
 //! Access log entry definition
 
-use crate::core::plugins::PluginLogs;
+use crate::core::plugins::StageLogs;
 use crate::types::{BackendContext, EdgionHttpContext, EdgionStatus, MatchInfo, RequestInfo};
 use serde::Serialize;
 
@@ -26,7 +26,7 @@ pub struct AccessLogEntry<'a> {
     pub backend_context: Option<&'a BackendContext>,
 
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
-    pub plugin_logs: &'a [PluginLogs],
+    pub stage_logs: &'a [StageLogs],
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conn_est: Option<bool>,
@@ -43,7 +43,7 @@ impl<'a> AccessLogEntry<'a> {
             match_info,
             errors: &ctx.edgion_status,
             backend_context: ctx.backend_context.as_ref(),
-            plugin_logs: &ctx.plugin_logs,
+            stage_logs: &ctx.stage_logs,
             conn_est: None,
         }
     }

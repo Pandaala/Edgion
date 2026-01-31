@@ -1,5 +1,6 @@
 // Test suite module
 
+pub mod edgion_plugins;
 pub mod edgion_tls;
 pub mod gateway;
 pub mod grpc_route;
@@ -27,9 +28,11 @@ pub use edgion_tls::{CipherTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTest
 pub use gateway::{
     AllowedRoutesAllNamespacesTestSuite, AllowedRoutesKindsTestSuite, AllowedRoutesSameNamespaceTestSuite,
     BackendTlsTestSuite, CombinedScenariosTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite,
-    ListenerHostnameTestSuite, PluginLogsTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite,
-    UpdatePhaseTestSuite,
+    ListenerHostnameTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, UpdatePhaseTestSuite,
 };
+
+// EdgionPlugins tests
+pub use edgion_plugins::{PluginConditionTestSuite, PluginLogsTestSuite};
 
 // ReferenceGrant Status tests
 pub use ref_grant_status::RefGrantStatusTestSuite;

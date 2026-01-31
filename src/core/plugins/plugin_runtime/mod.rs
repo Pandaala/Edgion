@@ -9,7 +9,7 @@ pub mod traits;
 pub use conditional_filter::{
     ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseFilter,
 };
-pub use log::{PluginLog, PluginLogs};
+pub use log::{EdgionPluginsLog, PluginLog, StageLogs};
 pub use runtime::PluginRuntime;
 pub use session_adapter::PingoraSessionAdapter;
 pub use traits::{

@@ -1,5 +1,6 @@
 //! PluginSession trait - shared across all filter stages
 
+use crate::core::plugins::plugin_runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::types::EdgionHttpContext;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -97,4 +98,21 @@ pub trait PluginSession: Send {
 
     /// Check whether reference key already exists in stack
     fn has_plugin_ref(&self, key: &str) -> bool;
+
+    /// Push EdgionPlugins execution log to pending list (for ExtensionRef)
+    fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog);
+
+    /// Start a new EdgionPluginsLog and return a token for safe log pushing.
+    ///
+    /// This creates an empty EdgionPluginsLog entry in the pending list and returns
+    /// a token that can be used with `push_to_edgion_plugins_log` to append logs.
+    /// The token records the current depth to prevent misuse in nested scopes.
+    fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken;
+
+    /// Push a PluginLog to the EdgionPluginsLog identified by the token.
+    ///
+    /// # Panics
+    /// In debug builds, panics if the current depth doesn't match the token's depth,
+    /// indicating the token is being used in the wrong scope.
+    fn push_to_edgion_plugins_log(&mut self, token: &EdgionPluginsLogToken, log: PluginLog);
 }

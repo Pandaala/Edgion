@@ -71,9 +71,14 @@ pub struct PluginConditions {
 /// Condition type enumeration
 ///
 /// Each variant represents a different type of condition check.
-/// Uses adjacently tagged enum for cleaner YAML representation.
+/// Uses internally tagged enum for YAML representation:
+/// ```yaml
+/// - type: keyExist
+///   source: header
+///   key: "X-Test"
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum Condition {
     /// Check if a key exists in the specified source
     KeyExist(KeyExistCondition),

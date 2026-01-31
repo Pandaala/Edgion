@@ -1,0 +1,22 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: condition-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Cors
+      config:
+        allowOrigins: "*"
+        allowMethods: "GET,POST"
+        allowHeaders: "Content-Type"
+      conditions:
+        skip:
+          - type: keyExist
+            source: header
+            key: "X-Skip-Cors"
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: DebugAccessLogToHeader
+      config: {}
