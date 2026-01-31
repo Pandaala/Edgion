@@ -7,4 +7,4 @@ mod debug_access_log;
 mod plugin_condition;
 
 pub use debug_access_log::PluginLogsTestSuite;
-pub use plugin_condition::PluginConditionTestSuite;
+pub use plugin_condition::{AllConditionsTestSuite, PluginConditionTestSuite};

@@ -108,6 +108,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
+            "all-conditions" | "allconditions" => "EdgionPlugins/PluginCondition/AllConditions".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -148,6 +149,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
         "EdgionPlugins/DebugAccessLog" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition" => "EdgionPlugins",
+        "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
         "EdgionTls" | "EdgionTls/https" => "EdgionTls/https",
@@ -339,6 +341,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::PluginConditionTestSuite));
+        }
+        "EdgionPlugins/PluginCondition/AllConditions" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PluginCondition/AllConditions tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::AllConditionsTestSuite));
         }
         "Gateway/ListenerHostname" => {
             if !gateway {

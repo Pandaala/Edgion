@@ -365,6 +365,7 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
                     run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
+                    run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
                 else
                     run_test "EdgionPlugins_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
                 fi
@@ -435,6 +436,7 @@ run_all_tests() {
         # EdgionPlugins Tests
         run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
         run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
+        run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
         run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
         run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
         run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
@@ -534,14 +536,21 @@ main() {
     trap cleanup EXIT
     
     # Auto-infer suites from resource/item if not explicitly specified
-    if [ -z "$suites" ] && [ -n "$G_RESOURCE" ] && [ -n "$G_ITEM" ]; then
+    if [ -z "$suites" ] && [ -n "$G_RESOURCE" ]; then
         # Always include base and HTTPRoute/Basic for dependencies (Service, EndpointSlice, etc.)
         local base_suites="base,HTTPRoute/Basic"
         # EdgionPlugins needs its own base Gateway
         if [ "$G_RESOURCE" = "EdgionPlugins" ]; then
             base_suites="${base_suites},EdgionPlugins/base"
+            # When running all EdgionPlugins tests, load all plugin configs
+            if [ -z "$G_ITEM" ]; then
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition"
+            else
+                suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
+            fi
+        elif [ -n "$G_ITEM" ]; then
+            suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
         fi
-        suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
     fi
     
     echo ""

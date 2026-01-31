@@ -147,9 +147,11 @@ impl PluginLogsTestSuite {
                                                 );
                                             }
 
-                                            // Check time_cost exists for all filters
+                                            // Check time_cost exists for filters (except ExtensionRef which doesn't have time_cost)
                                             for plugin in &stage.filters {
-                                                if plugin.time_cost.is_none() {
+                                                // ExtensionRef filters have refer_to set, they don't track time_cost
+                                                // because they are containers that reference other plugins
+                                                if plugin.name != "ExtensionRef" && plugin.refer_to.is_none() && plugin.time_cost.is_none() {
                                                     return TestResult::failed(
                                                         start.elapsed(),
                                                         format!("Filter '{}' missing time_cost", plugin.name),
@@ -367,14 +369,20 @@ impl PluginLogsTestSuite {
 
                                         for stage in &access_log.stage_logs {
                                             for plugin in &stage.filters {
+                                                // ExtensionRef filters have refer_to set, they don't track time_cost
+                                                // because they are containers that reference other plugins
+                                                let is_extension_ref = plugin.name == "ExtensionRef" || plugin.refer_to.is_some();
+                                                
                                                 match plugin.time_cost {
                                                     None => {
-                                                        all_valid = false;
-                                                        error_msg = format!(
-                                                            "Filter '{}' in stage '{}' missing time_cost",
-                                                            plugin.name, stage.stage
-                                                        );
-                                                        break;
+                                                        if !is_extension_ref {
+                                                            all_valid = false;
+                                                            error_msg = format!(
+                                                                "Filter '{}' in stage '{}' missing time_cost",
+                                                                plugin.name, stage.stage
+                                                            );
+                                                            break;
+                                                        }
                                                     }
                                                     Some(tc) => {
                                                         // Check reasonable range (< 1 second = 1,000,000 microseconds)
