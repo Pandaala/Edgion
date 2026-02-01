@@ -1295,6 +1295,7 @@ dependencies = [
  "mockall",
  "notify",
  "parking_lot",
+ "percent-encoding",
  "pingora-core",
  "pingora-http",
  "pingora-load-balancing",

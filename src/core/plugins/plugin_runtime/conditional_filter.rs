@@ -337,6 +337,10 @@ mod tests {
             &self.path
         }
 
+        fn get_query(&self) -> Option<String> {
+            None // Not used in condition evaluation tests
+        }
+
         fn get_method(&self) -> &str {
             &self.method
         }
@@ -348,6 +352,10 @@ mod tests {
         fn set_ctx_var(&mut self, key: &str, value: &str) -> super::super::traits::PluginSessionResult<()> {
             self.ctx_vars.insert(key.to_string(), value.to_string());
             Ok(())
+        }
+
+        fn get_path_param(&mut self, _name: &str) -> Option<String> {
+            None // Not used in condition evaluation tests
         }
 
         // Stub implementations for other methods (not used in tests)

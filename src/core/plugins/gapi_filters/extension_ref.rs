@@ -238,7 +238,7 @@ mod tests {
     use crate::core::plugins::edgion_plugins::get_global_plugin_store;
     use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
     use crate::types::resources::edgion_plugins::{EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry};
-    use crate::types::resources::gateway_api_plugins::EdgionPlugin;
+    use crate::types::resources::edgion_plugins::EdgionPlugin;
     use crate::types::resources::http_route::HTTPHeaderFilter;
     use kube::core::ObjectMeta;
     use mockall::predicate::eq;

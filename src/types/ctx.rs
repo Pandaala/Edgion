@@ -241,6 +241,11 @@ pub struct EdgionHttpContext {
     /// Context variables map for plugin communication
     /// Plugins can set values (e.g., KeySet plugin) and conditions can read them
     pub ctx_map: HashMap<String, String>,
+
+    /// Lazily extracted path parameters from route pattern (e.g., "/api/:uid/profile")
+    /// - None: not yet extracted
+    /// - Some(HashMap): already extracted (may be empty if no params or no match)
+    pub path_params: Option<HashMap<String, String>>,
 }
 
 impl Default for EdgionHttpContext {
@@ -270,6 +275,7 @@ impl EdgionHttpContext {
             upstream_start_time: None,
             hash_key: None,
             ctx_map: HashMap::new(),
+            path_params: None,
         }
     }
 

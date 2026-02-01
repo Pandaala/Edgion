@@ -11,7 +11,7 @@
   - `plugin.rs`: 插件实现（当前为 stub，审核通过后补全运行时逻辑）
 - **配置类型**: `Edgion/src/types/resources/edgion_plugins/plugin_configs/jwt_auth.rs`
   - `JwtAuthConfig`、`JwtAlgorithm`
-- **注册**: `EdgionPlugin::JwtAuth(JwtAuthConfig)` 已在 `gateway_api_plugins.rs` 与 `runtime.rs` 中注册。
+- **注册**: `EdgionPlugin::JwtAuth(JwtAuthConfig)` 已在 `edgion_plugin.rs` 与 `runtime.rs` 中注册。
 
 ---
 

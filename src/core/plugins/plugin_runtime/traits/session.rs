@@ -26,8 +26,11 @@ pub trait PluginSession: Send {
     /// Get a cookie value by name
     fn get_cookie(&self, name: &str) -> Option<String>;
 
-    /// Get the request path
+    /// Get the request path (without query string)
     fn get_path(&self) -> &str;
+
+    /// Get the request query string (without leading '?')
+    fn get_query(&self) -> Option<String>;
 
     /// Get the HTTP method as &str (more efficient than method())
     fn get_method(&self) -> &str;
@@ -37,6 +40,15 @@ pub trait PluginSession: Send {
 
     /// Set a context variable (for plugins to pass data downstream)
     fn set_ctx_var(&mut self, key: &str, value: &str) -> PluginSessionResult<()>;
+
+    /// Get a path parameter by name (lazy extraction from route pattern)
+    ///
+    /// For route pattern "/api/:uid/profile" and request path "/api/123/profile",
+    /// `get_path_param("uid")` returns `Some("123")`.
+    ///
+    /// This uses lazy extraction - parameters are only parsed on first call
+    /// and then cached for subsequent calls.
+    fn get_path_param(&mut self, name: &str) -> Option<String>;
 
     async fn write_response_header(
         &mut self,

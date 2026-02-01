@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
     BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig, JwtAuthConfig,
-    MockConfig,
+    MockConfig, ProxyRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -48,6 +48,8 @@ pub enum EdgionPlugin {
     Mock(MockConfig),
     /// Debug Access Log to Header filter (for debugging)
     DebugAccessLogToHeader(DebugAccessLogToHeaderConfig),
+    /// Proxy Rewrite filter (rewrite URI, Host, Method, Headers before forwarding to upstream)
+    ProxyRewrite(ProxyRewriteConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionRateLimit(RateLimitConfig),
     // EdgionCircuitBreaker(CircuitBreakerConfig),
@@ -74,6 +76,7 @@ impl EdgionPlugin {
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
+            EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
         }
     }
 }

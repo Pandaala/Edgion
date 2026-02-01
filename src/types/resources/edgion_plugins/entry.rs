@@ -4,7 +4,7 @@ use crate::core::plugins::plugins_cond::PluginConditions;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::gateway_api_plugins::EdgionPlugin;
+use super::edgion_plugin::EdgionPlugin;
 
 /// Helper functions for serde defaults
 pub(super) fn default_true() -> bool {

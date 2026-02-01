@@ -13,7 +13,7 @@ use crate::core::plugins::PluginRuntime;
 // Submodules
 pub mod custom_plugins;
 pub mod entry;
-pub mod gateway_api_plugins;
+pub mod edgion_plugin;
 
 pub mod plugin_configs;
 
@@ -22,10 +22,10 @@ mod tests;
 
 // Re-exports
 pub use entry::{PluginEntry, RequestFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry};
-pub use gateway_api_plugins::EdgionPlugin;
+pub use edgion_plugin::EdgionPlugin;
 pub use plugin_configs::{
-    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, DefaultAction, IpRestrictionConfig,
-    IpSource, JwtAlgorithm, JwtAuthConfig, MockConfig,
+    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, DefaultAction, HeaderActions, HeaderEntry,
+    HttpMethod, IpRestrictionConfig, IpSource, JwtAlgorithm, JwtAuthConfig, MockConfig, ProxyRewriteConfig, RegexUri,
 };
 
 /// API group for EdgionPlugins
