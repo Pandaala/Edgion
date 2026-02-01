@@ -23,6 +23,7 @@ use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
 use crate::core::plugins::edgion_plugins::mock::Mock;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
+use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
 use crate::core::plugins::gapi_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
 use crate::core::plugins::gapi_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter,
@@ -226,6 +227,7 @@ impl PluginRuntime {
                 Some(Box::new(ResponseHeaderModifierFilter::new(config.clone())))
             }
             EdgionPlugin::DebugAccessLogToHeader(config) => Some(Box::new(DebugAccessLogToHeaderFilter::new(config))),
+            EdgionPlugin::ResponseRewrite(config) => Some(Box::new(ResponseRewrite::new(config))),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);

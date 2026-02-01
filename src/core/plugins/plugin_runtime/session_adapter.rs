@@ -228,6 +228,28 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(())
     }
 
+    fn get_response_header(&self, name: &str) -> Option<String> {
+        self.response_header
+            .as_ref()
+            .and_then(|resp| resp.headers.get(name))
+            .and_then(|value| value.to_str().ok())
+            .map(|s| s.to_string())
+    }
+
+    fn set_response_status(&mut self, status: u16) -> PluginSessionResult<()> {
+        if let Some(resp) = &mut self.response_header {
+            let status_code = http::StatusCode::from_u16(status).map_err(|_| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Invalid status code: {}", status),
+                )) as PluginSessionError
+            })?;
+            resp.set_status(status_code)
+                .map_err(|e| Box::new(e) as PluginSessionError)?;
+        }
+        Ok(())
+    }
+
     fn set_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
         self.inner
             .req_header_mut()

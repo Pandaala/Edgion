@@ -71,6 +71,12 @@ pub trait PluginSession: Send {
     /// Remove a response header (for ResponseHeaderModifier)
     fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()>;
 
+    /// Get a response header value by name (for ResponseRewrite)
+    fn get_response_header(&self, name: &str) -> Option<String>;
+
+    /// Set the response status code (for ResponseRewrite)
+    fn set_response_status(&mut self, status: u16) -> PluginSessionResult<()>;
+
     /// Set a request header (for upstream)
     fn set_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 

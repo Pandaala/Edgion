@@ -389,6 +389,14 @@ mod tests {
             Ok(())
         }
 
+        fn get_response_header(&self, _name: &str) -> Option<String> {
+            None
+        }
+
+        fn set_response_status(&mut self, _status: u16) -> super::super::traits::PluginSessionResult<()> {
+            Ok(())
+        }
+
         fn set_request_header(&mut self, _name: &str, _value: &str) -> super::super::traits::PluginSessionResult<()> {
             Ok(())
         }

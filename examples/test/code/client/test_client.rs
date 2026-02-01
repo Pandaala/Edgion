@@ -153,6 +153,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
+        "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
         "EdgionTls" | "EdgionTls/https" => "EdgionTls/https",
@@ -366,6 +367,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::ProxyRewriteTestSuite));
+        }
+        "EdgionPlugins/ResponseRewrite" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/ResponseRewrite tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ResponseRewriteTestSuite));
         }
         "Gateway/ListenerHostname" => {
             if !gateway {
