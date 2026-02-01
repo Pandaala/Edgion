@@ -1,0 +1,25 @@
+# 4. Header 必须存在 - 要求 X-Auth-Token
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-header-required
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        rules:
+          - name: "require-auth"
+            source: Header
+            key: "X-Auth-Token"
+            deny:
+              - "invalid"
+              - "expired"
+            onMissing: Deny
+        status: 401
+        message: "Authentication required"
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: DebugAccessLogToHeader
+      config: {}

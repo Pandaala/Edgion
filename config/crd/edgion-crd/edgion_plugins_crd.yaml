@@ -197,6 +197,7 @@ spec:
                           - JwtAuth
                           - Mock
                           - ProxyRewrite
+                          - RequestRestriction
                           - RequestHeaderModifier
                           - ResponseHeaderModifier
                           - RequestRedirect

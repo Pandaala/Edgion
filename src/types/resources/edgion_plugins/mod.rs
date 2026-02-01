@@ -25,8 +25,9 @@ pub use entry::{PluginEntry, RequestFilterEntry, UpstreamResponseEntry, Upstream
 pub use edgion_plugin::EdgionPlugin;
 pub use plugin_configs::{
     BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, DefaultAction, HeaderActions, HeaderEntry,
-    HeaderRename, HttpMethod, IpRestrictionConfig, IpSource, JwtAlgorithm, JwtAuthConfig, MockConfig,
-    ProxyRewriteConfig, RegexUri, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig,
+    HeaderRename, HttpMethod, IpRestrictionConfig, IpSource, JwtAlgorithm, JwtAuthConfig, MockConfig, OnMissing,
+    ProxyRewriteConfig, RegexUri, RequestRestrictionConfig, ResponseHeaderActions, ResponseHeaderEntry,
+    ResponseRewriteConfig, RestrictionRule, RestrictionSource, RuleMatchMode,
 };
 
 /// API group for EdgionPlugins
