@@ -20,6 +20,7 @@ use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
 use crate::core::plugins::edgion_plugins::cors::Cors;
 use crate::core::plugins::edgion_plugins::csrf::Csrf;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
+use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
 use crate::core::plugins::edgion_plugins::mock::Mock;
 use crate::core::plugins::gapi_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
 use crate::core::plugins::gapi_filters::{
@@ -202,6 +203,7 @@ impl PluginRuntime {
             EdgionPlugin::Cors(config) => Some(Box::new(Cors::new(config))),
             EdgionPlugin::Csrf(config) => Some(Box::new(Csrf::new(config))),
             EdgionPlugin::IpRestriction(config) => Some(IpRestriction::create(config)),
+            EdgionPlugin::JwtAuth(config) => Some(Box::new(JwtAuth::new(config, namespace.to_string()))),
             EdgionPlugin::Mock(config) => Some(Box::new(Mock::new(config))),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =

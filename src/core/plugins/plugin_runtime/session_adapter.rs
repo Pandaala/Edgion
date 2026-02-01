@@ -105,6 +105,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.get_ctx_var(key).map(|s| s.to_string())
     }
 
+    fn set_ctx_var(&mut self, key: &str, value: &str) -> PluginSessionResult<()> {
+        self.ctx.set_ctx_var(key.to_string(), value.to_string());
+        Ok(())
+    }
+
     async fn write_response_header(
         &mut self,
         resp: Box<ResponseHeader>,

@@ -35,6 +35,9 @@ pub trait PluginSession: Send {
     /// Get a context variable by key (set by plugins like KeySet)
     fn get_ctx_var(&self, key: &str) -> Option<String>;
 
+    /// Set a context variable (for plugins to pass data downstream)
+    fn set_ctx_var(&mut self, key: &str, value: &str) -> PluginSessionResult<()>;
+
     async fn write_response_header(
         &mut self,
         resp: Box<ResponseHeader>,

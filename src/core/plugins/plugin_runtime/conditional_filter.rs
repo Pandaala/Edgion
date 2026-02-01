@@ -345,6 +345,11 @@ mod tests {
             self.ctx_vars.get(key).cloned()
         }
 
+        fn set_ctx_var(&mut self, key: &str, value: &str) -> super::super::traits::PluginSessionResult<()> {
+            self.ctx_vars.insert(key.to_string(), value.to_string());
+            Ok(())
+        }
+
         // Stub implementations for other methods (not used in tests)
         async fn write_response_header(
             &mut self,

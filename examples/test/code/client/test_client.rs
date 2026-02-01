@@ -109,6 +109,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
             "all-conditions" | "allconditions" => "EdgionPlugins/PluginCondition/AllConditions".to_string(),
+            "jwt-auth" | "jwtauth" => "EdgionPlugins/JwtAuth".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -150,6 +151,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DebugAccessLog" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
+        "EdgionPlugins/JwtAuth" => "EdgionPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
         "EdgionTls" | "EdgionTls/https" => "EdgionTls/https",
@@ -349,6 +351,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::AllConditionsTestSuite));
+        }
+        "EdgionPlugins/JwtAuth" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/JwtAuth tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::JwtAuthTestSuite));
         }
         "Gateway/ListenerHostname" => {
             if !gateway {

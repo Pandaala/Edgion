@@ -25,7 +25,7 @@ pub use entry::{PluginEntry, RequestFilterEntry, UpstreamResponseEntry, Upstream
 pub use gateway_api_plugins::EdgionPlugin;
 pub use plugin_configs::{
     BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, DefaultAction, IpRestrictionConfig,
-    IpSource, MockConfig,
+    IpSource, JwtAlgorithm, JwtAuthConfig, MockConfig,
 };
 
 /// API group for EdgionPlugins

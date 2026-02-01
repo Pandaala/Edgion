@@ -32,7 +32,7 @@ pub use gateway::{
 };
 
 // EdgionPlugins tests
-pub use edgion_plugins::{AllConditionsTestSuite, PluginConditionTestSuite, PluginLogsTestSuite};
+pub use edgion_plugins::{AllConditionsTestSuite, JwtAuthTestSuite, PluginConditionTestSuite, PluginLogsTestSuite};
 
 // ReferenceGrant Status tests
 pub use ref_grant_status::RefGrantStatusTestSuite;

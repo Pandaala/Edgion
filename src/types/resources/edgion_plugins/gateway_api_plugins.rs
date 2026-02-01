@@ -4,7 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
-    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig, MockConfig,
+    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig, JwtAuthConfig,
+    MockConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -41,6 +42,8 @@ pub enum EdgionPlugin {
     Csrf(CsrfConfig),
     /// IP Restriction filter (allow/deny based on IP address or CIDR)
     IpRestriction(IpRestrictionConfig),
+    /// JWT Authentication filter (verify JWT in header/query/cookie)
+    JwtAuth(JwtAuthConfig),
     /// Mock filter (return predefined responses for testing/prototyping)
     Mock(MockConfig),
     /// Debug Access Log to Header filter (for debugging)
@@ -68,6 +71,7 @@ impl EdgionPlugin {
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
+            EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
         }

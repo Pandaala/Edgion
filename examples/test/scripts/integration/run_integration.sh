@@ -366,6 +366,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
                     run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
                     run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
+                    run_test "EdgionPlugins_JwtAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i JwtAuth" || test_failed=true
                 else
                     run_test "EdgionPlugins_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
                 fi
@@ -544,7 +545,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/JwtAuth"
             else
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi

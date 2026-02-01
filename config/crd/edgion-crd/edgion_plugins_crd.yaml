@@ -194,6 +194,7 @@ spec:
                           - Cors
                           - Csrf
                           - IpRestriction
+                          - JwtAuth
                           - Mock
                           - RequestHeaderModifier
                           - ResponseHeaderModifier
