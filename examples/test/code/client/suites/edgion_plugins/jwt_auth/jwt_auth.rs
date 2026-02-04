@@ -40,10 +40,7 @@ fn generate_jwt_with_claims(claims_json: &str) -> String {
 
 /// Generate a simple HS256 JWT token
 fn generate_jwt(key_claim: &str, exp_offset_secs: i64) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
     let exp = now + exp_offset_secs;
     let payload = format!(r#"{{"key":"{}","exp":{}}}"#, key_claim, exp);
     generate_jwt_with_claims(&payload)
@@ -51,10 +48,7 @@ fn generate_jwt(key_claim: &str, exp_offset_secs: i64) -> String {
 
 /// Generate JWT with sub claim (for username extraction tests)
 fn generate_jwt_with_sub(sub: &str, exp_offset_secs: i64) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
     let exp = now + exp_offset_secs;
     let payload = format!(r#"{{"sub":"{}","exp":{}}}"#, sub, exp);
     generate_jwt_with_claims(&payload)
@@ -89,10 +83,7 @@ impl JwtAuthTestSuite {
                                     "Valid JWT accepted, returned 200".to_string(),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -124,10 +115,7 @@ impl JwtAuthTestSuite {
                                     "No token returns 401 as expected".to_string(),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 401, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 401, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -162,10 +150,7 @@ impl JwtAuthTestSuite {
                                     "Invalid token returns 401 as expected".to_string(),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 401, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 401, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -203,10 +188,7 @@ impl JwtAuthTestSuite {
                                     "Expired token returns 401 as expected".to_string(),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 401, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 401, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -241,10 +223,7 @@ impl JwtAuthTestSuite {
                                     "JWT in query accepted, returned 200".to_string(),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -282,10 +261,7 @@ impl JwtAuthTestSuite {
                                     "JWT in cookie accepted, returned 200".to_string(),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -312,25 +288,17 @@ impl JwtAuthTestSuite {
                         Ok(response) => {
                             let status = response.status().as_u16();
                             if status != 401 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 401, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 401, got {}", status));
                             }
 
                             // Check for WWW-Authenticate header
-                            let www_auth = response
-                                .headers()
-                                .get("WWW-Authenticate")
-                                .and_then(|v| v.to_str().ok());
+                            let www_auth = response.headers().get("WWW-Authenticate").and_then(|v| v.to_str().ok());
 
                             match www_auth {
-                                Some(value) if value.starts_with("Bearer") => {
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        format!("Got WWW-Authenticate: {}", value),
-                                    )
-                                }
+                                Some(value) if value.starts_with("Bearer") => TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Got WWW-Authenticate: {}", value),
+                                ),
                                 Some(value) => TestResult::failed(
                                     start.elapsed(),
                                     format!("WWW-Authenticate header exists but unexpected value: {}", value),
@@ -376,10 +344,7 @@ impl JwtAuthTestSuite {
                                     "JWT with sub claim accepted".to_string(),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),

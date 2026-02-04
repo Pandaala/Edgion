@@ -38,10 +38,7 @@ impl RequestRestrictionTestSuite {
                                     format!("Bot blocked with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 403, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -75,10 +72,7 @@ impl RequestRestrictionTestSuite {
                                     format!("Normal UA passed with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 200, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -99,9 +93,7 @@ impl RequestRestrictionTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/test/method-allow/api", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "request-restriction.example.com");
+                    let request = client.get(&url).header("host", "request-restriction.example.com");
 
                     match request.send().await {
                         Ok(response) => {
@@ -112,10 +104,7 @@ impl RequestRestrictionTestSuite {
                                     format!("GET passed with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 200, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -149,10 +138,7 @@ impl RequestRestrictionTestSuite {
                                     format!("POST blocked with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 405, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 405, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -187,10 +173,7 @@ impl RequestRestrictionTestSuite {
                                     format!("Valid token passed with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 200, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -210,9 +193,7 @@ impl RequestRestrictionTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/test/header-required/api", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "request-restriction.example.com");
+                    let request = client.get(&url).header("host", "request-restriction.example.com");
                     // 不发送 X-Auth-Token
 
                     match request.send().await {
@@ -224,10 +205,7 @@ impl RequestRestrictionTestSuite {
                                     format!("Missing token rejected with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 401, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 401, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -262,10 +240,7 @@ impl RequestRestrictionTestSuite {
                                     format!("Normal request passed with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 200, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -299,10 +274,7 @@ impl RequestRestrictionTestSuite {
                                     format!("Bot blocked with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 403, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -336,10 +308,7 @@ impl RequestRestrictionTestSuite {
                                     format!("Admin path blocked with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 403, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),

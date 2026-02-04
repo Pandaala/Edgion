@@ -82,10 +82,7 @@ impl MetricsClient {
         let response = self.client.get(&url).send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!(
-                "Failed to fetch metrics: HTTP {}",
-                response.status()
-            ));
+            return Err(anyhow!("Failed to fetch metrics: HTTP {}", response.status()));
         }
 
         Ok(response.text().await?)
@@ -104,10 +101,7 @@ impl MetricsClient {
     /// Only returns metrics that match the specified test_key.
     pub async fn fetch_backend_metrics_by_key(&self, test_key: &str) -> Result<Vec<BackendMetric>> {
         let metrics = self.fetch_backend_metrics().await?;
-        Ok(metrics
-            .into_iter()
-            .filter(|m| m.test_key == test_key)
-            .collect())
+        Ok(metrics.into_iter().filter(|m| m.test_key == test_key).collect())
     }
 
     /// Analyze LB distribution for a specific test_key
@@ -359,9 +353,7 @@ fn analyze_chash_consistency(metrics: &[BackendMetric]) -> Result<ConsistentHash
 
         if let Some(ref test_data) = metric.test_data {
             // Need both hash_key and endpoint (ip:port)
-            if let (Some(hash_key), Some(ip), Some(port)) =
-                (&test_data.hash_key, &test_data.ip, test_data.port)
-            {
+            if let (Some(hash_key), Some(ip), Some(port)) = (&test_data.hash_key, &test_data.ip, test_data.port) {
                 if !hash_key.is_empty() {
                     let endpoint = format!("{}:{}", ip, port);
                     let endpoints = key_mapping.entry(hash_key.clone()).or_insert_with(HashMap::new);
@@ -391,10 +383,7 @@ fn analyze_chash_consistency(metrics: &[BackendMetric]) -> Result<ConsistentHash
         } else {
             // Multiple endpoints for same key - inconsistent
             // Use the most common endpoint as the "expected" one
-            let (primary_endpoint, primary_count) = endpoints
-                .iter()
-                .max_by_key(|(_, count)| *count)
-                .unwrap();
+            let (primary_endpoint, primary_count) = endpoints.iter().max_by_key(|(_, count)| *count).unwrap();
             key_to_endpoint.insert(hash_key.clone(), primary_endpoint.clone());
             inconsistent_keys.push(hash_key.clone());
             consistent_count += primary_count;
@@ -425,7 +414,8 @@ mod tests {
 
     #[test]
     fn test_parse_labels() {
-        let labels_str = r#"gateway_namespace="default",gateway_name="test-gw",test_data="{\"ip\":\"10.0.0.1\",\"port\":8080}""#;
+        let labels_str =
+            r#"gateway_namespace="default",gateway_name="test-gw",test_data="{\"ip\":\"10.0.0.1\",\"port\":8080}""#;
         let labels = parse_labels(labels_str);
 
         assert_eq!(labels.get("gateway_namespace"), Some(&"default".to_string()));

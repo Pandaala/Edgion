@@ -63,8 +63,7 @@ impl PluginConditionTestSuite {
 
                     match request.send().await {
                         Ok(response) => {
-                            if let Some(debug_header) = response.headers().get("x-debug-access-log")
-                            {
+                            if let Some(debug_header) = response.headers().get("x-debug-access-log") {
                                 let json_str = debug_header.to_str().unwrap_or("");
                                 match serde_json::from_str::<AccessLog>(json_str) {
                                     Ok(access_log) => {
@@ -106,21 +105,13 @@ impl PluginConditionTestSuite {
                                             ),
                                         }
                                     }
-                                    Err(e) => TestResult::failed(
-                                        start.elapsed(),
-                                        format!("Parse error: {}", e),
-                                    ),
+                                    Err(e) => TestResult::failed(start.elapsed(), format!("Parse error: {}", e)),
                                 }
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "X-Debug-Access-Log not found".to_string(),
-                                )
+                                TestResult::failed(start.elapsed(), "X-Debug-Access-Log not found".to_string())
                             }
                         }
-                        Err(e) => {
-                            TestResult::failed(start.elapsed(), format!("Request failed: {}", e))
-                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
                 })
             },
@@ -145,8 +136,7 @@ impl PluginConditionTestSuite {
 
                     match request.send().await {
                         Ok(response) => {
-                            if let Some(debug_header) = response.headers().get("x-debug-access-log")
-                            {
+                            if let Some(debug_header) = response.headers().get("x-debug-access-log") {
                                 let json_str = debug_header.to_str().unwrap_or("");
                                 match serde_json::from_str::<AccessLog>(json_str) {
                                     Ok(access_log) => {
@@ -180,7 +170,10 @@ impl PluginConditionTestSuite {
                                                     // No cond_skip found - CORS ran but should have been skipped
                                                     TestResult::failed(
                                                         start.elapsed(),
-                                                        format!("CORS ran but should have been skipped. Log: {:?}", log.log),
+                                                        format!(
+                                                            "CORS ran but should have been skipped. Log: {:?}",
+                                                            log.log
+                                                        ),
                                                     )
                                                 }
                                             }
@@ -190,21 +183,13 @@ impl PluginConditionTestSuite {
                                             ),
                                         }
                                     }
-                                    Err(e) => TestResult::failed(
-                                        start.elapsed(),
-                                        format!("Parse error: {}", e),
-                                    ),
+                                    Err(e) => TestResult::failed(start.elapsed(), format!("Parse error: {}", e)),
                                 }
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "X-Debug-Access-Log not found".to_string(),
-                                )
+                                TestResult::failed(start.elapsed(), "X-Debug-Access-Log not found".to_string())
                             }
                         }
-                        Err(e) => {
-                            TestResult::failed(start.elapsed(), format!("Request failed: {}", e))
-                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
                 })
             },

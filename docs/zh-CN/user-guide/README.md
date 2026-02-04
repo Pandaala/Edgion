@@ -25,7 +25,7 @@
     - [CSRF](./http-route/filters/edgion-plugins/csrf.md)
     - [IP 限制](./http-route/filters/edgion-plugins/ip-restriction.md)
     - [ProxyRewrite](./http-route/filters/edgion-plugins/proxy-rewrite.md)
-    - [限流](./http-route/filters/edgion-plugins/rate-limit.md)
+    - [限流](./http-route/filters/edgion-plugins/rate-limiter.md)
 - **后端配置 (Backends)**
   - [Service 引用](./http-route/backends/service-ref.md)
   - [权重配置](./http-route/backends/weight.md)

@@ -68,7 +68,11 @@ fn has_listeners_not_valid(status: &GatewayStatus) -> bool {
     status
         .conditions
         .as_ref()
-        .map(|conditions| conditions.iter().any(|c| c.type_ == "ListenersNotValid" && c.status == "True"))
+        .map(|conditions| {
+            conditions
+                .iter()
+                .any(|c| c.type_ == "ListenersNotValid" && c.status == "True")
+        })
         .unwrap_or(false)
 }
 
@@ -125,9 +129,7 @@ impl PortConflictTestSuite {
 
                     let status = match &gateway.status {
                         Some(s) => s,
-                        None => {
-                            return TestResult::failed(start.elapsed(), "Gateway has no status".to_string())
-                        }
+                        None => return TestResult::failed(start.elapsed(), "Gateway has no status".to_string()),
                     };
 
                     // Check that Gateway has ListenersNotValid condition
@@ -293,9 +295,7 @@ impl PortConflictTestSuite {
 
                     let status = match &gateway.status {
                         Some(s) => s,
-                        None => {
-                            return TestResult::failed(start.elapsed(), "Gateway has no status".to_string())
-                        }
+                        None => return TestResult::failed(start.elapsed(), "Gateway has no status".to_string()),
                     };
 
                     // Check that Gateway does NOT have ListenersNotValid condition

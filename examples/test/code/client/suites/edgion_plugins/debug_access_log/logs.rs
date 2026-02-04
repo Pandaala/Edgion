@@ -151,7 +151,10 @@ impl PluginLogsTestSuite {
                                             for plugin in &stage.filters {
                                                 // ExtensionRef filters have refer_to set, they don't track time_cost
                                                 // because they are containers that reference other plugins
-                                                if plugin.name != "ExtensionRef" && plugin.refer_to.is_none() && plugin.time_cost.is_none() {
+                                                if plugin.name != "ExtensionRef"
+                                                    && plugin.refer_to.is_none()
+                                                    && plugin.time_cost.is_none()
+                                                {
                                                     return TestResult::failed(
                                                         start.elapsed(),
                                                         format!("Filter '{}' missing time_cost", plugin.name),
@@ -371,8 +374,9 @@ impl PluginLogsTestSuite {
                                             for plugin in &stage.filters {
                                                 // ExtensionRef filters have refer_to set, they don't track time_cost
                                                 // because they are containers that reference other plugins
-                                                let is_extension_ref = plugin.name == "ExtensionRef" || plugin.refer_to.is_some();
-                                                
+                                                let is_extension_ref =
+                                                    plugin.name == "ExtensionRef" || plugin.refer_to.is_some();
+
                                                 match plugin.time_cost {
                                                     None => {
                                                         if !is_extension_ref {

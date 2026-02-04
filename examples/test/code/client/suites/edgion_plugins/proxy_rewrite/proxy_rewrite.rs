@@ -79,17 +79,12 @@ impl ProxyRewriteTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/uri/simple/test", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "proxy-rewrite.example.com");
+                    let request = client.get(&url).header("host", "proxy-rewrite.example.com");
 
                     match request.send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("HTTP {}", response.status()),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("HTTP {}", response.status()));
                             }
 
                             match response.text().await {
@@ -128,17 +123,12 @@ impl ProxyRewriteTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/uri/var/test", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "proxy-rewrite.example.com");
+                    let request = client.get(&url).header("host", "proxy-rewrite.example.com");
 
                     match request.send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("HTTP {}", response.status()),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("HTTP {}", response.status()));
                             }
 
                             match response.text().await {
@@ -178,17 +168,12 @@ impl ProxyRewriteTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/uri/arg/test?keyword=hello&lang=en", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "proxy-rewrite.example.com");
+                    let request = client.get(&url).header("host", "proxy-rewrite.example.com");
 
                     match request.send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("HTTP {}", response.status()),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("HTTP {}", response.status()));
                             }
 
                             match response.text().await {
@@ -228,17 +213,12 @@ impl ProxyRewriteTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/regex/users/12345", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "proxy-rewrite.example.com");
+                    let request = client.get(&url).header("host", "proxy-rewrite.example.com");
 
                     match request.send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("HTTP {}", response.status()),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("HTTP {}", response.status()));
                             }
 
                             match response.text().await {
@@ -286,10 +266,7 @@ impl ProxyRewriteTestSuite {
                     match request.send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("HTTP {}", response.status()),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("HTTP {}", response.status()));
                             }
 
                             match response.text().await {
@@ -308,7 +285,10 @@ impl ProxyRewriteTestSuite {
 
                                     // 检查 Headers add
                                     if echo.headers.get("x-gateway") != Some(&"edgion".to_string()) {
-                                        errors.push(format!("X-Gateway: expected edgion, got {:?}", echo.headers.get("x-gateway")));
+                                        errors.push(format!(
+                                            "X-Gateway: expected edgion, got {:?}",
+                                            echo.headers.get("x-gateway")
+                                        ));
                                     }
 
                                     // 检查 Headers set
@@ -331,7 +311,11 @@ impl ProxyRewriteTestSuite {
                                     if errors.is_empty() {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
-                                            format!("Host={:?}, X-Gateway={:?}", echo.headers.get("host"), echo.headers.get("x-gateway")),
+                                            format!(
+                                                "Host={:?}, X-Gateway={:?}",
+                                                echo.headers.get("host"),
+                                                echo.headers.get("x-gateway")
+                                            ),
                                         )
                                     } else {
                                         TestResult::failed(start.elapsed(), errors.join("; "))
@@ -358,17 +342,12 @@ impl ProxyRewriteTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/params/789/info", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "proxy-rewrite.example.com");
+                    let request = client.get(&url).header("host", "proxy-rewrite.example.com");
 
                     match request.send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("HTTP {}", response.status()),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("HTTP {}", response.status()));
                             }
 
                             match response.text().await {
@@ -378,12 +357,18 @@ impl ProxyRewriteTestSuite {
 
                                     // 检查 URI 中的 $uid 替换
                                     if echo.path != "/user-service/789/profile" {
-                                        errors.push(format!("URI: expected /user-service/789/profile, got {}", echo.path));
+                                        errors.push(format!(
+                                            "URI: expected /user-service/789/profile, got {}",
+                                            echo.path
+                                        ));
                                     }
 
                                     // 检查 Header 中的 $uid 替换
                                     if echo.headers.get("x-user-id") != Some(&"789".to_string()) {
-                                        errors.push(format!("X-User-Id: expected 789, got {:?}", echo.headers.get("x-user-id")));
+                                        errors.push(format!(
+                                            "X-User-Id: expected 789, got {:?}",
+                                            echo.headers.get("x-user-id")
+                                        ));
                                     }
 
                                     if errors.is_empty() {

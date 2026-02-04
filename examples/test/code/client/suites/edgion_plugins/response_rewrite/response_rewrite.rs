@@ -23,23 +23,15 @@ impl ResponseRewriteTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/status-code/test", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "response-rewrite.example.com");
+                    let request = client.get(&url).header("host", "response-rewrite.example.com");
 
                     match request.send().await {
                         Ok(response) => {
                             let status = response.status().as_u16();
                             if status == 201 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Status code = {}", status),
-                                )
+                                TestResult::passed_with_message(start.elapsed(), format!("Status code = {}", status))
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 201, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 201, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -60,9 +52,7 @@ impl ResponseRewriteTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/headers-set/test", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "response-rewrite.example.com");
+                    let request = client.get(&url).header("host", "response-rewrite.example.com");
 
                     match request.send().await {
                         Ok(response) => {
@@ -144,9 +134,7 @@ impl ResponseRewriteTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/headers-rename/test", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "response-rewrite.example.com");
+                    let request = client.get(&url).header("host", "response-rewrite.example.com");
 
                     match request.send().await {
                         Ok(response) => {
@@ -159,10 +147,7 @@ impl ResponseRewriteTestSuite {
                                     "Request successful (rename verification requires test_server support)".to_string(),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("HTTP {}", response.status()),
-                                )
+                                TestResult::failed(start.elapsed(), format!("HTTP {}", response.status()))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -183,9 +168,7 @@ impl ResponseRewriteTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/combined/test", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "response-rewrite.example.com");
+                    let request = client.get(&url).header("host", "response-rewrite.example.com");
 
                     match request.send().await {
                         Ok(response) => {

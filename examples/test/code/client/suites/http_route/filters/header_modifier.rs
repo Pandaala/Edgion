@@ -30,13 +30,7 @@ impl HeaderModifierTestSuite {
                     // Request /headers endpoint which echoes back received headers
                     let url = format!("{}/request-header-test", ctx.http_url());
 
-                    match ctx
-                        .http_client
-                        .get(&url)
-                        .header("Host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("Host", TEST_HOST).send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
                                 return TestResult::failed(
@@ -61,9 +55,7 @@ impl HeaderModifierTestSuite {
                                         )
                                     }
                                 }
-                                Err(e) => {
-                                    TestResult::failed(start.elapsed(), format!("Failed to read body: {}", e))
-                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Failed to read body: {}", e)),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -84,13 +76,7 @@ impl HeaderModifierTestSuite {
 
                     let url = format!("{}/request-header-test", ctx.http_url());
 
-                    match ctx
-                        .http_client
-                        .get(&url)
-                        .header("Host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("Host", TEST_HOST).send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
                                 return TestResult::failed(
@@ -113,9 +99,7 @@ impl HeaderModifierTestSuite {
                                         )
                                     }
                                 }
-                                Err(e) => {
-                                    TestResult::failed(start.elapsed(), format!("Failed to read body: {}", e))
-                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Failed to read body: {}", e)),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -168,9 +152,7 @@ impl HeaderModifierTestSuite {
                                         )
                                     }
                                 }
-                                Err(e) => {
-                                    TestResult::failed(start.elapsed(), format!("Failed to read body: {}", e))
-                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Failed to read body: {}", e)),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -191,13 +173,7 @@ impl HeaderModifierTestSuite {
 
                     let url = format!("{}/response-header-test", ctx.http_url());
 
-                    match ctx
-                        .http_client
-                        .get(&url)
-                        .header("Host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("Host", TEST_HOST).send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
                                 return TestResult::failed(
@@ -217,10 +193,7 @@ impl HeaderModifierTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "X-Response-Set has wrong value: {}",
-                                                value.to_str().unwrap_or("")
-                                            ),
+                                            format!("X-Response-Set has wrong value: {}", value.to_str().unwrap_or("")),
                                         )
                                     }
                                 }
@@ -248,13 +221,7 @@ impl HeaderModifierTestSuite {
 
                     let url = format!("{}/response-header-test", ctx.http_url());
 
-                    match ctx
-                        .http_client
-                        .get(&url)
-                        .header("Host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("Host", TEST_HOST).send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
                                 return TestResult::failed(
@@ -273,10 +240,7 @@ impl HeaderModifierTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "X-Response-Add has wrong value: {}",
-                                                value.to_str().unwrap_or("")
-                                            ),
+                                            format!("X-Response-Add has wrong value: {}", value.to_str().unwrap_or("")),
                                         )
                                     }
                                 }
@@ -304,13 +268,7 @@ impl HeaderModifierTestSuite {
 
                     let url = format!("{}/both-headers-test", ctx.http_url());
 
-                    match ctx
-                        .http_client
-                        .get(&url)
-                        .header("Host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("Host", TEST_HOST).send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
                                 return TestResult::failed(
@@ -349,9 +307,7 @@ impl HeaderModifierTestSuite {
                                         )
                                     }
                                 }
-                                Err(e) => {
-                                    TestResult::failed(start.elapsed(), format!("Failed to read body: {}", e))
-                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Failed to read body: {}", e)),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -372,13 +328,7 @@ impl HeaderModifierTestSuite {
 
                     let url = format!("{}/multi-request-headers", ctx.http_url());
 
-                    match ctx
-                        .http_client
-                        .get(&url)
-                        .header("Host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("Host", TEST_HOST).send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
                                 return TestResult::failed(
@@ -420,9 +370,7 @@ impl HeaderModifierTestSuite {
                                         )
                                     }
                                 }
-                                Err(e) => {
-                                    TestResult::failed(start.elapsed(), format!("Failed to read body: {}", e))
-                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Failed to read body: {}", e)),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -443,13 +391,7 @@ impl HeaderModifierTestSuite {
 
                     let url = format!("{}/multi-response-headers", ctx.http_url());
 
-                    match ctx
-                        .http_client
-                        .get(&url)
-                        .header("Host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("Host", TEST_HOST).send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
                                 return TestResult::failed(
@@ -492,7 +434,10 @@ impl HeaderModifierTestSuite {
                                     format!("All {} response headers verified", found_headers.len()),
                                 )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Missing/wrong headers: {:?}", missing_headers))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Missing/wrong headers: {:?}", missing_headers),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
