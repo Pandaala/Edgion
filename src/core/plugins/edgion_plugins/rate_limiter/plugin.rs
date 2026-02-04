@@ -228,10 +228,15 @@ impl RequestFilter for RateLimiter {
         }
 
         // Get the rate limiting key using session.key_get()
-        let limit_key = match session.key_get(&self.config.key) {
-            Some(key) => key,
-            None => {
-                // Key not found - check if we have a default key configured
+        // Multiple keys are combined with "_" separator
+        let limit_key = {
+            let parts: Vec<String> = self.config.key
+                .iter()
+                .filter_map(|k| session.key_get(k))
+                .collect();
+            
+            if parts.is_empty() {
+                // No keys resolved - check if we have a default key configured
                 if let Some(ref default_key) = self.config.default_key {
                     plugin_log.push(&format!("Using default key: {}; ", default_key));
                     default_key.clone()
@@ -248,6 +253,8 @@ impl RequestFilter for RateLimiter {
                         }
                     }
                 }
+            } else {
+                parts.join("_")
             }
         };
 
@@ -438,9 +445,9 @@ mod tests {
         let mut config = RateLimiterConfig {
             rate: 100,
             interval: "1s".to_string(),
-            key: KeyGet::Header {
+            key: vec![KeyGet::Header {
                 name: "X-API-Key".to_string(),
-            },
+            }],
             ..Default::default()
         };
         config.validate();
@@ -457,6 +464,81 @@ mod tests {
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_composite_keys() {
+        // Test multiple keys combined with "_"
+        let mut config = RateLimiterConfig {
+            rate: 100,
+            interval: "1s".to_string(),
+            key: vec![
+                KeyGet::ClientIp,
+                KeyGet::Header { name: "X-API-Key".to_string() },
+                KeyGet::Path,
+            ],
+            ..Default::default()
+        };
+        config.validate();
+
+        let plugin = RateLimiter::create(&config);
+
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("RateLimiter");
+
+        // Mock key_get to return values for each key type
+        mock_session
+            .expect_key_get()
+            .withf(|k| matches!(k, KeyGet::ClientIp))
+            .return_const(Some("192.168.1.1".to_string()));
+        mock_session
+            .expect_key_get()
+            .withf(|k| matches!(k, KeyGet::Header { name } if name == "X-API-Key"))
+            .return_const(Some("api-key-123".to_string()));
+        mock_session
+            .expect_key_get()
+            .withf(|k| matches!(k, KeyGet::Path))
+            .return_const(Some("/api/users".to_string()));
+        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        // The combined key should be "192.168.1.1_api-key-123_/api/users"
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_partial_keys() {
+        // Test that partial keys work (some keys missing)
+        let mut config = RateLimiterConfig {
+            rate: 100,
+            interval: "1s".to_string(),
+            key: vec![
+                KeyGet::ClientIp,
+                KeyGet::Header { name: "X-API-Key".to_string() },
+            ],
+            ..Default::default()
+        };
+        config.validate();
+
+        let plugin = RateLimiter::create(&config);
+
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("RateLimiter");
+
+        // Only ClientIp available, Header missing
+        mock_session
+            .expect_key_get()
+            .withf(|k| matches!(k, KeyGet::ClientIp))
+            .return_const(Some("192.168.1.1".to_string()));
+        mock_session
+            .expect_key_get()
+            .withf(|k| matches!(k, KeyGet::Header { .. }))
+            .return_const(None);
+        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        // Should use just "192.168.1.1" as the key
     }
 
     #[tokio::test]

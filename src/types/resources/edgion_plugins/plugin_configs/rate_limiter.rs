@@ -148,29 +148,27 @@ pub struct RateLimiterConfig {
     #[serde(default = "default_interval")]
     pub interval: String,
 
-    /// Rate limiting key (dimension)
+    /// Rate limiting keys (dimensions)
     ///
     /// Specifies where to extract the rate limiting key from.
-    /// Uses the unified KeyGet type.
+    /// Multiple keys are combined with "_" separator.
     ///
-    /// ## Examples:
+    /// ## YAML Examples
+    ///
     /// ```yaml
-    /// # By client IP (default)
+    /// # Single key - limit by client IP
     /// key:
-    ///   type: clientIp
+    ///   - type: clientIp
     ///
-    /// # By header
+    /// # Multiple keys - limit by IP + API key + path
     /// key:
-    ///   type: header
-    ///   name: "X-API-Key"
-    ///
-    /// # By cookie
-    /// key:
-    ///   type: cookie
-    ///   name: "session_id"
+    ///   - type: clientIp
+    ///   - type: header
+    ///     name: "X-Api-Key"
+    ///   - type: path
     /// ```
     #[serde(default)]
-    pub key: KeyGet,
+    pub key: Vec<KeyGet>,
 
     /// Behavior when key cannot be extracted (default: Allow)
     ///
@@ -268,7 +266,7 @@ impl Default for RateLimiterConfig {
         Self {
             rate: 100,
             interval: default_interval(),
-            key: KeyGet::default(),
+            key: vec![KeyGet::default()],
             on_missing_key: OnMissingKey::default(),
             default_key: None,
             reject_status: default_reject_status(),
@@ -341,19 +339,21 @@ impl RateLimiterConfig {
             return Err(format!("Invalid reject_status: {}", self.reject_status));
         }
 
-        // Validate key: check if name is required but empty
-        if let Some(name) = self.key.name() {
-            if name.is_empty() {
-                return Err(format!(
-                    "'key.name' cannot be empty for type {:?}",
-                    self.key.source_type()
-                ));
+        // Validate keys: check if name is required but empty for each key
+        for (i, key) in self.key.iter().enumerate() {
+            if let Some(name) = key.name() {
+                if name.is_empty() {
+                    return Err(format!(
+                        "'key[{}].name' cannot be empty for type {:?}",
+                        i, key.source_type()
+                    ));
+                }
             }
-        }
 
-        // Log warning for unsupported KeyGet types in rate limiting
-        if matches!(self.key, KeyGet::Method) {
-            tracing::warn!("KeyGet::Method is not recommended for rate limiting");
+            // Log warning for unsupported KeyGet types in rate limiting
+            if matches!(key, KeyGet::Method) {
+                tracing::warn!("KeyGet::Method is not recommended for rate limiting (key[{}])", i);
+            }
         }
 
         // Parse interval
@@ -440,12 +440,12 @@ mod tests {
     fn test_validation_key_name_empty() {
         let mut config = RateLimiterConfig::default();
         config.rate = 10;
-        config.key = KeyGet::Header {
+        config.key = vec![KeyGet::Header {
             name: "".to_string(),
-        };
+        }];
         config.validate();
         assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("key.name"));
+        assert!(config.get_validation_error().unwrap().contains("key[0].name"));
     }
 
     #[test]
@@ -537,34 +537,34 @@ mod tests {
 
     #[test]
     fn test_yaml_key_format() {
-        // Test new YAML format with type: header
+        // Test YAML format with array of keys
         let yaml = r#"
 rate: 100
 interval: "1s"
 key:
-  type: header
-  name: "X-API-Key"
+  - type: header
+    name: "X-API-Key"
 "#;
         let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.rate, 100);
         assert_eq!(
             config.key,
-            KeyGet::Header {
+            vec![KeyGet::Header {
                 name: "X-API-Key".to_string()
-            }
+            }]
         );
     }
 
     #[test]
     fn test_yaml_key_client_ip() {
-        // Test clientIp key (default)
+        // Test clientIp key
         let yaml = r#"
 rate: 50
 key:
-  type: clientIp
+  - type: clientIp
 "#;
         let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.key, KeyGet::ClientIp);
+        assert_eq!(config.key, vec![KeyGet::ClientIp]);
     }
 
     #[test]
@@ -573,9 +573,43 @@ key:
         let yaml = r#"
 rate: 50
 key:
-  type: clientIpAndPath
+  - type: clientIpAndPath
 "#;
         let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.key, KeyGet::ClientIpAndPath);
+        assert_eq!(config.key, vec![KeyGet::ClientIpAndPath]);
+    }
+
+    #[test]
+    fn test_yaml_composite_keys() {
+        // Test multiple keys combined
+        let yaml = r#"
+rate: 100
+interval: "1s"
+key:
+  - type: clientIp
+  - type: header
+    name: "X-API-Key"
+  - type: path
+"#;
+        let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.rate, 100);
+        assert_eq!(
+            config.key,
+            vec![
+                KeyGet::ClientIp,
+                KeyGet::Header { name: "X-API-Key".to_string() },
+                KeyGet::Path,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_yaml_empty_key_defaults() {
+        // Test that empty key array defaults to clientIp
+        let yaml = r#"
+rate: 50
+"#;
+        let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.key.is_empty()); // serde default is empty vec
     }
 }

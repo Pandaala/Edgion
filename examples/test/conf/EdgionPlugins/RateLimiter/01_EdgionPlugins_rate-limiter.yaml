@@ -7,18 +7,36 @@ metadata:
   namespace: edgion-default
 spec:
   requestPlugins:
+    # 单 key 限流示例
     - enable: true
       type: RateLimiter
       config:
         rate: 5              # 每个窗口最多 5 个请求
         interval: "10s"      # 10 秒窗口
-        key:
-          type: header       # 使用统一的 KeyGet 格式
-          name: "X-Rate-Key"
+        key:                 # 支持单 key 或多 key 数组
+          - type: header
+            name: "X-Rate-Key"
         onMissingKey: Allow  # 缺少 key 时放行
         rejectStatus: 429
         rejectMessage: "Rate limit exceeded - try again later"
         showLimitHeaders: true
+
+    # 多 key 联合限流示例（按 IP + API Key + Path 组合限流）
+    - enable: false          # 默认禁用，仅作示例
+      type: RateLimiter
+      config:
+        rate: 100
+        interval: "1m"
+        key:                 # 多 key 组合，使用 "_" 连接
+          - type: clientIp
+          - type: header
+            name: "X-API-Key"
+          - type: path
+        onMissingKey: Allow
+        rejectStatus: 429
+        rejectMessage: "API rate limit exceeded"
+        showLimitHeaders: true
+
   upstreamResponseFilterPlugins:
     - enable: true
       type: DebugAccessLogToHeader

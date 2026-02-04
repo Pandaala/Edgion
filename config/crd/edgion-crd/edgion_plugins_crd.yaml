@@ -41,6 +41,12 @@ spec:
                         type: string
                         description: "Key name (required for header, cookie, query, ctx)"
 
+                  # KeyGet array schema - for multiple keys (e.g., RateLimiter composite key)
+                  keyGetArray: &keyGetArraySchema
+                    type: array
+                    description: "Array of key accessors, combined with '_' separator"
+                    items: *keyGetSchema
+
                   # Single condition schema
                   condition: &conditionSchema
                     type: object
