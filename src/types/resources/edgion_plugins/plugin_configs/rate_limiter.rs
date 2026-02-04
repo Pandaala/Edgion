@@ -15,6 +15,7 @@
 //! - Dual-slot (red/blue) design for sliding window behavior
 //! - Lock-free atomic operations for high concurrency
 
+use crate::types::common::KeyGet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -83,37 +84,6 @@ impl LimitHeaderNames {
     }
 }
 
-/// Key source for rate limiting dimension
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct LimitKey {
-    /// Data source for the key
-    #[serde(default)]
-    pub source: LimitKeySource,
-
-    /// Key name (required for Header, Cookie, Query)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
-/// Source of the rate limiting key
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
-#[serde(rename_all = "PascalCase")]
-pub enum LimitKeySource {
-    /// Client IP address (default)
-    #[default]
-    ClientIP,
-    /// Request header value
-    Header,
-    /// Cookie value
-    Cookie,
-    /// Query parameter value
-    Query,
-    /// Request path
-    Path,
-    /// Combination of ClientIP and Path
-    ClientIPAndPath,
-}
 
 /// Behavior when rate limit key cannot be extracted
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
@@ -139,8 +109,24 @@ pub enum OnMissingKey {
 ///   rate: 100              # 100 requests per interval
 ///   interval: "1s"         # 1 second window (default)
 ///   key:
-///     source: ClientIP     # Rate limit by IP
+///     type: clientIp       # Rate limit by IP (default)
 ///   showLimitHeaders: true
+/// ```
+///
+/// ## Key Configuration Examples:
+/// ```yaml
+/// # By client IP (default)
+/// key:
+///   type: clientIp
+///
+/// # By API key header
+/// key:
+///   type: header
+///   name: "X-API-Key"
+///
+/// # By client IP + path combination
+/// key:
+///   type: clientIpAndPath
 /// ```
 ///
 /// ## Algorithm Behavior:
@@ -163,8 +149,28 @@ pub struct RateLimiterConfig {
     pub interval: String,
 
     /// Rate limiting key (dimension)
+    ///
+    /// Specifies where to extract the rate limiting key from.
+    /// Uses the unified KeyGet type.
+    ///
+    /// ## Examples:
+    /// ```yaml
+    /// # By client IP (default)
+    /// key:
+    ///   type: clientIp
+    ///
+    /// # By header
+    /// key:
+    ///   type: header
+    ///   name: "X-API-Key"
+    ///
+    /// # By cookie
+    /// key:
+    ///   type: cookie
+    ///   name: "session_id"
+    /// ```
     #[serde(default)]
-    pub key: LimitKey,
+    pub key: KeyGet,
 
     /// Behavior when key cannot be extracted (default: Allow)
     ///
@@ -262,7 +268,7 @@ impl Default for RateLimiterConfig {
         Self {
             rate: 100,
             interval: default_interval(),
-            key: LimitKey::default(),
+            key: KeyGet::default(),
             on_missing_key: OnMissingKey::default(),
             default_key: None,
             reject_status: default_reject_status(),
@@ -335,14 +341,19 @@ impl RateLimiterConfig {
             return Err(format!("Invalid reject_status: {}", self.reject_status));
         }
 
-        // Validate key requirements
-        match self.key.source {
-            LimitKeySource::Header | LimitKeySource::Cookie | LimitKeySource::Query => {
-                if self.key.name.is_none() || self.key.name.as_ref().is_some_and(|n| n.is_empty()) {
-                    return Err(format!("'key.name' is required for source {:?}", self.key.source));
-                }
+        // Validate key: check if name is required but empty
+        if let Some(name) = self.key.name() {
+            if name.is_empty() {
+                return Err(format!(
+                    "'key.name' cannot be empty for type {:?}",
+                    self.key.source_type()
+                ));
             }
-            _ => {}
+        }
+
+        // Log warning for unsupported KeyGet types in rate limiting
+        if matches!(self.key, KeyGet::Method) {
+            tracing::warn!("KeyGet::Method is not recommended for rate limiting");
         }
 
         // Parse interval
@@ -351,13 +362,10 @@ impl RateLimiterConfig {
         // Compute effective estimator slots
         // Plugin config is in K units, convert to actual slots
         let min_slots = get_min_estimator_slots();
-        let configured_slots = self
-            .estimator_slots_k
-            .map(|k| k * SLOTS_K)
-            .unwrap_or(default_slots);
+        let configured_slots = self.estimator_slots_k.map(|k| k * SLOTS_K).unwrap_or(default_slots);
         let effective = configured_slots
-            .max(min_slots)   // At least minimum
-            .min(max_slots);  // At most maximum
+            .max(min_slots) // At least minimum
+            .min(max_slots); // At most maximum
 
         if configured_slots > max_slots {
             tracing::warn!(
@@ -368,7 +376,7 @@ impl RateLimiterConfig {
                 max_slots / SLOTS_K
             );
         }
-        
+
         self.effective_slots = Some(effective);
 
         Ok(())
@@ -429,11 +437,12 @@ mod tests {
     }
 
     #[test]
-    fn test_validation_key_name_required() {
+    fn test_validation_key_name_empty() {
         let mut config = RateLimiterConfig::default();
         config.rate = 10;
-        config.key.source = LimitKeySource::Header;
-        config.key.name = None;
+        config.key = KeyGet::Header {
+            name: "".to_string(),
+        };
         config.validate();
         assert!(!config.is_valid());
         assert!(config.get_validation_error().unwrap().contains("key.name"));
@@ -508,7 +517,7 @@ mod tests {
         let mut config = RateLimiterConfig::default();
         config.rate = 10;
         config.estimator_slots_k = Some(2048); // 2048K, way over max 1024K
-        // Global config: default=64K, max=256K for this test
+                                               // Global config: default=64K, max=256K for this test
         config.validate_with_global_config(64 * SLOTS_K, 256 * SLOTS_K);
         assert!(config.is_valid());
         assert_eq!(config.get_effective_slots(), 256 * SLOTS_K); // Capped at max
@@ -524,5 +533,49 @@ mod tests {
         config.validate();
         assert!(config.is_valid());
         assert_eq!(config.get_effective_slots(), get_min_estimator_slots()); // At least minimum (1K)
+    }
+
+    #[test]
+    fn test_yaml_key_format() {
+        // Test new YAML format with type: header
+        let yaml = r#"
+rate: 100
+interval: "1s"
+key:
+  type: header
+  name: "X-API-Key"
+"#;
+        let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.rate, 100);
+        assert_eq!(
+            config.key,
+            KeyGet::Header {
+                name: "X-API-Key".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_yaml_key_client_ip() {
+        // Test clientIp key (default)
+        let yaml = r#"
+rate: 50
+key:
+  type: clientIp
+"#;
+        let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.key, KeyGet::ClientIp);
+    }
+
+    #[test]
+    fn test_yaml_key_client_ip_and_path() {
+        // Test clientIpAndPath key
+        let yaml = r#"
+rate: 50
+key:
+  type: clientIpAndPath
+"#;
+        let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.key, KeyGet::ClientIpAndPath);
     }
 }

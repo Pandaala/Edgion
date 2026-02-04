@@ -1,6 +1,7 @@
 //! PluginSession trait - shared across all filter stages
 
 use crate::core::plugins::plugin_runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
+use crate::types::common::{KeyGet, KeySet};
 use crate::types::EdgionHttpContext;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -40,6 +41,9 @@ pub trait PluginSession: Send {
 
     /// Set a context variable (for plugins to pass data downstream)
     fn set_ctx_var(&mut self, key: &str, value: &str) -> PluginSessionResult<()>;
+
+    /// Remove a context variable
+    fn remove_ctx_var(&mut self, key: &str) -> PluginSessionResult<()>;
 
     /// Get a path parameter by name (lazy extraction from route pattern)
     ///
@@ -136,4 +140,26 @@ pub trait PluginSession: Send {
     /// In debug builds, panics if the current depth doesn't match the token's depth,
     /// indicating the token is being used in the wrong scope.
     fn push_to_edgion_plugins_log(&mut self, token: &EdgionPluginsLogToken, log: PluginLog);
+
+    // ========== KeyGet/KeySet unified accessor methods ==========
+
+    /// Get a value using KeyGet accessor
+    ///
+    /// This is the unified way to extract values from the session context.
+    /// Used by RateLimiter, Conditions, and other plugins.
+    ///
+    /// # Returns
+    /// * `Some(String)` - The extracted value
+    /// * `None` - If the value doesn't exist or is empty (for ClientIp)
+    fn key_get(&self, key: &KeyGet) -> Option<String>;
+
+    /// Set a value using KeySet accessor
+    ///
+    /// This is the unified way to write values to the session context.
+    /// When `value` is `None`, the key is removed/cleared.
+    ///
+    /// # Arguments
+    /// * `key` - The KeySet specifying where to write
+    /// * `value` - The value to set, or None to remove
+    fn key_set(&mut self, key: &KeySet, value: Option<String>) -> PluginSessionResult<()>;
 }

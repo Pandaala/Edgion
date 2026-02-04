@@ -13,7 +13,7 @@ spec:
         rate: 5              # 每个窗口最多 5 个请求
         interval: "10s"      # 10 秒窗口
         key:
-          source: Header
+          type: header       # 使用统一的 KeyGet 格式
           name: "X-Rate-Key"
         onMissingKey: Allow  # 缺少 key 时放行
         rejectStatus: 429

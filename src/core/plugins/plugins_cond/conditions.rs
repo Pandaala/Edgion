@@ -31,10 +31,12 @@
 //! conditions:
 //!   skip:
 //!     - keyExist:
-//!         source: header
-//!         key: "X-Internal-Request"
+//!         key:
+//!           type: header
+//!           name: "X-Internal-Request"
 //!     - exclude:
-//!         source: path
+//!         key:
+//!           type: path
 //!         values: ["/health", "/ready"]
 //!   run:
 //!     - timeRange:
@@ -44,6 +46,7 @@
 //!         ratio: 0.1
 //! ```
 
+use crate::types::common::KeyGet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -79,8 +82,9 @@ pub struct PluginConditions {
 /// Uses internally tagged enum for YAML representation:
 /// ```yaml
 /// - type: keyExist
-///   source: header
-///   key: "X-Test"
+///   key:
+///     type: header
+///     name: "X-Test"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -104,49 +108,6 @@ pub enum Condition {
     Exclude(ExcludeCondition),
 }
 
-/// Data source for condition evaluation
-///
-/// Specifies where to look for the value being checked
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ConditionSource {
-    /// HTTP request header
-    Header,
-
-    /// URL query parameter
-    Query,
-
-    /// HTTP cookie
-    Cookie,
-
-    /// Request path (e.g., "/api/v1/users")
-    Path,
-
-    /// Client IP address (after real IP extraction)
-    ClientIp,
-
-    /// HTTP method (GET, POST, etc.)
-    Method,
-
-    /// Context variable (set by other plugins or system)
-    Ctx,
-}
-
-impl ConditionSource {
-    /// Get a short string representation for logging
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ConditionSource::Header => "hdr",
-            ConditionSource::Query => "qry",
-            ConditionSource::Cookie => "cke",
-            ConditionSource::Path => "path",
-            ConditionSource::ClientIp => "ip",
-            ConditionSource::Method => "mtd",
-            ConditionSource::Ctx => "ctx",
-        }
-    }
-}
-
 /// Key existence condition
 ///
 /// Checks if a specified key exists in the given source.
@@ -154,17 +115,15 @@ impl ConditionSource {
 /// ## Example
 /// ```yaml
 /// keyExist:
-///   source: header
-///   key: "X-Request-ID"
+///   key:
+///     type: header
+///     name: "X-Request-ID"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyExistCondition {
-    /// Where to look for the key
-    pub source: ConditionSource,
-
-    /// The key name to check for existence
-    pub key: String,
+    /// The key to check for existence (unified KeyGet accessor)
+    pub key: KeyGet,
 }
 
 /// Key match condition
@@ -172,19 +131,21 @@ pub struct KeyExistCondition {
 /// Checks if a key's value matches a specific value or regex pattern.
 /// At least one of `value`, `values`, or `regex` must be specified.
 ///
-/// ## Example (exact match - single, backward compatible)
+/// ## Example (exact match - single)
 /// ```yaml
 /// keyMatch:
-///   source: header
-///   key: "X-Environment"
+///   key:
+///     type: header
+///     name: "X-Environment"
 ///   value: "production"
 /// ```
 ///
 /// ## Example (exact match - multiple values)
 /// ```yaml
 /// keyMatch:
-///   source: header
-///   key: "X-Environment"
+///   key:
+///     type: header
+///     name: "X-Environment"
 ///   values:
 ///     - "production"
 ///     - "staging"
@@ -193,8 +154,9 @@ pub struct KeyExistCondition {
 /// ## Example (regex match - multiple patterns)
 /// ```yaml
 /// keyMatch:
-///   source: header
-///   key: "User-Agent"
+///   key:
+///     type: header
+///     name: "User-Agent"
 ///   regex:
 ///     - "^Mozilla.*"
 ///     - "^Chrome.*"
@@ -203,13 +165,10 @@ pub struct KeyExistCondition {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyMatchCondition {
-    /// Where to look for the key
-    pub source: ConditionSource,
+    /// The key to match (unified KeyGet accessor)
+    pub key: KeyGet,
 
-    /// The key name to match
-    pub key: String,
-
-    /// Exact value to match (case-sensitive, backward compatible)
+    /// Exact value to match (case-sensitive)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
 
@@ -273,8 +232,9 @@ pub struct TimeRangeCondition {
 /// ```yaml
 /// probability:
 ///   ratio: 0.1
-///   key: "X-User-ID"
-///   keySource: header
+///   key:
+///     type: header
+///     name: "X-User-ID"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -283,26 +243,23 @@ pub struct ProbabilityCondition {
     /// 0.1 means 10% chance of execution
     pub ratio: f64,
 
-    /// Optional key for deterministic sampling
+    /// Optional key for deterministic sampling (unified KeyGet accessor)
     /// When specified, the same key value will always produce the same result
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key: Option<String>,
-
-    /// Source for the deterministic key (defaults to Header if key is specified)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_source: Option<ConditionSource>,
+    pub key: Option<KeyGet>,
 }
 
 /// Include condition
 ///
-/// Condition is satisfied if the source value matches ANY value in the list
+/// Condition is satisfied if the key value matches ANY value in the list
 /// or any regex pattern.
 /// For path matching, supports prefix matching with `*` suffix.
 ///
 /// ## Example (path include with wildcards)
 /// ```yaml
 /// include:
-///   source: path
+///   key:
+///     type: path
 ///   values:
 ///     - "/api/*"
 ///     - "/admin/*"
@@ -311,14 +268,16 @@ pub struct ProbabilityCondition {
 /// ## Example (method include)
 /// ```yaml
 /// include:
-///   source: method
+///   key:
+///     type: method
 ///   values: ["GET", "POST"]
 /// ```
 ///
 /// ## Example (with regex patterns)
 /// ```yaml
 /// include:
-///   source: path
+///   key:
+///     type: path
 ///   values:
 ///     - "/static/*"
 ///   regex:
@@ -328,8 +287,8 @@ pub struct ProbabilityCondition {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IncludeCondition {
-    /// Where to get the value to check
-    pub source: ConditionSource,
+    /// The key to check (unified KeyGet accessor)
+    pub key: KeyGet,
 
     /// List of values/patterns to match against (supports wildcards: *, prefix*, *suffix)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -352,14 +311,15 @@ pub struct IncludeCondition {
 
 /// Exclude condition
 ///
-/// Condition is satisfied if the source value does NOT match ANY value in the list
+/// Condition is satisfied if the key value does NOT match ANY value in the list
 /// or any regex pattern.
 /// This is the inverse of IncludeCondition.
 ///
 /// ## Example (exclude health check paths)
 /// ```yaml
 /// exclude:
-///   source: path
+///   key:
+///     type: path
 ///   values:
 ///     - "/health"
 ///     - "/ready"
@@ -369,7 +329,8 @@ pub struct IncludeCondition {
 /// ## Example (with regex patterns)
 /// ```yaml
 /// exclude:
-///   source: path
+///   key:
+///     type: path
 ///   values:
 ///     - "/internal/*"
 ///   regex:
@@ -379,8 +340,8 @@ pub struct IncludeCondition {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExcludeCondition {
-    /// Where to get the value to check
-    pub source: ConditionSource,
+    /// The key to check (unified KeyGet accessor)
+    pub key: KeyGet,
 
     /// List of values/patterns to exclude (supports wildcards: *, prefix*, *suffix)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -518,8 +479,9 @@ mod tests {
     fn test_plugin_conditions_builder() {
         let conditions = PluginConditions::new()
             .add_skip(Condition::KeyExist(KeyExistCondition {
-                source: ConditionSource::Header,
-                key: "X-Internal".to_string(),
+                key: KeyGet::Header {
+                    name: "X-Internal".to_string(),
+                },
             }))
             .add_run(Condition::TimeRange(TimeRangeCondition {
                 after: Some("2024-01-01T00:00:00Z".to_string()),
@@ -535,13 +497,13 @@ mod tests {
     fn test_serialize_deserialize() {
         let conditions = PluginConditions {
             skip: Some(vec![Condition::KeyExist(KeyExistCondition {
-                source: ConditionSource::Header,
-                key: "X-Test".to_string(),
+                key: KeyGet::Header {
+                    name: "X-Test".to_string(),
+                },
             })]),
             run: Some(vec![Condition::Probability(ProbabilityCondition {
                 ratio: 0.5,
                 key: None,
-                key_source: None,
             })]),
         };
 
@@ -555,8 +517,9 @@ mod tests {
     #[test]
     fn test_key_match_compile_single_regex() {
         let mut condition = KeyMatchCondition {
-            source: ConditionSource::Header,
-            key: "User-Agent".to_string(),
+            key: KeyGet::Header {
+                name: "User-Agent".to_string(),
+            },
             value: None,
             values: None,
             regex: Some(vec![r"^Mozilla.*".to_string()]),
@@ -575,8 +538,9 @@ mod tests {
     #[test]
     fn test_key_match_compile_multi_regex() {
         let mut condition = KeyMatchCondition {
-            source: ConditionSource::Header,
-            key: "User-Agent".to_string(),
+            key: KeyGet::Header {
+                name: "User-Agent".to_string(),
+            },
             value: None,
             values: None,
             regex: Some(vec![
@@ -610,8 +574,9 @@ mod tests {
         let values: Vec<String> = (0..20).map(|i| format!("value{}", i)).collect();
 
         let mut condition = KeyMatchCondition {
-            source: ConditionSource::Header,
-            key: "X-Test".to_string(),
+            key: KeyGet::Header {
+                name: "X-Test".to_string(),
+            },
             value: None,
             values: Some(values.clone()),
             regex: None,
@@ -635,8 +600,9 @@ mod tests {
         let values: Vec<String> = (0..16).map(|i| format!("value{}", i)).collect();
 
         let mut condition = KeyMatchCondition {
-            source: ConditionSource::Header,
-            key: "X-Test".to_string(),
+            key: KeyGet::Header {
+                name: "X-Test".to_string(),
+            },
             value: None,
             values: Some(values),
             regex: None,
@@ -651,7 +617,7 @@ mod tests {
     #[test]
     fn test_include_compile_regex() {
         let mut condition = IncludeCondition {
-            source: ConditionSource::Path,
+            key: KeyGet::Path,
             values: Some(vec!["/static/*".to_string()]),
             regex: Some(vec![r"^/api/v[0-9]+/.*".to_string(), r"^/internal/.*".to_string()]),
             values_set: None,
@@ -671,7 +637,7 @@ mod tests {
     #[test]
     fn test_exclude_compile_regex() {
         let mut condition = ExcludeCondition {
-            source: ConditionSource::Path,
+            key: KeyGet::Path,
             values: Some(vec!["/health".to_string()]),
             regex: Some(vec![r"^/debug/.*".to_string(), r"^/metrics/.*".to_string()]),
             values_set: None,
@@ -688,11 +654,22 @@ mod tests {
     }
 
     #[test]
-    fn test_condition_source_serialization() {
-        assert_eq!(serde_json::to_string(&ConditionSource::Header).unwrap(), "\"header\"");
+    fn test_key_get_serialization() {
+        // KeyGet uses tagged enum with camelCase
         assert_eq!(
-            serde_json::to_string(&ConditionSource::ClientIp).unwrap(),
-            "\"client_ip\""
+            serde_json::to_string(&KeyGet::ClientIp).unwrap(),
+            r#"{"type":"clientIp"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&KeyGet::Header {
+                name: "X-Test".to_string()
+            })
+            .unwrap(),
+            r#"{"type":"header","name":"X-Test"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&KeyGet::Path).unwrap(),
+            r#"{"type":"path"}"#
         );
     }
 }

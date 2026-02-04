@@ -4,6 +4,7 @@ target/
 
 # IDE files
 .idea/
+.gemini/
 .vscode/
 *.swp
 *.swo

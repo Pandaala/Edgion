@@ -24,11 +24,11 @@ mod tests;
 pub use edgion_plugin::EdgionPlugin;
 pub use entry::{PluginEntry, RequestFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry};
 pub use plugin_configs::{
-    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, DefaultAction, HeaderActions,
-    HeaderEntry, HeaderRename, HttpMethod, IpRestrictionConfig, IpSource, JwtAlgorithm, JwtAuthConfig,
-    LimitHeaderNames, LimitKey, LimitKeySource, MockConfig, OnMissing, OnMissingKey, ProxyRewriteConfig,
-    RateLimiterConfig, RegexUri, RequestRestrictionConfig, ResponseHeaderActions, ResponseHeaderEntry,
-    ResponseRewriteConfig, RestrictionRule, RestrictionSource, RuleMatchMode,
+    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, DefaultAction, HeaderActions, HeaderEntry,
+    HeaderRename, HttpMethod, IpRestrictionConfig, IpSource, JwtAlgorithm, JwtAuthConfig, LimitHeaderNames, MockConfig,
+    OnMissing, OnMissingKey, ProxyRewriteConfig, RateLimiterConfig, RegexUri, RequestRestrictionConfig,
+    ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource,
+    RuleMatchMode,
 };
 
 /// API group for EdgionPlugins

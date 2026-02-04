@@ -7,7 +7,7 @@ mod conditions;
 mod evaluator;
 
 pub use conditions::{
-    Condition, ConditionSource, ExcludeCondition, IncludeCondition, KeyExistCondition, KeyMatchCondition,
-    PluginConditions, ProbabilityCondition, TimeRangeCondition,
+    Condition, ExcludeCondition, IncludeCondition, KeyExistCondition, KeyMatchCondition, PluginConditions,
+    ProbabilityCondition, TimeRangeCondition,
 };
-pub use evaluator::{ConditionContext, ConditionEvalResult, EvaluationResult};
+pub use evaluator::{ConditionEvalResult, EvaluationResult};

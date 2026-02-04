@@ -1,3 +1,4 @@
+pub mod common;
 pub mod constants;
 pub mod ctx;
 pub mod edgion_status;
@@ -9,6 +10,9 @@ pub mod output;
 pub mod resources;
 pub mod schema;
 pub mod work_dir;
+
+// Re-export common types
+pub use self::common::{KeyGet, KeySet};
 
 // Backward compatibility: global_def re-exports from constants::app
 pub mod global_def {

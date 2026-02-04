@@ -53,139 +53,101 @@ spec:
                             description: "Conditions that will skip plugin execution (OR logic)"
                             items:
                               type: object
-                              description: "A single condition"
+                              description: "A single condition (tagged union with 'type' field)"
                               properties:
-                                keyExist:
+                                type:
+                                  type: string
+                                  description: "Condition type"
+                                  enum: [keyExist, keyMatch, timeRange, probability, include, exclude]
+                                # KeyGet object for key-based conditions
+                                key:
                                   type: object
-                                  description: "Check if a key exists"
+                                  description: "Key accessor (KeyGet) - used by keyExist, keyMatch, include, exclude"
                                   properties:
-                                    source:
+                                    type:
                                       type: string
-                                      enum: [header, query, cookie, path, client_ip, method, ctx]
-                                    key:
+                                      description: "Key source type"
+                                      enum: [clientIp, header, cookie, query, path, method, ctx, clientIpAndPath]
+                                    name:
                                       type: string
-                                keyMatch:
-                                  type: object
-                                  description: "Check if a key matches value/regex"
-                                  properties:
-                                    source:
-                                      type: string
-                                      enum: [header, query, cookie, path, client_ip, method, ctx]
-                                    key:
-                                      type: string
-                                    value:
-                                      type: string
-                                    regex:
-                                      type: string
-                                timeRange:
-                                  type: object
-                                  description: "Check time range"
-                                  properties:
-                                    after:
-                                      type: string
-                                    before:
-                                      type: string
-                                probability:
-                                  type: object
-                                  description: "Probability-based execution"
-                                  properties:
-                                    ratio:
-                                      type: number
-                                      minimum: 0.0
-                                      maximum: 1.0
-                                    key:
-                                      type: string
-                                    keySource:
-                                      type: string
-                                      enum: [header, query, cookie, path, client_ip, method, ctx]
-                                include:
-                                  type: object
-                                  description: "Include if matches any value"
-                                  properties:
-                                    source:
-                                      type: string
-                                      enum: [header, query, cookie, path, client_ip, method, ctx]
-                                    values:
-                                      type: array
-                                      items:
-                                        type: string
-                                exclude:
-                                  type: object
-                                  description: "Exclude if matches any value"
-                                  properties:
-                                    source:
-                                      type: string
-                                      enum: [header, query, cookie, path, client_ip, method, ctx]
-                                    values:
-                                      type: array
-                                      items:
-                                        type: string
+                                      description: "Key name (required for header, cookie, query, ctx)"
+                                # keyMatch specific fields
+                                value:
+                                  type: string
+                                  description: "Exact value to match (keyMatch)"
+                                values:
+                                  type: array
+                                  description: "Multiple values to match (keyMatch, include, exclude)"
+                                  items:
+                                    type: string
+                                regex:
+                                  type: array
+                                  description: "Regex patterns to match (keyMatch, include, exclude)"
+                                  items:
+                                    type: string
+                                # timeRange specific fields
+                                after:
+                                  type: string
+                                  description: "Time after which condition is true (RFC3339)"
+                                before:
+                                  type: string
+                                  description: "Time before which condition is true (RFC3339)"
+                                # probability specific fields
+                                ratio:
+                                  type: number
+                                  description: "Probability ratio 0.0-1.0"
+                                  minimum: 0.0
+                                  maximum: 1.0
                           run:
                             type: array
                             description: "Conditions that must be satisfied to run (AND logic)"
                             items:
                               type: object
-                              description: "A single condition"
+                              description: "A single condition (tagged union with 'type' field)"
                               properties:
-                                keyExist:
+                                type:
+                                  type: string
+                                  description: "Condition type"
+                                  enum: [keyExist, keyMatch, timeRange, probability, include, exclude]
+                                # KeyGet object for key-based conditions
+                                key:
                                   type: object
+                                  description: "Key accessor (KeyGet) - used by keyExist, keyMatch, include, exclude"
                                   properties:
-                                    source:
+                                    type:
                                       type: string
-                                      enum: [header, query, cookie, path, client_ip, method, ctx]
-                                    key:
+                                      description: "Key source type"
+                                      enum: [clientIp, header, cookie, query, path, method, ctx, clientIpAndPath]
+                                    name:
                                       type: string
-                                keyMatch:
-                                  type: object
-                                  properties:
-                                    source:
-                                      type: string
-                                      enum: [header, query, cookie, path, client_ip, method, ctx]
-                                    key:
-                                      type: string
-                                    value:
-                                      type: string
-                                    regex:
-                                      type: string
-                                timeRange:
-                                  type: object
-                                  properties:
-                                    after:
-                                      type: string
-                                    before:
-                                      type: string
-                                probability:
-                                  type: object
-                                  properties:
-                                    ratio:
-                                      type: number
-                                      minimum: 0.0
-                                      maximum: 1.0
-                                    key:
-                                      type: string
-                                    keySource:
-                                      type: string
-                                      enum: [header, query, cookie, path, client_ip, method, ctx]
-                                include:
-                                  type: object
-                                  properties:
-                                    source:
-                                      type: string
-                                      enum: [header, query, cookie, path, client_ip, method, ctx]
-                                    values:
-                                      type: array
-                                      items:
-                                        type: string
-                                exclude:
-                                  type: object
-                                  properties:
-                                    source:
-                                      type: string
-                                      enum: [header, query, cookie, path, client_ip, method, ctx]
-                                    values:
-                                      type: array
-                                      items:
-                                        type: string
+                                      description: "Key name (required for header, cookie, query, ctx)"
+                                # keyMatch specific fields
+                                value:
+                                  type: string
+                                  description: "Exact value to match (keyMatch)"
+                                values:
+                                  type: array
+                                  description: "Multiple values to match (keyMatch, include, exclude)"
+                                  items:
+                                    type: string
+                                regex:
+                                  type: array
+                                  description: "Regex patterns to match (keyMatch, include, exclude)"
+                                  items:
+                                    type: string
+                                # timeRange specific fields
+                                after:
+                                  type: string
+                                  description: "Time after which condition is true (RFC3339)"
+                                before:
+                                  type: string
+                                  description: "Time before which condition is true (RFC3339)"
+                                # probability specific fields
+                                ratio:
+                                  type: number
+                                  description: "Probability ratio 0.0-1.0"
+                                  minimum: 0.0
+                                  maximum: 1.0
                       type:
                         type: string
                         description: "Plugin type"

@@ -18,6 +18,6 @@ pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
 pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential};
 pub use mock::MockConfig;
 pub use proxy_rewrite::{HeaderActions, HeaderEntry, HttpMethod, ProxyRewriteConfig, RegexUri};
-pub use rate_limiter::{LimitHeaderNames, LimitKey, LimitKeySource, OnMissingKey, RateLimiterConfig};
+pub use rate_limiter::{LimitHeaderNames, OnMissingKey, RateLimiterConfig};
 pub use request_restriction::{OnMissing, RequestRestrictionConfig, RestrictionRule, RestrictionSource, RuleMatchMode};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};

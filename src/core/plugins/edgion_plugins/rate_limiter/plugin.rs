@@ -43,8 +43,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
+
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{LimitKey, LimitKeySource, OnMissingKey, RateLimiterConfig};
+use crate::types::resources::edgion_plugins::{OnMissingKey, RateLimiterConfig};
 
 // CMS estimator configuration
 // HASHES is fixed at 4 (4 hash functions for CMS)
@@ -226,8 +227,8 @@ impl RequestFilter for RateLimiter {
             return PluginRunningResult::GoodNext;
         }
 
-        // Get the rate limiting key using extraction logic
-        let limit_key = match extract_limit_key(session, &self.config.key) {
+        // Get the rate limiting key using session.key_get()
+        let limit_key = match session.key_get(&self.config.key) {
             Some(key) => key,
             None => {
                 // Key not found - check if we have a default key configured
@@ -275,54 +276,13 @@ impl RequestFilter for RateLimiter {
 
         // Add rate limit headers
         self.add_headers(session, remaining, interval);
-        plugin_log.push(&format!("Allowed (key: {}, count: {}, remaining: {}); ", limit_key, curr_count, remaining.max(0)));
+        plugin_log.push(&format!(
+            "Allowed (key: {}, count: {}, remaining: {}); ",
+            limit_key,
+            curr_count,
+            remaining.max(0)
+        ));
         PluginRunningResult::GoodNext
-    }
-}
-
-// ========== Key Extraction ==========
-
-/// Extract the rate limiting key from the request based on configuration
-///
-/// # Arguments
-/// * `session` - The plugin session containing request information
-/// * `key_config` - The key configuration specifying source and name
-///
-/// # Returns
-/// * `Some(String)` - The extracted key value
-/// * `None` - If the key could not be extracted (e.g., empty IP, missing header)
-fn extract_limit_key(session: &dyn PluginSession, key_config: &LimitKey) -> Option<String> {
-    match key_config.source {
-        LimitKeySource::ClientIP => {
-            let ip = session.remote_addr();
-            if ip.is_empty() {
-                None
-            } else {
-                Some(ip.to_string())
-            }
-        }
-        LimitKeySource::Header => {
-            let name = key_config.name.as_deref()?;
-            session.header_value(name)
-        }
-        LimitKeySource::Cookie => {
-            let name = key_config.name.as_deref()?;
-            session.get_cookie(name)
-        }
-        LimitKeySource::Query => {
-            let name = key_config.name.as_deref()?;
-            session.get_query_param(name)
-        }
-        LimitKeySource::Path => Some(session.get_path().to_string()),
-        LimitKeySource::ClientIPAndPath => {
-            let ip = session.remote_addr();
-            let path = session.get_path();
-            if ip.is_empty() {
-                None
-            } else {
-                Some(format!("{}:{}", ip, path))
-            }
-        }
     }
 }
 
@@ -330,6 +290,7 @@ fn extract_limit_key(session: &dyn PluginSession, key_config: &LimitKey) -> Opti
 mod tests {
     use super::*;
     use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
+    use crate::types::common::KeyGet;
 
     fn create_basic_config() -> RateLimiterConfig {
         let mut config = RateLimiterConfig {
@@ -342,6 +303,68 @@ mod tests {
         config
     }
 
+    #[test]
+    fn test_key_get_client_ip() {
+        let mut mock_session = MockPluginSession::new();
+        mock_session
+            .expect_key_get()
+            .withf(|k| matches!(k, KeyGet::ClientIp))
+            .return_const(Some("192.168.1.1".to_string()));
+
+        let key = KeyGet::ClientIp;
+        assert_eq!(mock_session.key_get(&key), Some("192.168.1.1".to_string()));
+    }
+
+    #[test]
+    fn test_key_get_empty_client_ip() {
+        let mut mock_session = MockPluginSession::new();
+        mock_session
+            .expect_key_get()
+            .withf(|k| matches!(k, KeyGet::ClientIp))
+            .return_const(None);
+
+        let key = KeyGet::ClientIp;
+        assert_eq!(mock_session.key_get(&key), None);
+    }
+
+    #[test]
+    fn test_key_get_header() {
+        let mut mock_session = MockPluginSession::new();
+        mock_session
+            .expect_key_get()
+            .withf(|k| matches!(k, KeyGet::Header { name } if name == "X-API-Key"))
+            .return_const(Some("api-key-123".to_string()));
+
+        let key = KeyGet::Header {
+            name: "X-API-Key".to_string(),
+        };
+        assert_eq!(mock_session.key_get(&key), Some("api-key-123".to_string()));
+    }
+
+    #[test]
+    fn test_key_get_path() {
+        let mut mock_session = MockPluginSession::new();
+        mock_session
+            .expect_key_get()
+            .withf(|k| matches!(k, KeyGet::Path))
+            .return_const(Some("/api/users".to_string()));
+
+        let key = KeyGet::Path;
+        assert_eq!(mock_session.key_get(&key), Some("/api/users".to_string()));
+    }
+
+    #[test]
+    fn test_key_get_client_ip_and_path() {
+        let mut mock_session = MockPluginSession::new();
+        mock_session
+            .expect_key_get()
+            .withf(|k| matches!(k, KeyGet::ClientIpAndPath))
+            .return_const(Some("10.0.0.1:/api/data".to_string()));
+
+        let key = KeyGet::ClientIpAndPath;
+        assert_eq!(mock_session.key_get(&key), Some("10.0.0.1:/api/data".to_string()));
+    }
+
     #[tokio::test]
     async fn test_rate_limiter_allows_within_limit() {
         let config = create_basic_config();
@@ -351,9 +374,10 @@ mod tests {
             let mut mock_session = MockPluginSession::new();
             let mut plugin_log = PluginLog::new("RateLimiter");
 
+            let ip = format!("test_basic_ip_{}", i);
             mock_session
-                .expect_remote_addr()
-                .return_const(format!("test_basic_ip_{}", i)); // Each request different IP to test independent
+                .expect_key_get()
+                .return_const(Some(ip)); // Each request different IP to test independent
             mock_session.expect_set_response_header().returning(|_, _| Ok(()));
 
             let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
@@ -373,8 +397,8 @@ mod tests {
             let mut mock_session = MockPluginSession::new();
             let mut plugin_log = PluginLog::new("RateLimiter");
             mock_session
-                .expect_remote_addr()
-                .return_const(test_ip.to_string());
+                .expect_key_get()
+                .return_const(Some(test_ip.to_string()));
             mock_session.expect_set_response_header().returning(|_, _| Ok(()));
             plugin.run_request(&mut mock_session, &mut plugin_log).await;
         }
@@ -384,8 +408,8 @@ mod tests {
         let mut plugin_log = PluginLog::new("RateLimiter");
 
         mock_session
-            .expect_remote_addr()
-            .return_const(test_ip.to_string());
+            .expect_key_get()
+            .return_const(Some(test_ip.to_string()));
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
         mock_session.expect_write_response_body().returning(|_, _| Ok(()));
 
@@ -402,7 +426,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("RateLimiter");
 
-        mock_session.expect_remote_addr().return_const("".to_string());
+        mock_session.expect_key_get().return_const(None);
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
@@ -414,9 +438,8 @@ mod tests {
         let mut config = RateLimiterConfig {
             rate: 100,
             interval: "1s".to_string(),
-            key: LimitKey {
-                source: LimitKeySource::Header,
-                name: Some("X-API-Key".to_string()),
+            key: KeyGet::Header {
+                name: "X-API-Key".to_string(),
             },
             ..Default::default()
         };
@@ -428,8 +451,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("RateLimiter");
 
         mock_session
-            .expect_header_value()
-            .withf(|k| k == "X-API-Key")
+            .expect_key_get()
             .return_const(Some("test-key-123".to_string()));
         mock_session.expect_set_response_header().returning(|_, _| Ok(()));
 
@@ -468,7 +490,9 @@ mod tests {
         for _ in 0..5 {
             let mut mock_session = MockPluginSession::new();
             let mut plugin_log = PluginLog::new("RateLimiter");
-            mock_session.expect_remote_addr().return_const(shared_ip.to_string());
+            mock_session
+                .expect_key_get()
+                .return_const(Some(shared_ip.to_string()));
             mock_session.expect_set_response_header().returning(|_, _| Ok(()));
             plugin1.run_request(&mut mock_session, &mut plugin_log).await;
         }
@@ -476,7 +500,9 @@ mod tests {
         // plugin2 should still allow (separate Rate instance)
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("RateLimiter");
-        mock_session.expect_remote_addr().return_const(shared_ip.to_string());
+        mock_session
+            .expect_key_get()
+            .return_const(Some(shared_ip.to_string()));
         mock_session.expect_set_response_header().returning(|_, _| Ok(()));
 
         let result = plugin2.run_request(&mut mock_session, &mut plugin_log).await;
@@ -498,86 +524,12 @@ mod tests {
 
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("RateLimiter");
-        mock_session.expect_remote_addr().return_const("test_slots_ip".to_string());
+        mock_session
+            .expect_key_get()
+            .return_const(Some("test_slots_ip".to_string()));
         mock_session.expect_set_response_header().returning(|_, _| Ok(()));
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[test]
-    fn test_extract_client_ip() {
-        let mut mock_session = MockPluginSession::new();
-        mock_session
-            .expect_remote_addr()
-            .return_const("192.168.1.1".to_string());
-
-        let key_config = LimitKey {
-            source: LimitKeySource::ClientIP,
-            name: None,
-        };
-
-        let result = extract_limit_key(&mock_session, &key_config);
-        assert_eq!(result, Some("192.168.1.1".to_string()));
-    }
-
-    #[test]
-    fn test_extract_empty_client_ip() {
-        let mut mock_session = MockPluginSession::new();
-        mock_session.expect_remote_addr().return_const("".to_string());
-
-        let key_config = LimitKey {
-            source: LimitKeySource::ClientIP,
-            name: None,
-        };
-
-        let result = extract_limit_key(&mock_session, &key_config);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_extract_header() {
-        let mut mock_session = MockPluginSession::new();
-        mock_session
-            .expect_header_value()
-            .withf(|k| k == "X-API-Key")
-            .return_const(Some("api-key-123".to_string()));
-
-        let key_config = LimitKey {
-            source: LimitKeySource::Header,
-            name: Some("X-API-Key".to_string()),
-        };
-
-        let result = extract_limit_key(&mock_session, &key_config);
-        assert_eq!(result, Some("api-key-123".to_string()));
-    }
-
-    #[test]
-    fn test_extract_path() {
-        let mut mock_session = MockPluginSession::new();
-        mock_session.expect_get_path().return_const("/api/users".to_string());
-
-        let key_config = LimitKey {
-            source: LimitKeySource::Path,
-            name: None,
-        };
-
-        let result = extract_limit_key(&mock_session, &key_config);
-        assert_eq!(result, Some("/api/users".to_string()));
-    }
-
-    #[test]
-    fn test_extract_client_ip_and_path() {
-        let mut mock_session = MockPluginSession::new();
-        mock_session.expect_remote_addr().return_const("10.0.0.1".to_string());
-        mock_session.expect_get_path().return_const("/api/data".to_string());
-
-        let key_config = LimitKey {
-            source: LimitKeySource::ClientIPAndPath,
-            name: None,
-        };
-
-        let result = extract_limit_key(&mock_session, &key_config);
-        assert_eq!(result, Some("10.0.0.1:/api/data".to_string()));
     }
 }
