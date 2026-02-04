@@ -139,7 +139,7 @@ jsonwebtoken = "9"
 pingora-core = { version = "0.6" }
 pingora-http = "0.6"
 pingora-limits = "0.6"
-pingora-load-balancing = "0.6"
+pingora-load-balancing = "0.7"
 pingora-proxy = { version = "0.6" }
 etcd-client = "0.18"
 

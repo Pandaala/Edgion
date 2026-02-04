@@ -649,6 +649,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bstr"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63044e1ae8e69f3b5a92c736ca6269b8d12fa7efe39bf34ddb06d102cf0e2cab"
+dependencies = [
+ "memchr",
+ "regex-automata",
+ "serde",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1296,8 +1307,8 @@ dependencies = [
  "notify",
  "parking_lot",
  "percent-encoding",
- "pingora-core",
- "pingora-http",
+ "pingora-core 0.6.0",
+ "pingora-http 0.6.0",
  "pingora-limits",
  "pingora-load-balancing",
  "pingora-proxy",
@@ -2611,6 +2622,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.16.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1dc47f592c06f33f8e3aea9591776ec7c9f9e4124778ff8a3c3b87159f7e593"
+dependencies = [
+ "hashbrown 0.16.1",
+]
+
+[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3305,15 +3325,15 @@ dependencies = [
  "httpdate",
  "indexmap 1.9.3",
  "log",
- "lru",
+ "lru 0.14.0",
  "once_cell",
  "parking_lot",
- "pingora-core",
- "pingora-error",
+ "pingora-core 0.6.0",
+ "pingora-error 0.6.0",
  "pingora-header-serde",
- "pingora-http",
+ "pingora-http 0.6.0",
  "pingora-lru",
- "pingora-timeout",
+ "pingora-timeout 0.6.0",
  "rand 0.8.5",
  "regex",
  "rmp",
@@ -3352,13 +3372,13 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "pingora-boringssl",
- "pingora-error",
- "pingora-http",
+ "pingora-error 0.6.0",
+ "pingora-http 0.6.0",
  "pingora-openssl",
- "pingora-pool",
- "pingora-runtime",
+ "pingora-pool 0.6.0",
+ "pingora-runtime 0.6.0",
  "pingora-rustls",
- "pingora-timeout",
+ "pingora-timeout 0.6.0",
  "prometheus",
  "rand 0.8.5",
  "regex",
@@ -3377,10 +3397,66 @@ dependencies = [
 ]
 
 [[package]]
+name = "pingora-core"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aced35d346b7c6559234b5ec493d638471d3234b0152f18c59390bbdafac2a7"
+dependencies = [
+ "ahash",
+ "async-trait",
+ "brotli",
+ "bstr",
+ "bytes",
+ "chrono",
+ "clap 4.5.54",
+ "daemonize",
+ "derivative",
+ "flate2",
+ "futures",
+ "h2",
+ "http",
+ "httparse",
+ "httpdate",
+ "libc",
+ "log",
+ "nix",
+ "once_cell",
+ "openssl-probe 0.1.6",
+ "parking_lot",
+ "percent-encoding",
+ "pingora-error 0.7.0",
+ "pingora-http 0.7.0",
+ "pingora-pool 0.7.0",
+ "pingora-runtime 0.7.0",
+ "pingora-timeout 0.7.0",
+ "prometheus",
+ "rand 0.8.5",
+ "regex",
+ "serde",
+ "serde_yaml 0.9.34+deprecated",
+ "sfv",
+ "socket2 0.6.1",
+ "strum",
+ "strum_macros",
+ "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "unicase",
+ "windows-sys 0.59.0",
+ "zstd",
+]
+
+[[package]]
 name = "pingora-error"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52119570d3f4644e09654ad24df2b7d851bf12eaa8c4148b4674c7f90916598e"
+
+[[package]]
+name = "pingora-error"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b761e30ae329162ddddbbb41d2bf8a3e48d52c70a0d5ff51ccb964acf0bd505"
 
 [[package]]
 name = "pingora-header-serde"
@@ -3391,8 +3467,8 @@ dependencies = [
  "bytes",
  "http",
  "httparse",
- "pingora-error",
- "pingora-http",
+ "pingora-error 0.6.0",
+ "pingora-http 0.6.0",
  "thread_local",
  "zstd",
  "zstd-safe",
@@ -3406,14 +3482,25 @@ checksum = "5a3542fd0fd0a83212882c5066ae739ba51804f20d624ff7e12ec85113c5c89a"
 dependencies = [
  "bytes",
  "http",
- "pingora-error",
+ "pingora-error 0.6.0",
+]
+
+[[package]]
+name = "pingora-http"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fbf2ce52fefeb2ed795a3d5fa4b556cfa33a7592691677e8837c6a58d0358215"
+dependencies = [
+ "bytes",
+ "http",
+ "pingora-error 0.7.0",
 ]
 
 [[package]]
 name = "pingora-ketama"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f5dd8546b1874d5cfca594375c1cfb852c3dffd4f060428fa031a6e790dea18"
+checksum = "5566ee2f3ca3ba478792d765d6b28aaf1ebae4a7f302c7eb814c83f4d793c1f1"
 dependencies = [
  "crc32fast",
 ]
@@ -3429,9 +3516,9 @@ dependencies = [
 
 [[package]]
 name = "pingora-load-balancing"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b5bb0314830a64b73b50b3782f3089f87947b61b4324c804d6f8d4ff9ce1c70"
+checksum = "3e7ff0d87ab5924c1af03fc1b766aef398e75cfe0273019f68b7c2978002ca97"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3440,11 +3527,11 @@ dependencies = [
  "futures",
  "http",
  "log",
- "pingora-core",
- "pingora-error",
- "pingora-http",
+ "pingora-core 0.7.0",
+ "pingora-error 0.7.0",
+ "pingora-http 0.7.0",
  "pingora-ketama",
- "pingora-runtime",
+ "pingora-runtime 0.7.0",
  "rand 0.8.5",
  "tokio",
 ]
@@ -3482,9 +3569,24 @@ checksum = "996c574f30a6e1ad10b47ac1626a86e0e47d5075953dd049d60df16ba5f7076e"
 dependencies = [
  "crossbeam-queue",
  "log",
- "lru",
+ "lru 0.14.0",
  "parking_lot",
- "pingora-timeout",
+ "pingora-timeout 0.6.0",
+ "thread_local",
+ "tokio",
+]
+
+[[package]]
+name = "pingora-pool"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1a89f8d8d48caadb7f711227e0754bac6495dd2d4ee03137cc2c6d46c3b0a9d"
+dependencies = [
+ "crossbeam-queue",
+ "log",
+ "lru 0.16.3",
+ "parking_lot",
+ "pingora-timeout 0.7.0",
  "thread_local",
  "tokio",
 ]
@@ -3504,9 +3606,9 @@ dependencies = [
  "log",
  "once_cell",
  "pingora-cache",
- "pingora-core",
- "pingora-error",
- "pingora-http",
+ "pingora-core 0.6.0",
+ "pingora-error 0.6.0",
+ "pingora-http 0.6.0",
  "rand 0.8.5",
  "regex",
  "tokio",
@@ -3525,6 +3627,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pingora-runtime"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c107d6eaf57c98285b91c487a1972bcb08405f39f9e73a5c28525620f7010956"
+dependencies = [
+ "once_cell",
+ "rand 0.8.5",
+ "thread_local",
+ "tokio",
+]
+
+[[package]]
 name = "pingora-rustls"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3532,7 +3646,7 @@ checksum = "d5d581533d775229a95cfd1833059d149bb613d620d16a06e468e5f197563714"
 dependencies = [
  "log",
  "no_debug",
- "pingora-error",
+ "pingora-error 0.6.0",
  "ring",
  "rustls",
  "rustls-native-certs 0.7.3",
@@ -3546,6 +3660,19 @@ name = "pingora-timeout"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "548cd21d41611c725827677937e68f2cd008bbfa09f3416d3fbad07e1e42f6d7"
+dependencies = [
+ "once_cell",
+ "parking_lot",
+ "pin-project-lite",
+ "thread_local",
+ "tokio",
+]
+
+[[package]]
+name = "pingora-timeout"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64451dc4613770411814209b8c1659945682f0258305bae51c1e44cb9b887d30"
 dependencies = [
  "once_cell",
  "parking_lot",
