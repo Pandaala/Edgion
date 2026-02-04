@@ -177,9 +177,7 @@ impl ReloadTimer {
     /// Start a new reload timer
     pub fn start() -> Self {
         reload_metrics().reload_started();
-        Self {
-            start: Instant::now(),
-        }
+        Self { start: Instant::now() }
     }
 
     /// Complete and record duration

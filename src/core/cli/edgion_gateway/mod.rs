@@ -147,6 +147,9 @@ impl EdgionGatewayCli {
         let log_config = config.to_log_config();
         let _log_guard = runtime.block_on(init_logging(log_config))?;
 
+        // 5. Initialize RateLimiter global configuration
+        config::init_rate_limiter_global_config(&config.rate_limiter);
+
         tracing::info!(
             component = "startup",
             allocator = crate::allocator_name(),

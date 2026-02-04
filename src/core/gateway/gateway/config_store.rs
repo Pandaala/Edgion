@@ -409,13 +409,7 @@ mod tests {
         assert_eq!(info.namespace_str(), "default");
         assert_eq!(info.listener_name, Some("https".to_string()));
 
-        let info_no_ns = GatewayInfo::new(
-            None,
-            "my-gateway".to_string(),
-            None,
-            None,
-            None,
-        );
+        let info_no_ns = GatewayInfo::new(None, "my-gateway".to_string(), None, None, None);
         assert_eq!(info_no_ns.gateway_key(), "my-gateway");
         assert_eq!(info_no_ns.namespace_str(), "");
         assert_eq!(info_no_ns.listener_name, None);

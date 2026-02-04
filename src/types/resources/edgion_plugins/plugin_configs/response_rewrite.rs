@@ -116,10 +116,7 @@ impl ResponseRewriteConfig {
         // Validate status code range
         if let Some(status) = self.status_code {
             if !(100..=599).contains(&status) {
-                self.validation_error = Some(format!(
-                    "Invalid status code: {}. Must be between 100 and 599.",
-                    status
-                ));
+                self.validation_error = Some(format!("Invalid status code: {}. Must be between 100 and 599.", status));
                 return false;
             }
         }
@@ -160,8 +157,7 @@ impl ResponseRewriteConfig {
             if let Some(ref rename_headers) = headers.rename {
                 for entry in rename_headers {
                     if entry.from.is_empty() {
-                        self.validation_error =
-                            Some("Header 'from' name in 'rename' cannot be empty.".to_string());
+                        self.validation_error = Some("Header 'from' name in 'rename' cannot be empty.".to_string());
                         return false;
                     }
                     if entry.to.is_empty() {

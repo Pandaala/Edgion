@@ -67,9 +67,15 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
 
     // Get matched route information (HTTP or gRPC)
     let (route_ns, route_name) = if let Some(ref route_unit) = ctx.route_unit {
-        (route_unit.matched_info.rns.as_str(), route_unit.matched_info.rn.as_str())
+        (
+            route_unit.matched_info.rns.as_str(),
+            route_unit.matched_info.rn.as_str(),
+        )
     } else if let Some(ref grpc_unit) = ctx.grpc_route_unit {
-        (grpc_unit.matched_info.route_ns.as_str(), grpc_unit.matched_info.route_name.as_str())
+        (
+            grpc_unit.matched_info.route_ns.as_str(),
+            grpc_unit.matched_info.route_name.as_str(),
+        )
     } else {
         ("unknown", "unknown")
     };
@@ -82,11 +88,7 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
         .unwrap_or(("unknown", "unknown"));
 
     // Get protocol from discover_protocol (default "http", could be "grpc", "websocket", etc.)
-    let protocol = ctx
-        .request_info
-        .discover_protocol
-        .as_deref()
-        .unwrap_or("http");
+    let protocol = ctx.request_info.discover_protocol.as_deref().unwrap_or("http");
 
     // Get test metrics only when test_mode is enabled
     // This prevents processing test annotations in production

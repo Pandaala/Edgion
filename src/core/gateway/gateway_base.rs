@@ -36,7 +36,11 @@ fn is_listener_conflicted(gateway: &Gateway, listener_name: &str) -> bool {
         .as_ref()
         .and_then(|s| s.listeners.as_ref())
         .and_then(|listeners| listeners.iter().find(|ls| ls.name == listener_name))
-        .map(|ls| ls.conditions.iter().any(|c| c.type_ == "Conflicted" && c.status == "True"))
+        .map(|ls| {
+            ls.conditions
+                .iter()
+                .any(|c| c.type_ == "Conflicted" && c.status == "True")
+        })
         .unwrap_or(false)
 }
 

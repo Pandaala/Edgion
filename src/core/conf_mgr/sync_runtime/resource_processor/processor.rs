@@ -439,21 +439,34 @@ where
         self.handler.clean_metadata(&mut obj, ctx);
 
         // 4. Validate (log warnings but continue)
-        let warnings = self.handler.validate(&obj, ctx);
-        for warning in &warnings {
+        let mut all_errors = self.handler.validate(&obj, ctx);
+        for error in &all_errors {
             tracing::warn!(
                 kind = self.kind,
                 name = %name,
                 namespace = %namespace,
-                warning = %warning,
-                "Resource validation warning"
+                error = %error,
+                "Resource validation error"
             );
         }
 
-        // 5. Parse/preprocess
+        // 5. Preparse (build runtime structures, validate configs)
+        let preparse_errors = self.handler.preparse(&mut obj, ctx);
+        for error in &preparse_errors {
+            tracing::warn!(
+                kind = self.kind,
+                name = %name,
+                namespace = %namespace,
+                error = %error,
+                "Resource preparse error"
+            );
+        }
+        all_errors.extend(preparse_errors);
+
+        // 6. Parse/preprocess
         match self.handler.parse(obj, ctx) {
             ProcessResult::Continue(mut parsed_obj) => {
-                // 6. Determine old status for comparison
+                // 7. Determine old status for comparison
                 // - If existing_status_json provided (FileSystem mode): use it
                 // - Otherwise: extract from object (K8s mode - status is already in obj)
                 let old_status = match existing_status_json {
@@ -471,10 +484,10 @@ where
                     );
                 }
 
-                // 7. Update status (handler sets Gateway API conditions)
-                self.handler.update_status(&mut parsed_obj, ctx, &warnings);
+                // 8. Update status (handler sets Gateway API conditions)
+                self.handler.update_status(&mut parsed_obj, ctx, &all_errors);
 
-                // 8. Check if status changed
+                // 9. Check if status changed
                 let new_status = extract_status_json(&parsed_obj);
 
                 // Log serialization errors
@@ -498,7 +511,7 @@ where
                     );
                 }
 
-                // 9. Call on_change
+                // 10. Call on_change
                 if !is_init {
                     self.handler.on_change(&parsed_obj, ctx);
                 }
@@ -513,7 +526,7 @@ where
                     "Resource processed and saving"
                 );
 
-                // 10. Save to cache
+                // 11. Save to cache
                 // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async)
                 let obj_for_result = parsed_obj.clone();
                 if is_init {

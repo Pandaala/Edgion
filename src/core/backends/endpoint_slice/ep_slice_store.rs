@@ -227,19 +227,13 @@ where
             all_services.insert(service_key.clone());
 
             new_ep_slices.insert(ep_key.clone(), (ep_slice, service_key.clone()));
-            new_service_to_slices
-                .entry(service_key)
-                .or_default()
-                .insert(ep_key);
+            new_service_to_slices.entry(service_key).or_default().insert(ep_key);
         }
 
         *self.service_to_slices.write().unwrap() = new_service_to_slices;
         *self.ep_slices.write().unwrap() = new_ep_slices;
 
-        tracing::debug!(
-            services = all_services.len(),
-            "Replaced data layer (data only)"
-        );
+        tracing::debug!(services = all_services.len(), "Replaced data layer (data only)");
 
         all_services
     }
@@ -264,7 +258,7 @@ where
             if let Some((_, service_key)) = ep_slices.remove(ep_key) {
                 affected_services.insert(service_key.clone());
                 if let Some(slice_set) = service_to_slices.get_mut(&service_key) {
-                    slice_set.remove(ep_key);  // O(1) with HashSet
+                    slice_set.remove(ep_key); // O(1) with HashSet
                     if slice_set.is_empty() {
                         service_to_slices.remove(&service_key);
                     }
@@ -282,7 +276,7 @@ where
                     // service_key changed, clean up old mapping
                     affected_services.insert(old_service_key.clone());
                     if let Some(slice_set) = service_to_slices.get_mut(old_service_key) {
-                        slice_set.remove(ep_key);  // O(1) with HashSet
+                        slice_set.remove(ep_key); // O(1) with HashSet
                         if slice_set.is_empty() {
                             service_to_slices.remove(old_service_key);
                         }
@@ -309,10 +303,7 @@ where
             ep_slices.insert(ep_key.clone(), (ep_slice.clone(), service_key.clone()));
 
             // HashSet insert is O(1) and handles duplicates automatically
-            service_to_slices
-                .entry(service_key)
-                .or_default()
-                .insert(ep_key.clone());
+            service_to_slices.entry(service_key).or_default().insert(ep_key.clone());
         }
 
         tracing::debug!(
@@ -546,7 +537,7 @@ where
         for ep_key in remove {
             if let Some((_, service_key)) = ep_slices.remove(ep_key) {
                 if let Some(slice_set) = service_to_slices.get_mut(&service_key) {
-                    slice_set.remove(ep_key);  // O(1) with HashSet
+                    slice_set.remove(ep_key); // O(1) with HashSet
                     if slice_set.is_empty() {
                         service_to_slices.remove(&service_key);
                     }
@@ -560,10 +551,7 @@ where
             ep_slices.insert(ep_key.clone(), (ep_slice.clone(), service_key.clone()));
 
             // HashSet insert is O(1) and handles duplicates automatically
-            service_to_slices
-                .entry(service_key)
-                .or_default()
-                .insert(ep_key.clone());
+            service_to_slices.entry(service_key).or_default().insert(ep_key.clone());
         }
 
         // 3. Re-aggregate affected services

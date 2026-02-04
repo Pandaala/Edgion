@@ -12,6 +12,4 @@ pub use plugin_runtime::{
     EdgionPluginsLog, PluginLog, PluginRuntime, PluginSession, PluginSessionError, PluginSessionResult, RequestFilter,
     StageLogs, UpstreamResponse, UpstreamResponseFilter,
 };
-pub use plugins_cond::{
-    Condition, ConditionContext, ConditionSource, EvaluationResult, PluginConditions,
-};
+pub use plugins_cond::{Condition, ConditionContext, ConditionSource, EvaluationResult, PluginConditions};

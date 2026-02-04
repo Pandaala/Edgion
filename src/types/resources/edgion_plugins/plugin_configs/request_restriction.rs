@@ -269,10 +269,7 @@ impl RequestRestrictionConfig {
 
         // Validate and compile each rule
         for (i, rule) in self.rules.iter_mut().enumerate() {
-            let rule_name = rule
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("rule[{}]", i));
+            let rule_name = rule.name.clone().unwrap_or_else(|| format!("rule[{}]", i));
 
             // Validate key requirement based on source
             match rule.source {
@@ -330,9 +327,7 @@ impl RestrictionRule {
                 return Err("'allowRegex' list cannot be empty".to_string());
             }
             let combined = patterns.join("|");
-            self.allow_compiled_regex = Some(
-                Regex::new(&combined).map_err(|e| format!("Invalid allowRegex: {}", e))?,
-            );
+            self.allow_compiled_regex = Some(Regex::new(&combined).map_err(|e| format!("Invalid allowRegex: {}", e))?);
         }
 
         // Compile deny values
@@ -355,9 +350,7 @@ impl RestrictionRule {
                 return Err("'denyRegex' list cannot be empty".to_string());
             }
             let combined = patterns.join("|");
-            self.deny_compiled_regex = Some(
-                Regex::new(&combined).map_err(|e| format!("Invalid denyRegex: {}", e))?,
-            );
+            self.deny_compiled_regex = Some(Regex::new(&combined).map_err(|e| format!("Invalid denyRegex: {}", e))?);
         }
 
         Ok(())

@@ -23,6 +23,7 @@ use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
 use crate::core::plugins::edgion_plugins::mock::Mock;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
+use crate::core::plugins::edgion_plugins::rate_limiter::RateLimiter;
 use crate::core::plugins::edgion_plugins::request_restriction::RequestRestriction;
 use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
 use crate::core::plugins::gapi_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
@@ -150,52 +151,106 @@ impl PluginRuntime {
     ///
     /// Filters are wrapped with ConditionalRequestFilter to support condition-based execution.
     /// Gateway API filters (via add_from_httproute_filters) are NOT wrapped to maintain compatibility.
-    pub fn add_from_request_filters(&mut self, entries: &[RequestFilterEntry], namespace: &str) {
-        for entry in entries {
+    ///
+    /// # Arguments
+    /// * `entries` - The request filter entries
+    /// * `namespace` - The namespace of the EdgionPlugins resource
+    ///
+    /// # Returns
+    /// A vector of validation error messages (empty if all plugins are valid)
+    pub fn add_from_request_filters(&mut self, entries: &[RequestFilterEntry], namespace: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                // Collect validation errors from plugin configs
+                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
+                }
+
                 if let Some(filter) = Self::create_request_filter_from_edgion(&entry.plugin, namespace) {
                     // Wrap with ConditionalRequestFilter to support condition evaluation
-                    let conditional_filter =
-                        ConditionalRequestFilter::new(filter, entry.conditions.clone());
+                    let conditional_filter = ConditionalRequestFilter::new(filter, entry.conditions.clone());
                     self.add_request_filter(Box::new(conditional_filter));
                 }
             }
         }
+
+        errors
     }
 
     /// Add upstream response filters from entries (only enabled)
     ///
     /// Filters are wrapped with ConditionalUpstreamResponseFilter to support condition-based execution.
-    pub fn add_from_upstream_response_filters(&mut self, entries: &[UpstreamResponseFilterEntry], namespace: &str) {
-        for entry in entries {
+    ///
+    /// # Returns
+    /// A vector of validation error messages (empty if all plugins are valid)
+    pub fn add_from_upstream_response_filters(
+        &mut self,
+        entries: &[UpstreamResponseFilterEntry],
+        namespace: &str,
+    ) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                // Collect validation errors from plugin configs
+                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponseFilterPlugins[{}] ({}): {}",
+                        index, plugin_name, error
+                    ));
+                }
+
                 if let Some(filter) = Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace) {
                     // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
-                    let conditional_filter =
-                        ConditionalUpstreamResponseFilter::new(filter, entry.conditions.clone());
+                    let conditional_filter = ConditionalUpstreamResponseFilter::new(filter, entry.conditions.clone());
                     self.add_upstream_response_filter(Box::new(conditional_filter));
                 }
             }
         }
+
+        errors
     }
 
     /// Add upstream response handlers from entries (only enabled)
     ///
     /// Filters are wrapped with ConditionalUpstreamResponse to support condition-based execution.
-    pub fn add_from_upstream_responses(&mut self, entries: &[UpstreamResponseEntry], namespace: &str) {
-        for entry in entries {
+    ///
+    /// # Returns
+    /// A vector of validation error messages (empty if all plugins are valid)
+    pub fn add_from_upstream_responses(&mut self, entries: &[UpstreamResponseEntry], namespace: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                // Collect validation errors from plugin configs
+                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponsePlugins[{}] ({}): {}",
+                        index, plugin_name, error
+                    ));
+                }
+
                 if let Some(filter) = Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
                     // Wrap with ConditionalUpstreamResponse to support condition evaluation
-                    let conditional_filter =
-                        ConditionalUpstreamResponse::new(filter, entry.conditions.clone());
+                    let conditional_filter = ConditionalUpstreamResponse::new(filter, entry.conditions.clone());
                     self.add_upstream_response(Box::new(conditional_filter));
                 }
             }
         }
+
+        errors
     }
 
     /// Create a RequestFilter instance from EdgionPlugin enum
+    ///
+    /// # Arguments
+    /// * `plugin` - The EdgionPlugin configuration
+    /// * `namespace` - The namespace of the EdgionPlugins resource
     fn create_request_filter_from_edgion(plugin: &EdgionPlugin, namespace: &str) -> Option<Box<dyn RequestFilter>> {
         match plugin {
             EdgionPlugin::RequestHeaderModifier(config) => {
@@ -210,6 +265,7 @@ impl PluginRuntime {
             EdgionPlugin::Mock(config) => Some(Box::new(Mock::new(config))),
             EdgionPlugin::ProxyRewrite(config) => Some(Box::new(ProxyRewrite::new(config))),
             EdgionPlugin::RequestRestriction(config) => Some(RequestRestriction::create(config)),
+            EdgionPlugin::RateLimiter(config) => Some(RateLimiter::create(config)),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
@@ -246,6 +302,40 @@ impl PluginRuntime {
     ) -> Option<Box<dyn UpstreamResponse>> {
         // Currently no plugins for this stage
         None
+    }
+
+    /// Get validation error from a plugin config (if any)
+    fn get_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
+        match plugin {
+            EdgionPlugin::RateLimiter(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::RequestRestriction(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::ProxyRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::ResponseRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
+            _ => None,
+        }
+    }
+
+    /// Get plugin type name for error messages
+    fn get_plugin_name(plugin: &EdgionPlugin) -> &'static str {
+        match plugin {
+            EdgionPlugin::RequestHeaderModifier(_) => "RequestHeaderModifier",
+            EdgionPlugin::RequestRedirect(_) => "RequestRedirect",
+            EdgionPlugin::ResponseHeaderModifier(_) => "ResponseHeaderModifier",
+            EdgionPlugin::BasicAuth(_) => "BasicAuth",
+            EdgionPlugin::Cors(_) => "Cors",
+            EdgionPlugin::Csrf(_) => "Csrf",
+            EdgionPlugin::IpRestriction(_) => "IpRestriction",
+            EdgionPlugin::JwtAuth(_) => "JwtAuth",
+            EdgionPlugin::Mock(_) => "Mock",
+            EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
+            EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
+            EdgionPlugin::RateLimiter(_) => "RateLimiter",
+            EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
+            EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
+            EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
+            EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
+            EdgionPlugin::RequestMirror(_) => "RequestMirror",
+        }
     }
 
     fn add_request_filter(&mut self, filter: Box<dyn RequestFilter>) {

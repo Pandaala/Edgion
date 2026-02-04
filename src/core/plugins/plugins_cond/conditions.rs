@@ -409,8 +409,7 @@ impl PluginConditions {
 
     /// Check if there are any conditions defined
     pub fn is_empty(&self) -> bool {
-        self.skip.as_ref().map_or(true, |v| v.is_empty())
-            && self.run.as_ref().map_or(true, |v| v.is_empty())
+        self.skip.as_ref().map_or(true, |v| v.is_empty()) && self.run.as_ref().map_or(true, |v| v.is_empty())
     }
 
     /// Add a skip condition
@@ -469,11 +468,7 @@ impl IncludeCondition {
 
         // 2. Extract exact values (without wildcards) and build HashSet if above threshold
         if let Some(values) = &self.values {
-            let exact_values: Vec<_> = values
-                .iter()
-                .filter(|v| !v.contains('*'))
-                .cloned()
-                .collect();
+            let exact_values: Vec<_> = values.iter().filter(|v| !v.contains('*')).cloned().collect();
             if exact_values.len() > VALUES_HASHSET_THRESHOLD {
                 self.values_set = Some(exact_values.into_iter().collect());
             }
@@ -497,11 +492,7 @@ impl ExcludeCondition {
 
         // 2. Extract exact values (without wildcards) and build HashSet if above threshold
         if let Some(values) = &self.values {
-            let exact_values: Vec<_> = values
-                .iter()
-                .filter(|v| !v.contains('*'))
-                .cloned()
-                .collect();
+            let exact_values: Vec<_> = values.iter().filter(|v| !v.contains('*')).cloned().collect();
             if exact_values.len() > VALUES_HASHSET_THRESHOLD {
                 self.values_set = Some(exact_values.into_iter().collect());
             }
@@ -662,10 +653,7 @@ mod tests {
         let mut condition = IncludeCondition {
             source: ConditionSource::Path,
             values: Some(vec!["/static/*".to_string()]),
-            regex: Some(vec![
-                r"^/api/v[0-9]+/.*".to_string(),
-                r"^/internal/.*".to_string(),
-            ]),
+            regex: Some(vec![r"^/api/v[0-9]+/.*".to_string(), r"^/internal/.*".to_string()]),
             values_set: None,
             compiled_regex: None,
         };
@@ -685,10 +673,7 @@ mod tests {
         let mut condition = ExcludeCondition {
             source: ConditionSource::Path,
             values: Some(vec!["/health".to_string()]),
-            regex: Some(vec![
-                r"^/debug/.*".to_string(),
-                r"^/metrics/.*".to_string(),
-            ]),
+            regex: Some(vec![r"^/debug/.*".to_string(), r"^/metrics/.*".to_string()]),
             values_set: None,
             compiled_regex: None,
         };
@@ -704,10 +689,7 @@ mod tests {
 
     #[test]
     fn test_condition_source_serialization() {
-        assert_eq!(
-            serde_json::to_string(&ConditionSource::Header).unwrap(),
-            "\"header\""
-        );
+        assert_eq!(serde_json::to_string(&ConditionSource::Header).unwrap(), "\"header\"");
         assert_eq!(
             serde_json::to_string(&ConditionSource::ClientIp).unwrap(),
             "\"client_ip\""

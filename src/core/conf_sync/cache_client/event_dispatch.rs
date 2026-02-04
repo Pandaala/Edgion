@@ -70,7 +70,7 @@ where
     ) -> Result<ListResult, tonic::Status> {
         let list_request = tonic::Request::new(crate::core::conf_sync::proto::ListRequest {
             key: gateway_class_key.to_string(),
-            kind: T::kind_name().to_string(),  // Use string kind name instead of enum
+            kind: T::kind_name().to_string(), // Use string kind name instead of enum
             expected_server_id: expected_server_id.to_string(),
         });
 
@@ -233,7 +233,7 @@ where
 
                     let request = tonic::Request::new(crate::core::conf_sync::proto::WatchRequest {
                         key: String::new(),
-                        kind: T::kind_name().to_string(),  // Use string kind name instead of enum
+                        kind: T::kind_name().to_string(), // Use string kind name instead of enum
                         client_id: client_id.as_ref().clone(),
                         client_name: client_name.as_ref().clone(),
                         from_version,

@@ -19,7 +19,10 @@ static GLOBAL_TEST_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 pub fn init_global_test_mode(enabled: bool) {
     GLOBAL_TEST_MODE.store(enabled, std::sync::atomic::Ordering::SeqCst);
     if enabled {
-        tracing::info!(component = "test_mode", "Test mode enabled: endpoint_mode=Both, metrics test features active");
+        tracing::info!(
+            component = "test_mode",
+            "Test mode enabled: endpoint_mode=Both, metrics test features active"
+        );
     }
 }
 

@@ -76,9 +76,7 @@ mod tests {
                         remove: Some(vec!["X-Remove".to_string()]),
                     },
                 ))]),
-                upstream_response_filter_plugins: None,
-                upstream_response_plugins: None,
-                plugin_runtime: Default::default(),
+                ..Default::default()
             },
             status: None,
         };

@@ -88,11 +88,7 @@ impl RequestFilter for ConditionalRequestFilter {
         self.inner.name()
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // Check conditions before running
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
@@ -100,12 +96,7 @@ impl RequestFilter for ConditionalRequestFilter {
                 let eval = conditions.evaluate_detail(&ctx);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
-                        log.set_cond_skip(format!(
-                            "{}:{},{}",
-                            eval.action,
-                            cond.cond_type(),
-                            cond.cond_detail()
-                        ));
+                        log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
                     }
                     return PluginRunningResult::Nothing;
                 }
@@ -155,12 +146,7 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
                 let eval = conditions.evaluate_detail(&ctx);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
-                        log.set_cond_skip(format!(
-                            "{}:{},{}",
-                            eval.action,
-                            cond.cond_type(),
-                            cond.cond_detail()
-                        ));
+                        log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
                     }
                     return PluginRunningResult::Nothing;
                 }
@@ -199,11 +185,7 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
         self.inner.name()
     }
 
-    async fn run_upstream_response(
-        &self,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // Check conditions before running
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
@@ -211,12 +193,7 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
                 let eval = conditions.evaluate_detail(&ctx);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
-                        log.set_cond_skip(format!(
-                            "{}:{},{}",
-                            eval.action,
-                            cond.cond_type(),
-                            cond.cond_detail()
-                        ));
+                        log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
                     }
                     return PluginRunningResult::Nothing;
                 }
@@ -262,11 +239,7 @@ mod tests {
             &self.name
         }
 
-        async fn run_request(
-            &self,
-            _session: &mut dyn PluginSession,
-            _log: &mut PluginLog,
-        ) -> PluginRunningResult {
+        async fn run_request(&self, _session: &mut dyn PluginSession, _log: &mut PluginLog) -> PluginRunningResult {
             self.run_count.fetch_add(1, Ordering::SeqCst);
             PluginRunningResult::Nothing
         }
@@ -381,7 +354,11 @@ mod tests {
             Ok(())
         }
 
-        fn append_response_header(&mut self, _name: &str, _value: &str) -> super::super::traits::PluginSessionResult<()> {
+        fn append_response_header(
+            &mut self,
+            _name: &str,
+            _value: &str,
+        ) -> super::super::traits::PluginSessionResult<()> {
             Ok(())
         }
 
@@ -401,7 +378,11 @@ mod tests {
             Ok(())
         }
 
-        fn append_request_header(&mut self, _name: &str, _value: &str) -> super::super::traits::PluginSessionResult<()> {
+        fn append_request_header(
+            &mut self,
+            _name: &str,
+            _value: &str,
+        ) -> super::super::traits::PluginSessionResult<()> {
             Ok(())
         }
 

@@ -176,9 +176,7 @@ fn collect_tls_routes(config_client: &ConfigClient, keys: &mut HashSet<PreloadKe
 
 fn preload_lb(service_key: &str, lb_type: &Option<LbPolicyType>, mode: EndpointMode) -> bool {
     match mode {
-        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
-            preload_eps_lb(service_key, lb_type)
-        }
+        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => preload_eps_lb(service_key, lb_type),
         EndpointMode::Endpoint => preload_endpoint_lb(service_key, lb_type),
     }
 }
@@ -202,19 +200,13 @@ fn preload_eps_lb(service_key: &str, lb_type: &Option<LbPolicyType>) -> bool {
     // Additionally preload specific LB if configured
     match lb_type {
         Some(LbPolicyType::ConsistentHash) => {
-            get_consistent_store().get_or_create_with_provider(service_key, |key| {
-                rr_store.get_slices_for_service(key)
-            });
+            get_consistent_store().get_or_create_with_provider(service_key, |key| rr_store.get_slices_for_service(key));
         }
         Some(LbPolicyType::LeastConn) => {
-            get_leastconn_store().get_or_create_with_provider(service_key, |key| {
-                rr_store.get_slices_for_service(key)
-            });
+            get_leastconn_store().get_or_create_with_provider(service_key, |key| rr_store.get_slices_for_service(key));
         }
         Some(LbPolicyType::Ewma) => {
-            get_ewma_store().get_or_create_with_provider(service_key, |key| {
-                rr_store.get_slices_for_service(key)
-            });
+            get_ewma_store().get_or_create_with_provider(service_key, |key| rr_store.get_slices_for_service(key));
         }
         None => {} // RoundRobin already preloaded
     }
@@ -247,19 +239,16 @@ fn preload_endpoint_lb(service_key: &str, lb_type: &Option<LbPolicyType>) -> boo
     // Additionally preload specific LB if configured
     match lb_type {
         Some(LbPolicyType::ConsistentHash) => {
-            get_endpoint_consistent_store().get_or_create_with_provider(service_key, |key| {
-                rr_store.get_endpoint_for_service(key)
-            });
+            get_endpoint_consistent_store()
+                .get_or_create_with_provider(service_key, |key| rr_store.get_endpoint_for_service(key));
         }
         Some(LbPolicyType::LeastConn) => {
-            get_endpoint_leastconn_store().get_or_create_with_provider(service_key, |key| {
-                rr_store.get_endpoint_for_service(key)
-            });
+            get_endpoint_leastconn_store()
+                .get_or_create_with_provider(service_key, |key| rr_store.get_endpoint_for_service(key));
         }
         Some(LbPolicyType::Ewma) => {
-            get_endpoint_ewma_store().get_or_create_with_provider(service_key, |key| {
-                rr_store.get_endpoint_for_service(key)
-            });
+            get_endpoint_ewma_store()
+                .get_or_create_with_provider(service_key, |key| rr_store.get_endpoint_for_service(key));
         }
         None => {} // RoundRobin already preloaded
     }

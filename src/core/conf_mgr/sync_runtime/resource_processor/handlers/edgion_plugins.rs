@@ -8,8 +8,7 @@
 //! - on_delete: Clear SecretRefManager references
 
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    condition_types, format_secret_key, get_secret, HandlerContext, ProcessResult, ProcessorHandler,
-    ResourceRef,
+    condition_types, format_secret_key, get_secret, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionPlugins;
 use crate::types::resources::edgion_plugins::plugin_configs::ResolvedJwtCredential;
@@ -43,8 +42,7 @@ impl EdgionPluginsHandler {
                 if let EdgionPlugin::JwtAuth(ref mut config) = entry.plugin {
                     // Resolve single secret_ref
                     if let Some(ref secret_ref) = config.secret_ref {
-                        let ns = secret_ref.namespace.as_ref()
-                            .or(ep.metadata.namespace.as_ref());
+                        let ns = secret_ref.namespace.as_ref().or(ep.metadata.namespace.as_ref());
                         let secret_key = format_secret_key(ns, &secret_ref.name);
                         let ns_str = ns.map(|s| s.as_str()).unwrap_or(ep_ns);
 
@@ -88,8 +86,7 @@ impl EdgionPluginsHandler {
                     if let Some(ref secret_refs) = config.secret_refs {
                         let mut resolved = HashMap::new();
                         for secret_ref in secret_refs {
-                            let ns = secret_ref.namespace.as_ref()
-                                .or(ep.metadata.namespace.as_ref());
+                            let ns = secret_ref.namespace.as_ref().or(ep.metadata.namespace.as_ref());
                             let secret_key = format_secret_key(ns, &secret_ref.name);
                             let ns_str = ns.map(|s| s.as_str()).unwrap_or(ep_ns);
 
@@ -135,6 +132,12 @@ impl Default for EdgionPluginsHandler {
 }
 
 impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
+    fn preparse(&self, ep: &mut EdgionPlugins, _ctx: &HandlerContext) -> Vec<String> {
+        // Build plugin runtime and collect validation errors
+        ep.preparse();
+        ep.get_preparse_errors().to_vec()
+    }
+
     fn parse(&self, mut ep: EdgionPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionPlugins> {
         let resource_ref = ResourceRef::new(
             ResourceKind::EdgionPlugins,
@@ -147,6 +150,8 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
 
         // Resolve JWT credentials from Secrets and register references
         Self::resolve_jwt_credentials(&mut ep, &resource_ref, ctx);
+
+        // Note: preparse() is called by processor before parse(), so we don't call it here
 
         ProcessResult::Continue(ep)
     }
@@ -167,6 +172,8 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
     fn update_status(&self, ep: &mut EdgionPlugins, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = ep.metadata.generation;
 
+        // Note: validation_errors already includes preparse errors (merged by processor)
+
         // Initialize status if not present
         let status = ep
             .status
@@ -185,8 +192,17 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         };
         update_k8s_condition(&mut status.conditions, accepted);
 
-        // Set Ready condition (always ready after parsing)
-        let ready = k8s_condition_true(condition_types::READY, "Ready", "Resource is ready", generation);
+        // Set Ready condition (ready only if no errors)
+        let ready = if validation_errors.is_empty() {
+            k8s_condition_true(condition_types::READY, "Ready", "Resource is ready", generation)
+        } else {
+            k8s_condition_false(
+                condition_types::READY,
+                "ConfigurationError",
+                "Resource has configuration errors",
+                generation,
+            )
+        };
         update_k8s_condition(&mut status.conditions, ready);
     }
 }

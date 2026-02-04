@@ -19,7 +19,6 @@ use tokio::net::UdpSocket;
 use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::observe::test_metrics::TestType;
 use crate::core::observe::AccessLogger;
-use crate::types::constants::annotations::edgion as annotations;
 use crate::core::routes::get_global_route_manager;
 use crate::core::routes::http_routes::{EdgionHttp, EdgionHttpRedirect};
 use crate::core::routes::tcp_routes::{get_global_tcp_route_manager, EdgionTcp};
@@ -27,6 +26,7 @@ use crate::core::routes::tls_routes::{get_global_tls_route_manager, EdgionTls};
 use crate::core::routes::udp_routes::{get_global_udp_route_manager, EdgionUdp};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 use crate::core::tls::backend_common::tls_pingora::TlsCallback;
+use crate::types::constants::annotations::edgion as annotations;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::gateway::Listener;
 
@@ -160,10 +160,7 @@ pub fn add_http_listener(
     // from GatewayConfigStore to support hot-reload of Gateway configuration
     //
     // Extract test metrics configuration from Gateway annotations (optional)
-    let metrics_test_key = context
-        .gateway_annotations
-        .get(annotations::METRICS_TEST_KEY)
-        .cloned();
+    let metrics_test_key = context.gateway_annotations.get(annotations::METRICS_TEST_KEY).cloned();
     let metrics_test_type = context
         .gateway_annotations
         .get(annotations::METRICS_TEST_TYPE)

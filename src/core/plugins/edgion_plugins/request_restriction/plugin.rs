@@ -158,11 +158,7 @@ impl RequestFilter for RequestRestriction {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        plugin_log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Check for configuration errors
         if !self.config.is_valid() {
             let error = self.config.get_validation_error().unwrap_or("Unknown error");

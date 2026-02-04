@@ -67,6 +67,20 @@ where
         Vec::new()
     }
 
+    /// Preparse resource and return validation errors
+    ///
+    /// Called by processor after validate(), before parse().
+    /// Used for resource-specific preprocessing that may produce validation errors
+    /// (e.g., plugin config validation, regex compilation, building runtime structures).
+    ///
+    /// Errors returned here are automatically merged with validate() errors
+    /// and passed to update_status().
+    ///
+    /// Default: no-op, returns empty errors
+    fn preparse(&self, _obj: &mut K, _ctx: &HandlerContext) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Parse/preprocess resource
     ///
     /// Perform resource-specific transformations:

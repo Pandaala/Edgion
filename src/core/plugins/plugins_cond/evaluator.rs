@@ -4,8 +4,8 @@
 //! to determine whether a plugin should be executed or skipped.
 
 use super::{
-    Condition, ConditionSource, ExcludeCondition, IncludeCondition, KeyExistCondition,
-    KeyMatchCondition, PluginConditions, ProbabilityCondition, TimeRangeCondition,
+    Condition, ConditionSource, ExcludeCondition, IncludeCondition, KeyExistCondition, KeyMatchCondition,
+    PluginConditions, ProbabilityCondition, TimeRangeCondition,
 };
 use chrono::Utc;
 use std::collections::hash_map::DefaultHasher;
@@ -576,8 +576,7 @@ mod tests {
 
         assert!(condition.evaluate(&ctx));
 
-        ctx.headers
-            .insert("X-Environment".to_string(), "staging".to_string());
+        ctx.headers.insert("X-Environment".to_string(), "staging".to_string());
         assert!(!condition.evaluate(&ctx));
     }
 
@@ -602,12 +601,10 @@ mod tests {
             .insert("X-Environment".to_string(), "production".to_string());
         assert!(condition.evaluate(&ctx));
 
-        ctx.headers
-            .insert("X-Environment".to_string(), "staging".to_string());
+        ctx.headers.insert("X-Environment".to_string(), "staging".to_string());
         assert!(condition.evaluate(&ctx));
 
-        ctx.headers
-            .insert("X-Environment".to_string(), "testing".to_string());
+        ctx.headers.insert("X-Environment".to_string(), "testing".to_string());
         assert!(!condition.evaluate(&ctx));
     }
 
@@ -654,13 +651,11 @@ mod tests {
         condition.compile().unwrap();
 
         let mut ctx = MockContext::new();
-        ctx.headers
-            .insert("User-Agent".to_string(), "Mozilla/5.0".to_string());
+        ctx.headers.insert("User-Agent".to_string(), "Mozilla/5.0".to_string());
 
         assert!(condition.evaluate(&ctx));
 
-        ctx.headers
-            .insert("User-Agent".to_string(), "curl/7.64.1".to_string());
+        ctx.headers.insert("User-Agent".to_string(), "curl/7.64.1".to_string());
         assert!(!condition.evaluate(&ctx));
     }
 
@@ -683,20 +678,16 @@ mod tests {
 
         let mut ctx = MockContext::new();
 
-        ctx.headers
-            .insert("User-Agent".to_string(), "Mozilla/5.0".to_string());
+        ctx.headers.insert("User-Agent".to_string(), "Mozilla/5.0".to_string());
         assert!(condition.evaluate(&ctx));
 
-        ctx.headers
-            .insert("User-Agent".to_string(), "Chrome/100.0".to_string());
+        ctx.headers.insert("User-Agent".to_string(), "Chrome/100.0".to_string());
         assert!(condition.evaluate(&ctx));
 
-        ctx.headers
-            .insert("User-Agent".to_string(), "SAFARI/605.1".to_string());
+        ctx.headers.insert("User-Agent".to_string(), "SAFARI/605.1".to_string());
         assert!(condition.evaluate(&ctx)); // case-insensitive
 
-        ctx.headers
-            .insert("User-Agent".to_string(), "curl/7.64.1".to_string());
+        ctx.headers.insert("User-Agent".to_string(), "curl/7.64.1".to_string());
         assert!(!condition.evaluate(&ctx));
     }
 
@@ -789,10 +780,7 @@ mod tests {
         let mut condition = IncludeCondition {
             source: ConditionSource::Path,
             values: Some(vec!["/static/*".to_string()]),
-            regex: Some(vec![
-                r"^/api/v[0-9]+/.*".to_string(),
-                r"(?i:^/internal/.*)".to_string(),
-            ]),
+            regex: Some(vec![r"^/api/v[0-9]+/.*".to_string(), r"(?i:^/internal/.*)".to_string()]),
             values_set: None,
             compiled_regex: None,
         };
@@ -851,10 +839,7 @@ mod tests {
         let mut condition = ExcludeCondition {
             source: ConditionSource::Path,
             values: Some(vec!["/health".to_string()]),
-            regex: Some(vec![
-                r"^/debug/.*".to_string(),
-                r"^/metrics/.*".to_string(),
-            ]),
+            regex: Some(vec![r"^/debug/.*".to_string(), r"^/metrics/.*".to_string()]),
             values_set: None,
             compiled_regex: None,
         };

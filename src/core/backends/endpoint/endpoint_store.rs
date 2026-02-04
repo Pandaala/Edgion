@@ -225,10 +225,7 @@ where
         let keys: HashSet<String> = data.keys().cloned().collect();
         *self.ep_data.write().unwrap() = data;
 
-        tracing::debug!(
-            services = keys.len(),
-            "Replaced Endpoint data layer (data only)"
-        );
+        tracing::debug!(services = keys.len(), "Replaced Endpoint data layer (data only)");
 
         keys
     }
@@ -496,8 +493,14 @@ mod tests {
         let store = EndpointStore::<RoundRobin>::new();
 
         let mut data = HashMap::new();
-        data.insert("default/svc-a".to_string(), create_test_endpoints("svc-a", "default", vec!["10.0.0.1"]));
-        data.insert("default/svc-b".to_string(), create_test_endpoints("svc-b", "default", vec!["10.0.0.2"]));
+        data.insert(
+            "default/svc-a".to_string(),
+            create_test_endpoints("svc-a", "default", vec!["10.0.0.1"]),
+        );
+        data.insert(
+            "default/svc-b".to_string(),
+            create_test_endpoints("svc-b", "default", vec!["10.0.0.2"]),
+        );
 
         let services = store.replace_data_only(data);
 
@@ -519,7 +522,10 @@ mod tests {
         let store = EndpointStore::<RoundRobin>::new();
 
         let mut data = HashMap::new();
-        data.insert("default/svc-a".to_string(), create_test_endpoints("svc-a", "default", vec!["10.0.0.1"]));
+        data.insert(
+            "default/svc-a".to_string(),
+            create_test_endpoints("svc-a", "default", vec!["10.0.0.1"]),
+        );
         store.replace_data_only(data);
 
         // LB not created yet
@@ -563,7 +569,10 @@ mod tests {
 
         // Setup initial data
         let mut data = HashMap::new();
-        data.insert("default/svc-a".to_string(), create_test_endpoints("svc-a", "default", vec!["10.0.0.1"]));
+        data.insert(
+            "default/svc-a".to_string(),
+            create_test_endpoints("svc-a", "default", vec!["10.0.0.1"]),
+        );
         store.replace_data_only(data);
 
         // Remove
@@ -581,7 +590,10 @@ mod tests {
 
         // Setup data and create LB
         let mut data = HashMap::new();
-        data.insert("default/svc-a".to_string(), create_test_endpoints("svc-a", "default", vec!["10.0.0.1"]));
+        data.insert(
+            "default/svc-a".to_string(),
+            create_test_endpoints("svc-a", "default", vec!["10.0.0.1"]),
+        );
         store.replace_data_only(data);
         let _ = store.get_or_create("default/svc-a");
         assert!(store.contains("default/svc-a"));
@@ -603,7 +615,10 @@ mod tests {
 
         // Setup data
         let mut data = HashMap::new();
-        data.insert("default/svc-a".to_string(), create_test_endpoints("svc-a", "default", vec!["10.0.0.1"]));
+        data.insert(
+            "default/svc-a".to_string(),
+            create_test_endpoints("svc-a", "default", vec!["10.0.0.1"]),
+        );
         store.replace_data_only(data);
 
         let creation_count = Arc::new(AtomicUsize::new(0));

@@ -55,10 +55,7 @@ impl ResponseRewrite {
                     if let Some(value) = session.get_response_header(&entry.from) {
                         // Set the new header with the same value
                         if let Err(e) = session.set_response_header(&entry.to, &value) {
-                            plugin_log.push(&format!(
-                                "Header rename {} -> {} failed: {}; ",
-                                entry.from, entry.to, e
-                            ));
+                            plugin_log.push(&format!("Header rename {} -> {} failed: {}; ", entry.from, entry.to, e));
                         } else {
                             // Remove the old header
                             let _ = session.remove_response_header(&entry.from);
@@ -141,9 +138,7 @@ impl UpstreamResponseFilter for ResponseRewrite {
 mod tests {
     use super::*;
     use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
-    use crate::types::resources::edgion_plugins::{
-        HeaderRename, ResponseHeaderActions, ResponseHeaderEntry,
-    };
+    use crate::types::resources::edgion_plugins::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry};
 
     fn create_basic_config() -> ResponseRewriteConfig {
         ResponseRewriteConfig {
@@ -244,10 +239,7 @@ mod tests {
 
         mock_session
             .expect_append_response_header()
-            .with(
-                mockall::predicate::eq("X-Added"),
-                mockall::predicate::eq("added-value"),
-            )
+            .with(mockall::predicate::eq("X-Added"), mockall::predicate::eq("added-value"))
             .returning(|_, _| Ok(()));
 
         let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
@@ -403,10 +395,7 @@ mod tests {
             .returning(|_| Some("old-value".to_string()));
         mock_session
             .expect_set_response_header()
-            .with(
-                mockall::predicate::eq("X-New"),
-                mockall::predicate::eq("old-value"),
-            )
+            .with(mockall::predicate::eq("X-New"), mockall::predicate::eq("old-value"))
             .returning(|_, _| Ok(()));
         mock_session
             .expect_remove_response_header()
@@ -416,10 +405,7 @@ mod tests {
         // Add (executed second)
         mock_session
             .expect_append_response_header()
-            .with(
-                mockall::predicate::eq("X-Powered-By"),
-                mockall::predicate::eq("Edgion"),
-            )
+            .with(mockall::predicate::eq("X-Powered-By"), mockall::predicate::eq("Edgion"))
             .returning(|_, _| Ok(()));
 
         // Set (executed third)

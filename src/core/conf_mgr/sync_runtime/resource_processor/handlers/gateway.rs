@@ -10,9 +10,8 @@
 use std::collections::HashSet;
 
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    accepted_condition, condition_false, condition_true, condition_types, condition_reasons,
-    format_secret_key, get_listener_port_manager, get_secret, make_port_key, HandlerContext,
-    ProcessResult, ProcessorHandler, ResourceRef,
+    accepted_condition, condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
+    get_listener_port_manager, get_secret, make_port_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::gateway::{GatewayStatus, ListenerStatus, RouteGroupKind};

@@ -20,17 +20,12 @@ static CAPTURE_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$(\d)")
 
 /// Regex for matching path parameter variables $<name>
 /// Matches $ followed by a letter and any word characters, but NOT $uri or $arg_xxx or $1-$9
-static PATH_PARAM_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\$([a-zA-Z][a-zA-Z0-9_]*)").unwrap());
+static PATH_PARAM_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$([a-zA-Z][a-zA-Z0-9_]*)").unwrap());
 
 /// Characters that should be percent-encoded in query parameter values.
 /// Based on RFC 3986, we encode everything except unreserved characters.
 /// Unreserved: A-Z a-z 0-9 - . _ ~
-const QUERY_VALUE_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
+const QUERY_VALUE_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
 
 /// Proxy Rewrite plugin
 ///
@@ -127,11 +122,7 @@ impl ProxyRewrite {
 
             for (full_match, param_name) in matches {
                 if let Some(value) = session.get_path_param(&param_name) {
-                    let replacement = if encode_values {
-                        Self::url_encode(&value)
-                    } else {
-                        value
-                    };
+                    let replacement = if encode_values { Self::url_encode(&value) } else { value };
                     result = result.replace(&full_match, &replacement);
                 }
             }
@@ -245,8 +236,7 @@ impl ProxyRewrite {
             if let Some(ref add_headers) = headers.add {
                 for entry in add_headers {
                     // Don't encode header values
-                    let resolved =
-                        self.resolve_variables(&entry.value, original_path, session, captures, false);
+                    let resolved = self.resolve_variables(&entry.value, original_path, session, captures, false);
                     if let Err(e) = session.append_request_header(&entry.name, &resolved) {
                         plugin_log.push(&format!("Header add {} failed: {}; ", entry.name, e));
                     } else {
@@ -259,8 +249,7 @@ impl ProxyRewrite {
             if let Some(ref set_headers) = headers.set {
                 for entry in set_headers {
                     // Don't encode header values
-                    let resolved =
-                        self.resolve_variables(&entry.value, original_path, session, captures, false);
+                    let resolved = self.resolve_variables(&entry.value, original_path, session, captures, false);
                     if let Err(e) = session.set_request_header(&entry.name, &resolved) {
                         plugin_log.push(&format!("Header set {} failed: {}; ", entry.name, e));
                     } else {
@@ -293,11 +282,7 @@ impl RequestFilter for ProxyRewrite {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        plugin_log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Check if configuration is valid
         if !self.config.is_valid() {
             if let Some(err) = self.config.get_validation_error() {
@@ -365,9 +350,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("ProxyRewrite");
 
-        mock_session
-            .expect_get_path()
-            .return_const("/old/path".to_string());
+        mock_session.expect_get_path().return_const("/old/path".to_string());
         mock_session
             .expect_get_query()
             .return_const(Some("foo=bar&baz=qux".to_string()));
@@ -394,9 +377,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("ProxyRewrite");
 
-        mock_session
-            .expect_get_path()
-            .return_const("/old/path".to_string());
+        mock_session.expect_get_path().return_const("/old/path".to_string());
         mock_session.expect_get_query().return_const(None::<String>);
         mock_session
             .expect_set_upstream_uri()
@@ -466,9 +447,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("ProxyRewrite");
 
         // Path doesn't match the regex pattern
-        mock_session
-            .expect_get_path()
-            .return_const("/other/path".to_string());
+        mock_session.expect_get_path().return_const("/other/path".to_string());
         mock_session.expect_get_query().return_const(None::<String>);
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
@@ -493,9 +472,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("ProxyRewrite");
 
-        mock_session
-            .expect_get_path()
-            .return_const("/test".to_string());
+        mock_session.expect_get_path().return_const("/test".to_string());
         mock_session.expect_get_query().return_const(None::<String>);
         mock_session
             .expect_set_upstream_method()
@@ -536,28 +513,20 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("ProxyRewrite");
 
-        mock_session
-            .expect_get_path()
-            .return_const("/test".to_string());
+        mock_session.expect_get_path().return_const("/test".to_string());
         mock_session.expect_get_query().return_const(None::<String>);
 
         // Headers should be set in order
         let mut seq = mockall::Sequence::new();
         mock_session
             .expect_set_request_header()
-            .with(
-                mockall::predicate::eq("X-First"),
-                mockall::predicate::eq("1"),
-            )
+            .with(mockall::predicate::eq("X-First"), mockall::predicate::eq("1"))
             .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| Ok(()));
         mock_session
             .expect_set_request_header()
-            .with(
-                mockall::predicate::eq("X-Second"),
-                mockall::predicate::eq("2"),
-            )
+            .with(mockall::predicate::eq("X-Second"), mockall::predicate::eq("2"))
             .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| Ok(()));
@@ -587,9 +556,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("ProxyRewrite");
 
-        mock_session
-            .expect_get_path()
-            .return_const("/old".to_string());
+        mock_session.expect_get_path().return_const("/old".to_string());
         mock_session.expect_get_query().return_const(None::<String>);
         mock_session
             .expect_get_query_param()
@@ -621,9 +588,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("ProxyRewrite");
 
-        mock_session
-            .expect_get_path()
-            .return_const("/old".to_string());
+        mock_session.expect_get_path().return_const("/old".to_string());
         mock_session.expect_get_query().return_const(None::<String>);
         mock_session
             .expect_get_query_param()
@@ -654,9 +619,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("ProxyRewrite");
 
-        mock_session
-            .expect_get_path()
-            .return_const("/api/users".to_string());
+        mock_session.expect_get_path().return_const("/api/users".to_string());
         mock_session.expect_get_query().return_const(None::<String>);
         mock_session
             .expect_set_upstream_uri()
@@ -711,17 +674,11 @@ mod tests {
         // Headers should get capture group values
         mock_session
             .expect_set_request_header()
-            .with(
-                mockall::predicate::eq("X-User-Id"),
-                mockall::predicate::eq("456"),
-            )
+            .with(mockall::predicate::eq("X-User-Id"), mockall::predicate::eq("456"))
             .returning(|_, _| Ok(()));
         mock_session
             .expect_set_request_header()
-            .with(
-                mockall::predicate::eq("X-Action"),
-                mockall::predicate::eq("profile"),
-            )
+            .with(mockall::predicate::eq("X-Action"), mockall::predicate::eq("profile"))
             .returning(|_, _| Ok(()));
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
@@ -793,9 +750,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("ProxyRewrite");
 
-        mock_session
-            .expect_get_path()
-            .return_const("/test".to_string());
+        mock_session.expect_get_path().return_const("/test".to_string());
         mock_session.expect_get_query().return_const(None::<String>);
         mock_session
             .expect_append_request_header()
@@ -903,17 +858,11 @@ mod tests {
         // Headers should get path param values
         mock_session
             .expect_set_request_header()
-            .with(
-                mockall::predicate::eq("X-User-Id"),
-                mockall::predicate::eq("456"),
-            )
+            .with(mockall::predicate::eq("X-User-Id"), mockall::predicate::eq("456"))
             .returning(|_, _| Ok(()));
         mock_session
             .expect_set_request_header()
-            .with(
-                mockall::predicate::eq("X-Action"),
-                mockall::predicate::eq("edit"),
-            )
+            .with(mockall::predicate::eq("X-Action"), mockall::predicate::eq("edit"))
             .returning(|_, _| Ok(()));
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
@@ -937,9 +886,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("ProxyRewrite");
 
-        mock_session
-            .expect_get_path()
-            .return_const("/test".to_string());
+        mock_session.expect_get_path().return_const("/test".to_string());
         mock_session.expect_get_query().return_const(None::<String>);
         // Path param not found
         mock_session

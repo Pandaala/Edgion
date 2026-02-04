@@ -160,9 +160,10 @@ impl JwtAuth {
     fn decode_secret_if_needed(&self, secret_bytes: Vec<u8>) -> JwtAuthResult<Vec<u8>> {
         if self.config.base64_secret {
             // Secret is base64 encoded, decode it
-            let secret_str = String::from_utf8(secret_bytes)
-                .map_err(|e| format!("Invalid UTF-8 in base64 secret: {}", e))?;
-            let decoded = base64::engine::general_purpose::STANDARD.decode(secret_str.trim())
+            let secret_str =
+                String::from_utf8(secret_bytes).map_err(|e| format!("Invalid UTF-8 in base64 secret: {}", e))?;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(secret_str.trim())
                 .map_err(|e| format!("Failed to decode base64 secret: {}", e))?;
             Ok(decoded)
         } else {
@@ -178,15 +179,17 @@ impl JwtAuth {
         // Try pre-resolved single credential first
         if let Some(ref resolved) = self.config.resolved_credential {
             let cred = if is_symmetric {
-                let secret_b64 = resolved.secret.as_ref()
-                    .ok_or("Resolved credential missing 'secret'")?;
-                let secret_bytes = base64::engine::general_purpose::STANDARD.decode(secret_b64)
+                let secret_b64 = resolved.secret.as_ref().ok_or("Resolved credential missing 'secret'")?;
+                let secret_bytes = base64::engine::general_purpose::STANDARD
+                    .decode(secret_b64)
                     .map_err(|e| format!("Invalid base64 secret: {}", e))?;
                 // Apply additional base64 decoding if configured
                 let final_secret = self.decode_secret_if_needed(secret_bytes)?;
                 Credential::Symmetric(final_secret)
             } else {
-                let pem = resolved.public_key.as_ref()
+                let pem = resolved
+                    .public_key
+                    .as_ref()
                     .ok_or("Resolved credential missing 'publicKey'")?;
                 Credential::Asymmetric(pem.clone())
             };
@@ -198,15 +201,20 @@ impl JwtAuth {
             let mut map = HashMap::new();
             for (key, resolved) in resolved_map {
                 let cred = if is_symmetric {
-                    let secret_b64 = resolved.secret.as_ref()
+                    let secret_b64 = resolved
+                        .secret
+                        .as_ref()
                         .ok_or_else(|| format!("Resolved credential '{}' missing 'secret'", key))?;
-                    let secret_bytes = base64::engine::general_purpose::STANDARD.decode(secret_b64)
+                    let secret_bytes = base64::engine::general_purpose::STANDARD
+                        .decode(secret_b64)
                         .map_err(|e| format!("Invalid base64 secret for '{}': {}", key, e))?;
                     // Apply additional base64 decoding if configured
                     let final_secret = self.decode_secret_if_needed(secret_bytes)?;
                     Credential::Symmetric(final_secret)
                 } else {
-                    let pem = resolved.public_key.as_ref()
+                    let pem = resolved
+                        .public_key
+                        .as_ref()
                         .ok_or_else(|| format!("Resolved credential '{}' missing 'publicKey'", key))?;
                     Credential::Asymmetric(pem.clone())
                 };
@@ -220,10 +228,7 @@ impl JwtAuth {
         // Fallback to get_secret (for controller-side or backward compatibility)
         // Single secret_ref
         if let Some(ref secret_ref) = self.config.secret_ref {
-            let ns = secret_ref
-                .namespace
-                .as_deref()
-                .unwrap_or(&self.plugin_namespace);
+            let ns = secret_ref.namespace.as_deref().unwrap_or(&self.plugin_namespace);
             let secret = get_secret(Some(ns), &secret_ref.name)
                 .ok_or_else(|| format!("Secret {}/{} not found", ns, secret_ref.name))?;
 
@@ -256,10 +261,7 @@ impl JwtAuth {
             let mut map = HashMap::new();
 
             for secret_ref in secret_refs {
-                let ns = secret_ref
-                    .namespace
-                    .as_deref()
-                    .unwrap_or(&self.plugin_namespace);
+                let ns = secret_ref.namespace.as_deref().unwrap_or(&self.plugin_namespace);
                 let secret = get_secret(Some(ns), &secret_ref.name)
                     .ok_or_else(|| format!("Secret {}/{} not found", ns, secret_ref.name))?;
 
@@ -271,8 +273,8 @@ impl JwtAuth {
                 let key_bytes = data
                     .get("key")
                     .ok_or_else(|| format!("Secret {}/{} missing 'key' field", ns, secret_ref.name))?;
-                let key_str = String::from_utf8(key_bytes.0.clone())
-                    .map_err(|e| format!("Invalid key encoding: {}", e))?;
+                let key_str =
+                    String::from_utf8(key_bytes.0.clone()).map_err(|e| format!("Invalid key encoding: {}", e))?;
 
                 let cred = if is_symmetric {
                     let secret_bytes = data
@@ -422,13 +424,7 @@ impl JwtAuth {
             .extra
             .get(&self.config.key_claim_name)
             .and_then(|v| v.as_str())
-            .or_else(|| {
-                token_data
-                    .claims
-                    .extra
-                    .get("sub")
-                    .and_then(|v| v.as_str())
-            })
+            .or_else(|| token_data.claims.extra.get("sub").and_then(|v| v.as_str()))
             .unwrap_or("")
             .to_string();
 
@@ -447,11 +443,7 @@ impl JwtAuth {
     }
 
     /// Set headers from JWT claims based on claims_to_headers configuration
-    fn set_claims_headers(
-        &self,
-        session: &mut dyn PluginSession,
-        claims: &serde_json::Value,
-    ) {
+    fn set_claims_headers(&self, session: &mut dyn PluginSession, claims: &serde_json::Value) {
         if let Some(ref mapping) = self.config.claims_to_headers {
             for (claim_name, header_name) in mapping {
                 if let Some(value) = claims.get(claim_name) {
@@ -479,11 +471,7 @@ impl JwtAuth {
 
     /// Handle anonymous access
     /// Sets X-Anonymous-Consumer header to indicate anonymous request
-    fn handle_anonymous_access(
-        &self,
-        session: &mut dyn PluginSession,
-        plugin_log: &mut PluginLog,
-    ) -> bool {
+    fn handle_anonymous_access(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> bool {
         if let Some(ref anonymous) = self.config.anonymous {
             plugin_log.push(&format!("Anon={}; ", anonymous));
             let _ = session.set_request_header("X-Anonymous-Consumer", "true");
@@ -558,11 +546,7 @@ impl RequestFilter for JwtAuth {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        plugin_log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Extract token
         let (token, source) = match self.extract_token(session) {
             Some(t) => t,
@@ -666,10 +650,7 @@ mod tests {
 
     /// Helper: get current timestamp
     fn now_ts() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
     }
 
     // ========== Basic Tests ==========
@@ -792,9 +773,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_401_includes_www_authenticate_header() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.realm = "my-api".to_string();
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.realm = "my-api".to_string();
+            }),
+        );
 
         let mut mock = MockPluginSession::new();
         let mut log = PluginLog::new("JwtAuth");
@@ -807,17 +792,16 @@ mod tests {
         // Capture response headers
         let headers_captured: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let headers_clone = headers_captured.clone();
-        mock.expect_write_response_header()
-            .returning(move |resp, _| {
-                // Check for WWW-Authenticate header in response
-                if let Some(val) = resp.headers.get("WWW-Authenticate") {
-                    headers_clone.lock().unwrap().push((
-                        "WWW-Authenticate".to_string(),
-                        val.to_str().unwrap_or("").to_string(),
-                    ));
-                }
-                Ok(())
-            });
+        mock.expect_write_response_header().returning(move |resp, _| {
+            // Check for WWW-Authenticate header in response
+            if let Some(val) = resp.headers.get("WWW-Authenticate") {
+                headers_clone
+                    .lock()
+                    .unwrap()
+                    .push(("WWW-Authenticate".to_string(), val.to_str().unwrap_or("").to_string()));
+            }
+            Ok(())
+        });
         mock.expect_write_response_body().returning(|_, _| Ok(()));
         mock.expect_shutdown().returning(|| {});
 
@@ -826,7 +810,9 @@ mod tests {
 
         let headers = headers_captured.lock().unwrap();
         assert!(
-            headers.iter().any(|(k, v)| k == "WWW-Authenticate" && v.contains("Bearer") && v.contains("my-api")),
+            headers
+                .iter()
+                .any(|(k, v)| k == "WWW-Authenticate" && v.contains("Bearer") && v.contains("my-api")),
             "Expected WWW-Authenticate header with realm, got: {:?}",
             *headers
         );
@@ -840,9 +826,13 @@ mod tests {
         let raw_secret = "my-raw-secret-key-for-testing!!";
         let base64_secret = base64::engine::general_purpose::STANDARD.encode(raw_secret);
 
-        let auth = jwt_auth_with_credential(&base64_secret, JwtAlgorithm::HS256, Some(|c| {
-            c.base64_secret = true;
-        }));
+        let auth = jwt_auth_with_credential(
+            &base64_secret,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.base64_secret = true;
+            }),
+        );
 
         // Generate token with raw secret
         let claims = json!({
@@ -871,9 +861,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_claims_in_ctx() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.store_claims_in_ctx = true;
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.store_claims_in_ctx = true;
+            }),
+        );
 
         let claims = json!({
             "sub": "user123",
@@ -896,13 +890,12 @@ mod tests {
         // Capture ctx var
         let ctx_var_captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let ctx_clone = ctx_var_captured.clone();
-        mock.expect_set_ctx_var()
-            .returning(move |key, value| {
-                if key == "jwt_claims" {
-                    *ctx_clone.lock().unwrap() = Some(value.to_string());
-                }
-                Ok(())
-            });
+        mock.expect_set_ctx_var().returning(move |key, value| {
+            if key == "jwt_claims" {
+                *ctx_clone.lock().unwrap() = Some(value.to_string());
+            }
+            Ok(())
+        });
 
         let r = auth.run_request(&mut mock, &mut log).await;
         assert_eq!(r, PluginRunningResult::GoodNext);
@@ -918,9 +911,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_username_from_key_claim_name() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.key_claim_name = "preferred_username".to_string();
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.key_claim_name = "preferred_username".to_string();
+            }),
+        );
 
         let claims = json!({
             "sub": "sub-value",
@@ -948,9 +945,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_username_fallback_to_sub() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.key_claim_name = "nonexistent_claim".to_string();
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.key_claim_name = "nonexistent_claim".to_string();
+            }),
+        );
 
         let claims = json!({
             "sub": "fallback-user",
@@ -979,9 +980,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_issuer_validation_pass() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.issuers = Some(vec!["https://auth.example.com".to_string()]);
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.issuers = Some(vec!["https://auth.example.com".to_string()]);
+            }),
+        );
 
         let claims = json!({
             "sub": "user123",
@@ -1007,9 +1012,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_issuer_validation_fail() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.issuers = Some(vec!["https://auth.example.com".to_string()]);
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.issuers = Some(vec!["https://auth.example.com".to_string()]);
+            }),
+        );
 
         let claims = json!({
             "sub": "user123",
@@ -1040,9 +1049,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_audience_validation_pass() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.audiences = Some(vec!["my-api".to_string()]);
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.audiences = Some(vec!["my-api".to_string()]);
+            }),
+        );
 
         let claims = json!({
             "sub": "user123",
@@ -1068,9 +1081,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_audience_validation_fail() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.audiences = Some(vec!["my-api".to_string()]);
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.audiences = Some(vec!["my-api".to_string()]);
+            }),
+        );
 
         let claims = json!({
             "sub": "user123",
@@ -1101,9 +1118,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_maximum_expiration_pass() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.maximum_expiration = 7200; // 2 hours max
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.maximum_expiration = 7200; // 2 hours max
+            }),
+        );
 
         let claims = json!({
             "sub": "user123",
@@ -1128,9 +1149,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_maximum_expiration_exceeded() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.maximum_expiration = 1800; // 30 minutes max
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.maximum_expiration = 1800; // 30 minutes max
+            }),
+        );
 
         let claims = json!({
             "sub": "user123",
@@ -1160,9 +1185,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth_failure_delay() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.auth_failure_delay_ms = 100; // 100ms delay
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.auth_failure_delay_ms = 100; // 100ms delay
+            }),
+        );
 
         let mut mock = MockPluginSession::new();
         let mut log = PluginLog::new("JwtAuth");
@@ -1188,13 +1217,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_claims_to_headers() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            let mut mapping = StdHashMap::new();
-            mapping.insert("sub".to_string(), "X-User-ID".to_string());
-            mapping.insert("email".to_string(), "X-User-Email".to_string());
-            mapping.insert("roles".to_string(), "X-User-Roles".to_string());
-            c.claims_to_headers = Some(mapping);
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                let mut mapping = StdHashMap::new();
+                mapping.insert("sub".to_string(), "X-User-ID".to_string());
+                mapping.insert("email".to_string(), "X-User-Email".to_string());
+                mapping.insert("roles".to_string(), "X-User-Roles".to_string());
+                c.claims_to_headers = Some(mapping);
+            }),
+        );
 
         let claims = json!({
             "sub": "user123",
@@ -1217,11 +1250,13 @@ mod tests {
         // Capture set headers
         let headers_set: Arc<Mutex<StdHashMap<String, String>>> = Arc::new(Mutex::new(StdHashMap::new()));
         let headers_clone = headers_set.clone();
-        mock.expect_set_request_header()
-            .returning(move |name, value| {
-                headers_clone.lock().unwrap().insert(name.to_string(), value.to_string());
-                Ok(())
-            });
+        mock.expect_set_request_header().returning(move |name, value| {
+            headers_clone
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), value.to_string());
+            Ok(())
+        });
 
         let r = auth.run_request(&mut mock, &mut log).await;
         assert_eq!(r, PluginRunningResult::GoodNext);
@@ -1236,9 +1271,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_token_from_query_param() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.query = "token".to_string();
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.query = "token".to_string();
+            }),
+        );
 
         let claims = json!({
             "sub": "query-user",
@@ -1252,14 +1291,13 @@ mod tests {
         mock.expect_method().returning(|| "GET".to_string());
         mock.expect_header_value().returning(|_| None);
         let token_clone = token.clone();
-        mock.expect_get_query_param()
-            .returning(move |name| {
-                if name == "token" {
-                    Some(token_clone.clone())
-                } else {
-                    None
-                }
-            });
+        mock.expect_get_query_param().returning(move |name| {
+            if name == "token" {
+                Some(token_clone.clone())
+            } else {
+                None
+            }
+        });
         mock.expect_get_cookie().returning(|_| None);
         mock.expect_set_request_header().returning(|_, _| Ok(()));
 
@@ -1270,9 +1308,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_token_from_cookie() {
-        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, Some(|c| {
-            c.cookie = "jwt_cookie".to_string();
-        }));
+        let auth = jwt_auth_with_credential(
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
+            Some(|c| {
+                c.cookie = "jwt_cookie".to_string();
+            }),
+        );
 
         let claims = json!({
             "sub": "cookie-user",
@@ -1287,14 +1329,13 @@ mod tests {
         mock.expect_header_value().returning(|_| None);
         mock.expect_get_query_param().returning(|_| None);
         let token_clone = token.clone();
-        mock.expect_get_cookie()
-            .returning(move |name| {
-                if name == "jwt_cookie" {
-                    Some(token_clone.clone())
-                } else {
-                    None
-                }
-            });
+        mock.expect_get_cookie().returning(move |name| {
+            if name == "jwt_cookie" {
+                Some(token_clone.clone())
+            } else {
+                None
+            }
+        });
         mock.expect_set_request_header().returning(|_, _| Ok(()));
 
         let r = auth.run_request(&mut mock, &mut log).await;

@@ -1,6 +1,5 @@
 use super::{
-    get_endpoint_consistent_store, get_endpoint_ewma_store, get_endpoint_leastconn_store,
-    get_endpoint_roundrobin_store,
+    get_endpoint_consistent_store, get_endpoint_ewma_store, get_endpoint_leastconn_store, get_endpoint_roundrobin_store,
 };
 use crate::core::conf_sync::traits::ConfHandler;
 use k8s_openapi::api::core::v1::Endpoints;
@@ -32,25 +31,22 @@ impl EndpointHandler {
         // Update Consistent store (uses RoundRobin's data layer)
         let consistent_store = get_endpoint_consistent_store();
         for service_key in consistent_store.get_existing_service_keys() {
-            consistent_store.update_lb_if_exists_with_provider(&service_key, |key| {
-                roundrobin_store.get_endpoint_for_service(key)
-            });
+            consistent_store
+                .update_lb_if_exists_with_provider(&service_key, |key| roundrobin_store.get_endpoint_for_service(key));
         }
 
         // Update LeastConn store (uses RoundRobin's data layer)
         let leastconn_store = get_endpoint_leastconn_store();
         for service_key in leastconn_store.get_existing_service_keys() {
-            leastconn_store.update_lb_if_exists_with_provider(&service_key, |key| {
-                roundrobin_store.get_endpoint_for_service(key)
-            });
+            leastconn_store
+                .update_lb_if_exists_with_provider(&service_key, |key| roundrobin_store.get_endpoint_for_service(key));
         }
 
         // Update EWMA store (uses RoundRobin's data layer)
         let ewma_store = get_endpoint_ewma_store();
         for service_key in ewma_store.get_existing_service_keys() {
-            ewma_store.update_lb_if_exists_with_provider(&service_key, |key| {
-                roundrobin_store.get_endpoint_for_service(key)
-            });
+            ewma_store
+                .update_lb_if_exists_with_provider(&service_key, |key| roundrobin_store.get_endpoint_for_service(key));
         }
     }
 
@@ -66,25 +62,22 @@ impl EndpointHandler {
         // Update Consistent store (uses RoundRobin's data layer)
         let consistent_store = get_endpoint_consistent_store();
         for service_key in affected_services {
-            consistent_store.update_lb_if_exists_with_provider(service_key, |key| {
-                roundrobin_store.get_endpoint_for_service(key)
-            });
+            consistent_store
+                .update_lb_if_exists_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key));
         }
 
         // Update LeastConn store (uses RoundRobin's data layer)
         let leastconn_store = get_endpoint_leastconn_store();
         for service_key in affected_services {
-            leastconn_store.update_lb_if_exists_with_provider(service_key, |key| {
-                roundrobin_store.get_endpoint_for_service(key)
-            });
+            leastconn_store
+                .update_lb_if_exists_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key));
         }
 
         // Update EWMA store (uses RoundRobin's data layer)
         let ewma_store = get_endpoint_ewma_store();
         for service_key in affected_services {
-            ewma_store.update_lb_if_exists_with_provider(service_key, |key| {
-                roundrobin_store.get_endpoint_for_service(key)
-            });
+            ewma_store
+                .update_lb_if_exists_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key));
         }
     }
 }

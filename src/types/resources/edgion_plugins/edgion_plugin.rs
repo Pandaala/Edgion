@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
     BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig, JwtAuthConfig,
-    MockConfig, ProxyRewriteConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    MockConfig, ProxyRewriteConfig, RateLimiterConfig, RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -54,8 +54,9 @@ pub enum EdgionPlugin {
     RequestRestriction(RequestRestrictionConfig),
     /// Response Rewrite filter (rewrite status code and headers before returning to client)
     ResponseRewrite(ResponseRewriteConfig),
+    /// RateLimiter filter (CMS algorithm for high-performance rate limiting)
+    RateLimiter(RateLimiterConfig),
     // TODO: Add more custom Edgion plugins here
-    // EdgionRateLimit(RateLimitConfig),
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
     // EdgionCache(CacheConfig),
@@ -83,6 +84,7 @@ impl EdgionPlugin {
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
+            EdgionPlugin::RateLimiter(_) => "RateLimiter",
         }
     }
 }

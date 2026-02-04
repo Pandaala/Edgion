@@ -224,7 +224,6 @@ fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Ve
     }
 }
 
-
 /// Select backend based on endpoint mode and LB policy.
 ///
 /// EndpointMode only controls which resources are synced:
@@ -279,9 +278,7 @@ fn select_from_endpoint_slice(
                 // DCL: Get or create Consistent LB with data from RoundRobin store
                 let consistent_store = get_consistent_store();
                 let lb = consistent_store
-                    .get_or_create_with_provider(service_key, |key| {
-                        roundrobin_store.get_slices_for_service(key)
-                    })
+                    .get_or_create_with_provider(service_key, |key| roundrobin_store.get_slices_for_service(key))
                     .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByConsistent)?;
                 lb.load_balancer()
                     .select(&hash_key, 256)
@@ -292,9 +289,7 @@ fn select_from_endpoint_slice(
             // DCL: Get or create LeastConn LB with data from RoundRobin store
             let leastconn_store = get_leastconn_store();
             let lb = leastconn_store
-                .get_or_create_with_provider(service_key, |key| {
-                    roundrobin_store.get_slices_for_service(key)
-                })
+                .get_or_create_with_provider(service_key, |key| roundrobin_store.get_slices_for_service(key))
                 .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByLeastConn)?;
             lb.load_balancer()
                 .select(b"", 256)
@@ -304,9 +299,7 @@ fn select_from_endpoint_slice(
             // DCL: Get or create EWMA LB with data from RoundRobin store
             let ewma_store = get_ewma_store();
             let lb = ewma_store
-                .get_or_create_with_provider(service_key, |key| {
-                    roundrobin_store.get_slices_for_service(key)
-                })
+                .get_or_create_with_provider(service_key, |key| roundrobin_store.get_slices_for_service(key))
                 .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByEwma)?;
             lb.load_balancer()
                 .select(b"", 256)
@@ -347,9 +340,7 @@ fn select_from_endpoints(
                 // DCL: Get or create Consistent LB with data from RoundRobin store
                 let consistent_store = get_endpoint_consistent_store();
                 let lb = consistent_store
-                    .get_or_create_with_provider(service_key, |key| {
-                        roundrobin_store.get_endpoint_for_service(key)
-                    })
+                    .get_or_create_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key))
                     .ok_or(EdgionStatus::BackendEndpointNotFoundByConsistent)?;
                 lb.load_balancer()
                     .select(&hash_key, 256)
@@ -360,9 +351,7 @@ fn select_from_endpoints(
             // DCL: Get or create LeastConn LB with data from RoundRobin store
             let leastconn_store = get_endpoint_leastconn_store();
             let lb = leastconn_store
-                .get_or_create_with_provider(service_key, |key| {
-                    roundrobin_store.get_endpoint_for_service(key)
-                })
+                .get_or_create_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key))
                 .ok_or(EdgionStatus::BackendEndpointNotFoundByLeastConn)?;
             lb.load_balancer()
                 .select(b"", 256)
@@ -372,9 +361,7 @@ fn select_from_endpoints(
             // DCL: Get or create EWMA LB with data from RoundRobin store
             let ewma_store = get_endpoint_ewma_store();
             let lb = ewma_store
-                .get_or_create_with_provider(service_key, |key| {
-                    roundrobin_store.get_endpoint_for_service(key)
-                })
+                .get_or_create_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key))
                 .ok_or(EdgionStatus::BackendEndpointNotFoundByEwma)?;
             lb.load_balancer()
                 .select(b"", 256)
@@ -719,10 +706,7 @@ mod tests {
     fn test_edgion_service_from_kind_default() {
         // None or empty string should default to Service
         assert_eq!(EdgionService::from_kind(None), EdgionService::Service);
-        assert_eq!(
-            EdgionService::from_kind(Some(&String::new())),
-            EdgionService::Service
-        );
+        assert_eq!(EdgionService::from_kind(Some(&String::new())), EdgionService::Service);
     }
 
     #[test]

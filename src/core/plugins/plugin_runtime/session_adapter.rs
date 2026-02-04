@@ -340,10 +340,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken {
         let idx = self.ctx.pending_edgion_plugins_logs.len();
         let depth = self.ctx.plugin_ref_depth();
-        self.ctx.pending_edgion_plugins_logs.push(EdgionPluginsLog {
-            name,
-            logs: Vec::new(),
-        });
+        self.ctx
+            .pending_edgion_plugins_logs
+            .push(EdgionPluginsLog { name, logs: Vec::new() });
         EdgionPluginsLogToken::new(idx, depth)
     }
 
