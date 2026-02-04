@@ -136,11 +136,11 @@ hex = "0.4"
 jsonwebtoken = "9"
 
 # Pingora
-pingora-core = { version = "0.6" }
-pingora-http = "0.6"
-pingora-limits = "0.6"
-pingora-load-balancing = "0.6"
-pingora-proxy = { version = "0.6" }
+pingora-core = { version = "0.7.0" }
+pingora-http = "0.7.0"
+pingora-limits = "0.7.0"
+pingora-load-balancing = "0.7.0"
+pingora-proxy = { version = "0.7.0" }
 etcd-client = "0.18"
 
 # BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)

@@ -29,6 +29,7 @@ pub struct LeastConnectionIter {
 
 impl BackendSelection for LeastConnection {
     type Iter = LeastConnectionIter;
+    type Config = ();
 
     fn build(backends: &BTreeSet<Backend>) -> Self {
         Self {

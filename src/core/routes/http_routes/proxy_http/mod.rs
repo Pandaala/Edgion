@@ -106,12 +106,15 @@ impl ProxyHttp for EdgionHttp {
         pg_early_request_filter::early_request_filter(self, session, ctx).await
     }
 
-    fn upstream_response_filter(
+    async fn upstream_response_filter(
         &self,
         session: &mut Session,
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
-    ) -> pingora_core::Result<()> {
+    ) -> pingora_core::Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
         pg_upstream_response_filter::upstream_response_filter(self, session, upstream_response, ctx)
     }
 
@@ -129,13 +132,14 @@ impl ProxyHttp for EdgionHttp {
     }
 
     /// upstream_response_body_filter - called when receiving body chunks from upstream
+    /// Returns Ok(None) to continue, Ok(Some(duration)) to rate limit for the given duration
     fn upstream_response_body_filter(
         &self,
         session: &mut Session,
         body: &mut Option<bytes::Bytes>,
         end_of_stream: bool,
         ctx: &mut Self::CTX,
-    ) -> pingora_core::Result<()> {
+    ) -> pingora_core::Result<Option<std::time::Duration>> {
         pg_upstream_response_body_filter::upstream_response_body_filter(self, session, body, end_of_stream, ctx)
     }
 
