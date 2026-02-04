@@ -153,6 +153,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
+        "EdgionPlugins/RateLimiter" => "EdgionPlugins",
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
         "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
@@ -375,6 +376,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::ResponseRewriteTestSuite));
+        }
+        "EdgionPlugins/RateLimiter" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/RateLimiter tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RateLimiterTestSuite));
         }
         "EdgionPlugins/RequestRestriction" => {
             if !gateway {

@@ -368,6 +368,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
                     run_test "EdgionPlugins_JwtAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i JwtAuth" || test_failed=true
                     run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
+                    run_test "EdgionPlugins_RateLimiter" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimiter" || test_failed=true
                     run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
                     run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
                 else
@@ -442,6 +443,7 @@ run_all_tests() {
         run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
         run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
         run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
+        run_test "EdgionPlugins_RateLimiter" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimiter" || test_failed=true
         run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
         run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
         run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
@@ -551,7 +553,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/JwtAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/JwtAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimiter,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction"
             else
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi
