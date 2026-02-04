@@ -1,0 +1,128 @@
+# Header Modifier 测试套件路由配置
+# 测试 RequestHeaderModifier 和 ResponseHeaderModifier 的 set/add/remove 功能
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: header-modifier-test
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: filters-test-gateway
+      namespace: edgion-test
+  hostnames:
+    - "header-test.example.com"
+  rules:
+    # 规则1: RequestHeaderModifier - 测试 set/add/remove
+    - matches:
+        - path:
+            type: Exact
+            value: /request-header-test
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: "X-Set-Header"
+                value: "set-value"
+            add:
+              - name: "X-Add-Header"
+                value: "add-value"
+            remove:
+              - "X-Remove-Me"
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则2: ResponseHeaderModifier - 测试 set/add/remove
+    - matches:
+        - path:
+            type: Exact
+            value: /response-header-test
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: "X-Response-Set"
+                value: "resp-set-value"
+            add:
+              - name: "X-Response-Add"
+                value: "resp-add-value"
+            remove:
+              - "X-Upstream-Internal"
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则3: 请求头和响应头同时修改
+    - matches:
+        - path:
+            type: Exact
+            value: /both-headers-test
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            add:
+              - name: "X-Request-Id"
+                value: "test-request-123"
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            add:
+              - name: "X-Processed-By"
+                value: "edgion-gateway"
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则4: 多个请求头修改（测试多值）
+    - matches:
+        - path:
+            type: Exact
+            value: /multi-request-headers
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: "X-Custom-Auth"
+                value: "Bearer token123"
+              - name: "X-Request-Source"
+                value: "gateway"
+            add:
+              - name: "X-Trace-Id"
+                value: "trace-abc"
+              - name: "X-Span-Id"
+                value: "span-xyz"
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则5: 多个响应头修改（测试多值）
+    - matches:
+        - path:
+            type: Exact
+            value: /multi-response-headers
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: "Cache-Control"
+                value: "no-cache, no-store"
+              - name: "X-Content-Type-Options"
+                value: "nosniff"
+            add:
+              - name: "X-Custom-Header-1"
+                value: "value1"
+              - name: "X-Custom-Header-2"
+                value: "value2"
+            remove:
+              - "X-Powered-By"
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 规则6: 默认路由（无 filter）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: test-http
+          port: 30001

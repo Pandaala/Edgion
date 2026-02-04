@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
 
-use super::common::ParentReference;
+use super::common::{ParentReference, RefDenied};
 use super::http_route::{
     BackendObjectReference, Fraction, HTTPHeader, LocalObjectReference, ParsedRouteTimeouts as HttpParsedRouteTimeouts,
     SessionPersistence,
@@ -30,6 +30,7 @@ pub const GRPC_ROUTE_KIND: &str = "GRPCRoute";
     version = "v1",
     kind = "GRPCRoute",
     plural = "grpcroutes",
+    status = "GRPCRouteStatus",
     namespaced
 )]
 #[serde(rename_all = "camelCase")]
@@ -226,6 +227,12 @@ pub struct GRPCBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub backend_tls_policy: Option<Arc<crate::types::resources::BackendTLSPolicy>>,
+
+    /// Cross-namespace reference denial info
+    /// Set by Controller when this backend's cross-namespace reference
+    /// is not permitted (no matching ReferenceGrant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ref_denied: Option<RefDenied>,
 }
 
 /// GRPCRouteFilter defines processing steps that must be completed during the request/response lifecycle
@@ -427,4 +434,19 @@ impl GRPCRoute {
             }
         }
     }
+}
+
+// ============================================================================
+// GRPCRoute Status (Gateway API standard)
+// ============================================================================
+
+use super::http_route::RouteParentStatus;
+
+/// GRPCRouteStatus describes the status of the GRPCRoute
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GRPCRouteStatus {
+    /// Parents describe the status of the route with respect to each parent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<RouteParentStatus>,
 }

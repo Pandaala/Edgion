@@ -1,0 +1,29 @@
+# 5. 综合测试：Host + Headers 组合
+# 注：Method 重写需要 test_server 支持 POST，这里先不测试
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: proxy-rewrite-combined
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        host: "backend.internal.svc"
+        headers:
+          add:
+            - name: X-Gateway
+              value: "edgion"
+          set:
+            - name: X-Original-Path
+              value: "$uri"
+            - name: X-Request-Id
+              value: "req-12345"
+          remove:
+            - X-Debug
+            - X-Internal-Token
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: DebugAccessLogToHeader
+      config: {}

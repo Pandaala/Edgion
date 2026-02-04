@@ -14,6 +14,27 @@ use kube::Resource;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+/// Result of processing a work item
+///
+/// Used by workers to determine if status needs to be persisted
+#[derive(Debug)]
+pub enum WorkItemResult<K> {
+    /// Resource was processed successfully
+    Processed {
+        /// The processed object (with updated status)
+        obj: K,
+        /// Whether status changed and needs persistence
+        status_changed: bool,
+    },
+    /// Resource was deleted
+    Deleted {
+        /// The key of the deleted resource
+        key: String,
+    },
+    /// Nothing to do (already processed or filtered)
+    Skipped,
+}
+
 use crate::core::conf_mgr::conf_center::MetadataFilterConfig;
 use crate::core::conf_sync::conf_server::WatchObj;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
@@ -24,6 +45,68 @@ use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
 use super::{make_resource_key, SecretRefManager};
 use crate::core::conf_mgr::sync_runtime::workqueue::{Workqueue, WorkqueueConfig};
+
+/// Result of status extraction
+#[derive(Debug, PartialEq)]
+enum StatusExtractResult {
+    /// Status field present with serialized value
+    Present(String),
+    /// Status field is null or empty
+    Empty,
+    /// Serialization failed
+    SerializationError,
+}
+
+/// Extract status field from a resource as JSON string for comparison
+///
+/// Returns the extraction result to distinguish between:
+/// - Status field present with value
+/// - Status field is null/empty
+/// - Serialization error (should be logged)
+fn extract_status_json<T: Serialize>(obj: &T) -> StatusExtractResult {
+    match serde_json::to_value(obj) {
+        Ok(value) => match value.get("status") {
+            Some(status) if !status.is_null() => match serde_json::to_string(status) {
+                Ok(s) => StatusExtractResult::Present(s),
+                Err(_) => StatusExtractResult::SerializationError,
+            },
+            _ => StatusExtractResult::Empty,
+        },
+        Err(_) => StatusExtractResult::SerializationError,
+    }
+}
+
+/// Check if status has changed based on extraction results
+fn status_has_changed(old: &StatusExtractResult, new: &StatusExtractResult) -> bool {
+    match (old, new) {
+        // Both present - compare values
+        (StatusExtractResult::Present(old_val), StatusExtractResult::Present(new_val)) => old_val != new_val,
+        // Both empty - no change
+        (StatusExtractResult::Empty, StatusExtractResult::Empty) => false,
+        // One has error - assume change to trigger persistence attempt
+        (StatusExtractResult::SerializationError, _) | (_, StatusExtractResult::SerializationError) => true,
+        // One empty, one present - change
+        _ => true,
+    }
+}
+
+/// Extract status field from a resource as serde_json::Value
+///
+/// Returns the status as a JSON Value, or None if not present.
+/// This is used for persisting status to FileSystem (.status files).
+pub fn extract_status_value<T: Serialize>(obj: &T) -> Option<serde_json::Value> {
+    match serde_json::to_value(obj) {
+        Ok(value) => value.get("status").cloned().filter(|s| !s.is_null()),
+        Err(e) => {
+            tracing::warn!(
+                component = "resource_processor",
+                error = %e,
+                "Failed to serialize object for status extraction"
+            );
+            None
+        }
+    }
+}
 
 /// Object-safe trait for processor management
 ///
@@ -182,10 +265,17 @@ where
     /// Handle InitApply event (process single resource from LIST)
     ///
     /// Called directly during init phase (not via workqueue).
-    /// Returns true if resource was processed, false if filtered.
-    pub fn on_init_apply(&self, obj: K) -> bool {
+    ///
+    /// # Arguments
+    /// * `obj` - Object from config center
+    /// * `existing_status_json` - Existing status from config center
+    ///   - K8s mode: pass None (status is already in obj from K8s API)
+    ///   - FileSystem mode: pass content of .status file as JSON string
+    ///
+    /// Returns WorkItemResult for status persistence handling by caller.
+    pub fn on_init_apply(&self, obj: K, existing_status_json: Option<String>) -> WorkItemResult<K> {
         let ctx = self.create_context();
-        self.process_resource(obj, &ctx, true)
+        self.process_resource(obj, &ctx, true, existing_status_json)
     }
 
     /// Handle InitDone event (LIST completed)
@@ -247,24 +337,41 @@ where
 
     /// Process a single work item (called by worker loop)
     ///
-    /// This compares the store state (from K8s) with cache state
+    /// This compares the store state (from K8s/FileSystem) with cache state
     /// and determines whether to update or delete.
-    pub fn process_work_item(&self, key: &str, store_obj: Option<K>) {
+    ///
+    /// # Arguments
+    /// * `key` - Resource key (namespace/name or just name)
+    /// * `store_obj` - Object from config center (K8s store or file)
+    /// * `existing_status_json` - Existing status from config center (for FileSystem: from .status file)
+    ///   - K8s mode: pass None (status is already in store_obj)
+    ///   - FileSystem mode: pass content of .status file as JSON string
+    ///
+    /// Returns `WorkItemResult` indicating what action was taken and whether
+    /// status needs to be persisted.
+    pub fn process_work_item(
+        &self,
+        key: &str,
+        store_obj: Option<K>,
+        existing_status_json: Option<String>,
+    ) -> WorkItemResult<K> {
         let ctx = self.create_context();
         let cache_obj = self.get(key);
 
         match (store_obj, cache_obj) {
             (Some(obj), _) => {
                 // Object exists in store -> process it
-                self.process_resource(obj, &ctx, false);
+                self.process_resource(obj, &ctx, false, existing_status_json)
             }
             (None, Some(cached)) => {
                 // Object deleted from store but exists in cache -> delete
                 self.process_delete(&cached, &ctx);
+                WorkItemResult::Deleted { key: key.to_string() }
             }
             (None, None) => {
                 // Both empty -> already processed, skip
                 tracing::trace!(kind = self.kind, key = key, "Already processed, skipping");
+                WorkItemResult::Skipped
             }
         }
     }
@@ -281,7 +388,21 @@ where
     }
 
     /// Process a resource through the handler pipeline
-    fn process_resource(&self, obj: K, ctx: &HandlerContext, is_init: bool) -> bool {
+    ///
+    /// # Arguments
+    /// * `obj` - Object to process
+    /// * `ctx` - Handler context
+    /// * `is_init` - Whether this is during init phase
+    /// * `existing_status_json` - Existing status from config center as JSON string
+    ///   - K8s mode: None (status is in obj)
+    ///   - FileSystem mode: content of .status file
+    fn process_resource(
+        &self,
+        obj: K,
+        ctx: &HandlerContext,
+        is_init: bool,
+        existing_status_json: Option<String>,
+    ) -> WorkItemResult<K> {
         // Extract name/namespace early for logging (owned strings to avoid borrow issues)
         let name = obj.meta().name.clone().unwrap_or_default();
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
@@ -295,7 +416,7 @@ where
                     namespace = %namespace,
                     "Skipped by namespace filter"
                 );
-                return false;
+                return WorkItemResult::Skipped;
             }
         }
 
@@ -307,33 +428,90 @@ where
                 namespace = %namespace,
                 "Skipped by handler filter"
             );
-            return false;
+            return WorkItemResult::Skipped;
         }
 
         // 3. Clean metadata
+        // First apply context's metadata filter (removes managedFields, annotations, etc.)
+        // Then let handler do any additional custom cleaning
         let mut obj = obj;
+        ctx.clean_metadata(&mut obj);
         self.handler.clean_metadata(&mut obj, ctx);
-        // Also apply context's metadata cleaning if configured
-        if ctx.metadata_filter().is_some() {
-            ctx.clean_metadata(&mut obj);
-        }
 
         // 4. Validate (log warnings but continue)
-        let warnings = self.handler.validate(&obj, ctx);
-        for warning in &warnings {
+        let mut all_errors = self.handler.validate(&obj, ctx);
+        for error in &all_errors {
             tracing::warn!(
                 kind = self.kind,
                 name = %name,
                 namespace = %namespace,
-                warning = %warning,
-                "Resource validation warning"
+                error = %error,
+                "Resource validation error"
             );
         }
 
-        // 5. Parse/preprocess
+        // 5. Preparse (build runtime structures, validate configs)
+        let preparse_errors = self.handler.preparse(&mut obj, ctx);
+        for error in &preparse_errors {
+            tracing::warn!(
+                kind = self.kind,
+                name = %name,
+                namespace = %namespace,
+                error = %error,
+                "Resource preparse error"
+            );
+        }
+        all_errors.extend(preparse_errors);
+
+        // 6. Parse/preprocess
         match self.handler.parse(obj, ctx) {
-            ProcessResult::Continue(parsed_obj) => {
-                // 6. Call on_change
+            ProcessResult::Continue(mut parsed_obj) => {
+                // 7. Determine old status for comparison
+                // - If existing_status_json provided (FileSystem mode): use it
+                // - Otherwise: extract from object (K8s mode - status is already in obj)
+                let old_status = match existing_status_json {
+                    Some(json) => StatusExtractResult::Present(json),
+                    None => extract_status_json(&parsed_obj),
+                };
+
+                // Log serialization errors
+                if matches!(old_status, StatusExtractResult::SerializationError) {
+                    tracing::warn!(
+                        kind = self.kind,
+                        name = %name,
+                        namespace = %namespace,
+                        "Failed to serialize old status for comparison"
+                    );
+                }
+
+                // 8. Update status (handler sets Gateway API conditions)
+                self.handler.update_status(&mut parsed_obj, ctx, &all_errors);
+
+                // 9. Check if status changed
+                let new_status = extract_status_json(&parsed_obj);
+
+                // Log serialization errors
+                if matches!(new_status, StatusExtractResult::SerializationError) {
+                    tracing::warn!(
+                        kind = self.kind,
+                        name = %name,
+                        namespace = %namespace,
+                        "Failed to serialize new status for comparison"
+                    );
+                }
+
+                let status_changed = status_has_changed(&old_status, &new_status);
+
+                if status_changed {
+                    tracing::trace!(
+                        kind = self.kind,
+                        name = %name,
+                        namespace = %namespace,
+                        "Status changed, will persist"
+                    );
+                }
+
+                // 10. Call on_change
                 if !is_init {
                     self.handler.on_change(&parsed_obj, ctx);
                 }
@@ -344,17 +522,23 @@ where
                     name = %parsed_obj.meta().name.as_deref().unwrap_or(""),
                     namespace = %parsed_obj.meta().namespace.as_deref().unwrap_or(""),
                     phase = phase,
+                    status_changed = status_changed,
                     "Resource processed and saving"
                 );
 
-                // 7. Save to cache
+                // 11. Save to cache
                 // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async)
+                let obj_for_result = parsed_obj.clone();
                 if is_init {
                     self.cache.apply_change(ResourceChange::InitAdd, parsed_obj);
                 } else {
                     self.save(parsed_obj);
                 }
-                true
+
+                WorkItemResult::Processed {
+                    obj: obj_for_result,
+                    status_changed,
+                }
             }
             ProcessResult::Skip { reason } => {
                 tracing::debug!(
@@ -362,7 +546,7 @@ where
                     reason = %reason,
                     "Resource skipped after parse"
                 );
-                false
+                WorkItemResult::Skipped
             }
         }
     }
@@ -527,8 +711,8 @@ mod tests {
         processor.on_init();
         assert!(!processor.is_ready());
 
-        let processed = processor.on_init_apply(resource.clone());
-        assert!(processed);
+        let result = processor.on_init_apply(resource.clone(), None);
+        assert!(matches!(result, WorkItemResult::Processed { .. }));
 
         processor.on_init_done();
         assert!(processor.is_ready());

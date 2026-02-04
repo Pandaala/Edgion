@@ -1,0 +1,76 @@
+# HTTPRoute for ResponseRewrite 集成测试
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: response-rewrite-test-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "response-rewrite.example.com"
+  rules:
+    # 1. 状态码修改测试
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /status-code
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: response-rewrite-status-code
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 2. 响应头设置测试
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /headers-set
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: response-rewrite-headers-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 3. 响应头重命名测试
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /headers-rename
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: response-rewrite-headers-rename
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 4. 综合功能测试
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /combined
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: response-rewrite-combined
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

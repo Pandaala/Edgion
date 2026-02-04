@@ -362,6 +362,7 @@ fn validate_mtls_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::constants::secret_keys::tls::{CERT, KEY};
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
@@ -369,10 +370,10 @@ mod tests {
     fn create_test_tls(cert_pem: Option<&str>, key_pem: Option<&str>, hosts: Vec<String>) -> EdgionTls {
         let mut data = BTreeMap::new();
         if let Some(cert) = cert_pem {
-            data.insert("tls.crt".to_string(), ByteString(cert.as_bytes().to_vec()));
+            data.insert(CERT.to_string(), ByteString(cert.as_bytes().to_vec()));
         }
         if let Some(key) = key_pem {
-            data.insert("tls.key".to_string(), ByteString(key.as_bytes().to_vec()));
+            data.insert(KEY.to_string(), ByteString(key.as_bytes().to_vec()));
         }
 
         EdgionTls {

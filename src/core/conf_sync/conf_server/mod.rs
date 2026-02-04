@@ -13,5 +13,5 @@ mod grpc_server;
 mod traits;
 
 pub use config_sync_server::ConfigSyncServer;
-pub use grpc_server::ConfigSyncGrpcServer;
+pub use grpc_server::{ConfigSyncGrpcServer, ConfigSyncServerProvider};
 pub use traits::{WatchObj, WatchResponseSimple};

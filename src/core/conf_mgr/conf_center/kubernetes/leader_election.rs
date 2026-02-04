@@ -45,23 +45,27 @@ impl LeaderElectionConfig {
     /// Requires either `POD_NAME` or `HOSTNAME` environment variable to be set.
     /// In Kubernetes, this is typically done via the Downward API.
     ///
-    /// # Panics
-    /// Panics if neither `POD_NAME` nor `HOSTNAME` environment variable is set.
-    pub fn new(lease_name: impl Into<String>, lease_namespace: impl Into<String>) -> Self {
+    /// # Errors
+    /// Returns error if neither `POD_NAME` nor `HOSTNAME` environment variable is set.
+    pub fn new(lease_name: impl Into<String>, lease_namespace: impl Into<String>) -> Result<Self> {
         // Try to get pod name from environment
-        let identity = std::env::var("POD_NAME").or_else(|_| std::env::var("HOSTNAME")).expect(
-            "Leader election requires POD_NAME or HOSTNAME environment variable to be set. \
-                     In Kubernetes, use the Downward API to inject the pod name.",
-        );
+        let identity = std::env::var("POD_NAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Leader election requires POD_NAME or HOSTNAME environment variable to be set. \
+                     In Kubernetes, use the Downward API to inject the pod name."
+                )
+            })?;
 
-        Self {
+        Ok(Self {
             lease_name: lease_name.into(),
             lease_namespace: lease_namespace.into(),
             identity,
             lease_duration_secs: DEFAULT_LEASE_DURATION_SECS,
             renew_period_secs: DEFAULT_RENEW_DEADLINE_SECS,
             retry_period_secs: DEFAULT_RETRY_PERIOD_SECS,
-        }
+        })
     }
 
     /// Set the identity for this instance

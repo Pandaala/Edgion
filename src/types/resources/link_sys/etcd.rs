@@ -444,6 +444,7 @@ spec:
                     observability: None,
                 }),
             },
+            status: None,
         };
 
         let yaml = serde_yaml::to_string(&link_sys).expect("Failed to serialize");

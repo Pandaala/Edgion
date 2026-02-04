@@ -21,6 +21,7 @@
 
 use super::file_watcher::FileSystemWatcher;
 use super::resource_controller::FileSystemResourceController;
+use super::status::FileSystemStatusHandler;
 use crate::core::conf_mgr::conf_center::EndpointMode;
 use crate::core::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor, SecretRefManager};
 use crate::core::conf_mgr::sync_runtime::ShutdownSignal;
@@ -45,9 +46,6 @@ use crate::core::conf_mgr::sync_runtime::resource_processor::{
     HttpRouteHandler, LinkSysHandler, PluginMetadataHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler,
     TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
-
-/// Default cache capacity for each resource type
-const DEFAULT_CACHE_CAPACITY: usize = 1000;
 
 /// FileSystemController - Top-level controller for FileSystem mode
 pub struct FileSystemController {
@@ -78,6 +76,26 @@ impl FileSystemController {
             conf_dir = %self.conf_dir.display(),
             "Starting FileSystemController"
         );
+
+        // Cleanup orphan .status files at startup
+        let status_handler = FileSystemStatusHandler::new(self.conf_dir.clone());
+        match status_handler.cleanup_orphans() {
+            Ok(count) if count > 0 => {
+                tracing::warn!(
+                    component = "fs_controller",
+                    cleaned = count,
+                    "Cleaned up orphan status files"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    component = "fs_controller",
+                    error = %e,
+                    "Failed to cleanup orphan status files"
+                );
+            }
+            _ => {}
+        }
 
         // Create shared components
         let secret_ref_manager = Arc::new(SecretRefManager::new());
@@ -180,36 +198,41 @@ impl FileSystemController {
             .await,
         );
 
-        match self.endpoint_mode {
-            EndpointMode::Endpoint => {
-                tracing::info!(
-                    component = "fs_controller",
-                    "Registering Endpoints controller (legacy mode)"
-                );
-                handles.push(
-                    spawn::<Endpoints, _>(
-                        "Endpoints",
-                        EndpointsHandler::new(),
-                        watcher,
-                        secret_ref_manager,
-                        shutdown_signal.clone(),
-                    )
-                    .await,
-                );
-            }
-            EndpointMode::EndpointSlice | EndpointMode::Auto => {
-                tracing::info!(component = "fs_controller", "Registering EndpointSlice controller");
-                handles.push(
-                    spawn::<EndpointSlice, _>(
-                        "EndpointSlice",
-                        EndpointSliceHandler::new(),
-                        watcher,
-                        secret_ref_manager,
-                        shutdown_signal.clone(),
-                    )
-                    .await,
-                );
-            }
+        // Register endpoint handlers based on endpoint mode
+        if self.endpoint_mode.uses_endpoint() {
+            tracing::info!(
+                component = "fs_controller",
+                mode = ?self.endpoint_mode,
+                "Registering Endpoints controller"
+            );
+            handles.push(
+                spawn::<Endpoints, _>(
+                    "Endpoints",
+                    EndpointsHandler::new(),
+                    watcher,
+                    secret_ref_manager,
+                    shutdown_signal.clone(),
+                )
+                .await,
+            );
+        }
+
+        if self.endpoint_mode.uses_endpoint_slice() {
+            tracing::info!(
+                component = "fs_controller",
+                mode = ?self.endpoint_mode,
+                "Registering EndpointSlice controller"
+            );
+            handles.push(
+                spawn::<EndpointSlice, _>(
+                    "EndpointSlice",
+                    EndpointSliceHandler::new(),
+                    watcher,
+                    secret_ref_manager,
+                    shutdown_signal.clone(),
+                )
+                .await,
+            );
         }
 
         // TLS related
@@ -346,10 +369,11 @@ where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
     H: ProcessorHandler<K> + 'static,
 {
-    // 1. Create ResourceProcessor
+    // 1. Create ResourceProcessor with capacity from config
+    let capacity = crate::core::cli::config::get_cache_capacity(kind);
     let processor = Arc::new(ResourceProcessor::new(
         kind,
-        DEFAULT_CACHE_CAPACITY,
+        capacity,
         Arc::new(handler),
         secret_ref_manager.clone(),
     ));

@@ -20,6 +20,11 @@ pub mod names {
     pub const STATUS_UPDATE_TOTAL: &str = "edgion_status_update_total";
     pub const STATUS_UPDATE_FAILED: &str = "edgion_status_update_failed_total";
     pub const STATUS_UPDATE_SKIPPED: &str = "edgion_status_update_skipped_total";
+    // Config sync metrics (client side)
+    pub const CONFIG_RELOAD_SIGNALS: &str = "edgion_config_reload_signals_total";
+    pub const CONFIG_RELIST_TOTAL: &str = "edgion_config_relist_total";
+    // Backend request metrics (for LB testing and monitoring)
+    pub const BACKEND_REQUESTS_TOTAL: &str = "edgion_backend_requests_total";
 }
 
 /// Global metrics singleton
@@ -57,6 +62,10 @@ pub struct GatewayMetrics {
     status_update_failed: Counter,
     /// Total K8s status updates skipped (no change)
     status_update_skipped: Counter,
+    /// Total reload signals received from controller
+    config_reload_signals: Counter,
+    /// Total config relist operations
+    config_relist_total: Counter,
 }
 
 impl GatewayMetrics {
@@ -74,6 +83,8 @@ impl GatewayMetrics {
             status_update_total: counter!(names::STATUS_UPDATE_TOTAL),
             status_update_failed: counter!(names::STATUS_UPDATE_FAILED),
             status_update_skipped: counter!(names::STATUS_UPDATE_SKIPPED),
+            config_reload_signals: counter!(names::CONFIG_RELOAD_SIGNALS),
+            config_relist_total: counter!(names::CONFIG_RELIST_TOTAL),
         }
     }
 
@@ -144,5 +155,76 @@ impl GatewayMetrics {
     #[inline]
     pub fn status_update_skipped(&self) {
         self.status_update_skipped.increment(1);
+    }
+
+    /// Record a reload signal received from controller
+    #[inline]
+    pub fn config_reload_signal(&self) {
+        self.config_reload_signals.increment(1);
+    }
+
+    /// Record a config relist operation
+    #[inline]
+    pub fn config_relist(&self) {
+        self.config_relist_total.increment(1);
+    }
+}
+
+/// Record a backend request metric
+///
+/// This function records detailed metrics for each backend request,
+/// useful for monitoring request distribution and verifying LB behavior.
+///
+/// # Arguments
+/// * `gateway_ns` - Gateway namespace
+/// * `gateway_name` - Gateway name
+/// * `route_ns` - Matched route namespace
+/// * `route_name` - Matched route name
+/// * `backend_ns` - Backend service namespace
+/// * `backend_name` - Backend service name
+/// * `protocol` - Protocol (http/grpc/websocket, from discover_protocol)
+/// * `status` - Status group (2xx/3xx/4xx/5xx/failed)
+/// * `test_key` - Test identifier (from Gateway annotation, empty in production)
+/// * `test_data` - JSON test data (from TestData::to_json(), empty in production)
+#[inline]
+pub fn record_backend_request(
+    gateway_ns: &str,
+    gateway_name: &str,
+    route_ns: &str,
+    route_name: &str,
+    backend_ns: &str,
+    backend_name: &str,
+    protocol: &str,
+    status: &str,
+    test_key: &str,
+    test_data: &str,
+) {
+    counter!(
+        names::BACKEND_REQUESTS_TOTAL,
+        "gateway_namespace" => gateway_ns.to_string(),
+        "gateway_name" => gateway_name.to_string(),
+        "route_namespace" => route_ns.to_string(),
+        "route_name" => route_name.to_string(),
+        "backend_namespace" => backend_ns.to_string(),
+        "backend_name" => backend_name.to_string(),
+        "protocol" => protocol.to_string(),
+        "status" => status.to_string(),
+        "test_key" => test_key.to_string(),
+        "test_data" => test_data.to_string(),
+    )
+    .increment(1);
+}
+
+/// Convert HTTP status code to status group
+///
+/// Groups status codes into: 2xx, 3xx, 4xx, 5xx, or "failed" for errors
+#[inline]
+pub fn status_group(status: Option<u16>) -> &'static str {
+    match status {
+        Some(s) if (200..300).contains(&s) => "2xx",
+        Some(s) if (300..400).contains(&s) => "3xx",
+        Some(s) if (400..500).contains(&s) => "4xx",
+        Some(s) if (500..600).contains(&s) => "5xx",
+        _ => "failed",
     }
 }

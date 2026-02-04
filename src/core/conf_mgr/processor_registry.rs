@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 
-use super::sync_runtime::resource_processor::ProcessorObj;
+use super::sync_runtime::resource_processor::{get_listener_port_manager, ProcessorObj};
 use crate::core::conf_sync::conf_server::WatchObj;
 
 /// Global processor registry instance
@@ -83,11 +83,16 @@ impl ProcessorRegistry {
     /// Get all WatchObjs for ConfigSyncServer registration
     ///
     /// Returns a HashMap that can be passed to ConfigSyncServer::register_all()
-    pub fn all_watch_objs(&self) -> HashMap<String, Arc<dyn WatchObj>> {
+    /// Filters out resources in no_sync_kinds (configurable, default: ReferenceGrant, Secret)
+    ///
+    /// # Arguments
+    /// * `no_sync_kinds` - List of resource kind names that should not be synced to Gateway
+    pub fn all_watch_objs(&self, no_sync_kinds: &[&str]) -> HashMap<String, Arc<dyn WatchObj>> {
         self.processors
             .read()
             .unwrap()
             .iter()
+            .filter(|(k, _)| !no_sync_kinds.contains(k))
             .map(|(k, v)| (k.to_string(), v.as_watch_obj()))
             .collect()
     }
@@ -135,15 +140,26 @@ impl ProcessorRegistry {
         }
     }
 
-    /// Clear all registered processors
+    /// Clear all registered processors and related global state
     ///
     /// Used when:
     /// - Restarting controller after failure
     /// - Losing leadership and re-election
     /// - Testing cleanup
+    ///
+    /// This also clears:
+    /// - ListenerPortManager: Global port tracking for conflict detection
+    ///
+    /// Note: This does NOT immediately notify watch clients. The gRPC layer detects
+    /// server_id changes after the new ConfigSyncServer is ready, ensuring clients
+    /// only relist when the new server is available.
     pub fn clear_registry(&self) {
         tracing::info!(component = "processor_registry", "Clearing all registered processors");
         self.processors.write().unwrap().clear();
+
+        // Clear ListenerPortManager to avoid stale port conflict data
+        get_listener_port_manager().clear();
+        tracing::info!(component = "processor_registry", "Cleared ListenerPortManager");
     }
 }
 

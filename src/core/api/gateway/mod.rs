@@ -64,6 +64,13 @@ impl ListResponse {
     }
 }
 
+/// Server info response
+#[derive(Serialize)]
+struct ServerInfoResponse {
+    server_id: String,
+    ready: bool,
+}
+
 /// Health check endpoint (liveness)
 async fn health_check() -> Json<ApiResponse<String>> {
     Json(ApiResponse::success("OK".to_string()))
@@ -75,6 +82,16 @@ async fn readiness_check(State(client): State<Arc<ConfigClient>>) -> axum::http:
         Ok(()) => axum::http::StatusCode::OK,
         Err(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE,
     }
+}
+
+/// Get server info including the current server_id from Controller
+///
+/// This returns the server_id that Gateway received from Controller.
+/// After a reload, this value should change to match the Controller's new server_id.
+async fn get_server_info(State(client): State<Arc<ConfigClient>>) -> Json<ApiResponse<ServerInfoResponse>> {
+    let server_id = client.current_server_id();
+    let ready = client.is_ready().is_ok();
+    Json(ApiResponse::success(ServerInfoResponse { server_id, ready }))
 }
 
 /// Helper macro to list all resources from ConfigClient
@@ -92,7 +109,7 @@ macro_rules! list_client_resources {
             ResourceKind::EdgionTls => to_json_vec($client.edgion_tls().list().data),
             ResourceKind::EdgionPlugins => to_json_vec($client.edgion_plugins().list().data),
             ResourceKind::EdgionStreamPlugins => to_json_vec($client.edgion_stream_plugins().list().data),
-            ResourceKind::ReferenceGrant => to_json_vec($client.reference_grants().list().data),
+            ResourceKind::ReferenceGrant => vec![], // ReferenceGrant not synced to Gateway
             ResourceKind::BackendTLSPolicy => to_json_vec($client.backend_tls_policies().list().data),
             ResourceKind::PluginMetaData => to_json_vec($client.plugin_metadata().list().data),
             ResourceKind::LinkSys => to_json_vec($client.link_sys().list().data),
@@ -123,7 +140,7 @@ macro_rules! get_client_resource {
             ResourceKind::EdgionStreamPlugins => {
                 find_resource_alt($client.edgion_stream_plugins().list().data, ns_opt, name_str)
             }
-            ResourceKind::ReferenceGrant => find_resource_alt($client.reference_grants().list().data, ns_opt, name_str),
+            ResourceKind::ReferenceGrant => None, // ReferenceGrant not synced to Gateway
             ResourceKind::BackendTLSPolicy => {
                 find_resource_alt($client.backend_tls_policies().list().data, ns_opt, name_str)
             }
@@ -210,6 +227,8 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/ready", get(readiness_check))
+        // Server info endpoint (for reload testing)
+        .route("/api/v1/server-info", get(get_server_info))
         // Dynamic endpoints for all resource types
         .route("/configclient/{kind}", get(get_resource))
         .route("/configclient/{kind}/list", get(list_resources))

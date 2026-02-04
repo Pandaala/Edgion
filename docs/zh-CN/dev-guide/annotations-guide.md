@@ -530,7 +530,7 @@ spec:
   plugins:
     - type: IpRestriction
       priority: 100  # 先执行
-    - type: RateLimit
+    - type: RateLimiter
       priority: 50   # 后执行
 ```
 

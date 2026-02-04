@@ -223,7 +223,7 @@ get_all_suites() {
     done
     
     # 其他resource类型
-    for resource in grpc grpc-match tcp udp mtls security real-ip backend-tls plugins; do
+    for resource in grpc grpc-match tcp udp mtls security real-ip backend-tls plugins ref-grant-status; do
         if [ -d "${CONF_DIR}/${resource}" ]; then
             suites="$suites $resource"
         fi

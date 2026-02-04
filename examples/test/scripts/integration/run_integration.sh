@@ -217,6 +217,51 @@ cleanup() {
 }
 
 # =============================================================================
+# Get server_id from controller
+# =============================================================================
+get_controller_server_id() {
+    local controller_url="${1:-http://127.0.0.1:5800}"
+    # Use the /api/v1/server-info endpoint to get server_id
+    local response=$(curl -s "${controller_url}/api/v1/server-info" 2>/dev/null)
+    local server_id=$(echo "$response" | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
+    if [ -z "$server_id" ]; then
+        server_id="unknown"
+    fi
+    echo "$server_id"
+}
+
+# =============================================================================
+# Get server_id from gateway (the server_id it received from controller)
+# =============================================================================
+get_gateway_server_id() {
+    local gateway_url="${1:-http://127.0.0.1:5900}"
+    # Use the /api/v1/server-info endpoint to get server_id
+    local response=$(curl -s "${gateway_url}/api/v1/server-info" 2>/dev/null)
+    local server_id=$(echo "$response" | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
+    if [ -z "$server_id" ]; then
+        server_id="unknown"
+    fi
+    echo "$server_id"
+}
+
+# =============================================================================
+# Trigger reload via Admin API
+# =============================================================================
+trigger_reload() {
+    local controller_url="${1:-http://127.0.0.1:5800}"
+    log_info "Triggering reload via Admin API..."
+    local response=$(curl -s -X POST "${controller_url}/api/v1/reload" 2>/dev/null)
+    local success=$(echo "$response" | grep -o '"success":true' || echo "")
+    if [ -n "$success" ]; then
+        log_success "Reload triggered successfully"
+        return 0
+    else
+        log_error "Reload failed: $response"
+        return 1
+    fi
+}
+
+# =============================================================================
 # Help info
 # =============================================================================
 show_help() {
@@ -234,6 +279,7 @@ show_help() {
     echo "  --dynamic-test         Run Gateway dynamic configuration tests"
     echo "  --dynamic-stage <NUM>  Dynamic test stage: 1=initial, 2=update, 0=both (default: 0)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
+    echo "  --with-reload          Run tests twice with reload in between (verify server_id changes)"
     echo "  -h, --help             Show help"
     echo ""
     echo "Examples:"
@@ -242,29 +288,210 @@ show_help() {
     echo "  $0 -r HTTPRoute -i Match            # Run HTTPRoute/Match test"
     echo "  $0 -r HTTPRoute -i Backend          # Run HTTPRoute/Backend test"
     echo "  $0 --no-prepare -r HTTPRoute        # Skip build, run HTTPRoute test"
+    echo "  $0 --with-reload                    # Run all tests, reload, verify server_id changed, run again"
 }
 
 # =============================================================================
 # Main function
 # =============================================================================
+
+# Global variables for test context (set by main, used by run_all_tests)
+G_RESOURCE=""
+G_ITEM=""
+G_DYNAMIC_TEST=false
+G_DYNAMIC_STAGE=0
+
+# =============================================================================
+# Run all tests function (can be called multiple times)
+# =============================================================================
+run_all_tests() {
+    local round_name="${1:-}"
+    local test_failed=false
+    
+    if [ -n "$round_name" ]; then
+        log_section "🔄 Running tests: ${round_name}"
+    fi
+    
+    # Decide which tests to run based on resource and item
+    if [ -n "$G_RESOURCE" ]; then
+        # Run specified resource tests
+        log_section "Running ${G_RESOURCE}${G_ITEM:+/$G_ITEM} tests"
+        
+        case "$G_RESOURCE" in
+            HTTPRoute)
+                if [ -z "$G_ITEM" ]; then
+                    # Run all HTTPRoute tests
+                    run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Basic" || test_failed=true
+                    run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Match" || test_failed=true
+                    run_test "HTTPRoute_Backend" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend" || test_failed=true
+                    run_test "HTTPRoute_Filters" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters" || test_failed=true
+                    run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/WebSocket" || test_failed=true
+                else
+                    # Run specified sub-item test
+                    run_test "HTTPRoute_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i ${G_ITEM}" || test_failed=true
+                fi
+                ;;
+            GRPCRoute)
+                if [ -z "$G_ITEM" ]; then
+                    run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Basic" || test_failed=true
+                    run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Match" || test_failed=true
+                else
+                    run_test "GRPCRoute_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i ${G_ITEM}" || test_failed=true
+                fi
+                ;;
+            TCPRoute)
+                run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
+                ;;
+            UDPRoute)
+                run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
+                ;;
+            Gateway)
+                if [ -z "$G_ITEM" ]; then
+                    run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
+                    run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
+                    run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
+                    run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
+                    run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
+                else
+                    # Replace / with _ in item name for log file
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "Gateway_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ${G_ITEM}" || test_failed=true
+                fi
+                ;;
+            EdgionPlugins)
+                if [ -z "$G_ITEM" ]; then
+                    run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
+                    run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
+                    run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
+                    run_test "EdgionPlugins_JwtAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i JwtAuth" || test_failed=true
+                    run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
+                    run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
+                    run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
+                else
+                    run_test "EdgionPlugins_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
+                fi
+                ;;
+            EdgionTls)
+                if [ -z "$G_ITEM" ]; then
+                    run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i https" || test_failed=true
+                    run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
+                    run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
+                    run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
+                else
+                    run_test "EdgionTls_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
+                fi
+                ;;
+            ReferenceGrant)
+                run_test "ReferenceGrant_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g ref-grant-status" || test_failed=true
+                ;;
+            *)
+                log_error "Unknown resource type: $G_RESOURCE"
+                return 1
+                ;;
+        esac
+    else
+        # Run all tests
+        log_section "Run Direct mode tests"
+        
+        run_test "http_direct" "${PROJECT_ROOT}/target/debug/examples/test_client http" || test_failed=true
+        run_test "grpc_direct" "${PROJECT_ROOT}/target/debug/examples/test_client grpc" || test_failed=true
+        run_test "websocket_direct" "${PROJECT_ROOT}/target/debug/examples/test_client websocket" || test_failed=true
+        run_test "tcp_direct" "${PROJECT_ROOT}/target/debug/examples/test_client tcp" || test_failed=true
+        run_test "udp_direct" "${PROJECT_ROOT}/target/debug/examples/test_client udp" || test_failed=true
+        
+        if $test_failed; then
+            log_error "Direct mode tests failed"
+            return 1
+        fi
+        
+        log_section "Run Gateway mode tests"
+        
+        # HTTPRoute Tests
+        run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g http" || test_failed=true
+        run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-match" || test_failed=true
+        run_test "HTTPRoute_Backend_LBRoundRobin" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-rr" || test_failed=true
+        run_test "HTTPRoute_Backend_LBConsistentHash" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-ch" || test_failed=true
+        run_test "HTTPRoute_Backend_WeightedBackend" "${PROJECT_ROOT}/target/debug/examples/test_client -g weighted-backend" || test_failed=true
+        if ! should_skip_test "HTTPRoute_Backend_Timeout"; then
+            run_test "HTTPRoute_Backend_Timeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g timeout" || test_failed=true
+        else
+            log_info "Skipping slow test: HTTPRoute_Backend_Timeout (use --full-test to run)"
+        fi
+        run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-redirect" || test_failed=true
+        run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-security" || test_failed=true
+        run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g websocket" || test_failed=true
+        
+        # GRPCRoute Tests
+        run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Basic" || test_failed=true
+        run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Match" || test_failed=true
+        
+        # TCPRoute Tests
+        run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
+        
+        # UDPRoute Tests
+        run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
+        
+        # Gateway Tests
+        run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
+        run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
+        # EdgionPlugins Tests
+        run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
+        run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
+        run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
+        run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
+        run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
+        run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
+        run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
+        run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
+        run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
+        run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
+        run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
+        run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
+        
+        # EdgionTls Tests
+        run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i https" || test_failed=true
+        run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
+        run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
+        run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
+        
+        # ReferenceGrant Status Tests
+        run_test "ReferenceGrant_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g ref-grant-status" || test_failed=true
+        
+        # Gateway Dynamic Tests (if enabled)
+        if $G_DYNAMIC_TEST; then
+            run_dynamic_tests $G_DYNAMIC_STAGE
+        fi
+    fi
+    
+    # Run dynamic tests for Gateway resource (if specified and enabled)
+    if [ -n "$G_RESOURCE" ] && [ "$G_RESOURCE" = "Gateway" ] && $G_DYNAMIC_TEST; then
+        run_dynamic_tests $G_DYNAMIC_STAGE
+    fi
+    
+    if $test_failed; then
+        return 1
+    fi
+    return 0
+}
+
 main() {
     local do_prepare=true
     local do_start=true
     local suites=""
-    local resource=""
-    local item=""
-    local dynamic_test=false
-    local dynamic_stage=0
+    local with_reload=false
     
     # Parse args
     while [[ $# -gt 0 ]]; do
         case $1 in
             -r|--resource)
-                resource="$2"
+                G_RESOURCE="$2"
                 shift 2
                 ;;
             -i|--item)
-                item="$2"
+                G_ITEM="$2"
                 shift 2
                 ;;
             --no-prepare)
@@ -285,16 +512,20 @@ main() {
                 shift
                 ;;
             --dynamic-test)
-                dynamic_test=true
+                G_DYNAMIC_TEST=true
                 shift
                 ;;
             --dynamic-stage)
-                dynamic_stage=$2
+                G_DYNAMIC_STAGE=$2
                 shift 2
                 ;;
             --suites)
                 suites="$2"
                 shift 2
+                ;;
+            --with-reload)
+                with_reload=true
+                shift
                 ;;
             -h|--help)
                 show_help
@@ -311,21 +542,42 @@ main() {
     # Setup cleanup on exit
     trap cleanup EXIT
     
+    # Auto-infer suites from resource/item if not explicitly specified
+    if [ -z "$suites" ] && [ -n "$G_RESOURCE" ]; then
+        # Always include base and HTTPRoute/Basic for dependencies (Service, EndpointSlice, etc.)
+        local base_suites="base,HTTPRoute/Basic"
+        # EdgionPlugins needs its own base Gateway
+        if [ "$G_RESOURCE" = "EdgionPlugins" ]; then
+            base_suites="${base_suites},EdgionPlugins/base"
+            # When running all EdgionPlugins tests, load all plugin configs
+            if [ -z "$G_ITEM" ]; then
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/JwtAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction"
+            else
+                suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
+            fi
+        elif [ -n "$G_ITEM" ]; then
+            suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
+        fi
+    fi
+    
     echo ""
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}Edgion Integration Test${NC}"
     echo -e "${BLUE}========================================${NC}"
     echo -e "Project: ${PROJECT_ROOT}"
-    if [ -n "$resource" ]; then
-        echo -e "Resource: ${resource}"
-        if [ -n "$item" ]; then
-            echo -e "Item: ${item}"
+    if [ -n "$G_RESOURCE" ]; then
+        echo -e "Resource: ${G_RESOURCE}"
+        if [ -n "$G_ITEM" ]; then
+            echo -e "Item: ${G_ITEM}"
         fi
     fi
     if $FULL_TEST; then
         echo -e "Mode: ${GREEN}Full Test${NC} (including slow tests)"
     else
         echo -e "Mode: ${YELLOW}Fast Test${NC} (slow tests skipped, use --full-test to include)"
+    fi
+    if $with_reload; then
+        echo -e "Reload Test: ${GREEN}Enabled${NC} (will test reload functionality)"
     fi
     echo ""
     
@@ -416,141 +668,115 @@ main() {
     }
     
     local test_failed=false
+    local controller_url="http://127.0.0.1:5800"
     
-    # Decide which tests to run based on resource and item
-    if [ -n "$resource" ]; then
-        # Run specified resource tests
-        log_section "Running ${resource}${item:+/$item} tests"
+    # =============================================================================
+    # Test execution with optional reload
+    # =============================================================================
+    if $with_reload; then
+        # ========== Round 1: Initial tests ==========
+        log_section "📋 Round 1: Initial tests (before reload)"
         
-        case "$resource" in
-            HTTPRoute)
-                if [ -z "$item" ]; then
-                    # Run all HTTPRoute tests
-                    run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Basic" || test_failed=true
-                    run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Match" || test_failed=true
-                    run_test "HTTPRoute_Backend" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend" || test_failed=true
-                    run_test "HTTPRoute_Filters" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters" || test_failed=true
-                    run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/WebSocket" || test_failed=true
-                else
-                    # Run specified sub-item test
-                    run_test "HTTPRoute_${item}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i ${item}" || test_failed=true
-                fi
-                ;;
-            GRPCRoute)
-                if [ -z "$item" ]; then
-                    run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Basic" || test_failed=true
-                    run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Match" || test_failed=true
-                else
-                    run_test "GRPCRoute_${item}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i ${item}" || test_failed=true
-                fi
-                ;;
-            TCPRoute)
-                run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
-                ;;
-            UDPRoute)
-                run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
-                ;;
-            Gateway)
-                if [ -z "$item" ]; then
-                    run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
-                    run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
-                    run_test "Gateway_Plugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Plugins" || test_failed=true
-                    run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
-                    run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
-                    run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
-                    run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
-                    run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
-                    run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
-                else
-                    # Replace / with _ in item name for log file
-                    local item_safe=$(echo "$item" | tr '/' '_')
-                    run_test "Gateway_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ${item}" || test_failed=true
-                fi
-                ;;
-            EdgionTls)
-                if [ -z "$item" ]; then
-                    run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i https" || test_failed=true
-                    run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
-                    run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
-                    run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
-                else
-                    run_test "EdgionTls_${item}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${item}" || test_failed=true
-                fi
-                ;;
-            *)
-                log_error "Unknown resource type: $resource"
-                exit 1
-                ;;
-        esac
-    else
-        # Run all tests
-        log_section "Step 3: Run Direct mode tests"
+        local gateway_url="http://127.0.0.1:5900"
         
-        run_test "http_direct" "${PROJECT_ROOT}/target/debug/examples/test_client http" || test_failed=true
-        run_test "grpc_direct" "${PROJECT_ROOT}/target/debug/examples/test_client grpc" || test_failed=true
-        run_test "websocket_direct" "${PROJECT_ROOT}/target/debug/examples/test_client websocket" || test_failed=true
-        run_test "tcp_direct" "${PROJECT_ROOT}/target/debug/examples/test_client tcp" || test_failed=true
-        run_test "udp_direct" "${PROJECT_ROOT}/target/debug/examples/test_client udp" || test_failed=true
+        # Get initial server_id from both Controller and Gateway
+        local controller_id_before=$(get_controller_server_id "$controller_url")
+        local gateway_id_before=$(get_gateway_server_id "$gateway_url")
+        log_info "Initial Controller server_id: ${controller_id_before}"
+        log_info "Initial Gateway server_id:    ${gateway_id_before}"
         
-        if $test_failed; then
-            log_error "Direct mode tests failed"
-            log_info "View detailed logs: ${TEST_LOG_DIR}"
+        # Run all tests (round 1)
+        if ! run_all_tests "Round 1 (before reload)"; then
+            test_failed=true
+            log_error "Round 1 tests failed"
+        else
+            log_success "Round 1 tests passed"
+        fi
+        
+        # ========== Trigger reload ==========
+        log_section "🔄 Triggering reload"
+        
+        if ! trigger_reload "$controller_url"; then
+            log_error "Failed to trigger reload"
             finalize_report
             exit 1
         fi
         
-        log_section "Step 4: Run Gateway mode tests"
+        # Wait for reload to complete and Gateway to sync
+        log_info "Waiting 5 seconds for reload to complete and Gateway to sync..."
+        sleep 5
         
-        # HTTPRoute Tests
-        run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g http" || test_failed=true
-        run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-match" || test_failed=true
-        run_test "HTTPRoute_Backend_LBPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-policy" || test_failed=true
-        run_test "HTTPRoute_Backend_WeightedBackend" "${PROJECT_ROOT}/target/debug/examples/test_client -g weighted-backend" || test_failed=true
-        if ! should_skip_test "HTTPRoute_Backend_Timeout"; then
-            run_test "HTTPRoute_Backend_Timeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g timeout" || test_failed=true
+        # ========== Verify Controller server_id changed ==========
+        local controller_id_after=$(get_controller_server_id "$controller_url")
+        log_info "New Controller server_id: ${controller_id_after}"
+        
+        if [ "$controller_id_before" = "$controller_id_after" ]; then
+            log_error "Controller server_id did not change after reload!"
+            log_error "Before: ${controller_id_before}"
+            log_error "After:  ${controller_id_after}"
+            report_test "Reload_Controller_ServerID_Changed" "FAIL" "0"
+            finalize_report
+            exit 1
         else
-            log_info "Skipping slow test: HTTPRoute_Backend_Timeout (use --full-test to run)"
+            log_success "Controller server_id changed successfully!"
+            log_info "Before: ${controller_id_before}"
+            log_info "After:  ${controller_id_after}"
+            report_test "Reload_Controller_ServerID_Changed" "PASS" "0"
         fi
-        run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-redirect" || test_failed=true
-        run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-security" || test_failed=true
-        run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g websocket" || test_failed=true
         
-        # GRPCRoute Tests
-        run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Basic" || test_failed=true
-        run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Match" || test_failed=true
+        # ========== Verify Gateway server_id changed ==========
+        local gateway_id_after=$(get_gateway_server_id "$gateway_url")
+        log_info "New Gateway server_id: ${gateway_id_after}"
         
-        # TCPRoute Tests
-        run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
-        
-        # UDPRoute Tests
-        run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
-        
-        # Gateway Tests
-        run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
-        run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
-        run_test "Gateway_Plugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Plugins" || test_failed=true
-        run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
-        run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
-        run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
-        run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
-        run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
-        run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
-        
-        # EdgionTls Tests
-        run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i https" || test_failed=true
-        run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
-        run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
-        run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
-        
-        # Gateway Dynamic Tests (if enabled)
-        if $dynamic_test; then
-            run_dynamic_tests $dynamic_stage
+        if [ "$gateway_id_before" = "$gateway_id_after" ]; then
+            log_error "Gateway server_id did not change after reload!"
+            log_error "Before: ${gateway_id_before}"
+            log_error "After:  ${gateway_id_after}"
+            log_error "This means Gateway did not detect the reload and re-sync!"
+            report_test "Reload_Gateway_ServerID_Changed" "FAIL" "0"
+            finalize_report
+            exit 1
+        else
+            log_success "Gateway server_id changed successfully!"
+            log_info "Before: ${gateway_id_before}"
+            log_info "After:  ${gateway_id_after}"
+            report_test "Reload_Gateway_ServerID_Changed" "PASS" "0"
         fi
-    fi
-    
-    # Run dynamic tests for Gateway resource (if specified and enabled)
-    if [ -n "$resource" ] && [ "$resource" = "Gateway" ] && $dynamic_test; then
-        run_dynamic_tests $dynamic_stage
+        
+        # ========== Verify Gateway and Controller have same server_id ==========
+        if [ "$controller_id_after" != "$gateway_id_after" ]; then
+            log_error "Gateway server_id does not match Controller!"
+            log_error "Controller: ${controller_id_after}"
+            log_error "Gateway:    ${gateway_id_after}"
+            report_test "Reload_ServerID_Match" "FAIL" "0"
+        else
+            log_success "Gateway and Controller server_id match!"
+            report_test "Reload_ServerID_Match" "PASS" "0"
+        fi
+        
+        # ========== Clear access log before Round 2 ==========
+        # Some tests (like LBPolicy) analyze access logs, so we need to clear them
+        # to avoid counting requests from Round 1
+        if [ -n "$EDGION_TEST_ACCESS_LOG_PATH" ] && [ -f "$EDGION_TEST_ACCESS_LOG_PATH" ]; then
+            log_info "Clearing access log for Round 2..."
+            > "$EDGION_TEST_ACCESS_LOG_PATH"
+        fi
+        
+        # ========== Round 2: Tests after reload ==========
+        log_section "📋 Round 2: Tests after reload"
+        
+        # Run all tests (round 2)
+        if ! run_all_tests "Round 2 (after reload)"; then
+            test_failed=true
+            log_error "Round 2 tests failed"
+        else
+            log_success "Round 2 tests passed"
+        fi
+    else
+        # Normal test execution (without reload)
+        if ! run_all_tests; then
+            test_failed=true
+        fi
     fi
     
     # Finalize report

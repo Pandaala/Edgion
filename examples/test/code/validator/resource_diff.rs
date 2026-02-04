@@ -35,6 +35,11 @@ struct Args {
     /// Maximum retry attempts for failed requests
     #[arg(long, default_value = "3")]
     max_retries: u32,
+
+    /// Resource kinds to skip (not synced to Gateway by design)
+    /// Default: ReferenceGrant,Secret
+    #[arg(long, value_delimiter = ',', default_value = "ReferenceGrant,Secret")]
+    skip_kinds: Vec<String>,
 }
 
 /// Resource identifier (kind, name, namespace)
@@ -314,10 +319,15 @@ const RESOURCE_TYPES: &[(&str, &str, &str)] = &[
 /// They are not synced to Gateway's config client, so we skip comparing them.
 ///
 /// Compare resources between controller and gateway
-async fn compare_resources(client: &AdminClient) -> DiffResult {
+async fn compare_resources(client: &AdminClient, skip_kinds: &[String]) -> DiffResult {
     let mut result = DiffResult::default();
 
     for (kind, controller_endpoint, gateway_endpoint) in RESOURCE_TYPES {
+        // Skip kinds that are not synced to Gateway by design
+        if skip_kinds.iter().any(|s| s.eq_ignore_ascii_case(kind)) {
+            continue;
+        }
+
         let controller_resources = match client.fetch_from_controller(controller_endpoint).await {
             Ok(res) => res,
             Err(e) => {
@@ -617,9 +627,18 @@ async fn main() {
 
     println!("{} Connected to controller and gateway\n", "✓".green());
 
+    // Log skipped kinds
+    if !args.skip_kinds.is_empty() {
+        println!(
+            "{} Skipping resource kinds (not synced by design): {}",
+            "ℹ".blue(),
+            args.skip_kinds.join(", ")
+        );
+    }
+
     // Compare resources
     println!("Comparing resources...");
-    let mut result = compare_resources(&client).await;
+    let mut result = compare_resources(&client, &args.skip_kinds).await;
 
     // Validate Secret references
     println!("Validating Secret references...");

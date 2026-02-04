@@ -1,0 +1,108 @@
+# HTTPRoute for ProxyRewrite 集成测试
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: proxy-rewrite-test-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "proxy-rewrite.example.com"
+  rules:
+    # 1. URI 简单替换
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /uri/simple
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: proxy-rewrite-uri-simple
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 2. URI + $uri 变量
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /uri/var
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: proxy-rewrite-uri-var
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 3. URI + $arg_xxx 变量
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /uri/arg
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: proxy-rewrite-uri-arg
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 4. Regex URI 捕获组
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /regex/users/
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: proxy-rewrite-regex
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 5. 综合测试：Host + Method + Headers
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /combined
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: proxy-rewrite-combined
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 6. Path 参数测试 (路由: /params/:uid/info)
+    - matches:
+        - path:
+            type: RegularExpression
+            value: "^/params/[^/]+/info$"
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: proxy-rewrite-path-param
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

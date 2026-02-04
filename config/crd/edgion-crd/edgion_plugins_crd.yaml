@@ -1,0 +1,318 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: edgionplugins.edgion.io
+spec:
+  group: edgion.io
+  names:
+    kind: EdgionPlugins
+    listKind: EdgionPluginsList
+    plural: edgionplugins
+    singular: edgionplugins
+    shortNames:
+      - eplugins
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              description: "EdgionPlugins specification"
+              properties:
+                # ============================================
+                # Request Stage Plugins (async)
+                # ============================================
+                requestPlugins:
+                  type: array
+                  description: "Request stage plugins (async)"
+                  items:
+                    type: object
+                    properties:
+                      enable:
+                        type: boolean
+                        description: "Whether this plugin is enabled (default: true)"
+                        default: true
+                      conditionEnable:
+                        type: object
+                        description: "Simple conditional enable (legacy)"
+                        properties:
+                          timeBefore:
+                            type: string
+                            description: "Plugin enabled before this time (RFC3339)"
+                      conditions:
+                        type: object
+                        description: "Advanced plugin conditions for conditional execution"
+                        properties:
+                          skip:
+                            type: array
+                            description: "Conditions that will skip plugin execution (OR logic)"
+                            items:
+                              type: object
+                              description: "A single condition"
+                              properties:
+                                keyExist:
+                                  type: object
+                                  description: "Check if a key exists"
+                                  properties:
+                                    source:
+                                      type: string
+                                      enum: [header, query, cookie, path, client_ip, method, ctx]
+                                    key:
+                                      type: string
+                                keyMatch:
+                                  type: object
+                                  description: "Check if a key matches value/regex"
+                                  properties:
+                                    source:
+                                      type: string
+                                      enum: [header, query, cookie, path, client_ip, method, ctx]
+                                    key:
+                                      type: string
+                                    value:
+                                      type: string
+                                    regex:
+                                      type: string
+                                timeRange:
+                                  type: object
+                                  description: "Check time range"
+                                  properties:
+                                    after:
+                                      type: string
+                                    before:
+                                      type: string
+                                probability:
+                                  type: object
+                                  description: "Probability-based execution"
+                                  properties:
+                                    ratio:
+                                      type: number
+                                      minimum: 0.0
+                                      maximum: 1.0
+                                    key:
+                                      type: string
+                                    keySource:
+                                      type: string
+                                      enum: [header, query, cookie, path, client_ip, method, ctx]
+                                include:
+                                  type: object
+                                  description: "Include if matches any value"
+                                  properties:
+                                    source:
+                                      type: string
+                                      enum: [header, query, cookie, path, client_ip, method, ctx]
+                                    values:
+                                      type: array
+                                      items:
+                                        type: string
+                                exclude:
+                                  type: object
+                                  description: "Exclude if matches any value"
+                                  properties:
+                                    source:
+                                      type: string
+                                      enum: [header, query, cookie, path, client_ip, method, ctx]
+                                    values:
+                                      type: array
+                                      items:
+                                        type: string
+                          run:
+                            type: array
+                            description: "Conditions that must be satisfied to run (AND logic)"
+                            items:
+                              type: object
+                              description: "A single condition"
+                              properties:
+                                keyExist:
+                                  type: object
+                                  properties:
+                                    source:
+                                      type: string
+                                      enum: [header, query, cookie, path, client_ip, method, ctx]
+                                    key:
+                                      type: string
+                                keyMatch:
+                                  type: object
+                                  properties:
+                                    source:
+                                      type: string
+                                      enum: [header, query, cookie, path, client_ip, method, ctx]
+                                    key:
+                                      type: string
+                                    value:
+                                      type: string
+                                    regex:
+                                      type: string
+                                timeRange:
+                                  type: object
+                                  properties:
+                                    after:
+                                      type: string
+                                    before:
+                                      type: string
+                                probability:
+                                  type: object
+                                  properties:
+                                    ratio:
+                                      type: number
+                                      minimum: 0.0
+                                      maximum: 1.0
+                                    key:
+                                      type: string
+                                    keySource:
+                                      type: string
+                                      enum: [header, query, cookie, path, client_ip, method, ctx]
+                                include:
+                                  type: object
+                                  properties:
+                                    source:
+                                      type: string
+                                      enum: [header, query, cookie, path, client_ip, method, ctx]
+                                    values:
+                                      type: array
+                                      items:
+                                        type: string
+                                exclude:
+                                  type: object
+                                  properties:
+                                    source:
+                                      type: string
+                                      enum: [header, query, cookie, path, client_ip, method, ctx]
+                                    values:
+                                      type: array
+                                      items:
+                                        type: string
+                      type:
+                        type: string
+                        description: "Plugin type"
+                        enum:
+                          - BasicAuth
+                          - Cors
+                          - Csrf
+                          - IpRestriction
+                          - JwtAuth
+                          - Mock
+                          - ProxyRewrite
+                          - RateLimit
+                          - RateCount
+                          - RequestRestriction
+                          - RequestHeaderModifier
+                          - ResponseHeaderModifier
+                          - RequestRedirect
+                          - ExtensionRef
+                          - DebugAccessLogToHeader
+                      config:
+                        type: object
+                        description: "Plugin-specific configuration"
+                        x-kubernetes-preserve-unknown-fields: true
+
+                # ============================================
+                # Upstream Response Filter Stage Plugins (sync)
+                # ============================================
+                upstreamResponseFilterPlugins:
+                  type: array
+                  description: "Upstream response filter stage plugins (sync)"
+                  items:
+                    type: object
+                    properties:
+                      enable:
+                        type: boolean
+                        default: true
+                      conditionEnable:
+                        type: object
+                        properties:
+                          timeBefore:
+                            type: string
+                      conditions:
+                        type: object
+                        description: "Advanced plugin conditions"
+                        properties:
+                          skip:
+                            type: array
+                            items:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                          run:
+                            type: array
+                            items:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                      type:
+                        type: string
+                        enum:
+                          - ResponseHeaderModifier
+                          - ResponseRewrite
+                          - DebugAccessLogToHeader
+                          - ExtensionRef
+                      config:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+
+                # ============================================
+                # Upstream Response Stage Plugins (async)
+                # ============================================
+                upstreamResponsePlugins:
+                  type: array
+                  description: "Upstream response stage plugins (async)"
+                  items:
+                    type: object
+                    properties:
+                      enable:
+                        type: boolean
+                        default: true
+                      conditionEnable:
+                        type: object
+                        properties:
+                          timeBefore:
+                            type: string
+                      conditions:
+                        type: object
+                        description: "Advanced plugin conditions"
+                        properties:
+                          skip:
+                            type: array
+                            items:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                          run:
+                            type: array
+                            items:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                      type:
+                        type: string
+                      config:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+
+            status:
+              type: object
+              description: "Status of EdgionPlugins"
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

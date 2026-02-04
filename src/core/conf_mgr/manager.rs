@@ -30,6 +30,9 @@ use super::conf_center::kubernetes::KubernetesCenter;
 use super::conf_center::traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfWriterError, ListOptions, ListResult};
 use super::conf_center::ConfCenterConfig;
 use super::sync_runtime::ShutdownHandle;
+use crate::core::conf_mgr::sync_runtime::resource_processor::ref_grant::{
+    get_global_dispatcher, CrossNsRevalidationListener,
+};
 use crate::core::conf_sync::conf_server::ConfigSyncServer;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -71,6 +74,12 @@ impl ConfMgr {
             }
         };
 
+        // Register cross-namespace revalidation listener
+        // This ensures that when ReferenceGrant changes, affected routes are requeued
+        let listener = Arc::new(CrossNsRevalidationListener::new());
+        get_global_dispatcher().register_listener(listener);
+        tracing::debug!(component = "conf_mgr", "Registered CrossNsRevalidationListener");
+
         Ok(Self { conf_center })
     }
 
@@ -106,11 +115,6 @@ impl ConfMgr {
         self.start_with_shutdown(shutdown_handle).await
     }
 
-    /// Reload all resources (FileSystem mode only)
-    pub async fn reload(&self) -> Result<()> {
-        self.conf_center.reload().await
-    }
-
     /// Check if the system is ready
     pub fn is_ready(&self) -> bool {
         self.conf_center.is_ready()
@@ -124,6 +128,19 @@ impl ConfMgr {
     /// Check if running in Kubernetes mode
     pub fn is_k8s_mode(&self) -> bool {
         self.conf_center.is_k8s_mode()
+    }
+
+    /// Request a reload (re-initialize all processors and stores)
+    ///
+    /// This triggers a full restart of the configuration center:
+    /// 1. Stop current controllers
+    /// 2. Clear PROCESSOR_REGISTRY
+    /// 3. Create new ConfigSyncServer (new server_id)
+    /// 4. Restart controllers (full Init -> InitApply -> InitDone flow)
+    ///
+    /// Returns Ok(()) if the reload request was accepted (reload happens asynchronously).
+    pub fn request_reload(&self) -> Result<(), String> {
+        self.conf_center.request_reload()
     }
 }
 
@@ -207,10 +224,6 @@ impl CenterLifeCycle for ConfMgr {
         self.conf_center.start(shutdown_handle).await
     }
 
-    async fn reload(&self) -> Result<()> {
-        self.conf_center.reload().await
-    }
-
     fn is_ready(&self) -> bool {
         self.conf_center.is_ready()
     }
@@ -221,6 +234,10 @@ impl CenterLifeCycle for ConfMgr {
 
     fn is_k8s_mode(&self) -> bool {
         self.conf_center.is_k8s_mode()
+    }
+
+    fn request_reload(&self) -> Result<(), String> {
+        self.conf_center.request_reload()
     }
 }
 

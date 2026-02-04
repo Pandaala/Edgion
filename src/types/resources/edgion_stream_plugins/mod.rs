@@ -14,7 +14,7 @@ use crate::core::plugins::StreamPluginRuntime;
 pub mod stream_plugins;
 
 // Re-exports from edgion_plugins
-pub use crate::types::resources::edgion_plugins::{ConditionEnable, PluginEntry};
+pub use crate::types::resources::edgion_plugins::PluginEntry;
 pub use stream_plugins::EdgionStreamPlugin;
 
 // Re-export plugin configs
@@ -58,10 +58,6 @@ pub struct StreamPluginEntry {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enable: bool,
 
-    /// Conditional enable configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub condition_enable: Option<ConditionEnable>,
-
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionStreamPlugin,
@@ -77,16 +73,9 @@ fn is_true(v: &bool) -> bool {
 }
 
 impl StreamPluginEntry {
-    /// Check if this plugin is enabled (considering both enable flag and condition)
+    /// Check if this plugin is enabled
     pub fn is_enabled(&self) -> bool {
-        if !self.enable {
-            return false;
-        }
-        // Check condition if present
-        if let Some(condition) = &self.condition_enable {
-            return condition.is_satisfied();
-        }
-        true
+        self.enable
     }
 
     /// Get the plugin type name

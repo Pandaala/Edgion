@@ -1,14 +1,19 @@
+pub mod constants;
 pub mod ctx;
 pub mod edgion_status;
 pub mod err;
 pub mod filters;
 pub mod gateway_base_conf;
-pub mod global_def;
 pub mod observe;
 pub mod output;
 pub mod resources;
 pub mod schema;
 pub mod work_dir;
+
+// Backward compatibility: global_def re-exports from constants::app
+pub mod global_def {
+    pub use super::constants::app::*;
+}
 
 // Resource system core module (consolidated)
 #[macro_use]
@@ -26,18 +31,19 @@ pub mod link_sys {
 pub use self::resource::ResourceKind;
 pub use self::resource::ResourceMeta;
 pub use self::resource::{
-    all_resource_type_names, base_conf_resource_names, get_resource_metadata, ResourceTypeMetadata, RESOURCE_TYPES,
+    all_resource_type_names, base_conf_resource_names, get_resource_metadata, ResourceTypeMetadata,
+    DEFAULT_NO_SYNC_KINDS, RESOURCE_TYPES,
 };
 
 // Re-export from other modules
+pub use self::constants::app::*;
 pub use self::ctx::{BackendContext, BackendTlsInfo, EdgionHttpContext, MatchInfo, RequestInfo, UpstreamInfo};
 pub use self::edgion_status::EdgionStatus;
 pub use self::err::{
-    EdError, WATCH_ERR_EVENTS_LOST, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_TOO_OLD_VERSION,
-    WATCH_ERR_VERSION_UNEXPECTED,
+    EdError, WATCH_ERR_EVENTS_LOST, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD,
+    WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED,
 };
 pub use self::gateway_base_conf::GatewayBaseConf;
-pub use self::global_def::*;
 pub use self::observe::{LogConfig, LogType};
 pub use self::resources::*;
 pub use self::schema::*;
@@ -45,8 +51,7 @@ pub use self::work_dir::{init_work_dir, work_dir, WorkDir};
 
 // Re-export from conf_mgr for backward compatibility
 pub use crate::core::conf_mgr::{
-    CenterApi as ResourceStore, ConfEntry as ResourceEntry, ConfMgrError as ResourceMgrError,
-    ConfStoreError as ResourceStoreError, EdgionConfMgr as EdgionResourceMgr,
+    CenterApi as ResourceStore, ConfEntry as ResourceEntry, ConfStoreError as ResourceStoreError,
 };
 
 // Backward compatibility re-exports (old paths)

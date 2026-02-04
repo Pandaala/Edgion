@@ -1,5 +1,6 @@
 //! PluginSession trait - shared across all filter stages
 
+use crate::core::plugins::plugin_runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::types::EdgionHttpContext;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,9 +12,43 @@ pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait PluginSession: Send {
-    fn header_value(&mut self, name: &str) -> Option<String>;
+    /// Get a request header value by name
+    fn header_value(&self, name: &str) -> Option<String>;
 
+    /// Get the HTTP method (returns owned String for compatibility)
     fn method(&self) -> String;
+
+    // ========== Condition evaluation methods (read-only) ==========
+
+    /// Get a query parameter value by name
+    fn get_query_param(&self, name: &str) -> Option<String>;
+
+    /// Get a cookie value by name
+    fn get_cookie(&self, name: &str) -> Option<String>;
+
+    /// Get the request path (without query string)
+    fn get_path(&self) -> &str;
+
+    /// Get the request query string (without leading '?')
+    fn get_query(&self) -> Option<String>;
+
+    /// Get the HTTP method as &str (more efficient than method())
+    fn get_method(&self) -> &str;
+
+    /// Get a context variable by key (set by plugins like KeySet)
+    fn get_ctx_var(&self, key: &str) -> Option<String>;
+
+    /// Set a context variable (for plugins to pass data downstream)
+    fn set_ctx_var(&mut self, key: &str, value: &str) -> PluginSessionResult<()>;
+
+    /// Get a path parameter by name (lazy extraction from route pattern)
+    ///
+    /// For route pattern "/api/:uid/profile" and request path "/api/123/profile",
+    /// `get_path_param("uid")` returns `Some("123")`.
+    ///
+    /// This uses lazy extraction - parameters are only parsed on first call
+    /// and then cached for subsequent calls.
+    fn get_path_param(&mut self, name: &str) -> Option<String>;
 
     async fn write_response_header(
         &mut self,
@@ -35,6 +70,12 @@ pub trait PluginSession: Send {
 
     /// Remove a response header (for ResponseHeaderModifier)
     fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()>;
+
+    /// Get a response header value by name (for ResponseRewrite)
+    fn get_response_header(&self, name: &str) -> Option<String>;
+
+    /// Set the response status code (for ResponseRewrite)
+    fn set_response_status(&mut self, status: u16) -> PluginSessionResult<()>;
 
     /// Set a request header (for upstream)
     fn set_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
@@ -78,4 +119,21 @@ pub trait PluginSession: Send {
 
     /// Check whether reference key already exists in stack
     fn has_plugin_ref(&self, key: &str) -> bool;
+
+    /// Push EdgionPlugins execution log to pending list (for ExtensionRef)
+    fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog);
+
+    /// Start a new EdgionPluginsLog and return a token for safe log pushing.
+    ///
+    /// This creates an empty EdgionPluginsLog entry in the pending list and returns
+    /// a token that can be used with `push_to_edgion_plugins_log` to append logs.
+    /// The token records the current depth to prevent misuse in nested scopes.
+    fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken;
+
+    /// Push a PluginLog to the EdgionPluginsLog identified by the token.
+    ///
+    /// # Panics
+    /// In debug builds, panics if the current depth doesn't match the token's depth,
+    /// indicating the token is being used in the wrong scope.
+    fn push_to_edgion_plugins_log(&mut self, token: &EdgionPluginsLogToken, log: PluginLog);
 }

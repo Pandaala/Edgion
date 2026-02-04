@@ -19,6 +19,8 @@
 mod framework;
 #[path = "../client/log_analyzer.rs"]
 mod log_analyzer;
+#[path = "../client/metrics_helper.rs"]
+pub mod metrics_helper;
 #[path = "../client/reporter.rs"]
 mod reporter;
 #[path = "../client/suites/mod.rs"]
@@ -118,6 +120,7 @@ async fn main() -> Result<()> {
         cli.udp_port,
         443,   // https_port (not used in direct mode)
         443,   // grpc_https_port (not used in direct mode)
+        8080,  // admin_port (not used in direct mode)
         None,  // http_host
         None,  // grpc_host
         false, // gateway mode = false

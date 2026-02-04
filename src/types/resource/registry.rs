@@ -90,8 +90,8 @@ pub fn all_resource_type_names() -> Vec<&'static str> {
                 .filter(|name| *name != "endpoint_slices")
                 .collect()
         }
-        Some(EndpointMode::Auto) | None => {
-            // Auto mode or not initialized - return all (should be resolved before use)
+        Some(EndpointMode::Both) | Some(EndpointMode::Auto) | None => {
+            // Both mode, Auto mode or not initialized - return all resources
             all_names
         }
     }

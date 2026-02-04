@@ -26,6 +26,24 @@ fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
         .unwrap_or(true) // Default to true if annotation is not present
 }
 
+/// Check if a Listener is marked as Conflicted in Gateway status
+///
+/// Returns true if the Listener has a Conflicted condition with status "True".
+/// This is set by the Controller when port conflicts are detected.
+fn is_listener_conflicted(gateway: &Gateway, listener_name: &str) -> bool {
+    gateway
+        .status
+        .as_ref()
+        .and_then(|s| s.listeners.as_ref())
+        .and_then(|listeners| listeners.iter().find(|ls| ls.name == listener_name))
+        .map(|ls| {
+            ls.conditions
+                .iter()
+                .any(|c| c.type_ == "Conflicted" && c.status == "True")
+        })
+        .unwrap_or(false)
+}
+
 impl GatewayBase {
     pub fn new(config_client: Arc<ConfigClient>) -> Self {
         Self { config_client }
@@ -49,14 +67,14 @@ impl GatewayBase {
 
         tracing::info!("Configuring {} Gateway resources", gateways.len());
 
-        // 1. Add all gateways to the global gateway store
+        // 1. Ensure all gateways are in the global gateway store
+        // Use update_gateway (idempotent) instead of add_gateway to avoid warnings
+        // when GatewayHandler has already added them via full_set/partial_update
         let gateway_store = get_global_gateway_store();
         {
             let mut store_guard = gateway_store.write().unwrap();
             for gateway in gateways.iter() {
-                if let Err(e) = store_guard.add_gateway(gateway.clone()) {
-                    tracing::warn!("Failed to add gateway to store: {}", e);
-                }
+                store_guard.update_gateway(gateway.clone());
             }
         }
 
@@ -137,6 +155,18 @@ impl GatewayBase {
 
                 // Add each listener
                 for listener in listeners {
+                    // Check if Listener is marked as Conflicted by Controller
+                    // Skip conflicted listeners to prevent BindError panic
+                    if is_listener_conflicted(gateway, &listener.name) {
+                        tracing::warn!(
+                            gateway = %gateway.key_name(),
+                            listener = %listener.name,
+                            port = listener.port,
+                            "Listener skipped - marked as Conflicted by Controller (port conflict)"
+                        );
+                        continue;
+                    }
+
                     tracing::info!(
                         "  Listener: name={}, protocol={}, port={}",
                         listener.name,

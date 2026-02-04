@@ -1,5 +1,5 @@
 {
-  "current_max": 31252,
+  "current_max": 31262,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -8,8 +8,11 @@
       "http": 31020,
       "https": 31021
     },
-    "HTTPRoute/Backend/LBPolicy": {
+    "HTTPRoute/Backend/LBRoundRobin": {
       "http": 31120
+    },
+    "HTTPRoute/Backend/LBConsistentHash": {
+      "http": 31121
     },
     "HTTPRoute/Backend/WeightedBackend": {
       "http": 31130
@@ -22,6 +25,9 @@
     },
     "HTTPRoute/Filters/Security": {
       "http": 31030
+    },
+    "HTTPRoute/Filters/HeaderModifier": {
+      "http": 31045
     },
     "HTTPRoute/Protocol/WebSocket": {
       "http": 31080
@@ -48,7 +54,7 @@
     "Gateway/TLS/BackendTLS": {
       "http": 31170
     },
-    "Gateway/Plugins": {
+    "EdgionPlugins": {
       "http": 31180
     },
     "EdgionTls/https": {
@@ -68,6 +74,11 @@
     },
     "Gateway/Dynamic": {
       "http": 31250
+    },
+    "Gateway/PortConflict": {
+      "internal_conflict": 31260,
+      "cross_conflict": 31261,
+      "no_conflict_hostname": 31262
     }
   }
 }

@@ -1,0 +1,22 @@
+# 多 Slice 场景 - Slice 1 (2 endpoints)
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: lb-rr-multi-1
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: lb-rr-multi-service
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+  - addresses:
+      - "127.0.0.2"
+    conditions:
+      ready: true

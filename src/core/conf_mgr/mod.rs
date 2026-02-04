@@ -43,7 +43,6 @@
 //! ```
 
 pub mod conf_center;
-mod conf_mgr_trait;
 mod manager;
 pub mod processor_registry;
 mod schema_validator;
@@ -71,7 +70,6 @@ pub use sync_runtime::{
 };
 
 // Export top-level types
-pub use conf_mgr_trait::{ConfMgrError, EdgionConfMgr};
 pub use schema_validator::{SchemaValidator, ValidationError};
 
 // ==================== conf_center exports ====================
@@ -91,9 +89,6 @@ pub use conf_center::kubernetes::{
 
 // Leader election
 pub use conf_center::kubernetes::{LeaderElection, LeaderHandle, RelinkReason};
-
-// Status store
-pub use conf_center::status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, StatusStoreError};
 
 // ==================== Backward compatibility aliases ====================
 

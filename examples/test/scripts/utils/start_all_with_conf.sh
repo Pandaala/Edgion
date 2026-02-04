@@ -300,11 +300,15 @@ start_test_server() {
 start_controller() {
     log_section "Start edgion-controller"
     
+    # Start controller with --test-mode to enable:
+    # - Both endpoint mode (sync both Endpoints and EndpointSlice)
+    # - Metrics test features (test_key, test_data)
     "${PROJECT_ROOT}/target/debug/edgion-controller" \
         -c "$CONTROLLER_CONFIG" \
         --work-dir "${WORK_DIR}" \
         --conf-dir "$CONFIG_DIR" \
         --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}" \
+        --test-mode \
         > "${LOG_DIR}/controller.log" 2>&1 &
     
     local pid=$!
@@ -355,6 +359,14 @@ start_gateway() {
         tail -30 "${LOG_DIR}/gateway.log" 2>/dev/null || true
         exit 1
     fi
+    
+    # Verify LB preload completed
+    if ! grep -q "LB preload completed" "${LOG_DIR}/gateway.log"; then
+        log_error "edgion-gateway LB preload 日志未找到"
+        tail -50 "${LOG_DIR}/gateway.log" 2>/dev/null || true
+        exit 1
+    fi
+    log_info "LB preload 日志验证通过"
     
     log_success "edgion-gateway Startsuccess (PID: $pid)"
 }
@@ -559,6 +571,7 @@ verify_sync() {
     local attempt=1
     
     while [ $attempt -le $max_retries ]; do
+        # Note: resource_diff now skips ReferenceGrant and Secret by default (--skip-kinds)
         if "$resource_diff" \
             --controller-url "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" \
             --gateway-url "http://127.0.0.1:${GATEWAY_ADMIN_PORT}" \
@@ -574,8 +587,9 @@ verify_sync() {
         ((attempt++))
     done
     
-    log_warning "resourcesyncverifyfailed after $max_retries attempts，viewlog: ${LOG_DIR}/resource_diff.log"
-    tail -10 "${LOG_DIR}/resource_diff.log" 2>/dev/null || true
+    log_error "resourcesyncverifyfailed after $max_retries attempts，viewlog: ${LOG_DIR}/resource_diff.log"
+    tail -20 "${LOG_DIR}/resource_diff.log" 2>/dev/null || true
+    exit 1
 }
 
 # =============================================================================
@@ -638,6 +652,7 @@ main() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "Project:  ${PROJECT_ROOT}"
     echo -e "Work Dir: ${WORK_DIR}"
+    echo -e "Test Mode: ${GREEN}enabled${NC} (Both endpoint mode + metrics test)"
     if [ -n "$SUITES" ]; then
         echo -e "Suites:   ${SUITES}"
     else

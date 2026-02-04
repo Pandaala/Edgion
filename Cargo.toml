@@ -131,11 +131,14 @@ rand = "0.9"
 smallvec = "1.15"
 bcrypt = "0.18"
 sha2 = "0.10"
+hmac = "0.12"
 hex = "0.4"
+jsonwebtoken = "9"
 
 # Pingora
 pingora-core = { version = "0.6" }
 pingora-http = "0.6"
+pingora-limits = "0.6"
 pingora-load-balancing = "0.6"
 pingora-proxy = { version = "0.6" }
 etcd-client = "0.18"
@@ -153,6 +156,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 http = "1.4.0"
+percent-encoding = "2.3"
 mockall = "0.14.0"
 
 # Test client dependencies

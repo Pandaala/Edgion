@@ -2,11 +2,12 @@
 //!
 //! Provides a generic workqueue with:
 //! - Deduplication: same key only exists once in queue
-//! - Processing tracking: prevents concurrent processing of same key
 //! - Exponential backoff: retry with increasing delays
-//! - Metrics: queue depth, adds, retries, latency
-
-#![allow(dead_code)]
+//! - Metrics: queue depth, adds, retries
+//!
+//! Key design decision: We don't track "processing" state. When a key is dequeued,
+//! it's simply removed from pending. This allows new enqueue requests during processing
+//! to succeed, ensuring updates are not lost (dirty requeue pattern).
 
 use dashmap::DashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -79,8 +80,6 @@ pub struct WorkqueueMetrics {
     pub retries_total: AtomicU64,
     /// Number of items currently in queue (pending)
     pub depth: AtomicU64,
-    /// Number of items currently being processed
-    pub processing: AtomicU64,
 }
 
 impl WorkqueueMetrics {
@@ -104,20 +103,8 @@ impl WorkqueueMetrics {
         self.depth.fetch_sub(1, Ordering::Relaxed);
     }
 
-    pub fn inc_processing(&self) {
-        self.processing.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn dec_processing(&self) {
-        self.processing.fetch_sub(1, Ordering::Relaxed);
-    }
-
     pub fn get_depth(&self) -> u64 {
         self.depth.load(Ordering::Relaxed)
-    }
-
-    pub fn get_processing(&self) -> u64 {
-        self.processing.load(Ordering::Relaxed)
     }
 
     pub fn get_adds_total(&self) -> u64 {
@@ -133,6 +120,10 @@ impl WorkqueueMetrics {
 ///
 /// Each resource type should have its own workqueue instance.
 /// This provides isolation between different resource types.
+///
+/// Design: We only track pending keys (not processing). When dequeue happens,
+/// the key is removed from pending immediately. This allows new enqueue requests
+/// during processing to succeed and be queued, ensuring dirty updates are not lost.
 pub struct Workqueue {
     /// Queue name (for logging and metrics)
     name: String,
@@ -142,8 +133,6 @@ pub struct Workqueue {
     rx: Mutex<mpsc::Receiver<WorkItem>>,
     /// Keys currently in the queue (for deduplication)
     pending: DashSet<String>,
-    /// Keys currently being processed (to prevent concurrent processing)
-    processing: DashSet<String>,
     /// Configuration
     config: WorkqueueConfig,
     /// Metrics
@@ -159,7 +148,6 @@ impl Workqueue {
             tx,
             rx: Mutex::new(rx),
             pending: DashSet::new(),
-            processing: DashSet::new(),
             config,
             metrics: Arc::new(WorkqueueMetrics::new()),
         }
@@ -183,13 +171,17 @@ impl Workqueue {
     /// Enqueue a key for processing
     ///
     /// Returns true if the key was added, false if it was already in the queue (deduplicated)
+    ///
+    /// Note: We only check pending, not processing. This allows enqueueing during processing,
+    /// which enables dirty requeue - if an update arrives while processing, it will be queued
+    /// and processed again after the current processing completes.
     pub async fn enqueue(&self, key: String) -> bool {
-        // Deduplication: if key is already pending or being processed, skip
-        if self.pending.contains(&key) || self.processing.contains(&key) {
+        // Deduplication: if key is already pending, skip
+        if self.pending.contains(&key) {
             tracing::trace!(
                 queue = %self.name,
                 key = %key,
-                "Key already in queue or processing, skipping"
+                "Key already in queue, skipping"
             );
             return false;
         }
@@ -231,16 +223,16 @@ impl Workqueue {
     ///
     /// This will block until an item is available.
     /// Returns None if the queue is closed.
+    ///
+    /// Note: The key is removed from pending immediately, allowing new enqueue
+    /// requests for the same key during processing.
     pub async fn dequeue(&self) -> Option<WorkItem> {
         let mut rx = self.rx.lock().await;
         let item = rx.recv().await?;
 
-        // Move from pending to processing
+        // Remove from pending - this allows new enqueue during processing
         self.pending.remove(&item.key);
         self.metrics.dec_depth();
-
-        self.processing.insert(item.key.clone());
-        self.metrics.inc_processing();
 
         tracing::debug!(
             queue = %self.name,
@@ -254,11 +246,9 @@ impl Workqueue {
 
     /// Mark an item as done (successfully processed)
     ///
-    /// This removes the key from the processing set.
+    /// This is now a no-op since we don't track processing state,
+    /// but kept for API compatibility and logging.
     pub fn done(&self, key: &str) {
-        self.processing.remove(key);
-        self.metrics.dec_processing();
-
         tracing::debug!(
             queue = %self.name,
             key = %key,
@@ -281,7 +271,6 @@ impl Workqueue {
                 max_retries = self.config.max_retries,
                 "Max retries exceeded, giving up"
             );
-            self.done(&item.key);
             return;
         }
 
@@ -299,10 +288,6 @@ impl Workqueue {
             backoff_ms = backoff.as_millis(),
             "Scheduling retry with backoff"
         );
-
-        // Remove from processing (will be re-added to pending after backoff)
-        self.processing.remove(&item.key);
-        self.metrics.dec_processing();
 
         // Spawn a task to requeue after backoff
         let tx = self.tx.clone();
@@ -351,19 +336,9 @@ impl Workqueue {
         self.pending.is_empty()
     }
 
-    /// Get number of items currently being processed
-    pub fn processing_count(&self) -> usize {
-        self.processing.len()
-    }
-
-    /// Check if a key is currently being processed
-    pub fn is_processing(&self, key: &str) -> bool {
-        self.processing.contains(key)
-    }
-
-    /// Check if a key is in the queue (pending or processing)
+    /// Check if a key is in the queue (pending)
     pub fn contains(&self, key: &str) -> bool {
-        self.pending.contains(key) || self.processing.contains(key)
+        self.pending.contains(key)
     }
 
     /// Get the configuration
@@ -390,11 +365,9 @@ mod tests {
         assert_eq!(item.key, "ns/name");
         assert_eq!(item.retry_count, 0);
         assert_eq!(queue.len(), 0);
-        assert_eq!(queue.processing_count(), 1);
 
-        // Done
+        // Done (no-op but should not panic)
         queue.done(&item.key);
-        assert_eq!(queue.processing_count(), 0);
     }
 
     #[tokio::test]
@@ -411,15 +384,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_deduplication_while_processing() {
+    async fn test_enqueue_during_processing() {
         let queue = Workqueue::with_defaults("test");
 
         // Enqueue and dequeue
         queue.enqueue("ns/name".to_string()).await;
         let _item = queue.dequeue().await.unwrap();
 
-        // Try to enqueue same key while processing - should be deduplicated
-        assert!(!queue.enqueue("ns/name".to_string()).await);
+        // Key is removed from pending after dequeue, so new enqueue should succeed
+        // This is the key behavior change - allows dirty requeue
+        assert!(queue.enqueue("ns/name".to_string()).await);
+        assert_eq!(queue.len(), 1);
     }
 
     #[tokio::test]
@@ -485,9 +460,8 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        // After max retries, item should be removed (done called)
+        // After max retries, item should not be requeued
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert_eq!(queue.processing_count(), 0);
         assert_eq!(queue.len(), 0);
     }
 
@@ -506,9 +480,39 @@ mod tests {
 
         let item = queue.dequeue().await.unwrap();
         assert_eq!(queue.metrics().get_depth(), 1);
-        assert_eq!(queue.metrics().get_processing(), 1);
 
         queue.done(&item.key);
-        assert_eq!(queue.metrics().get_processing(), 0);
+        // done is now no-op, depth should still be 1
+        assert_eq!(queue.metrics().get_depth(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_dirty_requeue_pattern() {
+        // This test verifies the key behavior: if an update arrives while processing,
+        // it should be queued and processed again.
+        let queue = Workqueue::with_defaults("test");
+
+        // Initial enqueue
+        queue.enqueue("ns/resource".to_string()).await;
+
+        // Dequeue for processing
+        let item = queue.dequeue().await.unwrap();
+        assert_eq!(item.key, "ns/resource");
+
+        // Simulate: while processing, a new update arrives (cascading requeue)
+        assert!(queue.enqueue("ns/resource".to_string()).await);
+
+        // Complete processing
+        queue.done(&item.key);
+
+        // The resource should be in queue again, ready for reprocessing
+        assert_eq!(queue.len(), 1);
+
+        // Dequeue and process the update
+        let item2 = queue.dequeue().await.unwrap();
+        assert_eq!(item2.key, "ns/resource");
+        queue.done(&item2.key);
+
+        assert_eq!(queue.len(), 0);
     }
 }

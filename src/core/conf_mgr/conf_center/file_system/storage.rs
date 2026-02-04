@@ -9,6 +9,20 @@ use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
+/// Format YAML content to pretty format
+///
+/// This ensures consistent, readable YAML output by:
+/// 1. Parsing the input YAML
+/// 2. Re-serializing with proper formatting
+///
+/// If parsing fails, returns the original content unchanged.
+fn format_yaml_pretty(content: &str) -> String {
+    match serde_yaml::from_str::<serde_yaml::Value>(content) {
+        Ok(value) => serde_yaml::to_string(&value).unwrap_or_else(|_| content.to_string()),
+        Err(_) => content.to_string(),
+    }
+}
+
 /// File system based configuration writer
 ///
 /// Stores resources as YAML files with naming convention: Kind_namespace_name.yaml
@@ -63,7 +77,10 @@ impl CenterApi for FileSystemStorage {
                 .map_err(|e| ConfWriterError::IOError(format!("Failed to create directory: {}", e)))?;
         }
 
-        fs::write(&path, content)
+        // Format YAML to pretty format for readability
+        let formatted_content = format_yaml_pretty(&content);
+
+        fs::write(&path, formatted_content)
             .await
             .map_err(|e| ConfWriterError::IOError(format!("Failed to write file: {}", e)))?;
 

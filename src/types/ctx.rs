@@ -1,4 +1,5 @@
-use crate::core::plugins::PluginLogs;
+use crate::core::gateway::gateway::GatewayInfo;
+use crate::core::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::routes::grpc_routes::GrpcRouteRuleUnit;
 use crate::core::routes::HttpRouteRuleUnit;
 use crate::types::filters::PluginRunningResult;
@@ -6,6 +7,7 @@ use crate::types::resources::http_route_preparse::ParsedLBPolicy;
 use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};
 use pingora_core::protocols::l4::socket::SocketAddr;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -186,6 +188,9 @@ pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
 
+    /// Gateway information (copied from EdgionHttp for easy access)
+    pub gateway_info: GatewayInfo,
+
     /// Request information (hostname, path, x-trace-id)
     pub request_info: RequestInfo,
 
@@ -211,8 +216,11 @@ pub struct EdgionHttpContext {
     /// Backend context containing service info and upstream attempts
     pub backend_context: Option<BackendContext>,
 
-    /// Plugin execution logs (grouped by stage)
-    pub plugin_logs: Vec<PluginLogs>,
+    /// Stage execution logs (grouped by stage)
+    pub stage_logs: Vec<StageLogs>,
+
+    /// Pending EdgionPlugins logs (collected during current stage, merged at stage end)
+    pub pending_edgion_plugins_logs: Vec<EdgionPluginsLog>,
 
     /// Tracking stack for nested plugin references to prevent cycles
     pub plugin_ref_stack: Vec<String>,
@@ -226,6 +234,18 @@ pub struct EdgionHttpContext {
     /// Time when first upstream connection was initiated
     /// Set only once on first connection attempt
     pub upstream_start_time: Option<Instant>,
+
+    /// Hash key used for consistent hashing (for test metrics)
+    pub hash_key: Option<String>,
+
+    /// Context variables map for plugin communication
+    /// Plugins can set values (e.g., KeySet plugin) and conditions can read them
+    pub ctx_map: HashMap<String, String>,
+
+    /// Lazily extracted path parameters from route pattern (e.g., "/api/:uid/profile")
+    /// - None: not yet extracted
+    /// - Some(HashMap): already extracted (may be empty if no params or no match)
+    pub path_params: Option<HashMap<String, String>>,
 }
 
 impl Default for EdgionHttpContext {
@@ -238,6 +258,7 @@ impl EdgionHttpContext {
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),
+            gateway_info: GatewayInfo::default(),
             request_info: RequestInfo::default(),
             edgion_status: Vec::with_capacity(5),
             route_unit: None,
@@ -246,11 +267,15 @@ impl EdgionHttpContext {
             selected_grpc_backend: None,
             is_grpc_route_matched: false,
             backend_context: None,
-            plugin_logs: Vec::with_capacity(3),
+            stage_logs: Vec::with_capacity(3),
+            pending_edgion_plugins_logs: Vec::new(),
             plugin_ref_stack: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
             try_cnt: 0,
             upstream_start_time: None,
+            hash_key: None,
+            ctx_map: HashMap::new(),
+            path_params: None,
         }
     }
 
@@ -322,5 +347,27 @@ impl EdgionHttpContext {
     /// Whether the stack already contains the given reference key (for cycle detection)
     pub fn has_plugin_ref(&self, key: &str) -> bool {
         self.plugin_ref_stack.iter().any(|k| k == key)
+    }
+
+    // ========== Context variable methods ==========
+
+    /// Get a context variable by key
+    pub fn get_ctx_var(&self, key: &str) -> Option<&str> {
+        self.ctx_map.get(key).map(|s| s.as_str())
+    }
+
+    /// Set a context variable (for plugins like KeySet)
+    pub fn set_ctx_var(&mut self, key: String, value: String) {
+        self.ctx_map.insert(key, value);
+    }
+
+    /// Remove a context variable
+    pub fn remove_ctx_var(&mut self, key: &str) -> Option<String> {
+        self.ctx_map.remove(key)
+    }
+
+    /// Check if a context variable exists
+    pub fn has_ctx_var(&self, key: &str) -> bool {
+        self.ctx_map.contains_key(key)
     }
 }

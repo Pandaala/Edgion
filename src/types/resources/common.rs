@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// This type is shared across all route resources and follows the
 /// Gateway API specification for parent references.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ParentReference {
     /// Group is the group of the referent
@@ -50,6 +50,25 @@ impl ParentReference {
         let namespace = self.namespace.as_deref().or(route_namespace).unwrap_or("default");
         format!("{}/{}", namespace, self.name)
     }
+}
+
+/// Cross-namespace reference denial info
+///
+/// Set by Controller when a cross-namespace reference is not permitted
+/// (no matching ReferenceGrant). This info is synced to Gateway and used
+/// to reject requests and log denial details to access log.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RefDenied {
+    /// The target namespace that was denied
+    pub target_namespace: String,
+
+    /// The target resource name that was denied
+    pub target_name: String,
+
+    /// Optional reason for denial (e.g., "NoMatchingReferenceGrant")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Condition contains details for one aspect of the current state of this API Resource.

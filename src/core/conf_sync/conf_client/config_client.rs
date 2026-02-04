@@ -13,6 +13,8 @@ use std::sync::RwLock;
 
 pub struct ConfigClient {
     pub base_conf: RwLock<Option<GatewayBaseConf>>,
+    /// Current server_id from Controller (updated on each list/watch response)
+    current_server_id: RwLock<String>,
     // Base conf resources now have dedicated caches
     gateway_classes: ClientCache<GatewayClass>,
     gateways: ClientCache<Gateway>,
@@ -29,7 +31,6 @@ pub struct ConfigClient {
     edgion_tls: ClientCache<EdgionTls>,
     edgion_plugins: ClientCache<EdgionPlugins>,
     edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
-    reference_grants: ClientCache<ReferenceGrant>,
     backend_tls_policies: ClientCache<BackendTLSPolicy>,
     plugin_metadata: ClientCache<PluginMetaData>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
@@ -97,11 +98,6 @@ impl ConfigClient {
         let stream_plugin_handler = crate::core::plugins::edgion_stream_plugins::create_stream_plugin_handler();
         stream_plugins_cache.set_conf_processor(stream_plugin_handler);
 
-        // Register ReferenceGrantStore as the handler for ReferenceGrant resources
-        let reference_grants_cache = ClientCache::new(client_id.clone(), client_name.clone());
-        let reference_grant_handler = crate::core::ref_grant::create_reference_grant_handler();
-        reference_grants_cache.set_conf_processor(reference_grant_handler);
-
         // Register BackendTLSPolicyStore as the handler for BackendTLSPolicy resources
         let backend_tls_policies_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let backend_tls_policy_handler = crate::core::backends::create_backend_tls_policy_handler();
@@ -123,6 +119,7 @@ impl ConfigClient {
 
         Self {
             base_conf: RwLock::new(None),
+            current_server_id: RwLock::new(String::new()),
             // Base conf caches with handlers registered
             gateway_classes: gateway_classes_cache,
             gateways: gateways_cache,
@@ -139,9 +136,27 @@ impl ConfigClient {
             edgion_tls: edgion_tls_cache,
             edgion_plugins: plugins_cache,
             edgion_stream_plugins: stream_plugins_cache,
-            reference_grants: reference_grants_cache,
             backend_tls_policies: backend_tls_policies_cache,
             plugin_metadata: ClientCache::new(client_id, client_name),
+        }
+    }
+
+    /// Get the current server_id from Controller
+    pub fn current_server_id(&self) -> String {
+        self.current_server_id.read().unwrap().clone()
+    }
+
+    /// Update the current server_id (called by cache when receiving list/watch responses)
+    pub fn set_current_server_id(&self, server_id: String) {
+        let mut current = self.current_server_id.write().unwrap();
+        if *current != server_id {
+            tracing::debug!(
+                component = "config_client",
+                old_server_id = %*current,
+                new_server_id = %server_id,
+                "Server ID updated"
+            );
+            *current = server_id;
         }
     }
 
@@ -205,11 +220,6 @@ impl ConfigClient {
         &self.edgion_stream_plugins
     }
 
-    /// Get reference_grants cache for direct access
-    pub fn reference_grants(&self) -> &ClientCache<ReferenceGrant> {
-        &self.reference_grants
-    }
-
     /// Get backend_tls_policies cache for direct access
     pub fn backend_tls_policies(&self) -> &ClientCache<BackendTLSPolicy> {
         &self.backend_tls_policies
@@ -259,7 +269,6 @@ impl ConfigClient {
             "edgion_tls" => Some(self.edgion_tls.is_ready()),
             "edgion_plugins" => Some(self.edgion_plugins.is_ready()),
             "edgion_stream_plugins" => Some(self.edgion_stream_plugins.is_ready()),
-            "reference_grants" => Some(self.reference_grants.is_ready()),
             "backend_tls_policies" => Some(self.backend_tls_policies.is_ready()),
             "plugin_metadata" => Some(self.plugin_metadata.is_ready()),
             // "secrets" => Some(self.secrets.is_ready()),  // Secret follows related resources
@@ -318,7 +327,9 @@ impl ConfigClient {
             ResourceKind::EdgionTls => self.edgion_tls.list().to_json("EdgionTls")?,
             ResourceKind::EdgionPlugins => self.edgion_plugins.list().to_json("EdgionPlugins")?,
             ResourceKind::EdgionStreamPlugins => self.edgion_stream_plugins.list().to_json("EdgionStreamPlugins")?,
-            ResourceKind::ReferenceGrant => self.reference_grants.list().to_json("ReferenceGrant")?,
+            ResourceKind::ReferenceGrant => {
+                return Err("ReferenceGrant resources are not synced to Gateway".to_string())
+            }
             ResourceKind::BackendTLSPolicy => self.backend_tls_policies.list().to_json("BackendTLSPolicy")?,
             ResourceKind::PluginMetaData => self.plugin_metadata.list().to_json("PluginMetaData")?,
             ResourceKind::Secret => return Err("Secret resources are not stored in ConfigClient".to_string()),
@@ -500,7 +511,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
             ResourceKind::EdgionStreamPlugins => {
                 apply_change!(EdgionStreamPlugins, edgion_stream_plugins, "EdgionStreamPlugins")
             }
-            ResourceKind::ReferenceGrant => apply_change!(ReferenceGrant, reference_grants, "ReferenceGrant"),
+            ResourceKind::ReferenceGrant => {
+                tracing::debug!(
+                    "skip resource change {:?} for ReferenceGrant (not synced to Gateway)",
+                    change
+                )
+            }
             ResourceKind::BackendTLSPolicy => apply_change!(BackendTLSPolicy, backend_tls_policies, "BackendTLSPolicy"),
             ResourceKind::Secret => tracing::warn!("skip resource change {:?} for Secret", change),
         }

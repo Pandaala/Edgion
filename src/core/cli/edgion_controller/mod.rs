@@ -1,7 +1,7 @@
 use crate::core::api::controller::serve_with_shutdown as serve_admin_api_with_shutdown;
 use crate::core::cli::config::EdgionControllerConfig;
 use crate::core::conf_mgr::{ConfMgr, SchemaValidator, ShutdownHandle};
-use crate::core::conf_sync::conf_server::ConfigSyncGrpcServer;
+use crate::core::conf_sync::conf_server::{ConfigSyncGrpcServer, ConfigSyncServerProvider};
 use crate::core::observe::init_logging;
 use crate::core::utils;
 use crate::types::{init_work_dir, work_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
@@ -11,6 +11,20 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_appender::non_blocking::WorkerGuard;
+
+/// Provider that wraps ConfMgr to dynamically provide ConfigSyncServer
+///
+/// This allows the gRPC server to always use the latest ConfigSyncServer
+/// instance, which is important for reload operations.
+struct ConfMgrProvider {
+    conf_mgr: Arc<ConfMgr>,
+}
+
+impl ConfigSyncServerProvider for ConfMgrProvider {
+    fn config_sync_server(&self) -> Option<Arc<crate::core::conf_sync::conf_server::ConfigSyncServer>> {
+        self.conf_mgr.config_sync_server()
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -123,6 +137,10 @@ impl EdgionControllerCli {
     ///
     /// Note: Services can start immediately. When ConfigSyncServer is not ready,
     /// they will return UNAVAILABLE errors until ConfMgr.start() completes.
+    ///
+    /// The gRPC server uses a provider pattern to dynamically obtain the latest
+    /// ConfigSyncServer instance, which allows it to use the new instance after
+    /// reload operations without restarting the server.
     async fn start_services(
         conf_mgr: Arc<ConfMgr>,
         schema_validator: Arc<SchemaValidator>,
@@ -148,22 +166,15 @@ impl EdgionControllerCli {
             async move { signal.wait().await }
         };
 
-        // Wait for ConfigSyncServer to be available
-        // It will be created by ConfMgr.start_with_shutdown()
-        let wait_conf_mgr = conf_mgr.clone();
-        let config_sync_server = tokio::spawn(async move {
-            loop {
-                if let Some(server) = wait_conf_mgr.config_sync_server() {
-                    return server;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .map_err(|e| anyhow!("Failed to wait for ConfigSyncServer: {}", e))?;
+        // Create provider that dynamically obtains ConfigSyncServer from ConfMgr
+        // This allows the gRPC server to use the latest instance after reload
+        let provider = Arc::new(ConfMgrProvider {
+            conf_mgr: conf_mgr.clone(),
+        });
 
-        // Create gRPC server from ConfigSyncServer
-        let grpc_server = ConfigSyncGrpcServer::new(config_sync_server);
+        // Create gRPC server with dynamic provider
+        // Note: gRPC server will return UNAVAILABLE until ConfigSyncServer is ready
+        let grpc_server = ConfigSyncGrpcServer::new(provider);
 
         // Run both services concurrently with shutdown support
         let (sync_result, admin_result) = tokio::join!(
@@ -213,6 +224,13 @@ impl EdgionControllerCli {
     pub async fn run(&self) -> Result<()> {
         // Load and merge configuration
         let config = EdgionControllerConfig::load(self.config.clone())?;
+
+        // Initialize global controller config for runtime access (e.g., by ReferenceGrant validator)
+        crate::core::cli::config::init_controller_config(config.clone());
+
+        // Initialize test mode if enabled via CLI --test-mode
+        // This affects: endpoint_mode (forced to Both), metrics test features
+        crate::core::cli::config::init_global_test_mode(self.config.test_mode);
 
         // 1. Initialize environment (work_dir, logging)
         let _log_guard = self.init_environment(&config).await?;

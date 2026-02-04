@@ -6,6 +6,7 @@ pub mod metrics;
 pub mod ssl_log;
 pub mod sys_log;
 pub mod tcp_log;
+pub mod test_metrics;
 pub mod udp_log;
 
 pub use access_log::{AccessLogEntry, AccessLogger};

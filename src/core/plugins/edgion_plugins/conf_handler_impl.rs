@@ -48,7 +48,6 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
             "partial update"
         );
 
-        // Merge add and update for storage
         let mut add_or_update = add;
         add_or_update.extend(update);
 
@@ -77,13 +76,11 @@ mod tests {
                         remove: Some(vec!["X-Remove".to_string()]),
                     },
                 ))]),
-                upstream_response_filter_plugins: None,
-                upstream_response_plugins: None,
-                plugin_runtime: Default::default(),
+                ..Default::default()
             },
             status: None,
         };
-        plugin.init_plugin_runtime();
+        plugin.preparse();
         plugin
     }
 

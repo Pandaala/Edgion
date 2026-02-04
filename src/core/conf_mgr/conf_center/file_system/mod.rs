@@ -39,8 +39,9 @@ mod center;
 pub mod config;
 mod controller;
 mod event;
-mod file_watcher;
+pub mod file_watcher;
 mod resource_controller;
+pub mod status;
 mod storage;
 
 pub use center::FileSystemCenter;
@@ -49,4 +50,5 @@ pub use controller::FileSystemController;
 pub use event::{FileSystemEvent, ResourceEvent};
 pub use file_watcher::FileSystemWatcher;
 pub use resource_controller::FileSystemResourceController;
+pub use status::{ErrorStatus, FileSystemStatusHandler};
 pub use storage::FileSystemStorage;

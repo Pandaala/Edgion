@@ -186,12 +186,14 @@ mod tests {
                         kind: None,
                         extension_info: Default::default(),
                         plugin_runtime: Default::default(),
+                        ref_denied: None,
                     }]),
                     stream_plugin_runtime: Default::default(),
                     backend_finder: Default::default(),
                     plugin_runtime: Default::default(),
                 }]),
             },
+            status: None,
         }
     }
 

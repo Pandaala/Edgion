@@ -71,7 +71,7 @@ impl_resource_meta!(EdgionTls, EdgionTls, "EdgionTls");
 
 // With pre_parse
 impl_resource_meta!(EdgionPlugins, EdgionPlugins, "EdgionPlugins", |self| {
-    self.init_plugin_runtime();
+    self.preparse();
 });
 
 impl_resource_meta!(

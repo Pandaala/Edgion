@@ -187,11 +187,13 @@ mod tests {
                         kind: None,
                         extension_info: Default::default(),
                         plugin_runtime: Default::default(),
+                        ref_denied: None,
                     }]),
                     backend_finder: Default::default(),
                     plugin_runtime: Default::default(),
                 }]),
             },
+            status: None,
         }
     }
 

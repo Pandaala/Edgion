@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
 
-use super::common::{Condition, ParentReference};
+use super::common::{Condition, ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::lb::BackendSelector;
 use crate::core::plugins::PluginRuntime;
@@ -240,6 +240,14 @@ pub struct HTTPBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub backend_tls_policy: Option<Arc<crate::types::resources::BackendTLSPolicy>>,
+
+    /// Cross-namespace reference denial info
+    /// Set by Controller when this backend's cross-namespace reference
+    /// is not permitted (no matching ReferenceGrant).
+    /// When present, Gateway will reject requests to this backend
+    /// and log the denial details to access log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ref_denied: Option<RefDenied>,
 }
 
 /// HTTPRouteFilter defines processing steps that must be completed during the request/response lifecycle
@@ -613,7 +621,7 @@ impl ParsedRouteTimeouts {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteStatus {
     /// Parents describe the status of the route with respect to each parent.
@@ -621,7 +629,7 @@ pub struct HTTPRouteStatus {
     pub parents: Vec<RouteParentStatus>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteParentStatus {
     /// ParentRef references the parent that this status corresponds to.

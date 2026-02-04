@@ -147,6 +147,9 @@ impl EdgionGatewayCli {
         let log_config = config.to_log_config();
         let _log_guard = runtime.block_on(init_logging(log_config))?;
 
+        // 5. Initialize RateLimiter global configuration
+        config::init_rate_limiter_global_config(&config.rate_limiter);
+
         tracing::info!(
             component = "startup",
             allocator = crate::allocator_name(),
@@ -171,6 +174,7 @@ impl EdgionGatewayCli {
         let endpoint_mode = match server_info.endpoint_mode.as_str() {
             "EndpointSlice" => EndpointMode::EndpointSlice,
             "Endpoint" => EndpointMode::Endpoint,
+            "Both" => EndpointMode::Both,
             _ => {
                 tracing::warn!(
                     component = "startup",
@@ -181,9 +185,16 @@ impl EdgionGatewayCli {
             }
         };
         init_global_endpoint_mode(endpoint_mode);
+
+        // 4.3. Initialize test mode if Controller is in Both mode
+        // Both mode indicates test-mode is enabled on Controller
+        let test_mode_enabled = endpoint_mode == EndpointMode::Both;
+        crate::core::cli::config::init_global_test_mode(test_mode_enabled);
+
         tracing::info!(
             component = "startup",
             endpoint_mode = ?endpoint_mode,
+            test_mode = test_mode_enabled,
             server_id = %server_info.server_id,
             "Global endpoint mode initialized from Controller"
         );
@@ -203,7 +214,10 @@ impl EdgionGatewayCli {
         // 7. Wait for all resources ready (including Gateway/GatewayClass/EdgionGatewayConfig)
         runtime.block_on(Self::wait_for_ready(config_client.clone()))?;
 
-        // 8. Initialize all loggers
+        // 8. Preload LBs for all routes (warm-up to reduce first-request latency)
+        crate::core::backends::preload_load_balancers(config_client.clone());
+
+        // 9. Initialize all loggers
         runtime.block_on(init_access_logger(&config.access_log))?;
         runtime.block_on(init_ssl_logger(&config.ssl_log))?;
         runtime.block_on(init_tcp_logger(&config.tcp_log))?;
@@ -211,21 +225,21 @@ impl EdgionGatewayCli {
 
         tracing::info!("All loggers initialized (access, ssl, tcp, udp)");
 
-        // 9. Create and configure Pingora server (in Tokio runtime context for UDP listeners)
+        // 10. Create and configure Pingora server (in Tokio runtime context for UDP listeners)
         let pingora_server = runtime.block_on(async {
             tokio::task::spawn_blocking(move || create_and_configure_server(config_client, &config))
                 .await
                 .expect("Failed to spawn blocking task")
         })?;
 
-        // 10. Move runtime to background thread to keep async tasks running
+        // 11. Move runtime to background thread to keep async tasks running
         std::thread::spawn(move || {
             runtime.block_on(async {
                 std::future::pending::<()>().await;
             });
         });
 
-        // 11. Run Pingora server (blocks until shutdown)
+        // 12. Run Pingora server (blocks until shutdown)
         run_server(pingora_server);
 
         Ok(())

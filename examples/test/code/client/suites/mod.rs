@@ -1,16 +1,18 @@
 // Test suite module
 
+pub mod edgion_plugins;
 pub mod edgion_tls;
 pub mod gateway;
 pub mod grpc_route;
 pub mod http_route;
+pub mod ref_grant_status;
 pub mod tcp_route;
 pub mod udp_route;
 
 // Re-export all test suites for convenience
 pub use http_route::{
-    HttpMatchTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite, LBPolicyTestSuite,
-    TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    HeaderModifierTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite,
+    LBConsistentHashTestSuite, LBRoundRobinTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};
@@ -26,5 +28,14 @@ pub use edgion_tls::{CipherTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTest
 pub use gateway::{
     AllowedRoutesAllNamespacesTestSuite, AllowedRoutesKindsTestSuite, AllowedRoutesSameNamespaceTestSuite,
     BackendTlsTestSuite, CombinedScenariosTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite,
-    ListenerHostnameTestSuite, PluginLogsTestSuite, RealIpTestSuite, SecurityTestSuite, UpdatePhaseTestSuite,
+    ListenerHostnameTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, UpdatePhaseTestSuite,
 };
+
+// EdgionPlugins tests
+pub use edgion_plugins::{
+    AllConditionsTestSuite, JwtAuthTestSuite, PluginConditionTestSuite, PluginLogsTestSuite, ProxyRewriteTestSuite,
+    RequestRestrictionTestSuite, ResponseRewriteTestSuite,
+};
+
+// ReferenceGrant Status tests
+pub use ref_grant_status::RefGrantStatusTestSuite;

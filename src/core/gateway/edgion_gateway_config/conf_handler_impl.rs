@@ -22,6 +22,7 @@ pub fn get_edgion_gateway_config_by_name(name: &str) -> Option<EdgionGatewayConf
 }
 
 /// List all EdgionGatewayConfig resources
+#[allow(dead_code)]
 pub fn list_edgion_gateway_configs() -> Vec<EdgionGatewayConfig> {
     let store = EDGION_GATEWAY_CONFIG_STORE.read().unwrap();
     store.clone()

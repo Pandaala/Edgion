@@ -35,7 +35,6 @@
 
 pub mod common;
 mod config;
-pub mod status;
 pub mod traits;
 
 pub mod file_system;
@@ -52,9 +51,6 @@ pub use kubernetes::{
     ControllerExitReason, KubernetesCenter, KubernetesConfig, KubernetesController, KubernetesStorage, LeaderElection,
     LeaderElectionConfig, LeaderHandle, MetadataFilterConfig, NamespaceWatchMode, RelinkReason,
 };
-
-// Re-export status store types
-pub use status::{FileSystemStatusStore, KubernetesStatusStore, StatusStore, StatusStoreError};
 
 // Re-export configuration types
 pub use common::EndpointMode;

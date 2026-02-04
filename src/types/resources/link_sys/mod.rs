@@ -2,6 +2,7 @@
 //!
 //! LinkSys is used to connect to external systems like Redis, Etcd, Elasticsearch, Kafka, etc.
 
+use super::common::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -29,7 +30,8 @@ pub const LINK_SYS_KIND: &str = "LinkSys";
     version = "v1",
     kind = "LinkSys",
     plural = "linksys",
-    namespaced
+    namespaced,
+    status = "LinkSysStatus"
 )]
 #[serde(rename_all = "camelCase")]
 pub struct LinkSysSpec {
@@ -163,4 +165,18 @@ impl LinkSys {
             self.metadata.name.as_deref().unwrap_or("").to_string()
         }
     }
+}
+
+// ============================================================================
+// LinkSys Status
+// ============================================================================
+
+/// LinkSysStatus describes the status of the LinkSys resource
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkSysStatus {
+    /// Conditions describe the current conditions of the LinkSys resource.
+    /// Standard conditions: Accepted, Ready
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
 }

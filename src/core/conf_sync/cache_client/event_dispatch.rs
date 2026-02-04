@@ -1,9 +1,10 @@
 use crate::core::conf_sync::cache_client::cache_data::CacheData;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::conf_sync::traits::{CacheEventDispatch, ResourceChange};
+use crate::core::observe::metrics::global_metrics;
 use crate::types::{
-    ResourceMeta, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_TOO_OLD_VERSION,
-    WATCH_ERR_VERSION_UNEXPECTED,
+    ResourceMeta, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD,
+    WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED,
 };
 use kube::{Resource, ResourceExt};
 use rand::Rng;
@@ -69,7 +70,7 @@ where
     ) -> Result<ListResult, tonic::Status> {
         let list_request = tonic::Request::new(crate::core::conf_sync::proto::ListRequest {
             key: gateway_class_key.to_string(),
-            kind: T::resource_kind() as i32,
+            kind: T::kind_name().to_string(), // Use string kind name instead of enum
             expected_server_id: expected_server_id.to_string(),
         });
 
@@ -170,6 +171,9 @@ where
                             // Reset backoff on success
                             backoff_secs = BACKOFF_INIT_SECS;
 
+                            // Record relist metric
+                            global_metrics().config_relist();
+
                             let count = {
                                 let cache = cache_data.read().unwrap();
                                 cache.len()
@@ -181,6 +185,11 @@ where
                                 server_id = %list_result.server_id,
                                 "List completed, starting watch"
                             );
+
+                            // Update global ConfigClient's server_id
+                            if let Some(client) = crate::core::conf_sync::get_global_config_client() {
+                                client.set_current_server_id(list_result.server_id.clone());
+                            }
 
                             // Set ready after first successful list
                             if !is_ready {
@@ -224,7 +233,7 @@ where
 
                     let request = tonic::Request::new(crate::core::conf_sync::proto::WatchRequest {
                         key: String::new(),
-                        kind: T::resource_kind() as i32,
+                        kind: T::kind_name().to_string(), // Use string kind name instead of enum
                         client_id: client_id.as_ref().clone(),
                         client_name: client_name.as_ref().clone(),
                         from_version,
@@ -256,6 +265,10 @@ where
                                         error = watch_response.err,
                                         "Received error signal from server, re-listing"
                                     );
+                                    // Record metric if this is a reload signal
+                                    if watch_response.err.contains(WATCH_ERR_SERVER_RELOAD) {
+                                        global_metrics().config_reload_signal();
+                                    }
                                     break 'watch_block;
                                 }
 

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
 
-use super::common::ParentReference;
+use super::common::{ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::lb::BackendSelector;
 use crate::core::plugins::PluginRuntime;
@@ -26,6 +26,7 @@ pub const TLS_ROUTE_KIND: &str = "TLSRoute";
     version = "v1alpha2",
     kind = "TLSRoute",
     plural = "tlsroutes",
+    status = "TLSRouteStatus",
     namespaced
 )]
 #[serde(rename_all = "camelCase")]
@@ -119,4 +120,25 @@ pub struct TLSBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
+
+    /// Cross-namespace reference denial info
+    /// Set by Controller when this backend's cross-namespace reference
+    /// is not permitted (no matching ReferenceGrant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ref_denied: Option<RefDenied>,
+}
+
+// ============================================================================
+// TLSRoute Status (Gateway API standard)
+// ============================================================================
+
+use super::http_route::RouteParentStatus;
+
+/// TLSRouteStatus describes the status of the TLSRoute
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TLSRouteStatus {
+    /// Parents describe the status of the route with respect to each parent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<RouteParentStatus>,
 }

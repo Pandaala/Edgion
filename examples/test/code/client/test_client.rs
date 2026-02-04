@@ -6,6 +6,7 @@
 
 mod framework;
 mod log_analyzer;
+pub mod metrics_helper;
 mod port_config;
 mod reporter;
 mod suites;
@@ -60,6 +61,9 @@ struct Cli {
     #[arg(long, default_value = "18443")]
     grpc_https_port: u16,
 
+    #[arg(long, default_value = "5800")]
+    admin_port: u16,
+
     #[arg(long)]
     json: bool,
 
@@ -89,7 +93,8 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "http-security" | "httpsecurity" => "HTTPRoute/Filters/Security".to_string(),
             "https" => "EdgionTls/https".to_string(),
             "websocket" => "HTTPRoute/Protocol/WebSocket".to_string(),
-            "lb-policy" | "lbpolicy" => "HTTPRoute/Backend/LBPolicy".to_string(),
+            "lb-rr" | "lbrr" | "lb-roundrobin" => "HTTPRoute/Backend/LBRoundRobin".to_string(),
+            "lb-ch" | "lbch" | "lb-consistenthash" => "HTTPRoute/Backend/LBConsistentHash".to_string(),
             "weighted-backend" | "weightedbackend" => "HTTPRoute/Backend/WeightedBackend".to_string(),
             "timeout" => "HTTPRoute/Backend/Timeout".to_string(),
             "grpc" => "GRPCRoute/Basic".to_string(),
@@ -101,7 +106,10 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "security" => "Gateway/Security".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
-            "plugin-logs" | "pluginlogs" => "Gateway/Plugins".to_string(),
+            "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
+            "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
+            "all-conditions" | "allconditions" => "EdgionPlugins/PluginCondition/AllConditions".to_string(),
+            "jwt-auth" | "jwtauth" => "EdgionPlugins/JwtAuth".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -121,7 +129,8 @@ fn suite_to_port_key(suite: &str) -> &str {
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => "HTTPRoute/Basic",
         "HTTPRoute/Match" => "HTTPRoute/Match",
-        "HTTPRoute/Backend" | "HTTPRoute/Backend/LBPolicy" => "HTTPRoute/Backend/LBPolicy",
+        "HTTPRoute/Backend" | "HTTPRoute/Backend/LBRoundRobin" => "HTTPRoute/Backend/LBRoundRobin",
+        "HTTPRoute/Backend/LBConsistentHash" => "HTTPRoute/Backend/LBConsistentHash",
         "HTTPRoute/Backend/WeightedBackend" => "HTTPRoute/Backend/WeightedBackend",
         "HTTPRoute/Backend/Timeout" => "HTTPRoute/Backend/Timeout",
         "HTTPRoute/Filters" | "HTTPRoute/Filters/Redirect" => "HTTPRoute/Filters/Redirect",
@@ -139,7 +148,14 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/RealIP" => "Gateway/RealIP",
         "Gateway/TLS/BackendTLS" => "Gateway/TLS/BackendTLS",
         "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
-        "Gateway/Plugins" => "Gateway/Plugins",
+        "EdgionPlugins/DebugAccessLog" => "EdgionPlugins",
+        "EdgionPlugins/PluginCondition" => "EdgionPlugins",
+        "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
+        "EdgionPlugins/JwtAuth" => "EdgionPlugins",
+        "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
+        "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
+        "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
+        "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
         "EdgionTls" | "EdgionTls/https" => "EdgionTls/https",
         "EdgionTls/grpctls" => "EdgionTls/grpctls",
@@ -168,16 +184,24 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 eprintln!("Error: HTTPRoute/Backend tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::LBPolicyTestSuite));
+            runner.add_suite(Box::new(suites::LBRoundRobinTestSuite));
+            runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
             runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
             runner.add_suite(Box::new(suites::TimeoutTestSuite));
         }
-        "HTTPRoute/Backend/LBPolicy" => {
+        "HTTPRoute/Backend/LBRoundRobin" => {
             if !gateway {
-                eprintln!("Error: LB Policy tests require --gateway flag");
+                eprintln!("Error: LB RoundRobin tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::LBPolicyTestSuite));
+            runner.add_suite(Box::new(suites::LBRoundRobinTestSuite));
+        }
+        "HTTPRoute/Backend/LBConsistentHash" => {
+            if !gateway {
+                eprintln!("Error: LB ConsistentHash tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
         }
         "HTTPRoute/Backend/WeightedBackend" => {
             if !gateway {
@@ -200,6 +224,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::HttpRedirectTestSuite));
             runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
+            runner.add_suite(Box::new(suites::HeaderModifierTestSuite));
         }
         "HTTPRoute/Filters/Redirect" => {
             if !gateway {
@@ -214,6 +239,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
+        }
+        "HTTPRoute/Filters/HeaderModifier" => {
+            if !gateway {
+                eprintln!("Error: HTTP Header Modifier tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HeaderModifierTestSuite));
         }
         "HTTPRoute/Protocol" => {
             runner.add_suite(Box::new(suites::WebSocketTestSuite));
@@ -301,12 +333,55 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::GatewayTlsTestSuite));
         }
-        "Gateway/Plugins" => {
+        "EdgionPlugins/DebugAccessLog" => {
             if !gateway {
-                eprintln!("Error: Gateway/Plugins tests require --gateway flag");
+                eprintln!("Error: EdgionPlugins/DebugAccessLog tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::PluginLogsTestSuite));
+        }
+        "EdgionPlugins/PluginCondition" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PluginCondition tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PluginConditionTestSuite));
+            runner.add_suite(Box::new(suites::AllConditionsTestSuite));
+        }
+        "EdgionPlugins/PluginCondition/AllConditions" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PluginCondition/AllConditions tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::AllConditionsTestSuite));
+        }
+        "EdgionPlugins/JwtAuth" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/JwtAuth tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::JwtAuthTestSuite));
+        }
+        "EdgionPlugins/ProxyRewrite" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/ProxyRewrite tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ProxyRewriteTestSuite));
+        }
+        "EdgionPlugins/ResponseRewrite" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/ResponseRewrite tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ResponseRewriteTestSuite));
+        }
+        "EdgionPlugins/RequestRestriction" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/RequestRestriction tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RequestRestrictionTestSuite));
         }
         "Gateway/ListenerHostname" => {
             if !gateway {
@@ -342,6 +417,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::CombinedScenariosTestSuite));
+        }
+        "Gateway/PortConflict" => {
+            if !gateway {
+                eprintln!("Error: Gateway/PortConflict tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PortConflictTestSuite));
         }
         "Gateway/Dynamic" => {
             if !gateway {
@@ -404,6 +486,14 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::CipherTestSuite));
         }
+        // ReferenceGrant Status tests
+        "ReferenceGrant/Status" | "ref-grant-status" => {
+            if !gateway {
+                eprintln!("Error: ReferenceGrant/Status tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RefGrantStatusTestSuite));
+        }
         // 运行所有测试
         "all" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
@@ -420,7 +510,8 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
                 runner.add_suite(Box::new(suites::HttpRedirectTestSuite));
                 runner.add_suite(Box::new(suites::PluginLogsTestSuite));
-                runner.add_suite(Box::new(suites::LBPolicyTestSuite));
+                runner.add_suite(Box::new(suites::LBRoundRobinTestSuite));
+                runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
                 runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
                 runner.add_suite(Box::new(suites::TimeoutTestSuite));
                 runner.add_suite(Box::new(suites::MtlsTestSuite));
@@ -549,6 +640,7 @@ async fn main() -> Result<()> {
         udp_port,
         https_port,
         grpc_https_port,
+        cli.admin_port,
         http_host.clone(),
         grpc_host,
         cli.gateway,

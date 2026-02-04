@@ -681,6 +681,9 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         // Step 1: Parse all HTTPRoutes into temporary gateway->domain->rules structure
         let gateway_domain_rules_new = parse_http_routes_to_gateway_domain_rules(data);
 
+        // Step 1.5: Collect new gateway keys for cleanup later
+        let new_gateway_keys: HashSet<String> = gateway_domain_rules_new.keys().cloned().collect();
+
         // Step 2: Build RouteRules with RadixRouteMatchEngine and update gateway_routes_map
         // Note: We no longer check GatewayStore - routes are built based on HTTPRoute's parentRef
         // and will be available when the Gateway arrives later
@@ -764,6 +767,35 @@ impl ConfHandler<HTTPRoute> for RouteManager {
             domain_route_rules.wildcard_engine.store(Arc::new(wildcard_engine));
 
             processed_gateways += 1;
+        }
+
+        // Step 3: Clean up stale gateway entries that no longer have any routes
+        // This prevents memory leaks after relist when some gateways lose all their HTTPRoutes
+        // First clear the routes data (for any existing Arc references), then remove from map
+        let stale_keys: Vec<String> = self
+            .gateway_routes_map
+            .iter()
+            .filter(|entry| !new_gateway_keys.contains(entry.key()))
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for key in &stale_keys {
+            // Clear routes first (for any existing Arc references)
+            if let Some(entry) = self.gateway_routes_map.get(key) {
+                entry.value().exact_domain_map.store(Arc::new(HashMap::new()));
+                entry.value().wildcard_engine.store(Arc::new(None));
+            }
+            // Then remove from map
+            self.gateway_routes_map.remove(key);
+            tracing::debug!(component = "route_manager", gateway_key = %key, "Removed stale gateway entry");
+        }
+
+        if !stale_keys.is_empty() {
+            tracing::info!(
+                component = "route_manager",
+                stale = stale_keys.len(),
+                "cleaned up stale gateway entries"
+            );
         }
 
         let elapsed = start_time.elapsed();

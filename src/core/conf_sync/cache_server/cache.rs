@@ -60,14 +60,20 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
 
     /// Clear all data from the cache
     /// Used during relink to remove stale data
+    ///
+    /// Note: This does NOT notify watcher tasks. The gRPC layer will detect
+    /// server_id changes after the new ConfigSyncServer is ready, and notify
+    /// clients to relist at that point. This ensures clients only relist when
+    /// the new server is available.
     pub fn clear(&self)
     where
         T: Clone,
     {
         let mut store_guard = self.store.write().unwrap();
         store_guard.clear();
-        // Notify watchers that data has changed (they will get error on next fetch)
-        self.notify.notify_waiters();
+        // Do NOT call notify.notify_waiters() here.
+        // Old watcher tasks will keep waiting, but gRPC layer will detect
+        // server_id change and send WATCH_ERR_SERVER_RELOAD when new server is ready.
     }
 
     /// List all data - returns all resources in the cache with resource version
@@ -103,6 +109,11 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
 
     /// Start a watcher task that listens for notifications and sends data
     /// Only needs the store to access data
+    ///
+    /// The task will exit when:
+    /// - Receiver is dropped (detected via sender.closed())
+    /// - Store returns an error
+    /// - Events are lost (version jumped)
     pub fn start_watcher_task(store: Arc<RwLock<EventStore<T>>>, notify: Arc<Notify>, watcher: WatchClient<T>)
     where
         T: Clone + Send + Sync + 'static,
@@ -153,7 +164,21 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
                                 let _ = sender.send(response).await;
                                 break;
                             } else {
-                                notify.notified().await;
+                                // Wait for notification OR receiver drop (via sender.closed())
+                                // This ensures the task exits when gRPC layer detects server_id change
+                                tokio::select! {
+                                    _ = notify.notified() => {
+                                        // New data may be available, continue loop
+                                    }
+                                    _ = sender.closed() => {
+                                        // Receiver dropped, exit task
+                                        tracing::debug!(
+                                            client_id = %watcher.client_id,
+                                            "Watcher task exiting: receiver dropped"
+                                        );
+                                        break;
+                                    }
+                                }
                             }
                         }
                     },
@@ -316,20 +341,34 @@ where
         // Spawn a task to convert WatchResponse<T> to WatchResponseSimple
         tokio::spawn(async move {
             let mut typed_rx = typed_rx;
-            while let Some(response) = typed_rx.recv().await {
-                let simple_response = match response.err {
-                    Some(err) => WatchResponseSimple::from_error(err, response.sync_version),
-                    None => match serde_json::to_string(&response.events) {
-                        Ok(json) => WatchResponseSimple::new(json, response.sync_version),
-                        Err(e) => WatchResponseSimple::from_error(
-                            format!("Serialization error: {}", e),
-                            response.sync_version,
-                        ),
-                    },
-                };
+            loop {
+                tokio::select! {
+                    // Forward data from upstream
+                    response = typed_rx.recv() => {
+                        match response {
+                            Some(response) => {
+                                let simple_response = match response.err {
+                                    Some(err) => WatchResponseSimple::from_error(err, response.sync_version),
+                                    None => match serde_json::to_string(&response.events) {
+                                        Ok(json) => WatchResponseSimple::new(json, response.sync_version),
+                                        Err(e) => WatchResponseSimple::from_error(
+                                            format!("Serialization error: {}", e),
+                                            response.sync_version,
+                                        ),
+                                    },
+                                };
 
-                if simple_tx.send(simple_response).await.is_err() {
-                    break;
+                                if simple_tx.send(simple_response).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => break, // Upstream closed
+                        }
+                    }
+                    // Exit when downstream receiver is dropped
+                    _ = simple_tx.closed() => {
+                        break;
+                    }
                 }
             }
         });

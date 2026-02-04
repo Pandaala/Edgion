@@ -3,7 +3,9 @@ use bytes::Bytes;
 use http::Uri;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
+use std::collections::HashMap;
 
+use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 use crate::types::filters::PluginRunningResult;
 use crate::types::EdgionHttpContext;
@@ -41,11 +43,68 @@ impl<'a> PingoraSessionAdapter<'a> {
     pub fn set_terminate(&mut self) {
         self.ctx.plugin_running_result = PluginRunningResult::ErrTerminateRequest;
     }
+
+    /// Extract path parameters from route pattern (lazy extraction).
+    ///
+    /// Parses the route pattern (e.g., "/api/:uid/profile") against the actual
+    /// request path (e.g., "/api/123/profile") and extracts named parameters.
+    fn extract_path_params(&mut self) {
+        let mut params = HashMap::new();
+
+        // Get the route pattern from matched route
+        let pattern = self
+            .ctx
+            .route_unit
+            .as_ref()
+            .and_then(|ru| ru.matched_info.m.path.as_ref())
+            .and_then(|p| p.value.as_ref())
+            .map(|s| s.as_str());
+
+        if let Some(pattern) = pattern {
+            // Only parse if pattern contains parameters
+            if pattern.contains(':') {
+                let actual_path = self.inner.req_header().uri.path();
+                params = Self::parse_path_params(pattern, actual_path);
+            }
+        }
+
+        self.ctx.path_params = Some(params);
+    }
+
+    /// Parse path parameters from pattern and actual path.
+    ///
+    /// # Arguments
+    /// * `pattern` - Route pattern with `:param` syntax (e.g., "/api/:uid/profile")
+    /// * `actual_path` - Actual request path (e.g., "/api/123/profile")
+    ///
+    /// # Returns
+    /// HashMap of parameter names to values.
+    fn parse_path_params(pattern: &str, actual_path: &str) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+
+        let pattern_segments: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
+        let actual_segments: Vec<&str> = actual_path.split('/').filter(|s| !s.is_empty()).collect();
+
+        for (i, pat_seg) in pattern_segments.iter().enumerate() {
+            // Check if this is a parameter segment (starts with ':' but not '::')
+            if pat_seg.starts_with(':') && !pat_seg.starts_with("::") {
+                // Extract parameter name (skip the ':')
+                let param_name = &pat_seg[1..];
+                if !param_name.is_empty() {
+                    if let Some(&actual_value) = actual_segments.get(i) {
+                        params.insert(param_name.to_string(), actual_value.to_string());
+                    }
+                }
+            }
+        }
+
+        params
+    }
 }
 
 #[async_trait]
 impl<'a> PluginSession for PingoraSessionAdapter<'a> {
-    fn header_value(&mut self, name: &str) -> Option<String> {
+    fn header_value(&self, name: &str) -> Option<String> {
         self.inner
             .req_header()
             .headers
@@ -56,6 +115,70 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn method(&self) -> String {
         self.inner.req_header().method.to_string()
+    }
+
+    fn get_query_param(&self, name: &str) -> Option<String> {
+        self.inner.req_header().uri.query().and_then(|query| {
+            // Parse query string manually: "key1=value1&key2=value2"
+            // Case-sensitive key matching per RFC 3986
+            query.split('&').find_map(|pair| {
+                let mut parts = pair.splitn(2, '=');
+                let key = parts.next()?;
+                if key == name {
+                    parts.next().map(|v| v.to_string())
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
+    fn get_cookie(&self, name: &str) -> Option<String> {
+        self.inner
+            .req_header()
+            .headers
+            .get("Cookie")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|cookies| {
+                cookies.split(';').find_map(|pair| {
+                    let mut parts = pair.trim().splitn(2, '=');
+                    let key = parts.next()?;
+                    if key == name {
+                        parts.next().map(|v| v.to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+    }
+
+    fn get_path(&self) -> &str {
+        self.inner.req_header().uri.path()
+    }
+
+    fn get_query(&self) -> Option<String> {
+        self.inner.req_header().uri.query().map(|s| s.to_string())
+    }
+
+    fn get_method(&self) -> &str {
+        self.inner.req_header().method.as_str()
+    }
+
+    fn get_ctx_var(&self, key: &str) -> Option<String> {
+        self.ctx.get_ctx_var(key).map(|s| s.to_string())
+    }
+
+    fn set_ctx_var(&mut self, key: &str, value: &str) -> PluginSessionResult<()> {
+        self.ctx.set_ctx_var(key.to_string(), value.to_string());
+        Ok(())
+    }
+
+    fn get_path_param(&mut self, name: &str) -> Option<String> {
+        // Lazy extraction: only parse on first call
+        if self.ctx.path_params.is_none() {
+            self.extract_path_params();
+        }
+        self.ctx.path_params.as_ref()?.get(name).cloned()
     }
 
     async fn write_response_header(
@@ -101,6 +224,28 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()> {
         if let Some(resp) = &mut self.response_header {
             resp.remove_header(name);
+        }
+        Ok(())
+    }
+
+    fn get_response_header(&self, name: &str) -> Option<String> {
+        self.response_header
+            .as_ref()
+            .and_then(|resp| resp.headers.get(name))
+            .and_then(|value| value.to_str().ok())
+            .map(|s| s.to_string())
+    }
+
+    fn set_response_status(&mut self, status: u16) -> PluginSessionResult<()> {
+        if let Some(resp) = &mut self.response_header {
+            let status_code = http::StatusCode::from_u16(status).map_err(|_| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Invalid status code: {}", status),
+                )) as PluginSessionError
+            })?;
+            resp.set_status(status_code)
+                .map_err(|e| Box::new(e) as PluginSessionError)?;
         }
         Ok(())
     }
@@ -186,5 +331,114 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn has_plugin_ref(&self, key: &str) -> bool {
         self.ctx.has_plugin_ref(key)
+    }
+
+    fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog) {
+        self.ctx.pending_edgion_plugins_logs.push(log);
+    }
+
+    fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken {
+        let idx = self.ctx.pending_edgion_plugins_logs.len();
+        let depth = self.ctx.plugin_ref_depth();
+        self.ctx
+            .pending_edgion_plugins_logs
+            .push(EdgionPluginsLog { name, logs: Vec::new() });
+        EdgionPluginsLogToken::new(idx, depth)
+    }
+
+    fn push_to_edgion_plugins_log(&mut self, token: &EdgionPluginsLogToken, log: PluginLog) {
+        debug_assert_eq!(
+            self.ctx.plugin_ref_depth(),
+            token.depth(),
+            "EdgionPluginsLogToken used in wrong scope: expected depth {}, got {}",
+            token.depth(),
+            self.ctx.plugin_ref_depth()
+        );
+        if let Some(edgion_log) = self.ctx.pending_edgion_plugins_logs.get_mut(token.idx()) {
+            edgion_log.logs.push(log);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_path_params_single_param() {
+        let pattern = "/api/:uid/profile";
+        let actual = "/api/123/profile";
+        let params = PingoraSessionAdapter::parse_path_params(pattern, actual);
+
+        assert_eq!(params.get("uid"), Some(&"123".to_string()));
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_path_params_multiple_params() {
+        let pattern = "/users/:uid/posts/:post_id";
+        let actual = "/users/456/posts/789";
+        let params = PingoraSessionAdapter::parse_path_params(pattern, actual);
+
+        assert_eq!(params.get("uid"), Some(&"456".to_string()));
+        assert_eq!(params.get("post_id"), Some(&"789".to_string()));
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_path_params_no_params() {
+        let pattern = "/api/v1/users";
+        let actual = "/api/v1/users";
+        let params = PingoraSessionAdapter::parse_path_params(pattern, actual);
+
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn test_parse_path_params_escaped_colon() {
+        // :: is escaped colon, not a parameter
+        let pattern = "/api/::version/data";
+        let actual = "/api/:v1/data";
+        let params = PingoraSessionAdapter::parse_path_params(pattern, actual);
+
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn test_parse_path_params_param_at_end() {
+        let pattern = "/users/:id";
+        let actual = "/users/999";
+        let params = PingoraSessionAdapter::parse_path_params(pattern, actual);
+
+        assert_eq!(params.get("id"), Some(&"999".to_string()));
+    }
+
+    #[test]
+    fn test_parse_path_params_prefix_match() {
+        // For prefix match, actual path may have more segments
+        let pattern = "/api/:version";
+        let actual = "/api/v2/users/123";
+        let params = PingoraSessionAdapter::parse_path_params(pattern, actual);
+
+        assert_eq!(params.get("version"), Some(&"v2".to_string()));
+    }
+
+    #[test]
+    fn test_parse_path_params_empty_param_name() {
+        // Empty param name should be skipped
+        let pattern = "/api/:/data";
+        let actual = "/api/test/data";
+        let params = PingoraSessionAdapter::parse_path_params(pattern, actual);
+
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn test_parse_path_params_special_characters_in_value() {
+        let pattern = "/search/:query";
+        let actual = "/search/hello%20world";
+        let params = PingoraSessionAdapter::parse_path_params(pattern, actual);
+
+        assert_eq!(params.get("query"), Some(&"hello%20world".to_string()));
     }
 }

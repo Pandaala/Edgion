@@ -1,0 +1,16 @@
+# LB RoundRobin 测试套件 Gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: lb-rr-gateway
+  namespace: edgion-test
+  annotations:
+    # Enable metrics test mode for LB distribution verification
+    edgion.io/metrics-test-key: "lb-rr-test"
+    edgion.io/metrics-test-type: "lb"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31120

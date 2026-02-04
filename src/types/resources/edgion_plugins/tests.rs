@@ -9,13 +9,11 @@ fn create_edgion_plugins_with_request_filters(plugins: Option<Vec<RequestFilterE
         metadata: Default::default(),
         spec: EdgionPluginsSpec {
             request_plugins: plugins,
-            upstream_response_filter_plugins: None,
-            upstream_response_plugins: None,
-            plugin_runtime: Default::default(),
+            ..Default::default()
         },
         status: None,
     };
-    ep.init_plugin_runtime();
+    ep.preparse();
     ep
 }
 
@@ -122,12 +120,11 @@ fn test_enabled_plugins_filter() {
         spec: EdgionPluginsSpec {
             request_plugins: Some(request_plugins),
             upstream_response_filter_plugins: Some(response_filter_plugins),
-            upstream_response_plugins: None,
-            plugin_runtime: Default::default(),
+            ..Default::default()
         },
         status: None,
     };
-    ep.init_plugin_runtime();
+    ep.preparse();
 
     assert_eq!(ep.plugin_count(), 3);
 

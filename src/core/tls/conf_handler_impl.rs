@@ -44,6 +44,7 @@ pub fn create_tls_handler() -> Box<dyn ConfHandler<EdgionTls> + Send + Sync> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::constants::secret_keys::tls::{CERT, KEY};
     use crate::types::resources::edgion_tls::EdgionTlsSpec;
     use crate::types::resources::gateway::SecretObjectReference;
     use k8s_openapi::api::core::v1::Secret;
@@ -60,8 +61,8 @@ mod tests {
             },
             data: Some({
                 let mut map = std::collections::BTreeMap::new();
-                map.insert("tls.crt".to_string(), ByteString(b"fake-cert".to_vec()));
-                map.insert("tls.key".to_string(), ByteString(b"fake-key".to_vec()));
+                map.insert(CERT.to_string(), ByteString(b"fake-cert".to_vec()));
+                map.insert(KEY.to_string(), ByteString(b"fake-key".to_vec()));
                 map
             }),
             ..Default::default()

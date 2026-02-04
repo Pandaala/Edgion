@@ -23,10 +23,13 @@ use super::controller_metrics;
 use super::namespace::NamespaceWatchMode;
 use super::InitSyncTimer;
 use super::ShutdownSignal;
-use crate::core::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+use crate::core::conf_mgr::sync_runtime::resource_processor::{
+    extract_status_value, ResourceProcessor, WorkItemResult,
+};
 use crate::types::ResourceMeta;
 use anyhow::Result;
 use futures::StreamExt;
+use kube::api::{Patch, PatchParams};
 use kube::runtime::reflector::{ObjectRef, Store};
 use kube::runtime::watcher::Event;
 use kube::runtime::{reflector, watcher};
@@ -52,6 +55,8 @@ pub enum RelinkReason {
     GoneError,
     /// Watcher reconnected (detected by Event::Init after init_done)
     WatcherReconnected,
+    /// Manual reload requested via Admin API
+    ReloadRequested,
 }
 
 /// Generic ResourceController that encapsulates the complete lifecycle for a single resource type
@@ -246,10 +251,39 @@ where
                         }
                         Event::InitApply(obj) => {
                             // Init phase: process directly via processor
-                            if passes_namespace_filter(&obj, &self.namespace_filter)
-                                && self.processor.on_init_apply(obj)
-                            {
-                                init_count += 1;
+                            // K8s mode: pass None for existing_status_json (status is already in obj from K8s API)
+                            if passes_namespace_filter(&obj, &self.namespace_filter) {
+                                let result = self.processor.on_init_apply(obj, None);
+
+                                // Handle status persistence (same as runtime)
+                                if let WorkItemResult::Processed { obj, status_changed } = result {
+                                    init_count += 1;
+                                    if status_changed {
+                                        if let Some(status_value) = extract_status_value(&obj) {
+                                            let name = obj.meta().name.as_deref().unwrap_or("");
+                                            let namespace = obj.meta().namespace.as_deref();
+
+                                            // Persist status to K8s API
+                                            if let Err(e) = persist_k8s_status::<K>(
+                                                &self.client,
+                                                &self.api_scope,
+                                                namespace,
+                                                name,
+                                                &status_value,
+                                            )
+                                            .await
+                                            {
+                                                tracing::warn!(
+                                                    component = "resource_controller",
+                                                    kind = kind,
+                                                    name = %name,
+                                                    error = %e,
+                                                    "Failed to persist status during init"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         Event::InitDone => {
@@ -273,6 +307,8 @@ where
                                 self.namespace_filter.clone(),
                                 kind,
                                 self.shutdown_signal.clone(),
+                                self.client.clone(),
+                                self.api_scope.clone(),
                             ));
 
                             tracing::info!(
@@ -289,10 +325,36 @@ where
                                     kind = kind,
                                     "Received Apply event during init phase, treating as InitApply"
                                 );
-                                if passes_namespace_filter(&obj, &self.namespace_filter)
-                                    && self.processor.on_init_apply(obj)
-                                {
-                                    init_count += 1;
+                                if passes_namespace_filter(&obj, &self.namespace_filter) {
+                                    let result = self.processor.on_init_apply(obj, None);
+
+                                    if let WorkItemResult::Processed { obj, status_changed } = result {
+                                        init_count += 1;
+                                        if status_changed {
+                                            if let Some(status_value) = extract_status_value(&obj) {
+                                                let name = obj.meta().name.as_deref().unwrap_or("");
+                                                let namespace = obj.meta().namespace.as_deref();
+
+                                                if let Err(e) = persist_k8s_status::<K>(
+                                                    &self.client,
+                                                    &self.api_scope,
+                                                    namespace,
+                                                    name,
+                                                    &status_value,
+                                                )
+                                                .await
+                                                {
+                                                    tracing::warn!(
+                                                        component = "resource_controller",
+                                                        kind = kind,
+                                                        name = %name,
+                                                        error = %e,
+                                                        "Failed to persist status during apply-as-init"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             } else {
                                 // Runtime phase - enqueue key for worker
@@ -390,12 +452,15 @@ where
 /// Worker implements Go operator-style reconciliation:
 /// - Dequeue key from workqueue
 /// - Check store (K8s state) and call processor.process_work_item()
+/// - Persist status to K8s API when status changes
 fn spawn_worker<K>(
     processor: Arc<ResourceProcessor<K>>,
     store: Store<K>,
     namespace_filter: Option<Vec<String>>,
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
+    client: Client,
+    api_scope: ApiScope,
 ) -> JoinHandle<()>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -404,21 +469,25 @@ where
     let workqueue = processor.workqueue();
 
     tokio::spawn(async move {
+        // Move shutdown_signal once outside the loop
+        let mut shutdown = shutdown_signal;
+
         loop {
-            let item = if let Some(ref mut shutdown) = shutdown_signal.clone() {
-                tokio::select! {
-                    item = workqueue.dequeue() => item,
-                    _ = shutdown.wait() => {
-                        tracing::info!(
-                            component = "resource_controller",
-                            kind = kind,
-                            "Worker received shutdown signal"
-                        );
-                        break;
+            let item = match &mut shutdown {
+                Some(signal) => {
+                    tokio::select! {
+                        item = workqueue.dequeue() => item,
+                        _ = signal.wait() => {
+                            tracing::info!(
+                                component = "resource_controller",
+                                kind = kind,
+                                "Worker received shutdown signal"
+                            );
+                            break;
+                        }
                     }
                 }
-            } else {
-                workqueue.dequeue().await
+                None => workqueue.dequeue().await,
             };
 
             match item {
@@ -434,7 +503,44 @@ where
                     };
 
                     if should_process {
-                        processor.process_work_item(&work_item.key, store_obj);
+                        // K8s mode: pass None for existing_status_json (status is already in store_obj from K8s API)
+                        let result = processor.process_work_item(&work_item.key, store_obj, None);
+
+                        // Persist status to K8s API when status changes
+                        if let WorkItemResult::Processed { obj, status_changed } = result {
+                            if status_changed {
+                                let name = obj.meta().name.as_deref().unwrap_or("");
+                                let namespace = obj.meta().namespace.as_deref();
+
+                                match extract_status_value(&obj) {
+                                    Some(status_value) => {
+                                        if let Err(e) =
+                                            persist_k8s_status::<K>(&client, &api_scope, namespace, name, &status_value)
+                                                .await
+                                        {
+                                            tracing::warn!(
+                                                component = "resource_controller",
+                                                kind = kind,
+                                                key = %work_item.key,
+                                                error = %e,
+                                                "Failed to persist status to K8s API"
+                                            );
+                                        }
+                                    }
+                                    None => {
+                                        // Status changed but extraction failed - log warning
+                                        tracing::warn!(
+                                            component = "resource_controller",
+                                            kind = kind,
+                                            key = %work_item.key,
+                                            "Status changed but failed to extract status value for persistence"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        // Note: For WorkItemResult::Deleted, K8s handles status cleanup
+                        // automatically when the resource is deleted
                     }
 
                     workqueue.done(&work_item.key);
@@ -452,6 +558,61 @@ where
 
         tracing::info!(component = "resource_controller", kind = kind, "Worker task ended");
     })
+}
+
+/// Persist status to K8s API using Server-Side Apply on status subresource
+///
+/// Note: This function uses DynamicObject to avoid the Scope type constraint issue.
+/// The status is patched using the resource's API path constructed from metadata.
+async fn persist_k8s_status<K>(
+    client: &Client,
+    api_scope: &ApiScope,
+    namespace: Option<&str>,
+    name: &str,
+    status_value: &serde_json::Value,
+) -> Result<(), kube::Error>
+where
+    K: Resource + Clone + Debug + DeserializeOwned + Serialize,
+    K::DynamicType: Default,
+{
+    use kube::core::DynamicObject;
+    use kube::discovery::ApiResource;
+
+    // Get API resource info from K type
+    let dt = K::DynamicType::default();
+    let api_resource = ApiResource::from_gvk(&kube::core::GroupVersionKind {
+        group: K::group(&dt).to_string(),
+        version: K::version(&dt).to_string(),
+        kind: K::kind(&dt).to_string(),
+    });
+
+    // Build status patch
+    let patch = serde_json::json!({
+        "status": status_value
+    });
+
+    let params = PatchParams::apply("edgion-controller").force();
+
+    match api_scope {
+        ApiScope::Namespaced(_) => {
+            let ns = namespace.unwrap_or("default");
+            let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), ns, &api_resource);
+            api.patch_status(name, &params, &Patch::Apply(&patch)).await?;
+        }
+        ApiScope::ClusterScoped => {
+            let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
+            api.patch_status(name, &params, &Patch::Apply(&patch)).await?;
+        }
+    }
+
+    tracing::trace!(
+        component = "resource_controller",
+        name = name,
+        namespace = namespace,
+        "Persisted status to K8s API"
+    );
+
+    Ok(())
 }
 
 /// Check if resource passes namespace filter

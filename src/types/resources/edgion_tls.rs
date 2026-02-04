@@ -1,7 +1,8 @@
 use super::common::ParentReference;
 use super::gateway::SecretObjectReference;
+use super::http_route::RouteParentStatus;
+use crate::types::constants::secret_keys::tls::{CERT, KEY};
 use k8s_openapi::api::core::v1::Secret;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -235,10 +236,14 @@ pub struct EarlyDataConfig {
     pub reject_on_replay: bool,
 }
 
+/// EdgionTlsStatus describes the status of the EdgionTls resource
+/// Following Gateway API RouteParentStatus pattern for parent-based status
 #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct EdgionTlsStatus {
+    /// Parents describe the status of the TLS config with respect to each parent Gateway.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub condition: Vec<Condition>,
+    pub parents: Vec<RouteParentStatus>,
 }
 
 impl EdgionTls {
@@ -264,8 +269,8 @@ impl EdgionTls {
             .ok_or_else(|| anyhow::anyhow!("Secret data not found"))?;
 
         let cert_pem = data
-            .get("tls.crt")
-            .ok_or_else(|| anyhow::anyhow!("Secret data tls.crt not found"))?;
+            .get(CERT)
+            .ok_or_else(|| anyhow::anyhow!("Secret data {} not found", CERT))?;
 
         String::from_utf8(cert_pem.0.clone()).map_err(|e| anyhow::anyhow!("Failed to decode cert PEM: {}", e))
     }
@@ -284,8 +289,8 @@ impl EdgionTls {
             .ok_or_else(|| anyhow::anyhow!("Secret data not found"))?;
 
         let key_pem = data
-            .get("tls.key")
-            .ok_or_else(|| anyhow::anyhow!("Secret data tls.key not found"))?;
+            .get(KEY)
+            .ok_or_else(|| anyhow::anyhow!("Secret data {} not found", KEY))?;
 
         String::from_utf8(key_pem.0.clone()).map_err(|e| anyhow::anyhow!("Failed to decode key PEM: {}", e))
     }

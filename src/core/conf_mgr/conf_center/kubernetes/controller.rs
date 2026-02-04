@@ -63,9 +63,6 @@ use crate::core::conf_mgr::sync_runtime::resource_processor::{
     TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 
-/// Default cache capacity for each resource type
-const DEFAULT_CACHE_CAPACITY: usize = 1000;
-
 /// Context for spawn functions
 struct SpawnContext {
     watcher_config: watcher::Config,
@@ -95,10 +92,11 @@ where
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
     H: ProcessorHandler<K> + 'static,
 {
-    // 1. Create ResourceProcessor
+    // 1. Create ResourceProcessor with capacity from config
+    let capacity = crate::core::cli::config::get_cache_capacity(kind);
     let processor = Arc::new(ResourceProcessor::new(
         kind,
-        DEFAULT_CACHE_CAPACITY,
+        capacity,
         Arc::new(handler),
         ctx.secret_ref_manager.clone(),
     ));
@@ -145,10 +143,11 @@ where
     K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
     H: ProcessorHandler<K> + 'static,
 {
-    // 1. Create ResourceProcessor
+    // 1. Create ResourceProcessor with capacity from config
+    let capacity = crate::core::cli::config::get_cache_capacity(kind);
     let processor = Arc::new(ResourceProcessor::new(
         kind,
-        DEFAULT_CACHE_CAPACITY,
+        capacity,
         Arc::new(handler),
         ctx.secret_ref_manager.clone(),
     ));
@@ -303,29 +302,34 @@ impl KubernetesController {
 
         // Backend resources
         h.push(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
-        match self.endpoint_mode {
-            EndpointMode::Endpoint => {
-                tracing::info!(
-                    component = "k8s_controller",
-                    "Registering Endpoints controller (legacy mode)"
-                );
-                h.push(spawn::<Endpoints, _>(self, "Endpoints", EndpointsHandler::new(), &ctx));
-            }
-            EndpointMode::EndpointSlice => {
-                tracing::info!(
-                    component = "k8s_controller",
-                    "Registering EndpointSlice controller (modern mode)"
-                );
-                h.push(spawn::<EndpointSlice, _>(
-                    self,
-                    "EndpointSlice",
-                    EndpointSliceHandler::new(),
-                    &ctx,
-                ));
-            }
-            EndpointMode::Auto => {
-                unreachable!("EndpointMode::Auto should be resolved before run_controllers");
-            }
+
+        // Register endpoint handlers based on endpoint mode
+        if self.endpoint_mode.uses_endpoint() {
+            tracing::info!(
+                component = "k8s_controller",
+                mode = ?self.endpoint_mode,
+                "Registering Endpoints controller"
+            );
+            h.push(spawn::<Endpoints, _>(self, "Endpoints", EndpointsHandler::new(), &ctx));
+        }
+
+        if self.endpoint_mode.uses_endpoint_slice() {
+            tracing::info!(
+                component = "k8s_controller",
+                mode = ?self.endpoint_mode,
+                "Registering EndpointSlice controller"
+            );
+            h.push(spawn::<EndpointSlice, _>(
+                self,
+                "EndpointSlice",
+                EndpointSliceHandler::new(),
+                &ctx,
+            ));
+        }
+
+        // Safety check: Auto mode should have been resolved
+        if self.endpoint_mode.is_auto() {
+            unreachable!("EndpointMode::Auto should be resolved before run_controllers");
         }
 
         // TLS related (special processing)

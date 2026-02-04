@@ -23,6 +23,7 @@ use super::version_detection::resolve_endpoint_mode;
 use crate::core::conf_mgr::conf_center::traits::{
     CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
+use crate::core::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::conf_mgr::sync_runtime::ShutdownHandle;
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::core::conf_sync::conf_server::ConfigSyncServer;
@@ -52,6 +53,8 @@ enum LifecycleEvent {
     LeadershipLost,
     /// Controller exited
     ControllerExit(ControllerExitReason),
+    /// Manual reload requested via Admin API
+    ReloadRequested,
 }
 
 /// Handles for all watcher tasks
@@ -59,6 +62,7 @@ struct WatcherHandles {
     controller: JoinHandle<()>,
     caches: JoinHandle<()>,
     leader: JoinHandle<()>,
+    reload: JoinHandle<()>,
 }
 
 impl WatcherHandles {
@@ -67,10 +71,12 @@ impl WatcherHandles {
         self.controller.abort();
         self.caches.abort();
         self.leader.abort();
+        self.reload.abort();
 
         let _ = self.controller.await;
         let _ = self.caches.await;
         let _ = self.leader.await;
+        let _ = self.reload.await;
     }
 }
 
@@ -89,6 +95,8 @@ pub struct KubernetesCenter {
     config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>,
     /// Shutdown handle for stopping sync tasks
     shutdown_handle: Mutex<Option<ShutdownHandle>>,
+    /// Reload signal sender (for triggering reload via Admin API)
+    reload_tx: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 impl KubernetesCenter {
@@ -108,6 +116,7 @@ impl KubernetesCenter {
             writer,
             config_sync_server: RwLock::new(None),
             shutdown_handle: Mutex::new(None),
+            reload_tx: Mutex::new(None),
         })
     }
 
@@ -142,12 +151,17 @@ impl KubernetesCenter {
         *shutdown_handle = Some(handle);
     }
 
+    /// Set reload signal sender
+    fn set_reload_tx(&self, tx: Option<mpsc::Sender<()>>) {
+        *self.reload_tx.lock().unwrap() = tx;
+    }
+
     /// Create internal LeaderElectionConfig from KubernetesConfig
     fn create_leader_election_config(&self) -> Result<InternalLeaderElectionConfig> {
         let le_config = self.config.leader_election();
 
         // Create internal leader election config from serialized config
-        let config = InternalLeaderElectionConfig::new(&le_config.lease_name, &le_config.lease_namespace)
+        let config = InternalLeaderElectionConfig::new(&le_config.lease_name, &le_config.lease_namespace)?
             .with_lease_duration_secs(le_config.lease_duration_secs)
             .with_renew_period_secs(le_config.renew_period_secs)
             .with_retry_period_secs(le_config.retry_period_secs);
@@ -205,8 +219,20 @@ impl KubernetesCenter {
         const STABLE_RUN_DURATION: Duration = Duration::from_secs(300); // 5 minutes
 
         let mut consecutive_failures: u32 = 0;
+        let mut reload_start_time: Option<std::time::Instant> = None;
 
         loop {
+            // Record reload completion time if this is a reload iteration
+            if let Some(start_time) = reload_start_time.take() {
+                let duration = start_time.elapsed().as_secs_f64();
+                reload_metrics().reload_completed(duration);
+                tracing::info!(
+                    component = "kubernetes_center",
+                    duration_secs = duration,
+                    "Reload completed"
+                );
+            }
+
             // Check if still leader before starting iteration
             if !leader_handle.is_leader() {
                 self.set_config_sync_server(None);
@@ -287,6 +313,16 @@ impl KubernetesCenter {
                         );
                         break reason;
                     }
+                    Some(LifecycleEvent::ReloadRequested) => {
+                        tracing::info!(
+                            component = "kubernetes_center",
+                            mode = "kubernetes",
+                            "Reload requested via Admin API, restarting controllers"
+                        );
+                        break ControllerExitReason::RelinkRequested(
+                            super::resource_controller::RelinkReason::ReloadRequested,
+                        );
+                    }
                     None => {
                         tracing::error!(
                             component = "kubernetes_center",
@@ -318,13 +354,24 @@ impl KubernetesCenter {
                     return MainFlowExit::LostLeadership;
                 }
                 ControllerExitReason::RelinkRequested(reason) => {
-                    // 410 GONE - normal reconnection, don't count as failure
-                    tracing::info!(
-                        component = "kubernetes_center",
-                        mode = "kubernetes",
-                        reason = ?reason,
-                        "Relink requested (410 GONE), restarting immediately"
-                    );
+                    // Check if this is a manual reload request
+                    let is_reload = matches!(reason, super::resource_controller::RelinkReason::ReloadRequested);
+                    if is_reload {
+                        tracing::info!(
+                            component = "kubernetes_center",
+                            mode = "kubernetes",
+                            "Manual reload requested, restarting with new server_id"
+                        );
+                        reload_metrics().reload_started();
+                        reload_start_time = Some(std::time::Instant::now());
+                    } else {
+                        tracing::info!(
+                            component = "kubernetes_center",
+                            mode = "kubernetes",
+                            reason = ?reason,
+                            "Relink requested (410 GONE), restarting immediately"
+                        );
+                    }
                     consecutive_failures = 0;
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
@@ -383,14 +430,24 @@ impl KubernetesCenter {
         event_tx: mpsc::Sender<LifecycleEvent>,
     ) -> Result<(WatcherHandles, Arc<ConfigSyncServer>)> {
         // 1. Resolve endpoint mode before creating controller
-        let config_endpoint_mode = self.config.endpoint_mode();
-
-        let resolved_mode = resolve_endpoint_mode(client, config_endpoint_mode).await?;
+        // - test_mode: force Both (sync both Endpoints and EndpointSlice)
+        // - Auto: detect based on K8s API capabilities
+        // - Others: use as configured
+        let resolved_mode = if crate::core::cli::config::is_test_mode() {
+            tracing::info!(
+                component = "kubernetes_center",
+                "Test mode enabled, forcing endpoint_mode=Both"
+            );
+            EndpointMode::Both
+        } else {
+            let config_endpoint_mode = self.config.endpoint_mode();
+            resolve_endpoint_mode(client, config_endpoint_mode).await?
+        };
 
         tracing::info!(
             component = "kubernetes_center",
-            config_mode = ?config_endpoint_mode,
             resolved_mode = ?resolved_mode,
+            test_mode = crate::core::cli::config::is_test_mode(),
             "Endpoint mode resolved"
         );
 
@@ -422,6 +479,8 @@ impl KubernetesCenter {
         // 5. Spawn caches ready watcher task (monitors PROCESSOR_REGISTRY)
         let css = config_sync_server.clone();
         let tx = event_tx.clone();
+        // Get no_sync_kinds from global config (or use default)
+        let no_sync_kinds = crate::core::cli::config::get_no_sync_kinds();
         let caches_handle = tokio::spawn(async move {
             const CACHE_READY_TIMEOUT_SECS: u64 = 30;
             let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
@@ -434,7 +493,14 @@ impl KubernetesCenter {
 
             if PROCESSOR_REGISTRY.is_all_ready() {
                 // Register all WatchObjs to ConfigSyncServer
-                css.register_all(PROCESSOR_REGISTRY.all_watch_objs());
+                // Filter out resources configured in no_sync_kinds
+                let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
+                css.register_all(PROCESSOR_REGISTRY.all_watch_objs(&no_sync_refs));
+
+                // Trigger full cross-namespace revalidation
+                // This ensures Routes processed before ReferenceGrants are revalidated
+                crate::core::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation();
+
                 let _ = tx.send(LifecycleEvent::CachesReady).await;
             } else {
                 let not_ready: Vec<String> = PROCESSOR_REGISTRY
@@ -457,7 +523,7 @@ impl KubernetesCenter {
 
         // 6. Spawn leadership loss watcher task
         let lh = leader_handle.clone();
-        let tx = event_tx;
+        let tx = event_tx.clone();
         let leader_watcher_handle = tokio::spawn(async move {
             while lh.is_leader() {
                 tokio::time::sleep(Duration::from_millis(200)).await;
@@ -465,11 +531,23 @@ impl KubernetesCenter {
             let _ = tx.send(LifecycleEvent::LeadershipLost).await;
         });
 
+        // 7. Create reload channel and spawn reload watcher task
+        let (reload_tx, mut reload_rx) = mpsc::channel::<()>(1);
+        self.set_reload_tx(Some(reload_tx));
+
+        let tx = event_tx;
+        let reload_watcher_handle = tokio::spawn(async move {
+            if reload_rx.recv().await.is_some() {
+                let _ = tx.send(LifecycleEvent::ReloadRequested).await;
+            }
+        });
+
         Ok((
             WatcherHandles {
                 controller: controller_handle,
                 caches: caches_handle,
                 leader: leader_watcher_handle,
+                reload: reload_watcher_handle,
             },
             config_sync_server,
         ))
@@ -647,11 +725,6 @@ impl CenterLifeCycle for KubernetesCenter {
         }
     }
 
-    /// Reload is not supported in Kubernetes mode
-    async fn reload(&self) -> Result<()> {
-        Err(anyhow::anyhow!("Reload not supported in K8s mode"))
-    }
-
     /// Check if the system is ready
     fn is_ready(&self) -> bool {
         PROCESSOR_REGISTRY.is_all_ready() && self.config_sync_server.read().unwrap().is_some()
@@ -665,6 +738,16 @@ impl CenterLifeCycle for KubernetesCenter {
     /// Check if running in Kubernetes mode
     fn is_k8s_mode(&self) -> bool {
         true
+    }
+
+    /// Request a reload (re-initialize all processors and stores)
+    fn request_reload(&self) -> Result<(), String> {
+        if let Some(tx) = self.reload_tx.lock().unwrap().as_ref() {
+            tx.try_send(())
+                .map_err(|e| format!("Failed to send reload signal: {}", e))
+        } else {
+            Err("Center not started or not ready for reload".to_string())
+        }
     }
 }
 

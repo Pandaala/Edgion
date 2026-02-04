@@ -5,15 +5,18 @@
 //!
 //! The event handling logic mirrors K8s mode's ResourceController:
 //! - Init -> processor.on_init()
-//! - InitApply(content) -> parse + processor.on_init_apply(obj)
+//! - InitApply { path, content } -> parse + processor.on_init_apply(obj)
 //! - InitDone -> processor.on_init_done()
-//! - Apply(content) -> parse + processor.on_apply(&obj)
+//! - Apply { path, content } -> parse + processor.on_apply(&obj)
 //! - Delete(info) -> processor.on_delete(&obj)
 
 use super::event::FileSystemEvent;
 use super::file_watcher::{build_path_from_key, KindEventReceiver};
+use super::status::FileSystemStatusHandler;
 use crate::core::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
-use crate::core::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+use crate::core::conf_mgr::sync_runtime::resource_processor::{
+    extract_status_value, make_resource_key, ResourceProcessor, WorkItemResult,
+};
 use crate::core::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::types::ResourceMeta;
 use anyhow::Result;
@@ -81,6 +84,9 @@ where
         let mut worker_handle: Option<JoinHandle<()>> = None;
         let mut shutdown = self.shutdown_signal.clone();
 
+        // Status handler for init phase (also used by worker)
+        let status_handler = FileSystemStatusHandler::new(self.conf_dir.clone());
+
         loop {
             let event = if let Some(ref mut signal) = shutdown {
                 tokio::select! {
@@ -119,19 +125,72 @@ where
                                 self.processor.on_init();
                             }
                         }
-                        FileSystemEvent::InitApply(content) => {
+                        FileSystemEvent::InitApply { path, content } => {
                             // Parse YAML content to resource type
                             match serde_yaml::from_str::<K>(&content) {
                                 Ok(obj) => {
-                                    if self.processor.on_init_apply(obj) {
-                                        init_count += 1;
+                                    let key = make_resource_key(&obj);
+
+                                    // Read existing status from .status file for comparison
+                                    let existing_status_json = status_handler.read_status_json(kind, &key);
+
+                                    let result = self.processor.on_init_apply(obj, existing_status_json);
+
+                                    // Handle status persistence (same as runtime)
+                                    match result {
+                                        WorkItemResult::Processed { obj, status_changed } => {
+                                            init_count += 1;
+                                            if status_changed {
+                                                match extract_status_value(&obj) {
+                                                    Some(status_value) => {
+                                                        if let Err(e) =
+                                                            status_handler.write_status_value(kind, &key, &status_value)
+                                                        {
+                                                            tracing::warn!(
+                                                                component = "fs_resource_controller",
+                                                                kind = kind,
+                                                                key = %key,
+                                                                error = %e,
+                                                                "Failed to write status file during init"
+                                                            );
+                                                        }
+                                                    }
+                                                    None => {
+                                                        tracing::warn!(
+                                                            component = "fs_resource_controller",
+                                                            kind = kind,
+                                                            key = %key,
+                                                            "Status changed but failed to extract during init"
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        WorkItemResult::Skipped | WorkItemResult::Deleted { .. } => {}
                                     }
                                 }
                                 Err(e) => {
+                                    // Write error status for parse failures
+                                    let error_msg = e.to_string();
+                                    // Extract key from path
+                                    if let Some(key) = extract_key_from_path(&path, kind) {
+                                        if let Err(write_err) =
+                                            status_handler.write_error_status(kind, &key, "ParseError", &error_msg)
+                                        {
+                                            tracing::warn!(
+                                                component = "fs_resource_controller",
+                                                kind = kind,
+                                                path = %path.display(),
+                                                error = %write_err,
+                                                "Failed to write error status during init"
+                                            );
+                                        }
+                                    }
                                     tracing::warn!(
                                         component = "fs_resource_controller",
                                         kind = kind,
-                                        error = %e,
+                                        path = %path.display(),
+                                        error = %error_msg,
                                         "Failed to parse resource during init"
                                     );
                                 }
@@ -165,19 +224,39 @@ where
                                 "Worker started, processing runtime events"
                             );
                         }
-                        FileSystemEvent::Apply(content) => {
+                        FileSystemEvent::Apply { path, content } => {
                             if !init_done {
                                 // During init phase, treat as InitApply
                                 match serde_yaml::from_str::<K>(&content) {
                                     Ok(obj) => {
-                                        if self.processor.on_init_apply(obj) {
+                                        let key = make_resource_key(&obj);
+                                        let existing_status_json = status_handler.read_status_json(kind, &key);
+                                        let result = self.processor.on_init_apply(obj, existing_status_json);
+
+                                        if let WorkItemResult::Processed { obj, status_changed } = result {
                                             init_count += 1;
+                                            if status_changed {
+                                                if let Some(status_value) = extract_status_value(&obj) {
+                                                    if let Err(e) =
+                                                        status_handler.write_status_value(kind, &key, &status_value)
+                                                    {
+                                                        tracing::warn!(
+                                                            component = "fs_resource_controller",
+                                                            kind = kind,
+                                                            key = %key,
+                                                            error = %e,
+                                                            "Failed to write status file during apply-as-init"
+                                                        );
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                     Err(e) => {
                                         tracing::warn!(
                                             component = "fs_resource_controller",
                                             kind = kind,
+                                            path = %path.display(),
                                             error = %e,
                                             "Failed to parse resource during apply"
                                         );
@@ -193,6 +272,7 @@ where
                                         tracing::warn!(
                                             component = "fs_resource_controller",
                                             kind = kind,
+                                            path = %path.display(),
                                             error = %e,
                                             "Failed to parse resource for apply"
                                         );
@@ -304,23 +384,28 @@ where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
 {
     let workqueue = processor.workqueue();
+    let status_handler = FileSystemStatusHandler::new(conf_dir.clone());
 
     tokio::spawn(async move {
+        // Clone shutdown_signal once outside the loop
+        let mut shutdown = shutdown_signal;
+
         loop {
-            let item = if let Some(ref mut shutdown) = shutdown_signal.clone() {
-                tokio::select! {
-                    item = workqueue.dequeue() => item,
-                    _ = shutdown.wait() => {
-                        tracing::info!(
-                            component = "fs_resource_controller",
-                            kind = kind,
-                            "Worker received shutdown signal"
-                        );
-                        break;
+            let item = match &mut shutdown {
+                Some(signal) => {
+                    tokio::select! {
+                        item = workqueue.dequeue() => item,
+                        _ = signal.wait() => {
+                            tracing::info!(
+                                component = "fs_resource_controller",
+                                kind = kind,
+                                "Worker received shutdown signal"
+                            );
+                            break;
+                        }
                     }
                 }
-            } else {
-                workqueue.dequeue().await
+                None => workqueue.dequeue().await,
             };
 
             match item {
@@ -328,38 +413,109 @@ where
                     // For FileSystem mode, we read from file instead of K8s store
                     let path = build_path_from_key(&conf_dir, kind, &work_item.key);
 
-                    let store_obj = if path.exists() {
+                    let (store_obj, parse_error) = if path.exists() {
                         match std::fs::read_to_string(&path) {
                             Ok(content) => match serde_yaml::from_str::<K>(&content) {
-                                Ok(obj) => Some(obj),
+                                Ok(obj) => (Some(obj), None),
                                 Err(e) => {
+                                    let error_msg = e.to_string();
                                     tracing::warn!(
                                         component = "fs_resource_controller",
                                         kind = kind,
                                         key = %work_item.key,
-                                        error = %e,
+                                        error = %error_msg,
                                         "Failed to parse file"
                                     );
-                                    None
+                                    (None, Some(error_msg))
                                 }
                             },
                             Err(e) => {
+                                let error_msg = e.to_string();
                                 tracing::warn!(
                                     component = "fs_resource_controller",
                                     kind = kind,
                                     key = %work_item.key,
-                                    error = %e,
+                                    error = %error_msg,
                                     "Failed to read file"
                                 );
-                                None
+                                (None, Some(error_msg))
                             }
                         }
                     } else {
-                        None
+                        (None, None)
                     };
 
+                    // Handle parse errors by writing error status
+                    if let Some(error_msg) = parse_error {
+                        if let Err(e) =
+                            status_handler.write_error_status(kind, &work_item.key, "ParseError", &error_msg)
+                        {
+                            tracing::warn!(
+                                component = "fs_resource_controller",
+                                kind = kind,
+                                key = %work_item.key,
+                                error = %e,
+                                "Failed to write error status"
+                            );
+                        }
+                        workqueue.done(&work_item.key);
+                        continue;
+                    }
+
+                    // Read existing status from .status file for comparison
+                    let existing_status_json = status_handler.read_status_json(kind, &work_item.key);
+
                     // Use processor's process_work_item which handles the reconciliation logic
-                    processor.process_work_item(&work_item.key, store_obj);
+                    let result = processor.process_work_item(&work_item.key, store_obj, existing_status_json);
+
+                    // Persist status based on result
+                    match result {
+                        WorkItemResult::Processed { obj, status_changed } => {
+                            if status_changed {
+                                // Extract and persist native status
+                                match extract_status_value(&obj) {
+                                    Some(status_value) => {
+                                        if let Err(e) =
+                                            status_handler.write_status_value(kind, &work_item.key, &status_value)
+                                        {
+                                            tracing::warn!(
+                                                component = "fs_resource_controller",
+                                                kind = kind,
+                                                key = %work_item.key,
+                                                error = %e,
+                                                "Failed to write status file"
+                                            );
+                                        }
+                                    }
+                                    None => {
+                                        // Status changed but extraction failed - log warning
+                                        tracing::warn!(
+                                            component = "fs_resource_controller",
+                                            kind = kind,
+                                            key = %work_item.key,
+                                            "Status changed but failed to extract status value for persistence"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        WorkItemResult::Deleted { key } => {
+                            // Delete status file when resource is deleted
+                            if let Err(e) = status_handler.delete_status(kind, &key) {
+                                tracing::warn!(
+                                    component = "fs_resource_controller",
+                                    kind = kind,
+                                    key = %key,
+                                    error = %e,
+                                    "Failed to delete status file"
+                                );
+                            }
+                        }
+                        WorkItemResult::Skipped => {
+                            // Nothing to do
+                        }
+                    }
+
                     workqueue.done(&work_item.key);
                 }
                 None => {
@@ -386,4 +542,32 @@ fn parse_delete_info(info: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Extract resource key from file path
+///
+/// Filename format:
+/// - With namespace: `{Kind}_{namespace}_{name}.yaml` -> "namespace/name"
+/// - Cluster-scoped: `{Kind}__{name}.yaml` -> "name"
+fn extract_key_from_path(path: &std::path::Path, expected_kind: &str) -> Option<String> {
+    let filename = path.file_stem()?.to_str()?;
+
+    // Split into at most 3 parts by underscore
+    let parts: Vec<&str> = filename.splitn(3, '_').collect();
+
+    if parts.len() == 3 && parts[0] == expected_kind {
+        let namespace = if parts[1].is_empty() {
+            None // Double underscore means cluster-scoped
+        } else {
+            Some(parts[1])
+        };
+        let name = parts[2];
+
+        Some(match namespace {
+            Some(ns) => format!("{}/{}", ns, name),
+            None => name.to_string(),
+        })
+    } else {
+        None
+    }
 }

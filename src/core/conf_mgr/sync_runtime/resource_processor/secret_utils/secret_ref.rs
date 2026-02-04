@@ -31,17 +31,19 @@ impl ResourceRef {
     }
 
     /// Create ResourceRef from a key string
+    ///
+    /// Parses a key in format "kind/namespace/name" or "kind//name" (cluster-scoped)
+    /// back into a ResourceRef.
+    ///
+    /// Supports all ResourceKind variants via ResourceKind::from_kind_name().
     pub fn from_key(key: &str) -> Option<Self> {
         let parts: Vec<&str> = key.splitn(3, '/').collect();
         if parts.len() < 3 {
             return None;
         }
 
-        let kind = match parts[0] {
-            "EdgionTls" => ResourceKind::EdgionTls,
-            "Gateway" => ResourceKind::Gateway,
-            _ => return None,
-        };
+        // Use ResourceKind::from_kind_name for generic parsing
+        let kind = ResourceKind::from_kind_name(parts[0])?;
 
         let namespace = if parts[1].is_empty() {
             None

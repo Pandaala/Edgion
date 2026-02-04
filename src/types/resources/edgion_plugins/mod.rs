@@ -12,8 +12,8 @@ use crate::core::plugins::PluginRuntime;
 
 // Submodules
 pub mod custom_plugins;
+pub mod edgion_plugin;
 pub mod entry;
-pub mod gateway_api_plugins;
 
 pub mod plugin_configs;
 
@@ -21,11 +21,14 @@ pub mod plugin_configs;
 mod tests;
 
 // Re-exports
-pub use entry::{ConditionEnable, PluginEntry, RequestFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry};
-pub use gateway_api_plugins::EdgionPlugin;
+pub use edgion_plugin::EdgionPlugin;
+pub use entry::{PluginEntry, RequestFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry};
 pub use plugin_configs::{
-    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, DefaultAction, IpRestrictionConfig,
-    IpSource, MockConfig,
+    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, DefaultAction, HeaderActions,
+    HeaderEntry, HeaderRename, HttpMethod, IpRestrictionConfig, IpSource, JwtAlgorithm, JwtAuthConfig,
+    LimitHeaderNames, LimitKey, LimitKeySource, MockConfig, OnMissing, OnMissingKey, ProxyRewriteConfig,
+    RateLimiterConfig, RegexUri, RequestRestrictionConfig, ResponseHeaderActions, ResponseHeaderEntry,
+    ResponseRewriteConfig, RestrictionRule, RestrictionSource, RuleMatchMode,
 };
 
 /// API group for EdgionPlugins
@@ -64,6 +67,12 @@ pub struct EdgionPluginsSpec {
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
+
+    /// Preparse validation errors (runtime only, not serialized)
+    /// Collected during preparse() for status reporting
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub preparse_errors: Vec<String>,
 }
 
 /// Status of EdgionPlugins
@@ -71,6 +80,18 @@ pub struct EdgionPluginsSpec {
 pub struct EdgionPluginsStatus {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
+}
+
+impl Default for EdgionPluginsSpec {
+    fn default() -> Self {
+        Self {
+            request_plugins: None,
+            upstream_response_filter_plugins: None,
+            upstream_response_plugins: None,
+            plugin_runtime: Arc::new(PluginRuntime::new()),
+            preparse_errors: Vec::new(),
+        }
+    }
 }
 
 impl EdgionPlugins {
@@ -126,24 +147,39 @@ impl EdgionPlugins {
         self.spec.upstream_response_plugins.as_deref().unwrap_or(&[])
     }
 
-    /// Initialize plugin runtime from edgion_plugins
-    /// This should be called after deserialization to populate the runtime field
-    pub fn init_plugin_runtime(&mut self) {
+    /// Preparse after deserialization to populate runtime fields
+    ///
+    /// This method should be called after deserializing EdgionPlugins from YAML/JSON
+    /// to populate the runtime-only plugin_runtime field.
+    ///
+    /// Validation errors from plugin configs are collected and stored in preparse_errors
+    /// for status reporting.
+    pub fn preparse(&mut self) {
         let mut runtime = PluginRuntime::new();
+        let mut errors = Vec::new();
         let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
 
         if let Some(request_plugins) = &self.spec.request_plugins {
-            runtime.add_from_request_filters(request_plugins, namespace);
+            let request_errors = runtime.add_from_request_filters(request_plugins, namespace);
+            errors.extend(request_errors);
         }
 
         if let Some(upstream_response_filter_plugins) = &self.spec.upstream_response_filter_plugins {
-            runtime.add_from_upstream_response_filters(upstream_response_filter_plugins, namespace);
+            let filter_errors = runtime.add_from_upstream_response_filters(upstream_response_filter_plugins, namespace);
+            errors.extend(filter_errors);
         }
 
         if let Some(upstream_response_plugins) = &self.spec.upstream_response_plugins {
-            runtime.add_from_upstream_responses(upstream_response_plugins, namespace);
+            let response_errors = runtime.add_from_upstream_responses(upstream_response_plugins, namespace);
+            errors.extend(response_errors);
         }
 
         self.spec.plugin_runtime = Arc::new(runtime);
+        self.spec.preparse_errors = errors;
+    }
+
+    /// Get preparse validation errors
+    pub fn get_preparse_errors(&self) -> &[String] {
+        &self.spec.preparse_errors
     }
 }
