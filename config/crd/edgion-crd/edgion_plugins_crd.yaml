@@ -131,6 +131,7 @@ spec:
                           - BasicAuth
                           - Cors
                           - Csrf
+                          - CtxSetter
                           - IpRestriction
                           - JwtAuth
                           - Mock

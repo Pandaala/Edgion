@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
-    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig, JwtAuthConfig,
-    MockConfig, ProxyRewriteConfig, RateLimiterConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetterConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig,
+    JwtAuthConfig, MockConfig, ProxyRewriteConfig, RateLimiterConfig, RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -56,6 +56,8 @@ pub enum EdgionPlugin {
     ResponseRewrite(ResponseRewriteConfig),
     /// RateLimiter filter (CMS algorithm for high-performance rate limiting)
     RateLimiter(RateLimiterConfig),
+    /// CtxSetter filter (set context variables from various sources with extraction, transformation, and mapping)
+    CtxSetter(CtxSetterConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -85,6 +87,7 @@ impl EdgionPlugin {
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::RateLimiter(_) => "RateLimiter",
+            EdgionPlugin::CtxSetter(_) => "CtxSetter",
         }
     }
 }

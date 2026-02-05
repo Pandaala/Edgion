@@ -151,6 +151,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DebugAccessLog" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
+        "EdgionPlugins/CtxSetter" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
         "EdgionPlugins/RateLimiter" => "EdgionPlugins",
@@ -390,6 +391,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RequestRestrictionTestSuite));
+        }
+        "EdgionPlugins/CtxSetter" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/CtxSetter tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CtxSetterTestSuite));
         }
         "Gateway/ListenerHostname" => {
             if !gateway {
