@@ -11,25 +11,183 @@ use crate::core::conf_mgr::sync_runtime::resource_processor::{
     condition_types, format_secret_key, get_secret, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionPlugins;
-use crate::types::resources::edgion_plugins::plugin_configs::ResolvedJwtCredential;
+use crate::types::resources::edgion_plugins::plugin_configs::{KeyMetadata, ResolvedJwtCredential};
 use crate::types::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsStatus};
 use crate::types::ResourceKind;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::chrono::Utc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// EdgionPlugins handler
 ///
 /// Features:
-/// - parse: Resolve JWT Secret references and register to SecretRefManager
+/// - parse: Resolve JWT/KeyAuth Secret references and register to SecretRefManager
 /// - on_delete: Clear SecretRefManager references
 pub struct EdgionPluginsHandler;
 
 impl EdgionPluginsHandler {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Resolve KeyAuth keys from Secrets and register references to SecretRefManager
+    fn resolve_key_auth_keys(ep: &mut EdgionPlugins, resource_ref: &ResourceRef, ctx: &HandlerContext) {
+        let ep_ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+
+        // Process request plugins
+        if let Some(ref mut plugins) = ep.spec.request_plugins {
+            for entry in plugins.iter_mut() {
+                if let EdgionPlugin::KeyAuth(ref mut config) = entry.plugin {
+                    let Some(ref secret_refs) = config.secret_refs else {
+                        continue;
+                    };
+
+                    let whitelist: HashSet<&str> =
+                        config.upstream_header_fields.iter().map(|s| s.as_str()).collect();
+                    let mut all_keys: HashMap<String, KeyMetadata> = HashMap::new();
+
+                    for secret_ref in secret_refs {
+                        let ns = secret_ref.namespace.as_ref().or(ep.metadata.namespace.as_ref());
+                        let secret_key = format_secret_key(ns, &secret_ref.name);
+                        let ns_str = ns.map(|s| s.as_str()).unwrap_or(ep_ns);
+
+                        // Register reference for cascading updates
+                        ctx.secret_ref_manager()
+                            .add_ref(secret_key.clone(), resource_ref.clone());
+
+                        let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) else {
+                            tracing::info!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "KeyAuth: Secret not found yet, will be reprocessed when Secret arrives"
+                            );
+                            continue;
+                        };
+
+                        // Try to get keys.yaml from data (base64 decoded) or string_data (plain text)
+                        let keys_yaml_str: String = if let Some(data) = &secret.data {
+                            // Try data field first (K8s stores decoded bytes here)
+                            if let Some(keys_yaml_bytes) = data.get("keys.yaml") {
+                                match String::from_utf8(keys_yaml_bytes.0.clone()) {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            edgion_plugins = %resource_ref.key(),
+                                            secret_key = %secret_key,
+                                            error = %e,
+                                            "KeyAuth: Failed to decode keys.yaml as UTF-8"
+                                        );
+                                        continue;
+                                    }
+                                }
+                            } else if let Some(string_data) = &secret.string_data {
+                                // Fallback to string_data if data doesn't have the key
+                                if let Some(s) = string_data.get("keys.yaml") {
+                                    s.clone()
+                                } else {
+                                    tracing::warn!(
+                                        edgion_plugins = %resource_ref.key(),
+                                        secret_key = %secret_key,
+                                        "KeyAuth: Secret missing 'keys.yaml' field in both data and string_data"
+                                    );
+                                    continue;
+                                }
+                            } else {
+                                tracing::warn!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    "KeyAuth: Secret missing 'keys.yaml' field"
+                                );
+                                continue;
+                            }
+                        } else if let Some(string_data) = &secret.string_data {
+                            // No data field, try string_data (used in local file testing)
+                            if let Some(s) = string_data.get("keys.yaml") {
+                                s.clone()
+                            } else {
+                                tracing::warn!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    "KeyAuth: Secret missing 'keys.yaml' field in string_data"
+                                );
+                                continue;
+                            }
+                        } else {
+                            tracing::warn!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "KeyAuth: Secret has no data or string_data"
+                            );
+                            continue;
+                        };
+
+                        // Parse YAML list of key entries
+                        let keys_list: Vec<HashMap<String, String>> = match serde_yaml::from_str(&keys_yaml_str) {
+                            Ok(list) => list,
+                            Err(e) => {
+                                tracing::warn!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    error = %e,
+                                    "KeyAuth: Failed to parse keys.yaml"
+                                );
+                                continue;
+                            }
+                        };
+
+                        // Process each key entry
+                        for key_entry in keys_list {
+                            let Some(key_value) = key_entry.get(&config.key_field) else {
+                                tracing::warn!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    key_field = %config.key_field,
+                                    "KeyAuth: Key entry missing key field"
+                                );
+                                continue;
+                            };
+
+                            // Extract whitelisted headers
+                            let mut metadata = KeyMetadata::default();
+                            for (field, value) in &key_entry {
+                                if field != &config.key_field && whitelist.contains(field.as_str()) {
+                                    metadata.headers.insert(field.clone(), value.clone());
+                                }
+                            }
+
+                            // Check for duplicate keys
+                            if all_keys.contains_key(key_value) {
+                                tracing::warn!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    "KeyAuth: Duplicate API key found, skipping"
+                                );
+                                continue;
+                            }
+
+                            all_keys.insert(key_value.clone(), metadata);
+                        }
+                    }
+
+                    if !all_keys.is_empty() {
+                        tracing::info!(
+                            edgion_plugins = %resource_ref.key(),
+                            key_count = all_keys.len(),
+                            "KeyAuth: Resolved {} API keys from Secrets",
+                            all_keys.len()
+                        );
+                        config.resolved_keys = Some(all_keys);
+                    } else {
+                        tracing::warn!(
+                            edgion_plugins = %resource_ref.key(),
+                            "KeyAuth: No API keys resolved from Secrets"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Resolve JWT credentials from Secrets and register references to SecretRefManager
@@ -150,6 +308,9 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
 
         // Resolve JWT credentials from Secrets and register references
         Self::resolve_jwt_credentials(&mut ep, &resource_ref, ctx);
+
+        // Resolve KeyAuth keys from Secrets and register references
+        Self::resolve_key_auth_keys(&mut ep, &resource_ref, ctx);
 
         // Note: preparse() is called by processor before parse(), so we don't call it here
 

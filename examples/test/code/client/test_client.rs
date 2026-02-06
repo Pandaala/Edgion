@@ -110,6 +110,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
             "all-conditions" | "allconditions" => "EdgionPlugins/PluginCondition/AllConditions".to_string(),
             "jwt-auth" | "jwtauth" => "EdgionPlugins/JwtAuth".to_string(),
+            "key-auth" | "keyauth" => "EdgionPlugins/KeyAuth".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -153,6 +154,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
         "EdgionPlugins/CtxSetter" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
+        "EdgionPlugins/KeyAuth" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
         "EdgionPlugins/RateLimiter" => "EdgionPlugins",
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
@@ -363,6 +365,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::JwtAuthTestSuite));
+        }
+        "EdgionPlugins/KeyAuth" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/KeyAuth tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::KeyAuthTestSuite));
         }
         "EdgionPlugins/ProxyRewrite" => {
             if !gateway {

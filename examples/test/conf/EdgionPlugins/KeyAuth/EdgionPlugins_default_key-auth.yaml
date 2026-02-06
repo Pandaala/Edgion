@@ -1,0 +1,35 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: key-auth-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: KeyAuth
+      config:
+        # Key sources (tried in order)
+        keySources:
+          - type: header
+            name: "X-API-Key"
+          - type: query
+            name: "api_key"
+          - type: cookie
+            name: "api_key"
+        # Security options
+        hideCredentials: false
+        realm: "Test API"
+        # Key storage
+        keyField: "key"
+        secretRefs:
+          - name: api-keys
+            namespace: edgion-default
+        # Upstream headers to forward
+        upstreamHeaderFields:
+          - "X-Consumer-Username"
+          - "X-Customer-ID"
+          - "X-User-Tier"
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: DebugAccessLogToHeader
+      config: {}

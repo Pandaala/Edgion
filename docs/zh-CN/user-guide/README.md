@@ -23,6 +23,7 @@
     - [BasicAuth](./http-route/filters/edgion-plugins/basic-auth.md)
     - [CORS](./http-route/filters/edgion-plugins/cors.md)
     - [CSRF](./http-route/filters/edgion-plugins/csrf.md)
+    - [CtxSetter](./edgion-plugins/ctx-setter.md)
     - [IP 限制](./http-route/filters/edgion-plugins/ip-restriction.md)
     - [ProxyRewrite](./http-route/filters/edgion-plugins/proxy-rewrite.md)
     - [限流](./http-route/filters/edgion-plugins/rate-limiter.md)

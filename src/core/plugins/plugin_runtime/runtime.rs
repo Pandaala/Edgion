@@ -22,6 +22,7 @@ use crate::core::plugins::edgion_plugins::csrf::Csrf;
 use crate::core::plugins::edgion_plugins::ctx_setter::CtxSetter;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
+use crate::core::plugins::edgion_plugins::key_auth::KeyAuth;
 use crate::core::plugins::edgion_plugins::mock::Mock;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
 use crate::core::plugins::edgion_plugins::rate_limiter::RateLimiter;
@@ -263,6 +264,7 @@ impl PluginRuntime {
             EdgionPlugin::Csrf(config) => Some(Box::new(Csrf::new(config))),
             EdgionPlugin::IpRestriction(config) => Some(IpRestriction::create(config)),
             EdgionPlugin::JwtAuth(config) => Some(Box::new(JwtAuth::new(config, namespace.to_string()))),
+            EdgionPlugin::KeyAuth(config) => Some(KeyAuth::create(config)),
             EdgionPlugin::Mock(config) => Some(Box::new(Mock::new(config))),
             EdgionPlugin::ProxyRewrite(config) => Some(Box::new(ProxyRewrite::new(config))),
             EdgionPlugin::RequestRestriction(config) => Some(RequestRestriction::create(config)),
@@ -314,6 +316,7 @@ impl PluginRuntime {
             EdgionPlugin::RequestRestriction(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ProxyRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ResponseRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::KeyAuth(config) => config.get_validation_error().map(|s| s.to_string()),
             _ => None,
         }
     }
@@ -329,6 +332,7 @@ impl PluginRuntime {
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
+            EdgionPlugin::KeyAuth(_) => "KeyAuth",
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",

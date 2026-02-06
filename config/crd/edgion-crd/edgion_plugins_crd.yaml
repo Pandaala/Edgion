@@ -134,6 +134,7 @@ spec:
                           - CtxSetter
                           - IpRestriction
                           - JwtAuth
+                          - KeyAuth
                           - Mock
                           - ProxyRewrite
                           - RateLimiter
