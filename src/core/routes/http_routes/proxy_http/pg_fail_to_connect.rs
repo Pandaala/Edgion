@@ -13,6 +13,9 @@ pub fn fail_to_connect(
     ctx: &mut EdgionHttpContext,
     mut e: Box<Error>,
 ) -> Box<Error> {
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        upstream.set_response_body_size(0);
+    }
     // Set status code based on error type: 504 for timeout, 503 for other errors
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         let status_code = match e.etype() {

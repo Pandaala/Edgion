@@ -13,6 +13,9 @@ pub async fn logging(
     _e: Option<&PingoraError>,
     ctx: &mut EdgionHttpContext,
 ) {
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        upstream.set_response_body_size(session.upstream_body_bytes_received());
+    }
     // Update LB metrics based on policy type
     if let Some(upstream) = ctx.get_current_upstream() {
         if let Some(addr) = &upstream.backend_addr {

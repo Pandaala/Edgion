@@ -153,6 +153,9 @@ pub struct UpstreamInfo {
     /// Elapsed time in milliseconds (total time for this upstream attempt)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub et: Option<u64>,
+    /// Upstream response body size in bytes (payload only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_body_size: Option<usize>,
     /// Start time - when this upstream attempt started (for calculating ct, ht, and bt)
     #[serde(skip)]
     pub start_time: Instant,
@@ -168,6 +171,17 @@ pub struct UpstreamInfo {
     /// Backend TLS connection information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls: Option<BackendTlsInfo>,
+}
+
+impl UpstreamInfo {
+    #[inline]
+    pub fn set_response_body_size(&mut self, size: usize) {
+        if self.response_body_size.is_some() {
+            self.err
+                .push("response_body_size already set".to_string());
+        }
+        self.response_body_size = Some(size);
+    }
 }
 
 /// Backend context containing service info and upstream attempt history
@@ -305,6 +319,7 @@ impl EdgionHttpContext {
                 ht: None,
                 bt: None,
                 et: None,
+                response_body_size: None,
                 start_time: std::time::Instant::now(),
                 err: Vec::new(),
                 backend_addr: None,

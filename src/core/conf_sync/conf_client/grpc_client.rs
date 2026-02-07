@@ -89,6 +89,7 @@ impl ConfigSyncClient {
         config_client.endpoint_slices().set_grpc_client(client.clone()).await;
         config_client.endpoints().set_grpc_client(client.clone()).await;
         config_client.edgion_tls().set_grpc_client(client.clone()).await;
+        config_client.edgion_acme().set_grpc_client(client.clone()).await;
         config_client.edgion_plugins().set_grpc_client(client.clone()).await;
         config_client
             .edgion_stream_plugins()
@@ -131,6 +132,7 @@ impl ConfigSyncClient {
             "EndpointSlice" => self.config_client.endpoint_slices().start_watch().await?,
             "Endpoints" => self.config_client.endpoints().start_watch().await?,
             "EdgionTls" => self.config_client.edgion_tls().start_watch().await?,
+            "EdgionAcme" => self.config_client.edgion_acme().start_watch().await?,
             "EdgionPlugins" => self.config_client.edgion_plugins().start_watch().await?,
             "EdgionStreamPlugins" => self.config_client.edgion_stream_plugins().start_watch().await?,
             "BackendTLSPolicy" => self.config_client.backend_tls_policies().start_watch().await?,
@@ -162,6 +164,7 @@ impl ConfigSyncClient {
             "EndpointSlice",
             "Endpoints",
             "EdgionTls",
+            "EdgionAcme",
             "EdgionPlugins",
             "EdgionStreamPlugins",
             "ReferenceGrant",

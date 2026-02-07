@@ -217,6 +217,11 @@ impl ConfigClient {
         &self.edgion_tls
     }
 
+    /// Get edgion_acme cache for direct access
+    pub fn edgion_acme(&self) -> &ClientCache<EdgionAcme> {
+        &self.edgion_acme
+    }
+
     /// Get edgion_plugins cache for direct access
     pub fn edgion_plugins(&self) -> &ClientCache<EdgionPlugins> {
         &self.edgion_plugins
