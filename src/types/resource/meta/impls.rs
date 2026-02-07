@@ -55,7 +55,7 @@ impl_resource_meta!(TLSRoute, TLSRoute, "TLSRoute");
 // =============================================================================
 
 use crate::types::resources::{
-    EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionTls, LinkSys, PluginMetaData,
+    EdgionAcme, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionTls, LinkSys, PluginMetaData,
 };
 
 // Cluster-scoped
@@ -90,3 +90,6 @@ impl_resource_meta!(LinkSys, LinkSys, "LinkSys", |self| {
 impl_resource_meta!(PluginMetaData, PluginMetaData, "PluginMetaData", |self| {
     self.validate_pre_parse();
 });
+
+// ACME
+impl_resource_meta!(EdgionAcme, EdgionAcme, "EdgionAcme");

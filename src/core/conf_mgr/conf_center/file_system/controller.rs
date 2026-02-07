@@ -41,10 +41,10 @@ use tokio::task::JoinHandle;
 
 // Import handlers
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    BackendTlsPolicyHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler,
-    EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler,
-    HttpRouteHandler, LinkSysHandler, PluginMetadataHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler,
-    TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
+    BackendTlsPolicyHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
+    EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler,
+    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler, ReferenceGrantHandler,
+    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 
 /// FileSystemController - Top-level controller for FileSystem mode
@@ -324,6 +324,16 @@ impl FileSystemController {
             spawn::<LinkSys, _>(
                 "LinkSys",
                 LinkSysHandler::new(),
+                watcher,
+                secret_ref_manager,
+                shutdown_signal.clone(),
+            )
+            .await,
+        );
+        handles.push(
+            spawn::<EdgionAcme, _>(
+                "EdgionAcme",
+                EdgionAcmeHandler::new(),
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),

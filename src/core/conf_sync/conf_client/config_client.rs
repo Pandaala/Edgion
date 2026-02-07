@@ -33,6 +33,7 @@ pub struct ConfigClient {
     edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
     backend_tls_policies: ClientCache<BackendTLSPolicy>,
     plugin_metadata: ClientCache<PluginMetaData>,
+    edgion_acme: ClientCache<EdgionAcme>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
 }
 
@@ -117,6 +118,11 @@ impl ConfigClient {
             crate::core::gateway::edgion_gateway_config::create_edgion_gateway_config_handler();
         edgion_gateway_configs_cache.set_conf_processor(edgion_gateway_config_handler);
 
+        // Register AcmeChallengeStore as the handler for EdgionAcme resources
+        let edgion_acme_cache = ClientCache::new(client_id.clone(), client_name.clone());
+        let acme_handler = crate::core::services::acme::create_acme_handler();
+        edgion_acme_cache.set_conf_processor(acme_handler);
+
         Self {
             base_conf: RwLock::new(None),
             current_server_id: RwLock::new(String::new()),
@@ -137,7 +143,8 @@ impl ConfigClient {
             edgion_plugins: plugins_cache,
             edgion_stream_plugins: stream_plugins_cache,
             backend_tls_policies: backend_tls_policies_cache,
-            plugin_metadata: ClientCache::new(client_id, client_name),
+            plugin_metadata: ClientCache::new(client_id.clone(), client_name.clone()),
+            edgion_acme: edgion_acme_cache,
         }
     }
 
@@ -271,6 +278,7 @@ impl ConfigClient {
             "edgion_stream_plugins" => Some(self.edgion_stream_plugins.is_ready()),
             "backend_tls_policies" => Some(self.backend_tls_policies.is_ready()),
             "plugin_metadata" => Some(self.plugin_metadata.is_ready()),
+            "edgion_acme" => Some(self.edgion_acme.is_ready()),
             // "secrets" => Some(self.secrets.is_ready()),  // Secret follows related resources
             _ => None,
         }
@@ -333,6 +341,7 @@ impl ConfigClient {
             ResourceKind::BackendTLSPolicy => self.backend_tls_policies.list().to_json("BackendTLSPolicy")?,
             ResourceKind::PluginMetaData => self.plugin_metadata.list().to_json("PluginMetaData")?,
             ResourceKind::Secret => return Err("Secret resources are not stored in ConfigClient".to_string()),
+            ResourceKind::EdgionAcme => self.edgion_acme.list().to_json("EdgionAcme")?,
         };
 
         Ok(ListDataSimple {
@@ -519,6 +528,7 @@ impl ConfigClientEventDispatcher for ConfigClient {
             }
             ResourceKind::BackendTLSPolicy => apply_change!(BackendTLSPolicy, backend_tls_policies, "BackendTLSPolicy"),
             ResourceKind::Secret => tracing::warn!("skip resource change {:?} for Secret", change),
+            ResourceKind::EdgionAcme => apply_change!(EdgionAcme, edgion_acme, "EdgionAcme"),
         }
     }
 }
