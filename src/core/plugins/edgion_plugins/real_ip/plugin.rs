@@ -65,17 +65,13 @@ impl RequestFilter for RealIp {
         let old_remote_addr = session.remote_addr().to_string();
 
         // Extract new real IP using RealIpExtractor
-        
+
         // Build a minimal RequestHeader to pass to extractor
         // We need to get the header value and pass it through
-        let new_remote_addr = if let Some(header_value) = session.header_value(&extractor.real_ip_header()) {
+        let new_remote_addr = if let Some(header_value) = session.header_value(extractor.real_ip_header()) {
             // Use extractor's internal logic via a simpler approach
             // Since we can't easily construct RequestHeader, extract the IP directly
-            extract_real_ip_with_extractor(
-                extractor,
-                session.client_addr(),
-                &header_value,
-            )
+            extract_real_ip_with_extractor(extractor, session.client_addr(), &header_value)
         } else {
             // No header found, check if client is trusted
             if let Ok(client_ip) = session.client_addr().parse() {
@@ -97,7 +93,7 @@ impl RequestFilter for RealIp {
                 plugin_log.push(&format!("Failed to set remote_addr: {}; ", e));
                 return PluginRunningResult::GoodNext;
             }
-            
+
             debug!(
                 old = %old_remote_addr,
                 new = %new_remote_addr,
@@ -116,11 +112,7 @@ impl RequestFilter for RealIp {
 }
 
 /// Helper function to extract real IP using RealIpExtractor logic
-fn extract_real_ip_with_extractor(
-    extractor: &RealIpExtractor,
-    client_addr: &str,
-    header_value: &str,
-) -> String {
+fn extract_real_ip_with_extractor(extractor: &RealIpExtractor, client_addr: &str, header_value: &str) -> String {
     use std::net::IpAddr;
 
     // Parse client_addr
@@ -211,8 +203,12 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("RealIp");
 
-        mock_session.expect_client_addr().return_const("192.168.1.254".to_string());
-        mock_session.expect_remote_addr().return_const("192.168.1.254".to_string());
+        mock_session
+            .expect_client_addr()
+            .return_const("192.168.1.254".to_string());
+        mock_session
+            .expect_remote_addr()
+            .return_const("192.168.1.254".to_string());
         mock_session
             .expect_header_value()
             .withf(|name| name == "X-Forwarded-For")

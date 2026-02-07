@@ -454,10 +454,7 @@ impl KeyAuthTestSuite {
                         Ok(response) => {
                             let status = response.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
                             // Parse response body to check if X-API-Key was forwarded
@@ -509,10 +506,7 @@ impl KeyAuthTestSuite {
                         Ok(response) => {
                             let status = response.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
                             let body = response.text().await.unwrap_or_default();
@@ -550,8 +544,12 @@ impl KeyAuthTestSuite {
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("Missing headers: {}. Found: {}. Body: {}", 
-                                        missing.join(", "), messages.join(", "), body),
+                                    format!(
+                                        "Missing headers: {}. Found: {}. Body: {}",
+                                        missing.join(", "),
+                                        messages.join(", "),
+                                        body
+                                    ),
                                 )
                             }
                         }
@@ -582,10 +580,7 @@ impl KeyAuthTestSuite {
                         Ok(response) => {
                             let status = response.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
                             let body = response.text().await.unwrap_or_default();

@@ -1,14 +1,14 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: real-ip-test
-  namespace: edgion-test
+  name: real-ip-test-route
+  namespace: edgion-default
 spec:
   parentRefs:
     - name: edgion-plugins-gateway
       namespace: edgion-test
   hostnames:
-    - "test.example.com"
+    - "real-ip-test.example.com"
   rules:
     - matches:
         - path:

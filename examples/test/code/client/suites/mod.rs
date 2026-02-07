@@ -33,7 +33,7 @@ pub use gateway::{
 
 // EdgionPlugins tests
 pub use edgion_plugins::{
-    AllConditionsTestSuite, CtxSetterTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, PluginConditionTestSuite,
+    AllConditionsTestSuite, CtxSetTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, PluginConditionTestSuite,
     PluginLogsTestSuite, ProxyRewriteTestSuite, RateLimiterTestSuite, RealIpPluginTestSuite,
     RequestRestrictionTestSuite, ResponseRewriteTestSuite,
 };

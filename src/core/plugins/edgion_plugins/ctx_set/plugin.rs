@@ -1,4 +1,4 @@
-//! CtxSetter plugin implementation
+//! CtxSet plugin implementation
 //!
 //! Sets context variables from various sources with optional extraction,
 //! transformation, and value mapping.
@@ -25,30 +25,30 @@ use tracing::debug;
 
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{CaseType, CtxSetterConfig, CtxVarRule, TransformConfig, TransformType};
+use crate::types::resources::edgion_plugins::{CaseType, CtxSetConfig, CtxVarRule, TransformConfig, TransformType};
 
 // ============================================================================
-// CtxSetter Plugin
+// CtxSet Plugin
 // ============================================================================
 
-/// CtxSetter plugin for setting context variables
+/// CtxSet plugin for setting context variables
 ///
 /// Sets context variables that can be accessed by downstream plugins,
 /// typically used for passing extracted values (like tenant ID, user tier, etc.)
 /// between plugins.
-pub struct CtxSetter {
+pub struct CtxSet {
     name: String,
-    config: CtxSetterConfig,
+    config: CtxSetConfig,
 }
 
-impl CtxSetter {
-    /// Create a new CtxSetter plugin from configuration
-    pub fn create(config: &CtxSetterConfig) -> Box<dyn RequestFilter> {
+impl CtxSet {
+    /// Create a new CtxSet plugin from configuration
+    pub fn create(config: &CtxSetConfig) -> Box<dyn RequestFilter> {
         let mut validated_config = config.clone();
         validated_config.validate();
 
-        let plugin = CtxSetter {
-            name: "CtxSetter".to_string(),
+        let plugin = CtxSet {
+            name: "CtxSet".to_string(),
             config: validated_config,
         };
 
@@ -70,12 +70,7 @@ impl CtxSetter {
 
         // Simple pattern matching for ${type:name} or ${type}
         // Using a loop to handle all occurrences
-        loop {
-            // Find next ${...} pattern
-            let start = match result.find("${") {
-                Some(pos) => pos,
-                None => break,
-            };
+        while let Some(start) = result.find("${") {
             let end = match result[start..].find('}') {
                 Some(pos) => start + pos,
                 None => break,
@@ -165,7 +160,7 @@ impl CtxSetter {
                     Some(extracted) => extracted,
                     None => {
                         debug!(
-                            "CtxSetter: extract regex did not match for var '{}', using default",
+                            "CtxSet: extract regex did not match for var '{}', using default",
                             rule.name
                         );
                         return rule.default.clone();
@@ -179,7 +174,7 @@ impl CtxSetter {
             value = match self.apply_transform(&value, transform) {
                 Some(transformed) => transformed,
                 None => {
-                    debug!("CtxSetter: transform failed for var '{}', using default", rule.name);
+                    debug!("CtxSet: transform failed for var '{}', using default", rule.name);
                     return rule.default.clone();
                 }
             };
@@ -239,7 +234,7 @@ impl CtxSetter {
 }
 
 #[async_trait]
-impl RequestFilter for CtxSetter {
+impl RequestFilter for CtxSet {
     fn name(&self) -> &str {
         &self.name
     }
@@ -267,12 +262,12 @@ impl RequestFilter for CtxSetter {
                         plugin_log.push(&format!("Failed to set ctx '{}': {}; ", rule.name, e));
                     } else {
                         set_count += 1;
-                        debug!("CtxSetter: set ctx '{}' = '{}'", rule.name, v);
+                        debug!("CtxSet: set ctx '{}' = '{}'", rule.name, v);
                     }
                 }
                 None => {
                     skip_count += 1;
-                    debug!("CtxSetter: skipped ctx '{}' (no value, no default)", rule.name);
+                    debug!("CtxSet: skipped ctx '{}' (no value, no default)", rule.name);
                 }
             }
         }
@@ -292,13 +287,13 @@ mod tests {
     use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
     use crate::types::common::KeyGet;
 
-    fn create_basic_config() -> CtxSetterConfig {
+    fn create_basic_config() -> CtxSetConfig {
         let yaml = r#"
 vars:
   - name: test_var
     value: static_value
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         config
     }
@@ -306,10 +301,10 @@ vars:
     #[tokio::test]
     async fn test_static_value() {
         let config = create_basic_config();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         mock_session
             .expect_set_ctx_var()
@@ -330,12 +325,12 @@ vars:
       type: header
       name: X-User-Id
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         mock_session
             .expect_key_get()
@@ -360,12 +355,12 @@ vars:
       name: X-User-Id
     default: anonymous
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         mock_session
             .expect_key_get()
@@ -387,12 +382,12 @@ vars:
   - name: rate_key
     template: "${header:X-Tenant}_${clientIp}"
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         mock_session
             .expect_header_value()
@@ -422,12 +417,12 @@ vars:
       regex: '"tenant":"([^"]+)"'
       group: 1
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         mock_session
             .expect_key_get()
@@ -451,12 +446,12 @@ vars:
     transform:
       case: lower
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         mock_session
             .expect_key_get()
@@ -483,12 +478,12 @@ vars:
         pattern: "^/api/v[0-9]+/"
         with: "/"
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         mock_session
             .expect_key_get()
@@ -514,12 +509,12 @@ vars:
     transform:
       substring: [0, 8]
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         mock_session
             .expect_key_get()
@@ -548,12 +543,12 @@ vars:
         basic: tier_2
       default: tier_3
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         mock_session.expect_key_get().return_const(Some("premium".to_string()));
         mock_session
@@ -578,12 +573,12 @@ vars:
         premium: tier_1
       default: tier_3
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         mock_session
             .expect_key_get()
@@ -617,12 +612,12 @@ vars:
         enterprise: tier_1
       default: tier_2
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         // X-Token contains "T:PREMIUM" -> extract "PREMIUM" -> lowercase "premium" -> map to "tier_1"
         mock_session
@@ -639,15 +634,17 @@ vars:
 
     #[tokio::test]
     async fn test_config_error_fail_open() {
-        let mut config = CtxSetterConfig::default();
-        config.validation_error = Some("test error".to_string());
-        let plugin = CtxSetter {
-            name: "CtxSetter".to_string(),
+        let config = CtxSetConfig {
+            validation_error: Some("test error".to_string()),
+            ..Default::default()
+        };
+        let plugin = CtxSet {
+            name: "CtxSet".to_string(),
             config,
         };
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
@@ -663,12 +660,12 @@ vars:
   - name: var2
     value: value2
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
-        let plugin = CtxSetter::create(&config);
+        let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSetter");
+        let mut plugin_log = PluginLog::new("CtxSet");
 
         mock_session
             .expect_set_ctx_var()

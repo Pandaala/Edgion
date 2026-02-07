@@ -1,4 +1,4 @@
-# HTTPRoute for CtxSetter 集成测试
+# HTTPRoute for CtxSet 集成测试
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

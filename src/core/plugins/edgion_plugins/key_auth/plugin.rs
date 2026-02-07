@@ -34,13 +34,13 @@ impl KeyAuth {
         validated_config.validate();
 
         let keys = validated_config.resolved_keys.clone().unwrap_or_default();
-        
+
         tracing::debug!(
             resolved_keys_present = config.resolved_keys.is_some(),
             keys_count = keys.len(),
             "KeyAuth: Creating plugin with resolved keys"
         );
-        
+
         let plugin = Self {
             name: "KeyAuth".to_string(),
             config: validated_config,
@@ -246,19 +246,13 @@ mod tests {
         let mut jack_headers = HashMap::new();
         jack_headers.insert("X-Consumer-Username".to_string(), "jack".to_string());
         jack_headers.insert("X-Customer-ID".to_string(), "cust-001".to_string());
-        keys.insert(
-            "jack-key-12345".to_string(),
-            KeyMetadata { headers: jack_headers },
-        );
+        keys.insert("jack-key-12345".to_string(), KeyMetadata { headers: jack_headers });
 
         // Key 2: alice
         let mut alice_headers = HashMap::new();
         alice_headers.insert("X-Consumer-Username".to_string(), "alice".to_string());
         alice_headers.insert("X-Customer-ID".to_string(), "cust-002".to_string());
-        keys.insert(
-            "alice-key-67890".to_string(),
-            KeyMetadata { headers: alice_headers },
-        );
+        keys.insert("alice-key-67890".to_string(), KeyMetadata { headers: alice_headers });
 
         auth.load_keys(keys);
         auth

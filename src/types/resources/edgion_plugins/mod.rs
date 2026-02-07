@@ -24,12 +24,12 @@ mod tests;
 pub use edgion_plugin::EdgionPlugin;
 pub use entry::{PluginEntry, RequestFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry};
 pub use plugin_configs::{
-    BasicAuthConfig, CaseType, CorsConfig, CsrfConfig, CtxSetterConfig, CtxVarRule, DebugAccessLogToHeaderConfig,
+    BasicAuthConfig, CaseType, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule, DebugAccessLogToHeaderConfig,
     DefaultAction, ExtractConfig, HeaderActions, HeaderEntry, HeaderRename, HttpMethod, IpRestrictionConfig, IpSource,
     JwtAlgorithm, JwtAuthConfig, KeyAuthConfig, KeyMetadata, LimitHeaderNames, MappingConfig, MockConfig, OnMissing,
-    OnMissingKey, ProxyRewriteConfig, RateLimiterConfig, RealIpConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig,
-    ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource,
-    RuleMatchMode, TransformConfig, TransformType,
+    OnMissingKey, ProxyRewriteConfig, RateLimiterConfig, RealIpConfig, RegexUri, ReplaceConfig,
+    RequestRestrictionConfig, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule,
+    RestrictionSource, RuleMatchMode, TransformConfig, TransformType,
 };
 
 /// API group for EdgionPlugins

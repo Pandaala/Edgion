@@ -1,22 +1,22 @@
-// CtxSetter Plugin Test Suite
+// CtxSet Plugin Test Suite
 //
 // 测试策略：
 // - 通过 DebugAccessLogToHeader 插件验证 ctx 变量被正确设置
 // - DebugAccessLogToHeader 会在响应头中添加 X-Edgion-Ctx-{name} 格式的头
 //
-// 配置参考：conf/EdgionPlugins/CtxSetter/01_EdgionPlugins_ctx-setter.yaml
+// 配置参考：conf/EdgionPlugins/CtxSet/01_EdgionPlugins_ctx-setter.yaml
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
 
-pub struct CtxSetterTestSuite;
+pub struct CtxSetTestSuite;
 
-impl CtxSetterTestSuite {
+impl CtxSetTestSuite {
     // ==================== 1. 从 Header 设置 ctx 变量测试 ====================
     fn test_ctx_from_header() -> TestCase {
         TestCase::new(
-            "ctx_setter_from_header",
-            "CtxSetter: 从 Header 设置 ctx 变量",
+            "ctx_set_from_header",
+            "CtxSet: 从 Header 设置 ctx 变量",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -68,8 +68,8 @@ impl CtxSetterTestSuite {
     // ==================== 2. 默认值测试 ====================
     fn test_ctx_default_value() -> TestCase {
         TestCase::new(
-            "ctx_setter_default_value",
-            "CtxSetter: 缺少 Header 时使用默认值",
+            "ctx_set_default_value",
+            "CtxSet: 缺少 Header 时使用默认值",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -115,8 +115,8 @@ impl CtxSetterTestSuite {
     // ==================== 3. 大小写转换测试 ====================
     fn test_ctx_transform_case() -> TestCase {
         TestCase::new(
-            "ctx_setter_transform_case",
-            "CtxSetter: 大小写转换 (method -> lower)",
+            "ctx_set_transform_case",
+            "CtxSet: 大小写转换 (method -> lower)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -161,8 +161,8 @@ impl CtxSetterTestSuite {
     // ==================== 4. 值映射测试 ====================
     fn test_ctx_mapping() -> TestCase {
         TestCase::new(
-            "ctx_setter_mapping",
-            "CtxSetter: 值映射 (premium -> tier_1)",
+            "ctx_set_mapping",
+            "CtxSet: 值映射 (premium -> tier_1)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -212,8 +212,8 @@ impl CtxSetterTestSuite {
     // ==================== 5. 映射默认值测试 ====================
     fn test_ctx_mapping_default() -> TestCase {
         TestCase::new(
-            "ctx_setter_mapping_default",
-            "CtxSetter: 映射默认值 (unknown -> tier_3)",
+            "ctx_set_mapping_default",
+            "CtxSet: 映射默认值 (unknown -> tier_3)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -261,9 +261,9 @@ impl CtxSetterTestSuite {
     }
 }
 
-impl TestSuite for CtxSetterTestSuite {
+impl TestSuite for CtxSetTestSuite {
     fn name(&self) -> &str {
-        "CtxSetter Plugin Tests"
+        "CtxSet Plugin Tests"
     }
 
     fn test_cases(&self) -> Vec<TestCase> {

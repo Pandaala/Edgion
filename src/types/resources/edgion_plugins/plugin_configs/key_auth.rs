@@ -326,7 +326,10 @@ realm: "Production API"
             ..Default::default()
         };
         assert!(!config.validate());
-        assert_eq!(config.get_validation_error(), Some("key_sources[0]: name cannot be empty"));
+        assert_eq!(
+            config.get_validation_error(),
+            Some("key_sources[0]: name cannot be empty")
+        );
     }
 
     #[test]

@@ -19,7 +19,7 @@ use super::traits::{RequestFilter, UpstreamResponse, UpstreamResponseFilter};
 use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
 use crate::core::plugins::edgion_plugins::cors::Cors;
 use crate::core::plugins::edgion_plugins::csrf::Csrf;
-use crate::core::plugins::edgion_plugins::ctx_setter::CtxSetter;
+use crate::core::plugins::edgion_plugins::ctx_set::CtxSet;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
 use crate::core::plugins::edgion_plugins::key_auth::KeyAuth;
@@ -270,7 +270,7 @@ impl PluginRuntime {
             EdgionPlugin::ProxyRewrite(config) => Some(Box::new(ProxyRewrite::new(config))),
             EdgionPlugin::RequestRestriction(config) => Some(RequestRestriction::create(config)),
             EdgionPlugin::RateLimiter(config) => Some(RateLimiter::create(config)),
-            EdgionPlugin::CtxSetter(config) => Some(CtxSetter::create(config)),
+            EdgionPlugin::CtxSet(config) => Some(CtxSet::create(config)),
             EdgionPlugin::RealIp(config) => Some(RealIp::create(config)),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
@@ -314,7 +314,7 @@ impl PluginRuntime {
     fn get_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
         match plugin {
             EdgionPlugin::RateLimiter(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::CtxSetter(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::CtxSet(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::RequestRestriction(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ProxyRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ResponseRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
@@ -339,7 +339,7 @@ impl PluginRuntime {
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::RateLimiter(_) => "RateLimiter",
-            EdgionPlugin::CtxSetter(_) => "CtxSetter",
+            EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",

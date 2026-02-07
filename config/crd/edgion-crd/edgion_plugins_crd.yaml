@@ -131,7 +131,7 @@ spec:
                           - BasicAuth
                           - Cors
                           - Csrf
-                          - CtxSetter
+                          - CtxSet
                           - IpRestriction
                           - JwtAuth
                           - KeyAuth

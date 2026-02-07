@@ -602,11 +602,15 @@ mod tests {
 
         // PluginSession has key_get() method
         assert_eq!(
-            session.key_get(&KeyGet::Header { name: "X-Test".to_string() }),
+            session.key_get(&KeyGet::Header {
+                name: "X-Test".to_string()
+            }),
             Some("value".to_string())
         );
         assert_eq!(
-            session.key_get(&KeyGet::Header { name: "X-Missing".to_string() }),
+            session.key_get(&KeyGet::Header {
+                name: "X-Missing".to_string()
+            }),
             None
         );
         assert_eq!(session.key_get(&KeyGet::Path), Some("/api/users".to_string()));
@@ -693,10 +697,8 @@ mod tests {
         assert_eq!(c2.cond_detail(), "method");
 
         // Test probability
-        let c3 = Condition::Probability(crate::core::plugins::plugins_cond::ProbabilityCondition {
-            ratio: 0.1,
-            key: None,
-        });
+        let c3 =
+            Condition::Probability(crate::core::plugins::plugins_cond::ProbabilityCondition { ratio: 0.1, key: None });
         assert_eq!(c3.cond_type(), "prob");
         assert_eq!(c3.cond_detail(), "10%");
     }

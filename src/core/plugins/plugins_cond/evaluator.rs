@@ -362,16 +362,12 @@ mod tests {
     use crate::types::common::KeyGet;
 
     /// Create a mock session with key_get that returns values based on the key
-    fn create_mock_session_with_key_get(
-        key_values: Vec<(KeyGet, Option<String>)>,
-    ) -> MockPluginSession {
+    fn create_mock_session_with_key_get(key_values: Vec<(KeyGet, Option<String>)>) -> MockPluginSession {
         let mut mock = MockPluginSession::new();
 
         // Convert to owned map
-        let values_map: std::collections::HashMap<String, Option<String>> = key_values
-            .into_iter()
-            .map(|(k, v)| (format!("{:?}", k), v))
-            .collect();
+        let values_map: std::collections::HashMap<String, Option<String>> =
+            key_values.into_iter().map(|(k, v)| (format!("{:?}", k), v)).collect();
 
         mock.expect_key_get().returning(move |key| {
             let key_str = format!("{:?}", key);
@@ -542,10 +538,7 @@ mod tests {
 
     #[test]
     fn test_probability_always() {
-        let condition = ProbabilityCondition {
-            ratio: 1.0,
-            key: None,
-        };
+        let condition = ProbabilityCondition { ratio: 1.0, key: None };
 
         let mut mock = MockPluginSession::new();
         mock.expect_key_get().returning(|_| None);
@@ -554,10 +547,7 @@ mod tests {
 
     #[test]
     fn test_probability_never() {
-        let condition = ProbabilityCondition {
-            ratio: 0.0,
-            key: None,
-        };
+        let condition = ProbabilityCondition { ratio: 0.0, key: None };
 
         let mut mock = MockPluginSession::new();
         mock.expect_key_get().returning(|_| None);

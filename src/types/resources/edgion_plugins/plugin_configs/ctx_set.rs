@@ -1,4 +1,4 @@
-//! CtxSetter plugin configuration
+//! CtxSet plugin configuration
 //!
 //! Sets context variables from various sources with optional extraction,
 //! transformation, and value mapping.
@@ -14,7 +14,7 @@
 //!
 //! ### Basic: copy header to context
 //! ```yaml
-//! ctxSetter:
+//! ctxSet:
 //!   vars:
 //!     - name: "user_id"
 //!       from:
@@ -24,7 +24,7 @@
 //!
 //! ### Regex extraction
 //! ```yaml
-//! ctxSetter:
+//! ctxSet:
 //!   vars:
 //!     - name: "jwt_user"
 //!       from:
@@ -37,7 +37,7 @@
 //!
 //! ### Value transformation
 //! ```yaml
-//! ctxSetter:
+//! ctxSet:
 //!   vars:
 //!     - name: "method_lower"
 //!       from:
@@ -48,7 +48,7 @@
 //!
 //! ### Value mapping
 //! ```yaml
-//! ctxSetter:
+//! ctxSet:
 //!   vars:
 //!     - name: "rate_tier"
 //!       from:
@@ -64,7 +64,7 @@
 //!
 //! ### Template with interpolation
 //! ```yaml
-//! ctxSetter:
+//! ctxSet:
 //!   vars:
 //!     - name: "rate_key"
 //!       template: "${header:X-Tenant}_${clientIp}"
@@ -78,15 +78,15 @@ use std::collections::HashMap;
 use crate::types::common::KeyGet;
 
 // ============================================================================
-// CtxSetter Configuration
+// CtxSet Configuration
 // ============================================================================
 
-/// CtxSetter plugin configuration
+/// CtxSet plugin configuration
 ///
 /// Sets context variables that can be accessed by downstream plugins.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct CtxSetterConfig {
+pub struct CtxSetConfig {
     /// List of context variable rules
     pub vars: Vec<CtxVarRule>,
 
@@ -101,7 +101,7 @@ pub struct CtxSetterConfig {
     pub compiled_patterns: HashMap<usize, Regex>,
 }
 
-impl Default for CtxSetterConfig {
+impl Default for CtxSetConfig {
     fn default() -> Self {
         Self {
             vars: Vec::new(),
@@ -324,7 +324,7 @@ pub struct MappingConfig {
 // Validation
 // ============================================================================
 
-impl CtxSetterConfig {
+impl CtxSetConfig {
     /// Validate configuration and compile regex patterns
     pub fn validate(&mut self) {
         self.validation_error = None;
@@ -426,7 +426,7 @@ vars:
       type: header
       name: X-User-Id
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(config.is_valid(), "Error: {:?}", config.validation_error);
         assert_eq!(config.vars.len(), 1);
@@ -440,7 +440,7 @@ vars:
   - name: env
     value: production
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(config.is_valid());
         assert_eq!(config.vars[0].value, Some("production".to_string()));
@@ -453,7 +453,7 @@ vars:
   - name: rate_key
     template: "${header:X-Tenant}_${clientIp}"
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(config.is_valid());
         assert_eq!(
@@ -474,7 +474,7 @@ vars:
       regex: "Bearer .*\\.(.+)\\."
       group: 1
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(config.is_valid(), "Error: {:?}", config.validation_error);
         assert!(config.get_compiled_regex(0).is_some());
@@ -492,7 +492,7 @@ vars:
         pattern: "^/api/v[0-9]+/"
         with: "/"
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(config.is_valid(), "Error: {:?}", config.validation_error);
     }
@@ -507,7 +507,7 @@ vars:
     transform:
       case: lower
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(config.is_valid());
         let transform = config.vars[0].transform.as_ref().unwrap();
@@ -525,7 +525,7 @@ vars:
     transform:
       substring: [0, 8]
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(config.is_valid());
         let transform = config.vars[0].transform.as_ref().unwrap();
@@ -549,7 +549,7 @@ vars:
     transform:
       suffix: "_v2"
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(config.is_valid());
         let t0 = config.vars[0].transform.as_ref().unwrap();
@@ -573,7 +573,7 @@ vars:
         basic: tier_2
       default: tier_3
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(config.is_valid());
         let mapping = config.vars[0].mapping.as_ref().unwrap();
@@ -601,7 +601,7 @@ vars:
       default: tenant_default
     default: unknown_tenant
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(config.is_valid(), "Error: {:?}", config.validation_error);
     }
@@ -611,7 +611,7 @@ vars:
         let yaml = r#"
 vars: []
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(!config.is_valid());
         assert!(config.get_validation_error().unwrap().contains("vars list is empty"));
@@ -624,7 +624,7 @@ vars:
   - name: ""
     value: test
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(!config.is_valid());
         assert!(config.get_validation_error().unwrap().contains("name is empty"));
@@ -636,7 +636,7 @@ vars:
 vars:
   - name: test_var
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(!config.is_valid());
         assert!(config.get_validation_error().unwrap().contains("must specify"));
@@ -653,7 +653,7 @@ vars:
     extract:
       regex: "([invalid"
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(!config.is_valid());
         assert!(config.get_validation_error().unwrap().contains("invalid extract regex"));
@@ -671,7 +671,7 @@ vars:
         pattern: "([invalid"
         with: ""
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(!config.is_valid());
         assert!(config
@@ -691,7 +691,7 @@ vars:
     transform:
       substring: [10, 5]
 "#;
-        let mut config: CtxSetterConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate();
         assert!(!config.is_valid());
         assert!(config.get_validation_error().unwrap().contains("substring start"));

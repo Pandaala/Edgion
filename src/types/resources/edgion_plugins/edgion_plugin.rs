@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
-    BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetterConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig,
+    BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig,
     JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimiterConfig, RealIpConfig,
     RequestRestrictionConfig, ResponseRewriteConfig,
 };
@@ -59,8 +59,8 @@ pub enum EdgionPlugin {
     ResponseRewrite(ResponseRewriteConfig),
     /// RateLimiter filter (CMS algorithm for high-performance rate limiting)
     RateLimiter(RateLimiterConfig),
-    /// CtxSetter filter (set context variables from various sources with extraction, transformation, and mapping)
-    CtxSetter(CtxSetterConfig),
+    /// CtxSet filter (set context variables from various sources with extraction, transformation, and mapping)
+    CtxSet(CtxSetConfig),
     /// RealIp filter (extract real client IP from headers with trusted proxy support)
     RealIp(RealIpConfig),
     // TODO: Add more custom Edgion plugins here
@@ -93,7 +93,7 @@ impl EdgionPlugin {
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::RateLimiter(_) => "RateLimiter",
-            EdgionPlugin::CtxSetter(_) => "CtxSetter",
+            EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
         }
     }

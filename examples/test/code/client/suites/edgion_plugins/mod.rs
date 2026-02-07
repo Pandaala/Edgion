@@ -3,7 +3,7 @@
 // Tests for EdgionPlugins functionality (independent from Gateway tests)
 // Corresponds to conf/EdgionPlugins/ directory structure
 
-mod ctx_setter;
+mod ctx_set;
 mod debug_access_log;
 mod jwt_auth;
 mod key_auth;
@@ -14,7 +14,7 @@ mod real_ip;
 mod request_restriction;
 mod response_rewrite;
 
-pub use ctx_setter::CtxSetterTestSuite;
+pub use ctx_set::CtxSetTestSuite;
 pub use debug_access_log::PluginLogsTestSuite;
 pub use jwt_auth::JwtAuthTestSuite;
 pub use key_auth::KeyAuthTestSuite;

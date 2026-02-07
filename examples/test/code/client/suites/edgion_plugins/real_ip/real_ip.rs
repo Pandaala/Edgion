@@ -1,44 +1,42 @@
 // RealIp Plugin Test Suite
 //
-// 测试策略：
-// - 验证插件能够从 X-Forwarded-For 提取真实 IP
-// - 验证可信代理列表的过滤逻辑
-// - 验证递归查找和非递归模式
-// - 验证直接连接场景
+// Test strategy:
+// - Verify the plugin extracts real IP from X-Forwarded-For
+// - Verify trusted proxy list filtering logic
+// - Verify recursive and non-recursive lookup modes
+// - Verify direct connection scenario
 //
-// 配置：trustedIps: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"]
+// Config: trustedIps: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"]
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::time::Instant;
+
+const HOST: &str = "real-ip-test.example.com";
 
 pub struct RealIpPluginTestSuite;
 
 impl RealIpPluginTestSuite {
-    // ==================== 1. XFF 提取测试（递归模式）====================
+    // ==================== 1. XFF extraction test (recursive mode) ====================
     fn test_xff_extraction_recursive() -> TestCase {
         TestCase::new(
             "plugin_real_ip_xff_recursive",
-            "RealIp 插件: X-Forwarded-For 递归提取",
+            "RealIp plugin: X-Forwarded-For recursive extraction",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
                     let url = format!("{}/headers", ctx.http_url());
 
-                    // 模拟代理链:
-                    // 真实客户端: 203.0.113.1 (NOT trusted)
-                    // 代理 1: 198.51.100.2 (在 198.51.100.0/24 - 不在 trustedIps 中，应该被识别为真实 IP)
-                    // 代理 2: 192.168.1.1 (在 192.168.0.0/16 - trusted)
-                    let mut request = client.get(&url).header(
-                        "x-forwarded-for",
-                        "203.0.113.1, 10.0.0.5, 192.168.1.1",
-                    ).header("x-trace-id", "test-real-ip-plugin-xff");
-
-                    if let Some(host) = &ctx.http_host {
-                        request = request.header("host", host);
-                    }
+                    // Simulate proxy chain:
+                    // Real client: 203.0.113.1 (NOT trusted)
+                    // Proxy 1: 10.0.0.5 (in 10.0.0.0/8 - trusted)
+                    // Proxy 2: 192.168.1.1 (in 192.168.0.0/16 - trusted)
+                    let request = client
+                        .get(&url)
+                        .header("host", HOST)
+                        .header("x-forwarded-for", "203.0.113.1, 10.0.0.5, 192.168.1.1")
+                        .header("x-trace-id", "test-real-ip-plugin-xff");
 
                     match request.send().await {
                         Ok(resp) => {
@@ -61,7 +59,7 @@ impl RealIpPluginTestSuite {
                                         }
                                     };
 
-                                    // 验证 X-Real-IP 是第一个非可信 IP (203.0.113.1)
+                                    // Verify X-Real-IP is the first non-trusted IP (203.0.113.1)
                                     let real_ip = match headers.get("x-real-ip").and_then(|v| v.as_str()) {
                                         Some(ip) => ip,
                                         None => {
@@ -72,7 +70,7 @@ impl RealIpPluginTestSuite {
                                         }
                                     };
 
-                                    // 由于插件会重新提取，期望是 203.0.113.1
+                                    // Plugin re-extracts, expected result is 203.0.113.1
                                     if real_ip != "203.0.113.1" {
                                         return TestResult::failed(
                                             start.elapsed(),
@@ -85,7 +83,7 @@ impl RealIpPluginTestSuite {
 
                                     TestResult::passed_with_message(
                                         start.elapsed(),
-                                        format!("✓ Plugin extracted real IP: {}", real_ip),
+                                        format!("Plugin extracted real IP: {}", real_ip),
                                     )
                                 }
                                 Err(e) => TestResult::failed(start.elapsed(), format!("Failed to parse JSON: {}", e)),
@@ -98,21 +96,21 @@ impl RealIpPluginTestSuite {
         )
     }
 
-    // ==================== 2. 直接连接测试 ====================
+    // ==================== 2. Direct connection test ====================
     fn test_direct_connection() -> TestCase {
         TestCase::new(
             "plugin_real_ip_direct_connection",
-            "RealIp 插件: 直接连接（无代理）",
+            "RealIp plugin: direct connection (no proxy)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
                     let url = format!("{}/headers", ctx.http_url());
 
-                    if let Some(host) = &ctx.http_host {
-                        request = request.header("host", host);
-                    }
-                    request = request.header("x-trace-id", "test-real-ip-plugin-direct");
+                    let request = client
+                        .get(&url)
+                        .header("host", HOST)
+                        .header("x-trace-id", "test-real-ip-plugin-direct");
 
                     match request.send().await {
                         Ok(resp) => {
@@ -135,7 +133,7 @@ impl RealIpPluginTestSuite {
                                         }
                                     };
 
-                                    // 直接连接，X-Real-IP 应该是 client_addr (127.0.0.1)
+                                    // Direct connection, X-Real-IP should be client_addr (127.0.0.1)
                                     let real_ip = match headers.get("x-real-ip").and_then(|v| v.as_str()) {
                                         Some(ip) => ip,
                                         None => {
@@ -158,7 +156,7 @@ impl RealIpPluginTestSuite {
 
                                     TestResult::passed_with_message(
                                         start.elapsed(),
-                                        format!("✓ Direct connection IP: {}", real_ip),
+                                        format!("Direct connection IP: {}", real_ip),
                                     )
                                 }
                                 Err(e) => TestResult::failed(start.elapsed(), format!("Failed to parse JSON: {}", e)),
@@ -171,26 +169,23 @@ impl RealIpPluginTestSuite {
         )
     }
 
-    // ==================== 3. 全部可信 IP 测试 ====================
+    // ==================== 3. All trusted IPs test ====================
     fn test_all_trusted_ips() -> TestCase {
         TestCase::new(
             "plugin_real_ip_all_trusted",
-            "RealIp 插件: 全部 IP 都在可信列表中",
+            "RealIp plugin: all IPs are in the trusted list",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
                     let url = format!("{}/headers", ctx.http_url());
 
-                    // 所有 IP 都在 trustedIps 中，应该返回最左边的 IP
-                    let mut request = client.get(&url).header(
-                        "x-forwarded-for",
-                        "192.168.1.1, 10.0.0.1, 172.16.0.1",
-                    ).header("x-trace-id", "test-real-ip-plugin-all-trusted");
-
-                    if let Some(host) = &ctx.http_host {
-                        request = request.header("host", host);
-                    }
+                    // All IPs are in trustedIps, should return the leftmost IP
+                    let request = client
+                        .get(&url)
+                        .header("host", HOST)
+                        .header("x-forwarded-for", "192.168.1.1, 10.0.0.1, 172.16.0.1")
+                        .header("x-trace-id", "test-real-ip-plugin-all-trusted");
 
                     match request.send().await {
                         Ok(resp) => {
@@ -223,7 +218,7 @@ impl RealIpPluginTestSuite {
                                         }
                                     };
 
-                                    // 全部可信，应该使用最左边的 IP
+                                    // All trusted, should use the leftmost IP
                                     if real_ip != "192.168.1.1" {
                                         return TestResult::failed(
                                             start.elapsed(),
@@ -236,7 +231,7 @@ impl RealIpPluginTestSuite {
 
                                     TestResult::passed_with_message(
                                         start.elapsed(),
-                                        format!("✓ All trusted, using leftmost IP: {}", real_ip),
+                                        format!("All trusted, using leftmost IP: {}", real_ip),
                                     )
                                 }
                                 Err(e) => TestResult::failed(start.elapsed(), format!("Failed to parse JSON: {}", e)),

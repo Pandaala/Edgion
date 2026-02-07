@@ -667,9 +667,6 @@ mod tests {
             .unwrap(),
             r#"{"type":"header","name":"X-Test"}"#
         );
-        assert_eq!(
-            serde_json::to_string(&KeyGet::Path).unwrap(),
-            r#"{"type":"path"}"#
-        );
+        assert_eq!(serde_json::to_string(&KeyGet::Path).unwrap(), r#"{"type":"path"}"#);
     }
 }

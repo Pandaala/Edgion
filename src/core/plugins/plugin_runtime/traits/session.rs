@@ -110,7 +110,7 @@ pub trait PluginSession: Send {
     fn remote_addr(&self) -> &str;
 
     /// Set remote address (real client IP)
-    /// 
+    ///
     /// Used by RealIp plugin to update the extracted real client IP.
     fn set_remote_addr(&mut self, addr: &str) -> PluginSessionResult<()>;
 

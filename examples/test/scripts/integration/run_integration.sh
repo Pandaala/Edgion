@@ -366,7 +366,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
                     run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
                     run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
-                    run_test "EdgionPlugins_CtxSetter" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i CtxSetter" || test_failed=true
+                    run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true
                     run_test "EdgionPlugins_JwtAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i JwtAuth" || test_failed=true
                     run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
                     run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
@@ -445,7 +445,7 @@ run_all_tests() {
         run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
         run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
         run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
-        run_test "EdgionPlugins_CtxSetter" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i CtxSetter" || test_failed=true
+        run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true
         run_test "EdgionPlugins_JwtAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i JwtAuth" || test_failed=true
         run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
         run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
@@ -560,7 +560,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSetter,EdgionPlugins/JwtAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimiter,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimiter,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction"
             else
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi

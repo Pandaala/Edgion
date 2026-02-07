@@ -1,10 +1,10 @@
-# CtxSetter 插件
+# CtxSet 插件
 
 ## 概述
 
-`CtxSetter` 插件用于在请求处理过程中设置上下文变量（Context Variables）。这些变量可以被后续的插件（如 RateLimiter, PluginConditions）使用，或者作为日志字段输出。
+`CtxSet` 插件用于在请求处理过程中设置上下文变量（Context Variables）。这些变量可以被后续的插件（如 RateLimiter, PluginConditions）使用，或者作为日志字段输出。
 
-CtxSetter 支持从多种数据源（Header, Query, Cookie 等）提取数据，并支持默认值、大小写转换、值映射（Mapping）以及基于模板的变量组合。
+CtxSet 支持从多种数据源（Header, Query, Cookie 等）提取数据，并支持默认值、大小写转换、值映射（Mapping）以及基于模板的变量组合。
 
 ## 功能特性
 
@@ -17,7 +17,7 @@ CtxSetter 支持从多种数据源（Header, Query, Cookie 等）提取数据，
 
 ## 配置参数
 
-### CtxSetterConfig
+### CtxSetConfig
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -64,7 +64,7 @@ metadata:
   name: basic-ctx-setter
 spec:
   requestPlugins:
-    - type: CtxSetter
+    - type: CtxSet
       config:
         rules:
           - name: tenant_id
@@ -118,7 +118,7 @@ rules:
     template: "{{ client_ip }}:{{ path }}"
 ```
 
-> **注意**：模板中的变量（如 `{{ client_ip }}`）必须是 **已存在** 的上下文变量或内置变量。建议先用 CtxSetter 提取基础变量，再用模板组合。
+> **注意**：模板中的变量（如 `{{ client_ip }}`）必须是 **已存在** 的上下文变量或内置变量。建议先用 CtxSet 提取基础变量，再用模板组合。
 
 ### 5. 综合示例
 
@@ -147,11 +147,11 @@ rules:
 
 ### 配合 RateLimiter 使用
 
-RateLimiter 插件可以使用 `ctx` 作为限流键的数据源。通过 CtxSetter，你可以构造复杂的限流键。
+RateLimiter 插件可以使用 `ctx` 作为限流键的数据源。通过 CtxSet，你可以构造复杂的限流键。
 
 ```yaml
 # 1. 先设置变量
-- type: CtxSetter
+- type: CtxSet
   config:
     rules:
       - name: limit_key
@@ -171,7 +171,7 @@ RateLimiter 插件可以使用 `ctx` 作为限流键的数据源。通过 CtxSet
 条件判断插件可以基于上下文变量决定是否跳过后续插件。
 
 ```yaml
-- type: CtxSetter
+- type: CtxSet
   config:
     rules:
       - name: is_internal

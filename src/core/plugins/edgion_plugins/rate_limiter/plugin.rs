@@ -230,11 +230,8 @@ impl RequestFilter for RateLimiter {
         // Get the rate limiting key using session.key_get()
         // Multiple keys are combined with "_" separator
         let limit_key = {
-            let parts: Vec<String> = self.config.key
-                .iter()
-                .filter_map(|k| session.key_get(k))
-                .collect();
-            
+            let parts: Vec<String> = self.config.key.iter().filter_map(|k| session.key_get(k)).collect();
+
             if parts.is_empty() {
                 // No keys resolved - check if we have a default key configured
                 if let Some(ref default_key) = self.config.default_key {
@@ -382,9 +379,7 @@ mod tests {
             let mut plugin_log = PluginLog::new("RateLimiter");
 
             let ip = format!("test_basic_ip_{}", i);
-            mock_session
-                .expect_key_get()
-                .return_const(Some(ip)); // Each request different IP to test independent
+            mock_session.expect_key_get().return_const(Some(ip)); // Each request different IP to test independent
             mock_session.expect_set_response_header().returning(|_, _| Ok(()));
 
             let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
@@ -403,9 +398,7 @@ mod tests {
         for _ in 0..5 {
             let mut mock_session = MockPluginSession::new();
             let mut plugin_log = PluginLog::new("RateLimiter");
-            mock_session
-                .expect_key_get()
-                .return_const(Some(test_ip.to_string()));
+            mock_session.expect_key_get().return_const(Some(test_ip.to_string()));
             mock_session.expect_set_response_header().returning(|_, _| Ok(()));
             plugin.run_request(&mut mock_session, &mut plugin_log).await;
         }
@@ -414,9 +407,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("RateLimiter");
 
-        mock_session
-            .expect_key_get()
-            .return_const(Some(test_ip.to_string()));
+        mock_session.expect_key_get().return_const(Some(test_ip.to_string()));
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
         mock_session.expect_write_response_body().returning(|_, _| Ok(()));
 
@@ -474,7 +465,9 @@ mod tests {
             interval: "1s".to_string(),
             key: vec![
                 KeyGet::ClientIp,
-                KeyGet::Header { name: "X-API-Key".to_string() },
+                KeyGet::Header {
+                    name: "X-API-Key".to_string(),
+                },
                 KeyGet::Path,
             ],
             ..Default::default()
@@ -514,7 +507,9 @@ mod tests {
             interval: "1s".to_string(),
             key: vec![
                 KeyGet::ClientIp,
-                KeyGet::Header { name: "X-API-Key".to_string() },
+                KeyGet::Header {
+                    name: "X-API-Key".to_string(),
+                },
             ],
             ..Default::default()
         };
@@ -572,9 +567,7 @@ mod tests {
         for _ in 0..5 {
             let mut mock_session = MockPluginSession::new();
             let mut plugin_log = PluginLog::new("RateLimiter");
-            mock_session
-                .expect_key_get()
-                .return_const(Some(shared_ip.to_string()));
+            mock_session.expect_key_get().return_const(Some(shared_ip.to_string()));
             mock_session.expect_set_response_header().returning(|_, _| Ok(()));
             plugin1.run_request(&mut mock_session, &mut plugin_log).await;
         }
@@ -582,9 +575,7 @@ mod tests {
         // plugin2 should still allow (separate Rate instance)
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("RateLimiter");
-        mock_session
-            .expect_key_get()
-            .return_const(Some(shared_ip.to_string()));
+        mock_session.expect_key_get().return_const(Some(shared_ip.to_string()));
         mock_session.expect_set_response_header().returning(|_, _| Ok(()));
 
         let result = plugin2.run_request(&mut mock_session, &mut plugin_log).await;

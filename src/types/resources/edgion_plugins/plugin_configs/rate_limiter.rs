@@ -84,7 +84,6 @@ impl LimitHeaderNames {
     }
 }
 
-
 /// Behavior when rate limit key cannot be extracted
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
@@ -345,7 +344,8 @@ impl RateLimiterConfig {
                 if name.is_empty() {
                     return Err(format!(
                         "'key[{}].name' cannot be empty for type {:?}",
-                        i, key.source_type()
+                        i,
+                        key.source_type()
                     ));
                 }
             }
@@ -440,9 +440,7 @@ mod tests {
     fn test_validation_key_name_empty() {
         let mut config = RateLimiterConfig::default();
         config.rate = 10;
-        config.key = vec![KeyGet::Header {
-            name: "".to_string(),
-        }];
+        config.key = vec![KeyGet::Header { name: "".to_string() }];
         config.validate();
         assert!(!config.is_valid());
         assert!(config.get_validation_error().unwrap().contains("key[0].name"));
@@ -597,7 +595,9 @@ key:
             config.key,
             vec![
                 KeyGet::ClientIp,
-                KeyGet::Header { name: "X-API-Key".to_string() },
+                KeyGet::Header {
+                    name: "X-API-Key".to_string()
+                },
                 KeyGet::Path,
             ]
         );

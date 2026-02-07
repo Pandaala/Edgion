@@ -44,8 +44,7 @@ impl EdgionPluginsHandler {
                         continue;
                     };
 
-                    let whitelist: HashSet<&str> =
-                        config.upstream_header_fields.iter().map(|s| s.as_str()).collect();
+                    let whitelist: HashSet<&str> = config.upstream_header_fields.iter().map(|s| s.as_str()).collect();
                     let mut all_keys: HashMap<String, KeyMetadata> = HashMap::new();
 
                     for secret_ref in secret_refs {

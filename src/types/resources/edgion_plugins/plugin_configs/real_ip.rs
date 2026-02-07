@@ -123,19 +123,17 @@ impl RealIpConfig {
         for ip_str in &self.trusted_ips {
             // Validate and convert to CIDR format
             match Self::validate_and_to_cidr(ip_str) {
-                Ok(cidr_str) => {
-                    match builder.insert(&cidr_str, true) {
-                        Ok(_) => valid_count += 1,
-                        Err(e) => {
-                            invalid_count += 1;
-                            tracing::warn!(
-                                ip = %ip_str,
-                                error = ?e,
-                                "Invalid IP/CIDR in trusted_ips, skipping"
-                            );
-                        }
+                Ok(cidr_str) => match builder.insert(&cidr_str, true) {
+                    Ok(_) => valid_count += 1,
+                    Err(e) => {
+                        invalid_count += 1;
+                        tracing::warn!(
+                            ip = %ip_str,
+                            error = ?e,
+                            "Invalid IP/CIDR in trusted_ips, skipping"
+                        );
                     }
-                }
+                },
                 Err(e) => {
                     invalid_count += 1;
                     tracing::warn!(
@@ -175,7 +173,7 @@ impl RealIpConfig {
     /// Validate IP/CIDR format and convert to CIDR if needed
     fn validate_and_to_cidr(ip_str: &str) -> Result<String, String> {
         let trimmed = ip_str.trim();
-        
+
         if trimmed.contains('/') {
             // CIDR format - validate both parts
             let parts: Vec<&str> = trimmed.split('/').collect();
@@ -314,9 +312,9 @@ mod tests {
     fn test_mixed_valid_invalid() {
         let mut config = RealIpConfig {
             trusted_ips: vec![
-                "10.0.0.0/8".to_string(),     // valid
-                "192.168.1.256".to_string(),  // invalid
-                "172.16.0.0/12".to_string(),  // valid
+                "10.0.0.0/8".to_string(),    // valid
+                "192.168.1.256".to_string(), // invalid
+                "172.16.0.0/12".to_string(), // valid
             ],
             ..Default::default()
         };
@@ -362,14 +360,8 @@ mod tests {
             RealIpConfig::validate_and_to_cidr("192.168.1.1").unwrap(),
             "192.168.1.1/32"
         );
-        assert_eq!(
-            RealIpConfig::validate_and_to_cidr("10.0.0.0/8").unwrap(),
-            "10.0.0.0/8"
-        );
-        assert_eq!(
-            RealIpConfig::validate_and_to_cidr("::1").unwrap(),
-            "::1/128"
-        );
+        assert_eq!(RealIpConfig::validate_and_to_cidr("10.0.0.0/8").unwrap(), "10.0.0.0/8");
+        assert_eq!(RealIpConfig::validate_and_to_cidr("::1").unwrap(), "::1/128");
         assert_eq!(
             RealIpConfig::validate_and_to_cidr("2001:db8::/32").unwrap(),
             "2001:db8::/32"
