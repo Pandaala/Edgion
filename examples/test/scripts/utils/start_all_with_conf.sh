@@ -360,13 +360,19 @@ start_gateway() {
         exit 1
     fi
     
-    # Verify LB preload completed
-    if ! grep -q "LB preload completed" "${LOG_DIR}/gateway.log"; then
-        log_error "edgion-gateway LB preload 日志未找到"
-        tail -50 "${LOG_DIR}/gateway.log" 2>/dev/null || true
-        exit 1
-    fi
-    log_info "LB preload 日志验证通过"
+    # Verify LB preload completed (with retry to handle log flush race condition)
+    local lb_timeout=15
+    local lb_waited=0
+    while ! grep -q "LB preload completed" "${LOG_DIR}/gateway.log" 2>/dev/null; do
+        if [ $lb_waited -ge $lb_timeout ]; then
+            log_error "edgion-gateway LB preload timeout after ${lb_timeout}s"
+            tail -50 "${LOG_DIR}/gateway.log" 2>/dev/null || true
+            exit 1
+        fi
+        sleep 1
+        ((lb_waited++))
+    done
+    log_info "LB preload 日志验证通过 (waited ${lb_waited}s)"
     
     log_success "edgion-gateway Startsuccess (PID: $pid)"
 }
