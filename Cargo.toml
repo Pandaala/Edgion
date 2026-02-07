@@ -136,7 +136,7 @@ hex = "0.4"
 jsonwebtoken = "9"
 
 # Pingora
-pingora-core = { version = "0.7.0" }
+pingora-core = { version = "0.7.0", features = ["connection_filter"] }
 pingora-http = "0.7.0"
 pingora-limits = "0.7.0"
 pingora-load-balancing = "0.7.0"
@@ -172,6 +172,9 @@ hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] 
 tower = "0.5"
 htpasswd-verify = "0.3.0"
 cookie = "0.18.1"
+instant-acme = "0.8.4"
+rcgen = { version = "0.14.7", features = ["x509-parser"] }
+sha1 = "0.10.6"
 
 [build-dependencies]
 tonic-build = "0.12"

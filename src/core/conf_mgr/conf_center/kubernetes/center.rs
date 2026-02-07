@@ -342,7 +342,8 @@ impl KubernetesCenter {
                 self.set_config_sync_server(None);
             }
 
-            // Clear PROCESSOR_REGISTRY for retry
+            // Stop ACME service and clear PROCESSOR_REGISTRY for retry
+            crate::core::services::acme::stop_acme_service();
             PROCESSOR_REGISTRY.clear_registry();
 
             // Handle exit reason
@@ -479,6 +480,7 @@ impl KubernetesCenter {
         // 5. Spawn caches ready watcher task (monitors PROCESSOR_REGISTRY)
         let css = config_sync_server.clone();
         let tx = event_tx.clone();
+        let acme_client = client.clone();
         // Get no_sync_kinds from global config (or use default)
         let no_sync_kinds = crate::core::cli::config::get_no_sync_kinds();
         let caches_handle = tokio::spawn(async move {
@@ -500,6 +502,9 @@ impl KubernetesCenter {
                 // Trigger full cross-namespace revalidation
                 // This ensures Routes processed before ReferenceGrants are revalidated
                 crate::core::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation();
+
+                // Start ACME background service (certificate issuance/renewal)
+                crate::core::services::acme::start_acme_service(acme_client);
 
                 let _ = tx.send(LifecycleEvent::CachesReady).await;
             } else {
@@ -706,7 +711,8 @@ impl CenterLifeCycle for KubernetesCenter {
             match exit_reason {
                 MainFlowExit::Shutdown => {
                     tracing::info!(component = "kubernetes_center", mode = "kubernetes", "Normal shutdown");
-                    // Clear PROCESSOR_REGISTRY
+                    // Stop ACME service and clear PROCESSOR_REGISTRY
+                    crate::core::services::acme::stop_acme_service();
                     PROCESSOR_REGISTRY.clear_registry();
                     return Ok(());
                 }
@@ -716,7 +722,8 @@ impl CenterLifeCycle for KubernetesCenter {
                         mode = "kubernetes",
                         "Lost leadership, will wait for re-election"
                     );
-                    // Clear PROCESSOR_REGISTRY for re-election
+                    // Stop ACME service and clear PROCESSOR_REGISTRY for re-election
+                    crate::core::services::acme::stop_acme_service();
                     PROCESSOR_REGISTRY.clear_registry();
                     // Loop back to wait for leadership
                     continue;

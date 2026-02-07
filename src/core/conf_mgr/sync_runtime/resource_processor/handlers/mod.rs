@@ -5,6 +5,7 @@
 //! is handled by ResourceProcessor.
 
 mod backend_tls_policy;
+mod edgion_acme;
 mod edgion_gateway_config;
 mod edgion_plugins;
 mod edgion_stream_plugins;
@@ -25,6 +26,7 @@ mod tls_route;
 mod udp_route;
 
 pub use backend_tls_policy::BackendTlsPolicyHandler;
+pub use edgion_acme::EdgionAcmeHandler;
 pub use edgion_gateway_config::EdgionGatewayConfigHandler;
 pub use edgion_plugins::EdgionPluginsHandler;
 pub use edgion_stream_plugins::EdgionStreamPluginsHandler;

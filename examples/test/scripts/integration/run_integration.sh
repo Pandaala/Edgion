@@ -340,7 +340,12 @@ run_all_tests() {
                 fi
                 ;;
             TCPRoute)
-                run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
+                if [ -z "$G_ITEM" ]; then
+                    run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
+                    run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
+                else
+                    run_test "TCPRoute_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
+                fi
                 ;;
             UDPRoute)
                 run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
@@ -355,6 +360,7 @@ run_all_tests() {
                     run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
                     run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
                     run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
+                    run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
                 else
                     # Replace / with _ in item name for log file
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
@@ -434,6 +440,7 @@ run_all_tests() {
         
         # TCPRoute Tests
         run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
+        run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
         
         # UDPRoute Tests
         run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
@@ -459,6 +466,7 @@ run_all_tests() {
         run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
         run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
         run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
+        run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
         
         # EdgionTls Tests
         run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i https" || test_failed=true

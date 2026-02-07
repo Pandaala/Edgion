@@ -57,6 +57,14 @@ pub struct TCPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
+
+    /// Store key for dynamic stream plugin lookup (runtime only, not serialized)
+    /// Format: "namespace/name" referencing an EdgionStreamPlugins resource.
+    /// Used for dynamic lookup from StreamPluginStore on each connection,
+    /// avoiding resource loading order issues and supporting hot-reloading.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub stream_plugin_store_key: Option<String>,
 }
 
 impl Clone for TCPRouteRule {
@@ -65,6 +73,7 @@ impl Clone for TCPRouteRule {
             backend_refs: self.backend_refs.clone(),
             backend_finder: BackendSelector::new(),
             stream_plugin_runtime: self.stream_plugin_runtime.clone(),
+            stream_plugin_store_key: self.stream_plugin_store_key.clone(),
         }
     }
 }
@@ -75,6 +84,7 @@ impl fmt::Debug for TCPRouteRule {
             .field("backend_refs", &self.backend_refs)
             .field("backend_finder", &"<skipped>")
             .field("stream_plugin_runtime", &self.stream_plugin_runtime)
+            .field("stream_plugin_store_key", &self.stream_plugin_store_key)
             .finish()
     }
 }

@@ -104,6 +104,8 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "udp" => "UDPRoute/Basic".to_string(),
             "mtls" => "EdgionTls/mTLS".to_string(),
             "security" => "Gateway/Security".to_string(),
+            "stream-plugins" | "streamplugins" | "connection-filter" => "Gateway/StreamPlugins".to_string(),
+            "tcp-stream-plugins" | "tcpstreamplugins" => "TCPRoute/StreamPlugins".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
@@ -142,6 +144,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "GRPCRoute/Match" => "GRPCRoute/Match",
         // TCPRoute
         "TCPRoute/Basic" | "TCPRoute" => "TCPRoute/Basic",
+        "TCPRoute/StreamPlugins" => "TCPRoute/StreamPlugins",
         // UDPRoute
         "UDPRoute/Basic" | "UDPRoute" => "UDPRoute/Basic",
         // Gateway
@@ -160,6 +163,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/RealIp" => "EdgionPlugins",
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
         "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
+        "Gateway/StreamPlugins" => "Gateway/StreamPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
         "EdgionTls" | "EdgionTls/https" => "EdgionTls/https",
@@ -296,6 +300,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         // TCP/UDP 资源
         "tcp" | "TCPRoute" | "TCPRoute/Basic" => {
             runner.add_suite(Box::new(suites::TcpTestSuite));
+        }
+        "TCPRoute/StreamPlugins" => {
+            if !gateway {
+                eprintln!("Error: TCPRoute/StreamPlugins tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TcpStreamPluginsTestSuite));
         }
         "udp" | "UDPRoute" | "UDPRoute/Basic" => {
             runner.add_suite(Box::new(suites::UdpTestSuite));
@@ -451,6 +462,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::CombinedScenariosTestSuite));
         }
+        "Gateway/StreamPlugins" => {
+            if !gateway {
+                eprintln!("Error: Gateway/StreamPlugins tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::StreamPluginsTestSuite));
+        }
         "Gateway/PortConflict" => {
             if !gateway {
                 eprintln!("Error: Gateway/PortConflict tests require --gateway flag");
@@ -526,6 +544,10 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RefGrantStatusTestSuite));
+        }
+        // Services tests (ACME, etc.)
+        "Services/acme" => {
+            runner.add_suite(Box::new(suites::AcmeTestSuite));
         }
         // 运行所有测试
         "all" => {

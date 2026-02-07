@@ -1,0 +1,54 @@
+# Pebble ACME Test Environment
+#
+# Pebble: lightweight ACME CA server (Let's Encrypt official test tool)
+# challtestsrv: mock DNS + HTTP challenge validation server
+#
+# Usage:
+#   docker compose -f docker-compose.yaml up -d
+#   docker compose -f docker-compose.yaml down
+#
+# Endpoints:
+#   - Pebble ACME directory: https://localhost:14000/dir
+#   - Pebble management:     https://localhost:15000
+#   - challtestsrv mgmt API: http://localhost:8055
+
+services:
+  challtestsrv:
+    image: ghcr.io/letsencrypt/pebble-challtestsrv:latest
+    # Disable HTTP-01/HTTPS-01/TLS-ALPN-01 built-in responders (we handle them externally)
+    # Disable default IPv6 (::1) to prevent Pebble VA from preferring IPv6
+    # Default IPv4 will be set by test code via /set-default-ipv4 API
+    command:
+      - -defaultIPv6
+      - ""
+      - -http01
+      - ""
+      - -https01
+      - ""
+      - -tlsalpn01
+      - ""
+    ports:
+      - "8055:8055"   # Management API (add/remove DNS records)
+    networks:
+      - acmenet
+
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:latest
+    # Use challtestsrv as DNS resolver so it can resolve test domains
+    command: -config /test/config/pebble-config.json -dnsserver challtestsrv:8053 -strict
+    ports:
+      - "14000:14000" # ACME directory
+      - "15000:15000" # Management API
+    environment:
+      PEBBLE_VA_NOSLEEP: "1"       # Skip validation delay (faster tests)
+      PEBBLE_VA_ALWAYS_VALID: "0"  # Actually validate challenges
+    volumes:
+      - ./pebble-config.json:/test/config/pebble-config.json:ro
+    depends_on:
+      - challtestsrv
+    networks:
+      - acmenet
+
+networks:
+  acmenet:
+    driver: bridge

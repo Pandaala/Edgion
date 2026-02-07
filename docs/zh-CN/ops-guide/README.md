@@ -17,6 +17,7 @@
 - **TLS 配置**
   - [TLS 终结](./gateway/tls/tls-termination.md)
   - [EdgionTls 扩展 🔌](./gateway/tls/edgion-tls.md)
+  - [ACME 自动证书 🔌](./gateway/tls/acme.md)
 
 ### 基础设施
 - [Secret 管理](./infrastructure/secret-management.md)

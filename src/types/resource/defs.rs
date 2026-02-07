@@ -186,6 +186,16 @@ define_resources! {
         default_capacity: normal,
     },
 
+    // ==================== ACME Resources ====================
+    EdgionAcme {
+        enum_value: 20,
+        kind_name: "edgionacme",
+        kind_aliases: [],
+        cache_field: edgion_acme,
+        capacity_field: edgion_acme_capacity,
+        default_capacity: small,
+    },
+
     // ==================== Infrastructure Resources ====================
     LinkSys {
         enum_value: 15,
@@ -204,8 +214,8 @@ mod tests {
 
     #[test]
     fn test_all_resource_infos_count() {
-        // We have 19 resource types (excluding Unspecified)
-        assert_eq!(ALL_RESOURCE_INFOS.len(), 19);
+        // We have 20 resource types (excluding Unspecified)
+        assert_eq!(ALL_RESOURCE_INFOS.len(), 20);
     }
 
     #[test]

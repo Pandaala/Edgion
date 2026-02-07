@@ -1,0 +1,62 @@
+# EdgionAcme - DNS-01 Challenge with Alibaba Cloud DNS Example
+#
+# This example shows how to automatically obtain a wildcard TLS certificate
+# using DNS-01 challenge validation with Alibaba Cloud DNS (AliDNS).
+#
+# Prerequisites:
+# - Alibaba Cloud AccessKey with DNS management permissions
+# - The credentials stored in a K8s Secret
+
+---
+# Step 1: Create a Secret containing AliDNS credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alidns-credentials
+  namespace: default
+type: Opaque
+stringData:
+  access-key-id: "your-access-key-id"
+  access-key-secret: "your-access-key-secret"
+
+---
+# Step 2: Create the EdgionAcme resource
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  name: aliyun-wildcard-acme
+  namespace: default
+spec:
+  email: admin@example.com
+
+  domains:
+    - "*.example.com"
+    - example.com
+
+  keyType: ecdsa-p384
+
+  challenge:
+    type: dns-01
+    dns01:
+      provider: alidns
+      credentialRef:
+        name: alidns-credentials
+        namespace: default
+      propagationTimeout: 180     # Alibaba DNS may need more time
+      propagationCheckInterval: 10
+
+  renewal:
+    renewBeforeDays: 14
+    checkInterval: 43200          # Check every 12 hours
+    failBackoff: 600              # Wait 10min after failure
+
+  storage:
+    secretName: aliyun-wildcard-cert
+    secretNamespace: cert-store   # Store in a dedicated namespace
+
+  autoEdgionTls:
+    enabled: true
+    name: aliyun-wildcard-tls     # Custom EdgionTls name
+    parentRefs:
+      - name: my-gateway
+        namespace: default

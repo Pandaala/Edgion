@@ -57,10 +57,10 @@ use crate::types::ResourceMeta;
 
 // Import handlers from conf_mgr
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    BackendTlsPolicyHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler,
-    EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler,
-    HttpRouteHandler, LinkSysHandler, PluginMetadataHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler,
-    TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
+    BackendTlsPolicyHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
+    EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler,
+    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler, ReferenceGrantHandler,
+    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 
 /// Context for spawn functions
@@ -376,6 +376,14 @@ impl KubernetesController {
             &ctx,
         ));
         h.push(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
+
+        // ==================== ACME Resources ====================
+        h.push(spawn::<EdgionAcme, _>(
+            self,
+            "EdgionAcme",
+            EdgionAcmeHandler::new(),
+            &ctx,
+        ));
 
         // ==================== Cluster-Scoped Resources ====================
         h.push(spawn_cluster::<GatewayClass, _>(
