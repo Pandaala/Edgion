@@ -19,6 +19,7 @@ use tokio::net::UdpSocket;
 use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::observe::test_metrics::TestType;
 use crate::core::observe::AccessLogger;
+use crate::core::plugins::edgion_stream_plugins::{get_global_stream_plugin_store, StreamPluginConnectionFilter};
 use crate::core::routes::get_global_route_manager;
 use crate::core::routes::http_routes::{EdgionHttp, EdgionHttpRedirect};
 use crate::core::routes::tcp_routes::{get_global_tcp_route_manager, EdgionTcp};
@@ -47,6 +48,15 @@ pub const ANNOTATION_HTTP_TO_HTTPS_REDIRECT: &str = "edgion.io/http-to-https-red
 /// Annotation key to specify HTTPS redirect port
 /// Default: 443
 pub const ANNOTATION_HTTPS_REDIRECT_PORT: &str = "edgion.io/https-redirect-port";
+
+/// Annotation key to reference an EdgionStreamPlugins resource for TCP-level connection filtering.
+///
+/// Value format: "namespace/name" pointing to an EdgionStreamPlugins resource.
+/// When set, incoming TCP connections are filtered by the referenced stream plugins
+/// **before** TLS handshake or HTTP parsing, providing efficient early rejection.
+///
+/// Example: `edgion.io/edgion-stream-plugins: "default/global-ip-filter"`
+pub const ANNOTATION_EDGION_STREAM_PLUGINS: &str = "edgion.io/edgion-stream-plugins";
 
 /// Context passed to listener builders containing gateway-level information and listener config
 #[derive(Clone)]
@@ -101,6 +111,7 @@ pub fn add_http_listener(
 
         let redirect_handler = EdgionHttpRedirect::new(https_port);
         let mut http_service = http_proxy_service(&context.server_conf, redirect_handler);
+        apply_connection_filter(&mut http_service, context);
         http_service.add_tcp(&addr);
 
         tracing::info!(
@@ -194,6 +205,9 @@ pub fn add_http_listener(
     // Create HTTP proxy service
     let mut http_service = http_proxy_service(&context.server_conf, edgion_http);
 
+    // Apply connection filter if configured via annotation
+    apply_connection_filter(&mut http_service, context);
+
     // Enable h2c (HTTP/2 Cleartext) for non-TLS listeners if enable_http2 is true
     if !enable_tls && enable_http2 {
         if let Some(http_logic) = http_service.app_logic_mut() {
@@ -280,7 +294,11 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
     };
 
     // Create TCP service
-    let tcp_service = Service::with_listeners(format!("TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tcp);
+    let mut tcp_service =
+        Service::with_listeners(format!("TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tcp);
+
+    // Apply connection filter if configured via annotation
+    apply_connection_filter(&mut tcp_service, context);
 
     // Add to server
     server.add_service(tcp_service);
@@ -377,6 +395,9 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     let mut tls_service =
         Service::with_listeners(format!("TLS-TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tls);
 
+    // Apply connection filter if configured via annotation
+    apply_connection_filter(&mut tls_service, context);
+
     // Add TLS settings to the service
     tls_service.add_tls_with_settings(&addr, None, tls_settings);
 
@@ -431,4 +452,33 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
             anyhow::bail!("Unsupported protocol: {}", protocol)
         }
     }
+}
+
+/// Apply connection filter to a Pingora Service if the Gateway has the
+/// `edgion.io/edgion-stream-plugins` annotation set.
+///
+/// The annotation value should be "namespace/name" referencing an EdgionStreamPlugins resource.
+/// The filter runs at TCP level, before TLS handshake or HTTP parsing.
+fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContext) {
+    let Some(annotation_value) = context.gateway_annotations.get(ANNOTATION_EDGION_STREAM_PLUGINS) else {
+        return;
+    };
+
+    let store_key = annotation_value.trim().to_string();
+    if store_key.is_empty() {
+        return;
+    }
+
+    let store = get_global_stream_plugin_store();
+    let port = context.listener.port as u16;
+
+    let filter = Arc::new(StreamPluginConnectionFilter::new(store, store_key.clone(), port));
+    service.set_connection_filter(filter);
+
+    tracing::info!(
+        gateway=%context.gateway_key,
+        listener=%context.listener.name,
+        store_key=%store_key,
+        "ConnectionFilter enabled via edgion-stream-plugins annotation"
+    );
 }

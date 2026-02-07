@@ -104,6 +104,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "udp" => "UDPRoute/Basic".to_string(),
             "mtls" => "EdgionTls/mTLS".to_string(),
             "security" => "Gateway/Security".to_string(),
+            "stream-plugins" | "streamplugins" | "connection-filter" => "Gateway/StreamPlugins".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
@@ -160,6 +161,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/RealIp" => "EdgionPlugins",
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
         "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
+        "Gateway/StreamPlugins" => "Gateway/StreamPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
         "EdgionTls" | "EdgionTls/https" => "EdgionTls/https",
@@ -450,6 +452,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::CombinedScenariosTestSuite));
+        }
+        "Gateway/StreamPlugins" => {
+            if !gateway {
+                eprintln!("Error: Gateway/StreamPlugins tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::StreamPluginsTestSuite));
         }
         "Gateway/PortConflict" => {
             if !gateway {

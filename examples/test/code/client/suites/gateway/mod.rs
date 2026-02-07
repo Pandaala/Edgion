@@ -10,6 +10,7 @@ mod listener_hostname;
 mod port_conflict;
 mod real_ip;
 mod security;
+mod stream_plugins;
 mod tls;
 
 // 导出Test suite
@@ -23,5 +24,6 @@ pub use listener_hostname::ListenerHostnameTestSuite;
 pub use port_conflict::PortConflictTestSuite;
 pub use real_ip::RealIpTestSuite;
 pub use security::SecurityTestSuite;
+pub use stream_plugins::StreamPluginsTestSuite;
 pub use tls::BackendTlsTestSuite;
 pub use tls::GatewayTlsTestSuite;

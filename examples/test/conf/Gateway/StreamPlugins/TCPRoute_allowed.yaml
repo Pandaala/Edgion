@@ -1,0 +1,16 @@
+# TCPRoute for the allow-all gateway (connections should pass through)
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: stream-plugins-tcp-allowed
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: stream-plugins-pass-gw
+      namespace: edgion-test
+      sectionName: tcp
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+          weight: 100

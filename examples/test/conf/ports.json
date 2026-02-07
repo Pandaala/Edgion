@@ -1,5 +1,5 @@
 {
-  "current_max": 31262,
+  "current_max": 31272,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -79,6 +79,11 @@
       "internal_conflict": 31260,
       "cross_conflict": 31261,
       "no_conflict_hostname": 31262
+    },
+    "Gateway/StreamPlugins": {
+      "http": 31270,
+      "tcp": 31271,
+      "tcp_filtered": 31272
     }
   }
 }

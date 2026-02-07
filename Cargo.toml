@@ -136,7 +136,7 @@ hex = "0.4"
 jsonwebtoken = "9"
 
 # Pingora
-pingora-core = { version = "0.7.0" }
+pingora-core = { version = "0.7.0", features = ["connection_filter"] }
 pingora-http = "0.7.0"
 pingora-limits = "0.7.0"
 pingora-load-balancing = "0.7.0"
