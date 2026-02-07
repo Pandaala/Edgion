@@ -6,6 +6,7 @@ pub mod gateway;
 pub mod grpc_route;
 pub mod http_route;
 pub mod ref_grant_status;
+pub mod services;
 pub mod tcp_route;
 pub mod udp_route;
 
@@ -41,3 +42,6 @@ pub use edgion_plugins::{
 
 // ReferenceGrant Status tests
 pub use ref_grant_status::RefGrantStatusTestSuite;
+
+// Services tests (ACME, etc.)
+pub use services::AcmeTestSuite;

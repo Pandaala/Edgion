@@ -22,6 +22,7 @@ pub enum ResourceKind {
     ReferenceGrant = 17,
     BackendTLSPolicy = 18,
     Endpoint = 19,
+    EdgionAcme = 20,
 }
 
 impl ResourceKind {
@@ -53,6 +54,7 @@ impl ResourceKind {
             ResourceKind::ReferenceGrant => "ReferenceGrant",
             ResourceKind::BackendTLSPolicy => "BackendTLSPolicy",
             ResourceKind::Endpoint => "Endpoint",
+            ResourceKind::EdgionAcme => "EdgionAcme",
         }
     }
 
@@ -94,10 +96,11 @@ impl ResourceKind {
                 ResourceKind::EdgionStreamPlugins => {}
                 ResourceKind::ReferenceGrant => {}
                 ResourceKind::BackendTLSPolicy => {}
-                ResourceKind::Endpoint => {} // NOTE: When adding a new ResourceKind variant:
-                                             // 1. Add it to this match
-                                             // 2. Add corresponding entry in src/types/resource_defs.rs
-                                             // The compiler will ensure both are in sync.
+                ResourceKind::Endpoint => {}
+                ResourceKind::EdgionAcme => {} // NOTE: When adding a new ResourceKind variant:
+                                               // 1. Add it to this match
+                                               // 2. Add corresponding entry in src/types/resource_defs.rs
+                                               // The compiler will ensure both are in sync.
             }
         }
         // Trigger the check
@@ -146,6 +149,7 @@ impl ResourceKind {
             "referencegrant" | "referencegrants" => Some(ResourceKind::ReferenceGrant),
             "backendtlspolicy" | "backendtlspolicies" => Some(ResourceKind::BackendTLSPolicy),
             "endpoint" | "endpoints" => Some(ResourceKind::Endpoint),
+            "edgionacme" => Some(ResourceKind::EdgionAcme),
             _ => None,
         }
     }

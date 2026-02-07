@@ -6,7 +6,7 @@ mod types;
 
 use crate::core::conf_mgr::{ConfMgr, SchemaValidator};
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::Json,
     routing::{delete, get, post, put},
@@ -126,6 +126,30 @@ async fn reload_all_resources(
     }
 }
 
+/// Manually trigger ACME certificate issuance or renewal for a specific resource.
+///
+/// POST /api/v1/services/acme/{namespace}/{name}/trigger
+///
+/// This resets the retry counter and re-evaluates the resource, same as modifying the CRD.
+async fn trigger_acme(
+    Path((namespace, name)): Path<(String, String)>,
+) -> Json<ApiResponse<String>> {
+    let key = format!("{}/{}", namespace, name);
+    tracing::info!(
+        component = "admin_api",
+        event = "acme_trigger",
+        key = %key,
+        "ACME trigger requested via Admin API"
+    );
+
+    crate::core::services::acme::notify_resource_changed(key.clone());
+
+    Json(ApiResponse::success(format!(
+        "ACME check triggered for {}",
+        key
+    )))
+}
+
 // ============= Router Setup =============
 
 /// Create the admin API router with unified K8s-style endpoints
@@ -178,6 +202,11 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         // Special operations
         .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))
+        // Services: ACME manual trigger
+        .route(
+            "/api/v1/services/acme/{namespace}/{name}/trigger",
+            post(trigger_acme),
+        )
         // ConfigServer endpoints (for edgion-ctl --target server)
         .route("/configserver/{kind}/list", get(configserver_handlers::list_resources))
         .route("/configserver/{kind}", get(configserver_handlers::get_resource))

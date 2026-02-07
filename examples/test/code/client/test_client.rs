@@ -545,6 +545,10 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::RefGrantStatusTestSuite));
         }
+        // Services tests (ACME, etc.)
+        "Services/acme" => {
+            runner.add_suite(Box::new(suites::AcmeTestSuite));
+        }
         // 运行所有测试
         "all" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));

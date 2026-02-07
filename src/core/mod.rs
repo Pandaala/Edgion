@@ -10,5 +10,6 @@ pub mod matcher;
 pub mod observe;
 pub mod plugins;
 pub mod routes;
+pub mod services;
 pub mod tls;
 pub mod utils;

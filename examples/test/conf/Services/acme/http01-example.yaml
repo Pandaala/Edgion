@@ -1,0 +1,54 @@
+# EdgionAcme - HTTP-01 Challenge Example
+#
+# This example shows how to automatically obtain a TLS certificate
+# for example.com and www.example.com using HTTP-01 challenge validation.
+#
+# Prerequisites:
+# - A Gateway listener on port 80 (HTTP) for serving challenge responses
+# - DNS A/AAAA records pointing the domains to the Gateway
+
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  name: example-acme
+  namespace: default
+spec:
+  # ACME server URL (default: Let's Encrypt production)
+  # For testing, use: https://acme-staging-v02.api.letsencrypt.org/directory
+  server: https://acme-v02.api.letsencrypt.org/directory
+
+  # Contact email (required for ACME account registration)
+  email: admin@example.com
+
+  # Domains to obtain certificate for
+  domains:
+    - example.com
+    - www.example.com
+
+  # Certificate key type (default: ecdsa-p256)
+  keyType: ecdsa-p256
+
+  # Challenge configuration
+  challenge:
+    type: http-01
+    http01:
+      # The Gateway that will serve HTTP-01 challenge responses
+      gatewayRef:
+        name: my-gateway
+        namespace: default
+
+  # Certificate renewal settings
+  renewal:
+    renewBeforeDays: 30     # Start renewal 30 days before expiry
+    checkInterval: 86400    # Check every 24 hours
+
+  # Where to store the issued certificate
+  storage:
+    secretName: example-tls-cert
+
+  # Automatically create an EdgionTls resource
+  autoEdgionTls:
+    enabled: true
+    parentRefs:
+      - name: my-gateway
+        namespace: default

@@ -1,0 +1,53 @@
+# EdgionAcme - DNS-01 Challenge with Cloudflare Example
+#
+# This example shows how to automatically obtain a wildcard TLS certificate
+# using DNS-01 challenge validation with Cloudflare DNS.
+#
+# Prerequisites:
+# - A Cloudflare API token with Zone.DNS:Edit permission
+# - The token stored in a K8s Secret
+
+---
+# Step 1: Create a Secret containing the Cloudflare API token
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflare-api-token
+  namespace: default
+type: Opaque
+stringData:
+  api-token: "your-cloudflare-api-token-here"
+
+---
+# Step 2: Create the EdgionAcme resource
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  name: wildcard-acme
+  namespace: default
+spec:
+  email: admin@example.com
+
+  # Wildcard domains require DNS-01 challenge
+  domains:
+    - "*.example.com"
+    - example.com
+
+  challenge:
+    type: dns-01
+    dns01:
+      provider: cloudflare
+      credentialRef:
+        name: cloudflare-api-token
+        namespace: default
+      propagationTimeout: 120    # seconds to wait for DNS propagation
+      propagationCheckInterval: 5 # seconds between DNS checks
+
+  storage:
+    secretName: wildcard-tls-cert
+
+  autoEdgionTls:
+    enabled: true
+    parentRefs:
+      - name: my-gateway
+        namespace: default
