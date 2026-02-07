@@ -124,10 +124,18 @@ impl ConfHandler<TCPRoute> for TcpRouteManager {
     }
 }
 
+/// Annotation key for referencing EdgionStreamPlugins from TCPRoute.
+/// Same annotation as Gateway-level: `edgion.io/edgion-stream-plugins`.
+/// Value format: "namespace/name" or just "name" (namespace inferred from TCPRoute).
+const ANNOTATION_EDGION_STREAM_PLUGINS: &str = "edgion.io/edgion-stream-plugins";
+
 impl TcpRouteManager {
-    /// Initialize a TCPRoute by setting up BackendSelector
+    /// Initialize a TCPRoute by setting up BackendSelector and stream plugin store key
     fn initialize_route(&self, mut route: TCPRoute) -> Result<Arc<TCPRoute>, String> {
         let route_key = route.key_name();
+
+        // Resolve stream plugin store key from annotation (for dynamic lookup at connection time)
+        let store_key = Self::resolve_stream_plugin_store_key(&route);
 
         // Initialize rules
         if let Some(rules) = route.spec.rules.as_mut() {
@@ -146,10 +154,42 @@ impl TcpRouteManager {
                         "Initialized BackendSelector for TCPRoute rule"
                     );
                 }
+
+                // Set stream plugin store key for dynamic lookup at connection time
+                if let Some(ref key) = store_key {
+                    rule.stream_plugin_store_key = Some(key.clone());
+                    tracing::info!(
+                        route = %route_key,
+                        rule_idx,
+                        store_key = %key,
+                        "Set stream plugin store key for TCPRoute rule (dynamic lookup)"
+                    );
+                }
             }
         }
 
         Ok(Arc::new(route))
+    }
+
+    /// Resolve the stream plugin store key from the TCPRoute's `edgion.io/edgion-stream-plugins` annotation.
+    /// Returns the resolved "namespace/name" key for dynamic lookup at connection time.
+    fn resolve_stream_plugin_store_key(route: &TCPRoute) -> Option<String> {
+        let annotations = route.metadata.annotations.as_ref()?;
+        let annotation_value = annotations.get(ANNOTATION_EDGION_STREAM_PLUGINS)?;
+        let trimmed = annotation_value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Resolve store_key: if value contains '/', use as-is; otherwise prepend namespace
+        let store_key = if trimmed.contains('/') {
+            trimmed.to_string()
+        } else {
+            let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+            format!("{}/{}", namespace, trimmed)
+        };
+
+        Some(store_key)
     }
 }
 
@@ -187,6 +227,7 @@ mod tests {
                         ref_denied: None,
                     }]),
                     stream_plugin_runtime: Default::default(),
+                    stream_plugin_store_key: None,
                     backend_finder: Default::default(),
                 }]),
             },

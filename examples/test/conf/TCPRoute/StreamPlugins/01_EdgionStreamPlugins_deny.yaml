@@ -1,0 +1,13 @@
+# EdgionStreamPlugins: deny all IPs
+# Tests that stream plugin at TCPRoute level correctly denies connections
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tcp-deny-all
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        defaultAction: deny
+        message: "Blocked by TCPRoute stream plugin"

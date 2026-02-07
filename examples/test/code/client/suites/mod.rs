@@ -17,7 +17,7 @@ pub use http_route::{
 
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};
 
-pub use tcp_route::TcpTestSuite;
+pub use tcp_route::{TcpStreamPluginsTestSuite, TcpTestSuite};
 
 pub use udp_route::UdpTestSuite;
 

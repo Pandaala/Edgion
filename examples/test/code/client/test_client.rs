@@ -105,6 +105,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "mtls" => "EdgionTls/mTLS".to_string(),
             "security" => "Gateway/Security".to_string(),
             "stream-plugins" | "streamplugins" | "connection-filter" => "Gateway/StreamPlugins".to_string(),
+            "tcp-stream-plugins" | "tcpstreamplugins" => "TCPRoute/StreamPlugins".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
@@ -143,6 +144,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "GRPCRoute/Match" => "GRPCRoute/Match",
         // TCPRoute
         "TCPRoute/Basic" | "TCPRoute" => "TCPRoute/Basic",
+        "TCPRoute/StreamPlugins" => "TCPRoute/StreamPlugins",
         // UDPRoute
         "UDPRoute/Basic" | "UDPRoute" => "UDPRoute/Basic",
         // Gateway
@@ -298,6 +300,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         // TCP/UDP 资源
         "tcp" | "TCPRoute" | "TCPRoute/Basic" => {
             runner.add_suite(Box::new(suites::TcpTestSuite));
+        }
+        "TCPRoute/StreamPlugins" => {
+            if !gateway {
+                eprintln!("Error: TCPRoute/StreamPlugins tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TcpStreamPluginsTestSuite));
         }
         "udp" | "UDPRoute" | "UDPRoute/Basic" => {
             runner.add_suite(Box::new(suites::UdpTestSuite));

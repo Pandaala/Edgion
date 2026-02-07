@@ -340,7 +340,12 @@ run_all_tests() {
                 fi
                 ;;
             TCPRoute)
-                run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
+                if [ -z "$G_ITEM" ]; then
+                    run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
+                    run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
+                else
+                    run_test "TCPRoute_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
+                fi
                 ;;
             UDPRoute)
                 run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
@@ -435,6 +440,7 @@ run_all_tests() {
         
         # TCPRoute Tests
         run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
+        run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
         
         # UDPRoute Tests
         run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true

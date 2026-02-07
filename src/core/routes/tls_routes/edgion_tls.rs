@@ -58,11 +58,18 @@ pub struct EdgionTls {
 #[async_trait]
 impl ServerApp for EdgionTls {
     async fn process_new(self: &Arc<Self>, mut downstream: Stream, _shutdown: &ShutdownWatch) -> Option<Stream> {
+        // Extract client address from the underlying socket
+        let (client_addr, client_port) = downstream
+            .get_socket_digest()
+            .and_then(|d| d.peer_addr().cloned())
+            .and_then(|addr| addr.as_inet().map(|inet| (inet.ip().to_string(), inet.port())))
+            .unwrap_or_else(|| ("unknown".to_string(), 0));
+
         // Create context
         let mut ctx = TlsContext {
             listener_port: self.listener_port,
-            client_addr: "unknown".to_string(), // TODO: Extract from Stream
-            client_port: 0,
+            client_addr,
+            client_port,
             sni_hostname: None,
             upstream_addr: None,
             start_time: Instant::now(),

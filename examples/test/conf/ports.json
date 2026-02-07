@@ -1,5 +1,5 @@
 {
-  "current_max": 31272,
+  "current_max": 31275,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -84,6 +84,10 @@
       "http": 31270,
       "tcp": 31271,
       "tcp_filtered": 31272
+    },
+    "TCPRoute/StreamPlugins": {
+      "tcp": 31274,
+      "tcp_filtered": 31275
     }
   }
 }

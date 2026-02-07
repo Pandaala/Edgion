@@ -12,6 +12,7 @@ use pingora_core::upstreams::peer::BasicPeer;
 
 use crate::core::backends::select_roundrobin_backend;
 use crate::core::observe::{log_tcp, TcpLogEntry};
+use crate::core::plugins::edgion_stream_plugins::get_global_stream_plugin_store;
 use crate::core::plugins::{StreamContext, StreamPluginResult};
 use crate::core::routes::tcp_routes::GatewayTcpRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -53,11 +54,18 @@ pub struct EdgionTcp {
 #[async_trait]
 impl ServerApp for EdgionTcp {
     async fn process_new(self: &Arc<Self>, downstream: Stream, _shutdown: &ShutdownWatch) -> Option<Stream> {
+        // Extract client address from the underlying socket
+        let (client_addr, client_port) = downstream
+            .get_socket_digest()
+            .and_then(|d| d.peer_addr().cloned())
+            .and_then(|addr| addr.as_inet().map(|inet| (inet.ip().to_string(), inet.port())))
+            .unwrap_or_else(|| ("unknown".to_string(), 0));
+
         // Create context
         let mut ctx = TcpContext {
             listener_port: self.listener_port,
-            client_addr: "unknown".to_string(), // TODO: Extract from Stream
-            client_port: 0,
+            client_addr,
+            client_port,
             upstream_addr: None,
             start_time: Instant::now(),
             bytes_sent: 0,
@@ -102,27 +110,40 @@ impl EdgionTcp {
             }
         };
 
-        // 3. Execute stream plugins (NEW)
-        if !rule.stream_plugin_runtime.is_empty() {
-            // Extract client IP from downstream connection
-            // TODO: Properly extract IP from Stream - for now use placeholder
-            if let Ok(client_ip) = "0.0.0.0".parse() {
-                let stream_ctx = StreamContext::new(client_ip, self.listener_port);
-
-                match rule.stream_plugin_runtime.run(&stream_ctx).await {
-                    StreamPluginResult::Allow => {
-                        // Continue processing
-                        tracing::debug!("Stream plugins allowed connection");
+        // 3. Execute stream plugins
+        // Dynamic lookup from StreamPluginStore using store_key (supports hot-reloading
+        // and avoids resource loading order issues)
+        if let Some(store_key) = &rule.stream_plugin_store_key {
+            if let Ok(client_ip) = ctx.client_addr.parse() {
+                let store = get_global_stream_plugin_store();
+                if let Some(resource) = store.get(store_key) {
+                    let runtime = &resource.spec.stream_plugin_runtime;
+                    if !runtime.is_empty() {
+                        let stream_ctx = StreamContext::new(client_ip, self.listener_port);
+                        match runtime.run(&stream_ctx).await {
+                            StreamPluginResult::Allow => {
+                                tracing::debug!(
+                                    store_key = %store_key,
+                                    "Stream plugins allowed connection"
+                                );
+                            }
+                            StreamPluginResult::Deny(reason) => {
+                                tracing::info!(
+                                    listener_port = self.listener_port,
+                                    store_key = %store_key,
+                                    reason = %reason,
+                                    "Connection denied by stream plugin"
+                                );
+                                ctx.status = TcpStatus::UpstreamConnectionFailed;
+                                return;
+                            }
+                        }
                     }
-                    StreamPluginResult::Deny(reason) => {
-                        tracing::info!(
-                            listener_port = self.listener_port,
-                            reason = %reason,
-                            "Connection denied by stream plugin"
-                        );
-                        ctx.status = TcpStatus::UpstreamConnectionFailed;
-                        return;
-                    }
+                } else {
+                    tracing::warn!(
+                        store_key = %store_key,
+                        "EdgionStreamPlugins resource not found in store, allowing connection"
+                    );
                 }
             }
         }

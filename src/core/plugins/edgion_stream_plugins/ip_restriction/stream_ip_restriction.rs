@@ -29,9 +29,15 @@ pub struct StreamIpRestriction {
 impl StreamIpRestriction {
     /// Create a new StreamIpRestriction plugin from configuration
     pub fn new(config: &IpRestrictionConfig) -> Self {
+        let mut config = config.clone();
+        // Initialize runtime matchers (allow_matcher, deny_matcher) from allow/deny lists.
+        // These are #[serde(skip)] fields that must be built after deserialization.
+        if let Err(e) = config.validate_and_init() {
+            tracing::error!(error = %e, "Failed to initialize IpRestrictionConfig for stream plugin");
+        }
         Self {
             name: "StreamIpRestriction".to_string(),
-            config: config.clone(),
+            config,
         }
     }
 }
