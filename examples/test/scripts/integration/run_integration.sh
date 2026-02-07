@@ -615,19 +615,29 @@ main() {
         fi
         
         # Execute start script
-        local output=$($start_cmd 2>&1)
-        local exit_code=$?
+        # NOTE: Must separate 'local' from command substitution, because
+        # 'local' always returns 0 and masks the real exit code of $().
+        local output exit_code
+        output=$($start_cmd 2>&1) && exit_code=0 || exit_code=$?
         
         # Show output
         echo "$output"
         
         if [ $exit_code -ne 0 ]; then
-            log_error "Start failed"
+            log_error "Start failed (exit code: $exit_code)"
             exit 1
         fi
         
-        # Get work directory
-        WORK_DIR=$(echo "$output" | tail -1)
+        # Get work directory from .current file (written by start_all_with_conf.sh)
+        # This is more robust than 'tail -1' which can be polluted by background
+        # process output leaking into the captured stdout.
+        local current_file="${PROJECT_ROOT}/integration_testing/.current"
+        if [ -f "$current_file" ]; then
+            WORK_DIR=$(cat "$current_file")
+        else
+            log_error "Work directory file not found: $current_file"
+            exit 1
+        fi
         
         # Set environment variables
         export EDGION_TEST_ACCESS_LOG_PATH="${WORK_DIR}/logs/edgion_access.log"
