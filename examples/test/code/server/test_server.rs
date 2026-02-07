@@ -201,24 +201,10 @@ async fn headers_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     let headers = req.headers();
     let mut headers_map = serde_json::Map::new();
 
-    // X-Real-IP
-    if let Some(real_ip) = headers.get("x-real-ip") {
-        if let Ok(val) = real_ip.to_str() {
-            headers_map.insert("x-real-ip".to_string(), json!(val));
-        }
-    }
-
-    // X-Forwarded-For
-    if let Some(xff) = headers.get("x-forwarded-for") {
-        if let Ok(val) = xff.to_str() {
-            headers_map.insert("x-forwarded-for".to_string(), json!(val));
-        }
-    }
-
-    // X-Trace-ID
-    if let Some(trace_id) = headers.get("x-trace-id") {
-        if let Ok(val) = trace_id.to_str() {
-            headers_map.insert("x-trace-id".to_string(), json!(val));
+    // Return all headers (convert header names to lowercase for consistency)
+    for (key, value) in headers.iter() {
+        if let Ok(val) = value.to_str() {
+            headers_map.insert(key.as_str().to_lowercase(), json!(val));
         }
     }
 

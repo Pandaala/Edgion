@@ -250,7 +250,7 @@ impl AllConditionsTestSuite {
                                 .any(|log| {
                                     log.name == "Mock"
                                         && was_skipped_by_condition(log, "keyExist")
-                                        && log.cond_skip.as_ref().map_or(false, |s| s.contains("qry:skip_query"))
+                                        && log.cond_skip.as_ref().map_or(false, |s| s.contains("query:skip_query"))
                                 });
 
                             if found_skipped {

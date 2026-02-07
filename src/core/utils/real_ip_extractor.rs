@@ -15,7 +15,7 @@
 //! ```text
 //! X-Forwarded-For: 203.0.113.1, 198.51.100.2, 192.168.1.1
 //! client_addr: 192.168.1.254:45678
-//! trusted_proxies: ["192.168.0.0/16", "198.51.100.0/24"]
+//! trusted_ips: ["192.168.0.0/16", "198.51.100.0/24"]
 //!
 //! Logic:
 //! 1. client_addr 192.168.1.254 -> matches trusted ✅ continue
@@ -45,7 +45,7 @@ impl RealIpExtractor {
     /// Creates a new RealIpExtractor with trusted proxy CIDRs
     ///
     /// # Arguments
-    /// * `trusted_proxies` - List of CIDR strings (e.g., ["10.0.0.0/8", "192.168.0.0/16"])
+    /// * `trusted_ips` - List of CIDR strings (e.g., ["10.0.0.0/8", "192.168.0.0/16"])
     /// * `real_ip_header` - Header name to extract real IP from (e.g., "X-Forwarded-For")
     ///
     /// # Returns
@@ -55,13 +55,13 @@ impl RealIpExtractor {
     /// # Notes
     /// - Invalid CIDRs are skipped with a warning log
     /// - If no valid CIDRs are provided, returns extractor with no matcher (all IPs untrusted)
-    pub fn new(trusted_proxies: &[String], real_ip_header: String) -> Result<Self, IpRadixError> {
-        let trusted_proxy_matcher = if !trusted_proxies.is_empty() {
+    pub fn new(trusted_ips: &[String], real_ip_header: String) -> Result<Self, IpRadixError> {
+        let trusted_proxy_matcher = if !trusted_ips.is_empty() {
             let mut builder = IpRadixMatcher::builder();
             let mut valid_count = 0;
             let mut invalid_count = 0;
 
-            for cidr in trusted_proxies {
+            for cidr in trusted_ips {
                 match builder.insert(cidr, true) {
                     Ok(_) => {
                         valid_count += 1;
@@ -71,7 +71,7 @@ impl RealIpExtractor {
                         tracing::warn!(
                             cidr = %cidr,
                             error = ?e,
-                            "Invalid CIDR in trusted_proxies, skipping"
+                            "Invalid CIDR in trusted_ips, skipping"
                         );
                     }
                 }
@@ -86,8 +86,8 @@ impl RealIpExtractor {
                 Some(Arc::new(builder.build()?))
             } else {
                 tracing::warn!(
-                    total_cidrs = trusted_proxies.len(),
-                    "No valid CIDRs in trusted_proxies, real IP extraction will be disabled"
+                    total_cidrs = trusted_ips.len(),
+                    "No valid CIDRs in trusted_ips, real IP extraction will be disabled"
                 );
                 None
             }
@@ -109,11 +109,16 @@ impl RealIpExtractor {
     /// # Returns
     /// * `true` - IP is in trusted proxy list
     /// * `false` - IP is not trusted or no trusted proxies configured
-    fn is_trusted_proxy(&self, ip: &IpAddr) -> bool {
+    pub fn is_trusted_proxy(&self, ip: &IpAddr) -> bool {
         self.trusted_proxy_matcher
             .as_ref()
             .and_then(|m| m.match_ip(ip))
             .unwrap_or(false)
+    }
+
+    /// Get the configured real IP header name
+    pub fn real_ip_header(&self) -> &str {
+        &self.real_ip_header
     }
 
     /// Extracts the real client IP address using Nginx-style logic
@@ -196,7 +201,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_no_trusted_proxies() {
+    fn test_no_trusted_ips() {
         let extractor = RealIpExtractor::new(&[], "X-Forwarded-For".to_string()).unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();

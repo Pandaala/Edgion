@@ -119,9 +119,9 @@ spec:
                   type: object
                   description: "Real IP extraction configuration"
                   properties:
-                    trustedProxies:
+                    trustedIps:
                       type: array
-                      description: "Trusted proxy CIDRs (e.g., ['10.0.0.0/8', '172.16.0.0/12'])"
+                      description: "Trusted IP addresses or CIDR ranges (e.g., ['10.0.0.0/8', '172.16.0.0/12'])"
                       items:
                         type: string
                     realIpHeader:

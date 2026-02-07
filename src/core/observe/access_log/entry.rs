@@ -3,6 +3,7 @@
 use crate::core::plugins::StageLogs;
 use crate::types::{BackendContext, EdgionHttpContext, EdgionStatus, MatchInfo, RequestInfo};
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// Helper function to check if a slice is empty
 fn is_empty<T>(slice: &&[T]) -> bool {
@@ -30,6 +31,9 @@ pub struct AccessLogEntry<'a> {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conn_est: Option<bool>,
+
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub ctx: &'a HashMap<String, String>,
 }
 
 impl<'a> AccessLogEntry<'a> {
@@ -45,6 +49,7 @@ impl<'a> AccessLogEntry<'a> {
             backend_context: ctx.backend_context.as_ref(),
             stage_logs: &ctx.stage_logs,
             conn_est: None,
+            ctx: &ctx.ctx_map,
         }
     }
 

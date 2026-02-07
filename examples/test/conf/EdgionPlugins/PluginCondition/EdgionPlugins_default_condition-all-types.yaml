@@ -32,8 +32,9 @@ spec:
       conditions:
         skip:
           - type: keyExist
-            source: header
-            key: "X-Skip-KeyExist-Header"
+            key:
+              type: header
+              name: "X-Skip-KeyExist-Header"
 
     # 1.2 KeyExist + Query source (skip when ?skip_query=1 exists)
     - enable: true
@@ -45,8 +46,9 @@ spec:
       conditions:
         skip:
           - type: keyExist
-            source: query
-            key: "skip_query"
+            key:
+              type: query
+              name: "skip_query"
 
     # 1.3 KeyExist + Cookie source (run when session_id cookie exists)
     - enable: true
@@ -58,8 +60,9 @@ spec:
       conditions:
         run:
           - type: keyExist
-            source: cookie
-            key: "session_id"
+            key:
+              type: cookie
+              name: "session_id"
 
     # =========================================================================
     # 2. KeyMatch Tests - 检查键值匹配
@@ -75,8 +78,9 @@ spec:
       conditions:
         run:
           - type: keyMatch
-            source: header
-            key: "X-Env"
+            key:
+              type: header
+              name: "X-Env"
             value: "production"
 
     # 2.2 KeyMatch regex (run when User-Agent matches ^TestBot.*)
@@ -89,8 +93,9 @@ spec:
       conditions:
         run:
           - type: keyMatch
-            source: header
-            key: "User-Agent"
+            key:
+              type: header
+              name: "User-Agent"
             regex:
               - "^TestBot.*"
 
@@ -104,8 +109,9 @@ spec:
       conditions:
         run:
           - type: keyMatch
-            source: query
-            key: "version"
+            key:
+              type: query
+              name: "version"
             value: "v2"
 
     # 2.4 KeyMatch with multiple regex patterns (run when UA matches Mozilla OR Chrome OR Safari)
@@ -118,8 +124,9 @@ spec:
       conditions:
         run:
           - type: keyMatch
-            source: header
-            key: "User-Agent"
+            key:
+              type: header
+              name: "User-Agent"
             regex:
               - "^Mozilla.*"
               - "^Chrome.*"
@@ -135,8 +142,9 @@ spec:
       conditions:
         run:
           - type: keyMatch
-            source: header
-            key: "X-Region"
+            key:
+              type: header
+              name: "X-Region"
             values:
               - "us-east"
               - "us-west"
@@ -212,8 +220,9 @@ spec:
         run:
           - type: probability
             ratio: 0.5
-            key: "X-User-ID"
-            keySource: header
+            key:
+              type: header
+              name: "X-User-ID"
 
     # =========================================================================
     # 5. Include Tests - 包含条件
@@ -229,7 +238,8 @@ spec:
       conditions:
         run:
           - type: include
-            source: path
+            key:
+              type: path
             values:
               - "/api/*"
               - "/v1/*"
@@ -244,7 +254,8 @@ spec:
       conditions:
         run:
           - type: include
-            source: method
+            key:
+              type: method
             values:
               - "POST"
               - "PUT"
@@ -259,7 +270,8 @@ spec:
       conditions:
         run:
           - type: include
-            source: path
+            key:
+              type: path
             values:
               - "/static/*"
             regex:
@@ -280,7 +292,8 @@ spec:
       conditions:
         skip:
           - type: exclude
-            source: path
+            key:
+              type: path
             values:
               - "/health"
               - "/ready"
@@ -296,7 +309,8 @@ spec:
       conditions:
         skip:
           - type: exclude
-            source: method
+            key:
+              type: method
             values:
               - "OPTIONS"
 
@@ -310,7 +324,8 @@ spec:
       conditions:
         skip:
           - type: exclude
-            source: path
+            key:
+              type: path
             values:
               - "/health"
             regex:

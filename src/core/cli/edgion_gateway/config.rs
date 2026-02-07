@@ -61,10 +61,10 @@ pub struct EdgionGatewayConfig {
     #[serde(default)]
     pub server: ServerConfig,
 
-    /// RateLimiter plugin global configuration
+    /// RateLimit plugin global configuration
     #[arg(skip)]
-    #[serde(default)]
-    pub rate_limiter: RateLimiterGlobalConfig,
+    #[serde(default, alias = "rate_limiter")]
+    pub rate_limit: RateLimitGlobalConfig,
 }
 
 /// Gateway configuration
@@ -191,7 +191,7 @@ impl Default for LoggingConfig {
 }
 
 // ============================================
-// RateLimiter Global Configuration
+// RateLimit Global Configuration
 // ============================================
 
 /// Unit multiplier: 1K = 1024 slots
@@ -206,9 +206,9 @@ pub const DEFAULT_ESTIMATOR_SLOTS_K: usize = 64;
 /// Maximum CMS estimator slots in K (1024K = 1M slots, ~64MB)
 pub const DEFAULT_MAX_ESTIMATOR_SLOTS_K: usize = 1024;
 
-/// RateLimiter plugin global configuration
+/// RateLimit plugin global configuration
 ///
-/// Controls the Count-Min Sketch (CMS) estimator settings for all RateLimiter plugins.
+/// Controls the Count-Min Sketch (CMS) estimator settings for all RateLimit plugins.
 /// The CMS algorithm provides memory-efficient rate limiting with configurable precision.
 ///
 /// All slot values are in K units (1K = 1024 slots).
@@ -216,13 +216,13 @@ pub const DEFAULT_MAX_ESTIMATOR_SLOTS_K: usize = 1024;
 ///
 /// ## TOML Configuration Example:
 /// ```toml
-/// [rate_limiter]
+/// [rate_limit]
 /// default_estimator_slots_k = 64     # 64K slots = ~4MB
 /// max_estimator_slots_k = 1024       # 1024K slots = ~64MB
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct RateLimiterGlobalConfig {
+pub struct RateLimitGlobalConfig {
     /// Default CMS estimator slots in K units (default: 64)
     ///
     /// Controls the precision and memory usage of the rate limiting algorithm.
@@ -241,7 +241,7 @@ pub struct RateLimiterGlobalConfig {
 
     /// Maximum allowed CMS estimator slots in K units (default: 1024)
     ///
-    /// Limits the maximum slots that can be configured per RateLimiter plugin.
+    /// Limits the maximum slots that can be configured per RateLimit plugin.
     /// Maximum memory per Rate instance ≈ max_slots_k × 64KB
     #[serde(default = "default_max_estimator_slots_k")]
     pub max_estimator_slots_k: usize,
@@ -255,7 +255,7 @@ fn default_max_estimator_slots_k() -> usize {
     DEFAULT_MAX_ESTIMATOR_SLOTS_K
 }
 
-impl Default for RateLimiterGlobalConfig {
+impl Default for RateLimitGlobalConfig {
     fn default() -> Self {
         Self {
             default_estimator_slots_k: DEFAULT_ESTIMATOR_SLOTS_K,
@@ -265,34 +265,34 @@ impl Default for RateLimiterGlobalConfig {
 }
 
 // ============================================
-// Global RateLimiter Config Store
+// Global RateLimit Config Store
 // ============================================
 
 use std::sync::{LazyLock, RwLock};
 
-/// Global store for RateLimiter configuration
-static RATE_LIMITER_GLOBAL_CONFIG: LazyLock<RwLock<RateLimiterGlobalConfig>> =
-    LazyLock::new(|| RwLock::new(RateLimiterGlobalConfig::default()));
+/// Global store for RateLimit configuration
+static RATE_LIMIT_GLOBAL_CONFIG: LazyLock<RwLock<RateLimitGlobalConfig>> =
+    LazyLock::new(|| RwLock::new(RateLimitGlobalConfig::default()));
 
-/// Initialize the global RateLimiter configuration
+/// Initialize the global RateLimit configuration
 ///
 /// This should be called once during application startup with the loaded config.
-pub fn init_rate_limiter_global_config(config: &RateLimiterGlobalConfig) {
-    if let Ok(mut global) = RATE_LIMITER_GLOBAL_CONFIG.write() {
+pub fn init_rate_limit_global_config(config: &RateLimitGlobalConfig) {
+    if let Ok(mut global) = RATE_LIMIT_GLOBAL_CONFIG.write() {
         *global = config.clone();
         tracing::info!(
             default_slots_k = config.default_estimator_slots_k,
             max_slots_k = config.max_estimator_slots_k,
             default_slots = config.default_estimator_slots_k * SLOTS_K,
             max_slots = config.max_estimator_slots_k * SLOTS_K,
-            "RateLimiter global config initialized"
+            "RateLimit global config initialized"
         );
     }
 }
 
 /// Get the default estimator slots from global config (returns actual slot count)
 pub fn get_default_estimator_slots() -> usize {
-    RATE_LIMITER_GLOBAL_CONFIG
+    RATE_LIMIT_GLOBAL_CONFIG
         .read()
         .map(|c| c.default_estimator_slots_k * SLOTS_K)
         .unwrap_or(DEFAULT_ESTIMATOR_SLOTS_K * SLOTS_K)
@@ -300,7 +300,7 @@ pub fn get_default_estimator_slots() -> usize {
 
 /// Get the maximum estimator slots from global config (returns actual slot count)
 pub fn get_max_estimator_slots() -> usize {
-    RATE_LIMITER_GLOBAL_CONFIG
+    RATE_LIMIT_GLOBAL_CONFIG
         .read()
         .map(|c| c.max_estimator_slots_k * SLOTS_K)
         .unwrap_or(DEFAULT_MAX_ESTIMATOR_SLOTS_K * SLOTS_K)

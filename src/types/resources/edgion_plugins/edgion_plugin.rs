@@ -4,8 +4,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
-    BasicAuthConfig, CorsConfig, CsrfConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig, JwtAuthConfig,
-    MockConfig, ProxyRewriteConfig, RateLimiterConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig,
+    JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -44,6 +45,8 @@ pub enum EdgionPlugin {
     IpRestriction(IpRestrictionConfig),
     /// JWT Authentication filter (verify JWT in header/query/cookie)
     JwtAuth(JwtAuthConfig),
+    /// Key Authentication filter (API Key in header/query)
+    KeyAuth(KeyAuthConfig),
     /// Mock filter (return predefined responses for testing/prototyping)
     Mock(MockConfig),
     /// Debug Access Log to Header filter (for debugging)
@@ -54,8 +57,12 @@ pub enum EdgionPlugin {
     RequestRestriction(RequestRestrictionConfig),
     /// Response Rewrite filter (rewrite status code and headers before returning to client)
     ResponseRewrite(ResponseRewriteConfig),
-    /// RateLimiter filter (CMS algorithm for high-performance rate limiting)
-    RateLimiter(RateLimiterConfig),
+    /// RateLimit filter (CMS algorithm for high-performance rate limiting)
+    RateLimit(RateLimitConfig),
+    /// CtxSet filter (set context variables from various sources with extraction, transformation, and mapping)
+    CtxSet(CtxSetConfig),
+    /// RealIp filter (extract real client IP from headers with trusted proxy support)
+    RealIp(RealIpConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -79,12 +86,15 @@ impl EdgionPlugin {
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
+            EdgionPlugin::KeyAuth(_) => "KeyAuth",
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
-            EdgionPlugin::RateLimiter(_) => "RateLimiter",
+            EdgionPlugin::RateLimit(_) => "RateLimit",
+            EdgionPlugin::CtxSet(_) => "CtxSet",
+            EdgionPlugin::RealIp(_) => "RealIp",
         }
     }
 }

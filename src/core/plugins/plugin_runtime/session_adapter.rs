@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
+use crate::types::common::{KeyGet, KeySet};
 use crate::types::filters::PluginRunningResult;
 use crate::types::EdgionHttpContext;
 
@@ -173,6 +174,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(())
     }
 
+    fn remove_ctx_var(&mut self, key: &str) -> PluginSessionResult<()> {
+        self.ctx.remove_ctx_var(key);
+        Ok(())
+    }
+
     fn get_path_param(&mut self, name: &str) -> Option<String> {
         // Lazy extraction: only parse on first call
         if self.ctx.path_params.is_none() {
@@ -313,6 +319,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &self.ctx.request_info.remote_addr
     }
 
+    fn set_remote_addr(&mut self, addr: &str) -> PluginSessionResult<()> {
+        self.ctx.request_info.remote_addr = addr.to_string();
+        Ok(())
+    }
+
     fn ctx(&self) -> &EdgionHttpContext {
         self.ctx
     }
@@ -356,6 +367,52 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         );
         if let Some(edgion_log) = self.ctx.pending_edgion_plugins_logs.get_mut(token.idx()) {
             edgion_log.logs.push(log);
+        }
+    }
+
+    fn key_get(&self, key: &KeyGet) -> Option<String> {
+        match key {
+            KeyGet::ClientIp => {
+                let ip = self.remote_addr();
+                if ip.is_empty() {
+                    None
+                } else {
+                    Some(ip.to_string())
+                }
+            }
+            KeyGet::Header { name } => self.header_value(name),
+            KeyGet::Cookie { name } => self.get_cookie(name),
+            KeyGet::Query { name } => self.get_query_param(name),
+            KeyGet::Path => Some(self.get_path().to_string()),
+            KeyGet::Method => Some(self.get_method().to_string()),
+            KeyGet::Ctx { name } => self.get_ctx_var(name),
+            KeyGet::ClientIpAndPath => {
+                let ip = self.remote_addr();
+                if ip.is_empty() {
+                    None
+                } else {
+                    Some(format!("{}:{}", ip, self.get_path()))
+                }
+            }
+        }
+    }
+
+    fn key_set(&mut self, key: &KeySet, value: Option<String>) -> PluginSessionResult<()> {
+        match (key, value) {
+            (KeySet::Header { name }, Some(v)) => self.set_request_header(name, &v),
+            (KeySet::Header { name }, None) => self.remove_request_header(name),
+            (KeySet::ResponseHeader { name }, Some(v)) => self.set_response_header(name, &v),
+            (KeySet::ResponseHeader { name }, None) => self.remove_response_header(name),
+            (KeySet::Cookie { name }, Some(v)) => {
+                // Set cookie via Set-Cookie header
+                self.set_response_header("Set-Cookie", &format!("{}={}", name, v))
+            }
+            (KeySet::Cookie { name }, None) => {
+                // Remove cookie by setting Max-Age=0
+                self.set_response_header("Set-Cookie", &format!("{}=; Max-Age=0", name))
+            }
+            (KeySet::Ctx { name }, Some(v)) => self.set_ctx_var(name, &v),
+            (KeySet::Ctx { name }, None) => self.remove_ctx_var(name),
         }
     }
 }

@@ -8,53 +8,13 @@ use async_trait::async_trait;
 
 use super::log::PluginLog;
 use super::traits::{PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseFilter};
-use crate::core::plugins::plugins_cond::{ConditionContext, EvaluationResult, PluginConditions};
+use crate::core::plugins::plugins_cond::{EvaluationResult, PluginConditions};
 use crate::types::filters::PluginRunningResult;
 
-// ==================== ConditionContext Adapter ====================
-
-/// Adapter to convert PluginSession to ConditionContext
-///
-/// This allows condition evaluation using the read-only methods from PluginSession
-struct SessionConditionContext<'a> {
-    session: &'a dyn PluginSession,
-}
-
-impl<'a> SessionConditionContext<'a> {
-    fn new(session: &'a dyn PluginSession) -> Self {
-        Self { session }
-    }
-}
-
-impl<'a> ConditionContext for SessionConditionContext<'a> {
-    fn get_header(&self, name: &str) -> Option<String> {
-        self.session.header_value(name)
-    }
-
-    fn get_query_param(&self, name: &str) -> Option<String> {
-        self.session.get_query_param(name)
-    }
-
-    fn get_cookie(&self, name: &str) -> Option<String> {
-        self.session.get_cookie(name)
-    }
-
-    fn get_path(&self) -> &str {
-        self.session.get_path()
-    }
-
-    fn get_client_ip(&self) -> &str {
-        self.session.remote_addr()
-    }
-
-    fn get_method(&self) -> &str {
-        self.session.get_method()
-    }
-
-    fn get_ctx_var(&self, key: &str) -> Option<String> {
-        self.session.get_ctx_var(key)
-    }
-}
+// ==================== PluginSession Integration ====================
+//
+// NOTE: PluginConditions.evaluate() now accepts &dyn PluginSession directly.
+// PluginSession also has key_get() and key_set() methods for unified value access.
 
 // ==================== ConditionalRequestFilter ====================
 
@@ -92,8 +52,7 @@ impl RequestFilter for ConditionalRequestFilter {
         // Check conditions before running
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let ctx = SessionConditionContext::new(session);
-                let eval = conditions.evaluate_detail(&ctx);
+                let eval = conditions.evaluate_detail(session);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -142,8 +101,7 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
         // Check conditions before running
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let ctx = SessionConditionContext::new(session);
-                let eval = conditions.evaluate_detail(&ctx);
+                let eval = conditions.evaluate_detail(session);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -189,8 +147,7 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
         // Check conditions before running
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let ctx = SessionConditionContext::new(session);
-                let eval = conditions.evaluate_detail(&ctx);
+                let eval = conditions.evaluate_detail(session);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -208,7 +165,8 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugins::plugins_cond::{Condition, ConditionSource, IncludeCondition, KeyExistCondition};
+    use crate::core::plugins::plugins_cond::{Condition, IncludeCondition, KeyExistCondition};
+    use crate::types::common::KeyGet;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -327,6 +285,11 @@ mod tests {
             Ok(())
         }
 
+        fn remove_ctx_var(&mut self, key: &str) -> super::super::traits::PluginSessionResult<()> {
+            self.ctx_vars.remove(key);
+            Ok(())
+        }
+
         fn get_path_param(&mut self, _name: &str) -> Option<String> {
             None // Not used in condition evaluation tests
         }
@@ -420,6 +383,10 @@ mod tests {
             &self.client_ip
         }
 
+        fn set_remote_addr(&mut self, _addr: &str) -> super::super::traits::PluginSessionResult<()> {
+            Ok(())
+        }
+
         fn ctx(&self) -> &crate::types::EdgionHttpContext {
             unimplemented!("Not needed for condition tests")
         }
@@ -445,6 +412,40 @@ mod tests {
             _log: crate::core::plugins::plugin_runtime::log::PluginLog,
         ) {
         }
+
+        fn key_get(&self, key: &crate::types::common::KeyGet) -> Option<String> {
+            use crate::types::common::KeyGet;
+            match key {
+                KeyGet::ClientIp => {
+                    if self.client_ip.is_empty() {
+                        None
+                    } else {
+                        Some(self.client_ip.clone())
+                    }
+                }
+                KeyGet::Header { name } => self.headers.get(name).cloned(),
+                KeyGet::Cookie { name } => self.cookies.get(name).cloned(),
+                KeyGet::Query { name } => self.query_params.get(name).cloned(),
+                KeyGet::Path => Some(self.path.clone()),
+                KeyGet::Method => Some(self.method.clone()),
+                KeyGet::Ctx { name } => self.ctx_vars.get(name).cloned(),
+                KeyGet::ClientIpAndPath => {
+                    if self.client_ip.is_empty() {
+                        None
+                    } else {
+                        Some(format!("{}:{}", self.client_ip, self.path))
+                    }
+                }
+            }
+        }
+
+        fn key_set(
+            &mut self,
+            _key: &crate::types::common::KeySet,
+            _value: Option<String>,
+        ) -> super::super::traits::PluginSessionResult<()> {
+            Ok(()) // Stub for tests
+        }
     }
 
     // ==================== Tests ====================
@@ -460,8 +461,9 @@ mod tests {
     fn test_conditional_filter_with_skip_condition() {
         let conditions = PluginConditions {
             skip: Some(vec![Condition::KeyExist(KeyExistCondition {
-                source: ConditionSource::Header,
-                key: "X-Skip".to_string(),
+                key: KeyGet::Header {
+                    name: "X-Skip".to_string(),
+                },
             })]),
             run: None,
         };
@@ -490,7 +492,7 @@ mod tests {
         let conditions = PluginConditions {
             skip: None,
             run: Some(vec![Condition::Include(IncludeCondition {
-                source: ConditionSource::Method,
+                key: KeyGet::Method,
                 values: Some(vec!["POST".to_string()]),
                 regex: None,
                 values_set: None,
@@ -517,7 +519,7 @@ mod tests {
         let conditions = PluginConditions {
             skip: None,
             run: Some(vec![Condition::Include(IncludeCondition {
-                source: ConditionSource::Method,
+                key: KeyGet::Method,
                 values: Some(vec!["POST".to_string()]),
                 regex: None,
                 values_set: None,
@@ -544,8 +546,9 @@ mod tests {
         // Skip if header X-Internal exists
         let conditions = PluginConditions {
             skip: Some(vec![Condition::KeyExist(KeyExistCondition {
-                source: ConditionSource::Header,
-                key: "X-Internal".to_string(),
+                key: KeyGet::Header {
+                    name: "X-Internal".to_string(),
+                },
             })]),
             run: None,
         };
@@ -569,8 +572,9 @@ mod tests {
         // Skip if header X-Internal exists
         let conditions = PluginConditions {
             skip: Some(vec![Condition::KeyExist(KeyExistCondition {
-                source: ConditionSource::Header,
-                key: "X-Internal".to_string(),
+                key: KeyGet::Header {
+                    name: "X-Internal".to_string(),
+                },
             })]),
             run: None,
         };
@@ -588,19 +592,30 @@ mod tests {
     }
 
     #[test]
-    fn test_session_condition_context_adapter() {
+    fn test_plugin_session_key_get() {
+        use crate::types::KeyGet;
+
         let session = MockPluginSession::new()
             .with_header("X-Test", "value")
             .with_path("/api/users")
             .with_method("POST");
 
-        let ctx = SessionConditionContext::new(&session);
-
-        assert_eq!(ctx.get_header("X-Test"), Some("value".to_string()));
-        assert_eq!(ctx.get_header("X-Missing"), None);
-        assert_eq!(ctx.get_path(), "/api/users");
-        assert_eq!(ctx.get_method(), "POST");
-        assert_eq!(ctx.get_client_ip(), "127.0.0.1");
+        // PluginSession has key_get() method
+        assert_eq!(
+            session.key_get(&KeyGet::Header {
+                name: "X-Test".to_string()
+            }),
+            Some("value".to_string())
+        );
+        assert_eq!(
+            session.key_get(&KeyGet::Header {
+                name: "X-Missing".to_string()
+            }),
+            None
+        );
+        assert_eq!(session.key_get(&KeyGet::Path), Some("/api/users".to_string()));
+        assert_eq!(session.key_get(&KeyGet::Method), Some("POST".to_string()));
+        assert_eq!(session.key_get(&KeyGet::ClientIp), Some("127.0.0.1".to_string()));
     }
 
     #[tokio::test]
@@ -610,8 +625,9 @@ mod tests {
         // Skip if header X-Internal exists
         let conditions = PluginConditions {
             skip: Some(vec![Condition::KeyExist(KeyExistCondition {
-                source: ConditionSource::Header,
-                key: "X-Internal".to_string(),
+                key: KeyGet::Header {
+                    name: "X-Internal".to_string(),
+                },
             })]),
             run: None,
         };
@@ -637,7 +653,7 @@ mod tests {
         let conditions = PluginConditions {
             skip: None,
             run: Some(vec![Condition::Include(IncludeCondition {
-                source: ConditionSource::Method,
+                key: KeyGet::Method,
                 values: Some(vec!["POST".to_string()]),
                 regex: None,
                 values_set: None,
@@ -655,36 +671,34 @@ mod tests {
 
         assert!(log.is_cond_skipped());
         // Verify cond_skip contains condition info (prefixed with ! for run condition not met)
-        assert_eq!(log.cond_skip.as_deref(), Some("!run:include,mtd"));
+        assert_eq!(log.cond_skip.as_deref(), Some("!run:include,method"));
     }
 
     #[test]
     fn test_condition_type_and_detail() {
         // Test keyExist
         let c1 = Condition::KeyExist(KeyExistCondition {
-            source: ConditionSource::Header,
-            key: "X-Test".to_string(),
+            key: KeyGet::Header {
+                name: "X-Test".to_string(),
+            },
         });
         assert_eq!(c1.cond_type(), "keyExist");
         assert_eq!(c1.cond_detail(), "hdr:X-Test");
 
         // Test include
         let c2 = Condition::Include(IncludeCondition {
-            source: ConditionSource::Method,
+            key: KeyGet::Method,
             values: Some(vec!["GET".to_string(), "POST".to_string()]),
             regex: None,
             values_set: None,
             compiled_regex: None,
         });
         assert_eq!(c2.cond_type(), "include");
-        assert_eq!(c2.cond_detail(), "mtd");
+        assert_eq!(c2.cond_detail(), "method");
 
         // Test probability
-        let c3 = Condition::Probability(crate::core::plugins::plugins_cond::ProbabilityCondition {
-            ratio: 0.1,
-            key: None,
-            key_source: None,
-        });
+        let c3 =
+            Condition::Probability(crate::core::plugins::plugins_cond::ProbabilityCondition { ratio: 0.1, key: None });
         assert_eq!(c3.cond_type(), "prob");
         assert_eq!(c3.cond_detail(), "10%");
     }

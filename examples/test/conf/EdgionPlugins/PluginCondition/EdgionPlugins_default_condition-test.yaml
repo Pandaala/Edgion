@@ -14,8 +14,9 @@ spec:
       conditions:
         skip:
           - type: keyExist
-            source: header
-            key: "X-Skip-Cors"
+            key:
+              type: header
+              name: "X-Skip-Cors"
   upstreamResponseFilterPlugins:
     - enable: true
       type: DebugAccessLogToHeader

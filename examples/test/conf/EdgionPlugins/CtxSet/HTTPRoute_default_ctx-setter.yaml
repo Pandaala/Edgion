@@ -1,0 +1,27 @@
+# HTTPRoute for CtxSet 集成测试
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ctx-setter-test-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "ctx-setter.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/ctx-setter
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ctx-setter-test
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

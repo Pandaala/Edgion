@@ -1,8 +1,8 @@
-# RateLimiter 插件
+# RateLimit 插件
 
 ## 概述
 
-`RateLimiter` 插件使用 **Pingora 的 Count-Min Sketch (CMS) 算法** 实现高性能请求速率限制。该算法具有固定的内存占用和 O(1) 的时间复杂度，非常适合高并发场景。
+`RateLimit` 插件使用 **Pingora 的 Count-Min Sketch (CMS) 算法** 实现高性能请求速率限制。该算法具有固定的内存占用和 O(1) 的时间复杂度，非常适合高并发场景。
 
 ## 功能特性
 
@@ -14,7 +14,7 @@
 
 ## 配置参数
 
-### RateLimiterConfig
+### RateLimitConfig
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -47,17 +47,17 @@
 
 ## 全局配置
 
-RateLimiter 支持通过 Gateway 的 TOML 配置文件 (`edgion-gateway.toml`) 配置全局默认值：
+RateLimit 支持通过 Gateway 的 TOML 配置文件 (`edgion-gateway.toml`) 配置全局默认值：
 
 ```toml
 # config/edgion-gateway.toml
 
-[rate_limiter]
+[rate_limit]
 default_estimator_slots_k = 64     # 默认 64K 槽位 (~4MB)
 max_estimator_slots_k = 1024       # 最大 1024K 槽位 (~64MB)
 ```
 
-### RateLimiterGlobalConfig
+### RateLimitGlobalConfig
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -134,10 +134,10 @@ max_estimator_slots_k = 1024       # 最大 1024K 槽位 (~64MB)
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: api-rate-limiter
+  name: api-rate-limit
 spec:
   requestPlugins:
-    - type: RateLimiter
+    - type: RateLimit
       config:
         rate: 100              # 每秒 100 请求
         interval: "1s"
@@ -153,10 +153,10 @@ spec:
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: api-key-rate-limiter
+  name: api-key-rate-limit
 spec:
   requestPlugins:
-    - type: RateLimiter
+    - type: RateLimit
       config:
         rate: 1000             # 每分钟 1000 请求
         interval: "1m"
@@ -173,10 +173,10 @@ spec:
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: path-rate-limiter
+  name: path-rate-limit
 spec:
   requestPlugins:
-    - type: RateLimiter
+    - type: RateLimit
       config:
         rate: 20
         interval: "1s"
@@ -190,10 +190,10 @@ spec:
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: ip-path-rate-limiter
+  name: ip-path-rate-limit
 spec:
   requestPlugins:
-    - type: RateLimiter
+    - type: RateLimit
       config:
         rate: 10
         interval: "1s"
@@ -210,7 +210,7 @@ metadata:
   name: custom-headers-limiter
 spec:
   requestPlugins:
-    - type: RateLimiter
+    - type: RateLimit
       config:
         rate: 100
         interval: "1s"
@@ -232,7 +232,7 @@ metadata:
   name: fallback-limiter
 spec:
   requestPlugins:
-    - type: RateLimiter
+    - type: RateLimit
       config:
         rate: 50
         interval: "1s"
@@ -251,7 +251,7 @@ metadata:
   name: high-precision-limiter
 spec:
   requestPlugins:
-    - type: RateLimiter
+    - type: RateLimit
       config:
         rate: 1000
         interval: "1m"
@@ -278,7 +278,7 @@ spec:
 2. **CMS 精度**：Count-Min Sketch 是概率数据结构，可能会略微高估计数（但不会低估）。对于大多数限流场景，这个误差是可接受的。
 
 3. **内存使用**：无论有多少不同的 key，CMS 的内存占用是固定的。这使得它非常适合高基数场景（如大量不同 IP）。
-   - 每个 RateLimiter 插件实例拥有独立的 Rate 实例
+   - 每个 RateLimit 插件实例拥有独立的 Rate 实例
    - 内存占用 ≈ `estimatorSlotsK × 64KB`
    - 默认 64K 槽位 ≈ 4MB
 

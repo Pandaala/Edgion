@@ -110,6 +110,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
             "all-conditions" | "allconditions" => "EdgionPlugins/PluginCondition/AllConditions".to_string(),
             "jwt-auth" | "jwtauth" => "EdgionPlugins/JwtAuth".to_string(),
+            "key-auth" | "keyauth" => "EdgionPlugins/KeyAuth".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -151,8 +152,12 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DebugAccessLog" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
+        "EdgionPlugins/CtxSet" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
+        "EdgionPlugins/KeyAuth" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
+        "EdgionPlugins/RateLimit" => "EdgionPlugins",
+        "EdgionPlugins/RealIp" => "EdgionPlugins",
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
         "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
@@ -362,6 +367,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::JwtAuthTestSuite));
         }
+        "EdgionPlugins/KeyAuth" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/KeyAuth tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::KeyAuthTestSuite));
+        }
         "EdgionPlugins/ProxyRewrite" => {
             if !gateway {
                 eprintln!("Error: EdgionPlugins/ProxyRewrite tests require --gateway flag");
@@ -376,12 +388,33 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::ResponseRewriteTestSuite));
         }
+        "EdgionPlugins/RateLimit" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/RateLimit tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RateLimitTestSuite));
+        }
+        "EdgionPlugins/RealIp" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/RealIp tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RealIpPluginTestSuite));
+        }
         "EdgionPlugins/RequestRestriction" => {
             if !gateway {
                 eprintln!("Error: EdgionPlugins/RequestRestriction tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RequestRestrictionTestSuite));
+        }
+        "EdgionPlugins/CtxSet" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/CtxSet tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CtxSetTestSuite));
         }
         "Gateway/ListenerHostname" => {
             if !gateway {

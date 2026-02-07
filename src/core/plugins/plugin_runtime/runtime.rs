@@ -19,11 +19,14 @@ use super::traits::{RequestFilter, UpstreamResponse, UpstreamResponseFilter};
 use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
 use crate::core::plugins::edgion_plugins::cors::Cors;
 use crate::core::plugins::edgion_plugins::csrf::Csrf;
+use crate::core::plugins::edgion_plugins::ctx_set::CtxSet;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
+use crate::core::plugins::edgion_plugins::key_auth::KeyAuth;
 use crate::core::plugins::edgion_plugins::mock::Mock;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
-use crate::core::plugins::edgion_plugins::rate_limiter::RateLimiter;
+use crate::core::plugins::edgion_plugins::rate_limit::RateLimit;
+use crate::core::plugins::edgion_plugins::real_ip::RealIp;
 use crate::core::plugins::edgion_plugins::request_restriction::RequestRestriction;
 use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
 use crate::core::plugins::gapi_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
@@ -262,10 +265,13 @@ impl PluginRuntime {
             EdgionPlugin::Csrf(config) => Some(Box::new(Csrf::new(config))),
             EdgionPlugin::IpRestriction(config) => Some(IpRestriction::create(config)),
             EdgionPlugin::JwtAuth(config) => Some(Box::new(JwtAuth::new(config, namespace.to_string()))),
+            EdgionPlugin::KeyAuth(config) => Some(KeyAuth::create(config)),
             EdgionPlugin::Mock(config) => Some(Box::new(Mock::new(config))),
             EdgionPlugin::ProxyRewrite(config) => Some(Box::new(ProxyRewrite::new(config))),
             EdgionPlugin::RequestRestriction(config) => Some(RequestRestriction::create(config)),
-            EdgionPlugin::RateLimiter(config) => Some(RateLimiter::create(config)),
+            EdgionPlugin::RateLimit(config) => Some(RateLimit::create(config)),
+            EdgionPlugin::CtxSet(config) => Some(CtxSet::create(config)),
+            EdgionPlugin::RealIp(config) => Some(RealIp::create(config)),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
@@ -307,10 +313,12 @@ impl PluginRuntime {
     /// Get validation error from a plugin config (if any)
     fn get_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
         match plugin {
-            EdgionPlugin::RateLimiter(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::RateLimit(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::CtxSet(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::RequestRestriction(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ProxyRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ResponseRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::KeyAuth(config) => config.get_validation_error().map(|s| s.to_string()),
             _ => None,
         }
     }
@@ -326,10 +334,13 @@ impl PluginRuntime {
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
+            EdgionPlugin::KeyAuth(_) => "KeyAuth",
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
-            EdgionPlugin::RateLimiter(_) => "RateLimiter",
+            EdgionPlugin::RateLimit(_) => "RateLimit",
+            EdgionPlugin::CtxSet(_) => "CtxSet",
+            EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::ExtensionRef(_) => "ExtensionRef",

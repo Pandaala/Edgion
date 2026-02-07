@@ -31,6 +31,7 @@ pub struct EwmaIter {
 
 impl BackendSelection for Ewma {
     type Iter = EwmaIter;
+    type Config = ();
 
     fn build(backends: &BTreeSet<Backend>) -> Self {
         Self {
