@@ -1,4 +1,4 @@
-//! RateLimiter plugin configuration
+//! RateLimit plugin configuration
 //!
 //! Rate limiting using Pingora's Count-Min Sketch (CMS) algorithm.
 //! Provides high-performance, memory-efficient rate limiting for high-concurrency scenarios.
@@ -95,16 +95,16 @@ pub enum OnMissingKey {
     Deny,
 }
 
-// ========== RateLimiter Configuration ==========
+// ========== RateLimit Configuration ==========
 
-/// RateLimiter plugin configuration
+/// RateLimit plugin configuration
 ///
 /// Uses Pingora's Count-Min Sketch algorithm for rate limiting.
 /// This provides memory-efficient rate limiting suitable for high-cardinality keys.
 ///
 /// ## Example:
 /// ```yaml
-/// rateLimiter:
+/// rateLimit:
 ///   rate: 100              # 100 requests per interval
 ///   interval: "1s"         # 1 second window (default)
 ///   key:
@@ -134,7 +134,7 @@ pub enum OnMissingKey {
 /// - The window slides based on `interval` duration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct RateLimiterConfig {
+pub struct RateLimitConfig {
     /// Maximum requests per interval
     ///
     /// For example, rate=100 with interval="1s" means 100 requests per second.
@@ -260,7 +260,7 @@ fn default_true() -> bool {
     true
 }
 
-impl Default for RateLimiterConfig {
+impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
             rate: 100,
@@ -285,10 +285,10 @@ pub use crate::core::cli::edgion_gateway::config::{
     get_default_estimator_slots, get_max_estimator_slots, get_min_estimator_slots, SLOTS_K,
 };
 
-impl RateLimiterConfig {
+impl RateLimitConfig {
     /// Validate and compile the configuration
     ///
-    /// Uses the global RateLimiter configuration from toml config file.
+    /// Uses the global RateLimit configuration from toml config file.
     pub fn validate(&mut self) {
         let default_slots = get_default_estimator_slots();
         let max_slots = get_max_estimator_slots();
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn test_default_config() {
-        let config = RateLimiterConfig::default();
+        let config = RateLimitConfig::default();
         assert_eq!(config.rate, 100);
         assert_eq!(config.interval, "1s");
         assert_eq!(config.reject_status, 429);
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_validation_rate() {
-        let mut config = RateLimiterConfig::default();
+        let mut config = RateLimitConfig::default();
         config.rate = 0;
         config.validate();
         assert!(!config.is_valid());
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn test_validation_key_name_empty() {
-        let mut config = RateLimiterConfig::default();
+        let mut config = RateLimitConfig::default();
         config.rate = 10;
         config.key = vec![KeyGet::Header { name: "".to_string() }];
         config.validate();
@@ -448,7 +448,7 @@ mod tests {
 
     #[test]
     fn test_validation_success() {
-        let mut config = RateLimiterConfig::default();
+        let mut config = RateLimitConfig::default();
         config.rate = 10;
         config.validate();
         assert!(config.is_valid());
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn test_interval_parsing() {
-        let mut config = RateLimiterConfig::default();
+        let mut config = RateLimitConfig::default();
         config.rate = 10;
         config.interval = "5s".to_string();
         config.validate();
@@ -492,7 +492,7 @@ mod tests {
 
     #[test]
     fn test_estimator_slots_default() {
-        let mut config = RateLimiterConfig::default();
+        let mut config = RateLimitConfig::default();
         config.rate = 10;
         config.validate();
         assert!(config.is_valid());
@@ -502,7 +502,7 @@ mod tests {
 
     #[test]
     fn test_estimator_slots_custom() {
-        let mut config = RateLimiterConfig::default();
+        let mut config = RateLimitConfig::default();
         config.rate = 10;
         config.estimator_slots_k = Some(16); // 16K = 16384 slots
         config.validate();
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn test_estimator_slots_capped_at_max() {
-        let mut config = RateLimiterConfig::default();
+        let mut config = RateLimitConfig::default();
         config.rate = 10;
         config.estimator_slots_k = Some(2048); // 2048K, way over max 1024K
                                                // Global config: default=64K, max=256K for this test
@@ -523,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_estimator_slots_minimum() {
-        let mut config = RateLimiterConfig::default();
+        let mut config = RateLimitConfig::default();
         config.rate = 10;
         // Setting to 0 is not valid as a K value, but it will be converted to 0 slots
         // The min check will bump it up
@@ -543,7 +543,7 @@ key:
   - type: header
     name: "X-API-Key"
 "#;
-        let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.rate, 100);
         assert_eq!(
             config.key,
@@ -561,7 +561,7 @@ rate: 50
 key:
   - type: clientIp
 "#;
-        let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.key, vec![KeyGet::ClientIp]);
     }
 
@@ -573,7 +573,7 @@ rate: 50
 key:
   - type: clientIpAndPath
 "#;
-        let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.key, vec![KeyGet::ClientIpAndPath]);
     }
 
@@ -589,7 +589,7 @@ key:
     name: "X-API-Key"
   - type: path
 "#;
-        let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.rate, 100);
         assert_eq!(
             config.key,
@@ -609,7 +609,7 @@ key:
         let yaml = r#"
 rate: 50
 "#;
-        let config: RateLimiterConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.key.is_empty()); // serde default is empty vec
     }
 }

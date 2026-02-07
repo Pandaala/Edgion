@@ -25,7 +25,7 @@ use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
 use crate::core::plugins::edgion_plugins::key_auth::KeyAuth;
 use crate::core::plugins::edgion_plugins::mock::Mock;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
-use crate::core::plugins::edgion_plugins::rate_limiter::RateLimiter;
+use crate::core::plugins::edgion_plugins::rate_limit::RateLimit;
 use crate::core::plugins::edgion_plugins::real_ip::RealIp;
 use crate::core::plugins::edgion_plugins::request_restriction::RequestRestriction;
 use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
@@ -269,7 +269,7 @@ impl PluginRuntime {
             EdgionPlugin::Mock(config) => Some(Box::new(Mock::new(config))),
             EdgionPlugin::ProxyRewrite(config) => Some(Box::new(ProxyRewrite::new(config))),
             EdgionPlugin::RequestRestriction(config) => Some(RequestRestriction::create(config)),
-            EdgionPlugin::RateLimiter(config) => Some(RateLimiter::create(config)),
+            EdgionPlugin::RateLimit(config) => Some(RateLimit::create(config)),
             EdgionPlugin::CtxSet(config) => Some(CtxSet::create(config)),
             EdgionPlugin::RealIp(config) => Some(RealIp::create(config)),
             EdgionPlugin::ExtensionRef(ext_ref) => {
@@ -313,7 +313,7 @@ impl PluginRuntime {
     /// Get validation error from a plugin config (if any)
     fn get_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
         match plugin {
-            EdgionPlugin::RateLimiter(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::RateLimit(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::CtxSet(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::RequestRestriction(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ProxyRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
@@ -338,7 +338,7 @@ impl PluginRuntime {
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
-            EdgionPlugin::RateLimiter(_) => "RateLimiter",
+            EdgionPlugin::RateLimit(_) => "RateLimit",
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",

@@ -1,4 +1,4 @@
-//! RateLimiter plugin implementation
+//! RateLimit plugin implementation
 //!
 //! Rate limiting using Pingora's Count-Min Sketch (CMS) algorithm.
 //! Provides high-performance, memory-efficient rate limiting for high-concurrency scenarios.
@@ -10,14 +10,14 @@
 //! - Rate limit response headers
 //!
 //! ## Architecture:
-//! Each RateLimiter plugin instance owns its Rate instance (lazily initialized).
+//! Each RateLimit plugin instance owns its Rate instance (lazily initialized).
 //! Rate instances are NOT shared between different plugins.
 //!
 //! ## Configuration Examples:
 //!
 //! ### Basic rate limiting by IP:
 //! ```yaml
-//! rateLimiter:
+//! rateLimit:
 //!   rate: 100              # 100 requests per interval
 //!   interval: "1s"         # 1 second window
 //!   key:
@@ -26,7 +26,7 @@
 //!
 //! ### Rate limiting by API key:
 //! ```yaml
-//! rateLimiter:
+//! rateLimit:
 //!   rate: 1000
 //!   interval: "1m"         # 1000 requests per minute
 //!   key:
@@ -45,27 +45,27 @@ use tracing::debug;
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{OnMissingKey, RateLimiterConfig};
+use crate::types::resources::edgion_plugins::{OnMissingKey, RateLimitConfig};
 
 // CMS estimator configuration
 // HASHES is fixed at 4 (4 hash functions for CMS)
 const CMS_HASHES: usize = 4;
 
-// ========== RateLimiter Plugin ==========
+// ========== RateLimit Plugin ==========
 
-/// RateLimiter plugin using Pingora's Count-Min Sketch algorithm
+/// RateLimit plugin using Pingora's Count-Min Sketch algorithm
 ///
 /// Each plugin instance owns its own Rate instance, which is lazily initialized
 /// on the first request. The Rate instance is NOT shared between different plugins.
-pub struct RateLimiter {
+pub struct RateLimit {
     name: String,
-    config: RateLimiterConfig,
+    config: RateLimitConfig,
     /// The Rate instance, lazily initialized on first use
     rate: OnceLock<Rate>,
 }
 
-impl RateLimiter {
-    /// Create a new RateLimiter plugin from configuration
+impl RateLimit {
+    /// Create a new RateLimit plugin from configuration
     ///
     /// # Arguments
     /// * `config` - The rate limiter configuration
@@ -75,12 +75,12 @@ impl RateLimiter {
     ///
     /// Global configuration (default_estimator_slots, max_estimator_slots) is
     /// automatically loaded from the toml config file via `validate()`.
-    pub fn create(config: &RateLimiterConfig) -> Box<dyn RequestFilter> {
+    pub fn create(config: &RateLimitConfig) -> Box<dyn RequestFilter> {
         let mut validated_config = config.clone();
         validated_config.validate();
 
-        let plugin = RateLimiter {
-            name: "RateLimiter".to_string(),
+        let plugin = RateLimit {
+            name: "RateLimit".to_string(),
             config: validated_config,
             rate: OnceLock::new(),
         };
@@ -213,7 +213,7 @@ fn format_duration(d: Duration) -> String {
 }
 
 #[async_trait]
-impl RequestFilter for RateLimiter {
+impl RequestFilter for RateLimit {
     fn name(&self) -> &str {
         &self.name
     }
@@ -296,8 +296,8 @@ mod tests {
     use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
     use crate::types::common::KeyGet;
 
-    fn create_basic_config() -> RateLimiterConfig {
-        let mut config = RateLimiterConfig {
+    fn create_basic_config() -> RateLimitConfig {
+        let mut config = RateLimitConfig {
             rate: 5,
             interval: "1s".to_string(),
             reject_message: Some("Too many requests".to_string()),
@@ -370,13 +370,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rate_limiter_allows_within_limit() {
+    async fn test_rate_limit_allows_within_limit() {
         let config = create_basic_config();
-        let plugin = RateLimiter::create(&config);
+        let plugin = RateLimit::create(&config);
 
         for i in 0..5 {
             let mut mock_session = MockPluginSession::new();
-            let mut plugin_log = PluginLog::new("RateLimiter");
+            let mut plugin_log = PluginLog::new("RateLimit");
 
             let ip = format!("test_basic_ip_{}", i);
             mock_session.expect_key_get().return_const(Some(ip)); // Each request different IP to test independent
@@ -389,15 +389,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rate_limiter_rejects_over_limit() {
+    async fn test_rate_limit_rejects_over_limit() {
         let config = create_basic_config();
-        let plugin = RateLimiter::create(&config);
+        let plugin = RateLimit::create(&config);
         let test_ip = "test_over_ip_unique";
 
         // Consume all quota (5 requests from same IP)
         for _ in 0..5 {
             let mut mock_session = MockPluginSession::new();
-            let mut plugin_log = PluginLog::new("RateLimiter");
+            let mut plugin_log = PluginLog::new("RateLimit");
             mock_session.expect_key_get().return_const(Some(test_ip.to_string()));
             mock_session.expect_set_response_header().returning(|_, _| Ok(()));
             plugin.run_request(&mut mock_session, &mut plugin_log).await;
@@ -405,7 +405,7 @@ mod tests {
 
         // Next request should be rejected
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimiter");
+        let mut plugin_log = PluginLog::new("RateLimit");
 
         mock_session.expect_key_get().return_const(Some(test_ip.to_string()));
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
@@ -417,12 +417,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rate_limiter_no_key_allows() {
+    async fn test_rate_limit_no_key_allows() {
         let config = create_basic_config();
-        let plugin = RateLimiter::create(&config);
+        let plugin = RateLimit::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimiter");
+        let mut plugin_log = PluginLog::new("RateLimit");
 
         mock_session.expect_key_get().return_const(None);
 
@@ -432,8 +432,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rate_limiter_header_key() {
-        let mut config = RateLimiterConfig {
+    async fn test_rate_limit_header_key() {
+        let mut config = RateLimitConfig {
             rate: 100,
             interval: "1s".to_string(),
             key: vec![KeyGet::Header {
@@ -443,10 +443,10 @@ mod tests {
         };
         config.validate();
 
-        let plugin = RateLimiter::create(&config);
+        let plugin = RateLimit::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimiter");
+        let mut plugin_log = PluginLog::new("RateLimit");
 
         mock_session
             .expect_key_get()
@@ -458,9 +458,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rate_limiter_composite_keys() {
+    async fn test_rate_limit_composite_keys() {
         // Test multiple keys combined with "_"
-        let mut config = RateLimiterConfig {
+        let mut config = RateLimitConfig {
             rate: 100,
             interval: "1s".to_string(),
             key: vec![
@@ -474,10 +474,10 @@ mod tests {
         };
         config.validate();
 
-        let plugin = RateLimiter::create(&config);
+        let plugin = RateLimit::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimiter");
+        let mut plugin_log = PluginLog::new("RateLimit");
 
         // Mock key_get to return values for each key type
         mock_session
@@ -500,9 +500,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rate_limiter_partial_keys() {
+    async fn test_rate_limit_partial_keys() {
         // Test that partial keys work (some keys missing)
-        let mut config = RateLimiterConfig {
+        let mut config = RateLimitConfig {
             rate: 100,
             interval: "1s".to_string(),
             key: vec![
@@ -515,10 +515,10 @@ mod tests {
         };
         config.validate();
 
-        let plugin = RateLimiter::create(&config);
+        let plugin = RateLimit::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimiter");
+        let mut plugin_log = PluginLog::new("RateLimit");
 
         // Only ClientIp available, Header missing
         mock_session
@@ -538,16 +538,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_config_validation_error() {
-        let mut config = RateLimiterConfig {
+        let mut config = RateLimitConfig {
             rate: 0, // Invalid rate
             ..Default::default()
         };
         config.validate();
 
-        let plugin = RateLimiter::create(&config);
+        let plugin = RateLimit::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimiter");
+        let mut plugin_log = PluginLog::new("RateLimit");
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
@@ -558,15 +558,15 @@ mod tests {
     async fn test_separate_plugin_instances() {
         // Test that different plugin instances have separate rate limiting state
         let config = create_basic_config();
-        let plugin1 = RateLimiter::create(&config);
-        let plugin2 = RateLimiter::create(&config);
+        let plugin1 = RateLimit::create(&config);
+        let plugin2 = RateLimit::create(&config);
 
         let shared_ip = "shared_ip_test";
 
         // Exhaust plugin1's limit
         for _ in 0..5 {
             let mut mock_session = MockPluginSession::new();
-            let mut plugin_log = PluginLog::new("RateLimiter");
+            let mut plugin_log = PluginLog::new("RateLimit");
             mock_session.expect_key_get().return_const(Some(shared_ip.to_string()));
             mock_session.expect_set_response_header().returning(|_, _| Ok(()));
             plugin1.run_request(&mut mock_session, &mut plugin_log).await;
@@ -574,7 +574,7 @@ mod tests {
 
         // plugin2 should still allow (separate Rate instance)
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimiter");
+        let mut plugin_log = PluginLog::new("RateLimit");
         mock_session.expect_key_get().return_const(Some(shared_ip.to_string()));
         mock_session.expect_set_response_header().returning(|_, _| Ok(()));
 
@@ -585,7 +585,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_custom_estimator_slots() {
-        let mut config = RateLimiterConfig {
+        let mut config = RateLimitConfig {
             rate: 10,
             interval: "1s".to_string(),
             estimator_slots_k: Some(16), // 16K = 16384 slots
@@ -593,10 +593,10 @@ mod tests {
         };
         config.validate();
 
-        let plugin = RateLimiter::create(&config);
+        let plugin = RateLimit::create(&config);
 
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimiter");
+        let mut plugin_log = PluginLog::new("RateLimit");
         mock_session
             .expect_key_get()
             .return_const(Some("test_slots_ip".to_string()));

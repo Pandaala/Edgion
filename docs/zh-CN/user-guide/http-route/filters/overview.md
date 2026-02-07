@@ -28,7 +28,7 @@
 | CORS | 跨域资源共享 | [详情](./edgion-plugins/cors.md) |
 | CSRF | CSRF 防护 | [详情](./edgion-plugins/csrf.md) |
 | IpRestriction | IP 黑白名单 | [详情](./edgion-plugins/ip-restriction.md) |
-| RateLimiter | 限流 | [详情](./edgion-plugins/rate-limiter.md) |
+| RateLimit | 限流 | [详情](./edgion-plugins/rate-limit.md) |
 
 ## 过滤器执行顺序
 

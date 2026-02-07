@@ -1,4 +1,4 @@
-// RateLimiter Plugin Test Suite
+// RateLimit Plugin Test Suite
 //
 // 测试策略：
 // - 在限制内的请求应通过
@@ -15,9 +15,9 @@ use std::time::Instant;
 // 全局计数器用于生成唯一 key
 static KEY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub struct RateLimiterTestSuite;
+pub struct RateLimitTestSuite;
 
-impl RateLimiterTestSuite {
+impl RateLimitTestSuite {
     /// 生成唯一的测试 key，避免测试间干扰
     fn generate_test_key() -> String {
         let count = KEY_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -44,7 +44,7 @@ impl RateLimiterTestSuite {
                     for i in 0..3 {
                         let response = client
                             .get(&url)
-                            .header("host", "rate-limiter.example.com")
+                            .header("host", "rate-limit.example.com")
                             .header("X-Rate-Key", &test_key)
                             .send()
                             .await;
@@ -90,7 +90,7 @@ impl RateLimiterTestSuite {
                     for i in 0..5 {
                         let response = client
                             .get(&url)
-                            .header("host", "rate-limiter.example.com")
+                            .header("host", "rate-limit.example.com")
                             .header("X-Rate-Key", &test_key)
                             .send()
                             .await;
@@ -117,7 +117,7 @@ impl RateLimiterTestSuite {
                     // 第 6 个请求应该被限流
                     let response = client
                         .get(&url)
-                        .header("host", "rate-limiter.example.com")
+                        .header("host", "rate-limit.example.com")
                         .header("X-Rate-Key", &test_key)
                         .send()
                         .await;
@@ -157,7 +157,7 @@ impl RateLimiterTestSuite {
 
                     let response = client
                         .get(&url)
-                        .header("host", "rate-limiter.example.com")
+                        .header("host", "rate-limit.example.com")
                         .header("X-Rate-Key", &test_key)
                         .send()
                         .await;
@@ -227,7 +227,7 @@ impl RateLimiterTestSuite {
                     for i in 0..5 {
                         let response = client
                             .get(&url)
-                            .header("host", "rate-limiter.example.com")
+                            .header("host", "rate-limit.example.com")
                             .header("X-Rate-Key", &key_a)
                             .send()
                             .await;
@@ -243,7 +243,7 @@ impl RateLimiterTestSuite {
                     // 验证 key_a 的下一个请求被限流
                     let resp_a = client
                         .get(&url)
-                        .header("host", "rate-limiter.example.com")
+                        .header("host", "rate-limit.example.com")
                         .header("X-Rate-Key", &key_a)
                         .send()
                         .await;
@@ -265,7 +265,7 @@ impl RateLimiterTestSuite {
                     // key_b 应该仍然可以请求（独立计数）
                     let resp_b = client
                         .get(&url)
-                        .header("host", "rate-limiter.example.com")
+                        .header("host", "rate-limit.example.com")
                         .header("X-Rate-Key", &key_b)
                         .send()
                         .await;
@@ -304,7 +304,7 @@ impl RateLimiterTestSuite {
                     let url = format!("http://127.0.0.1:31180/test/rate-limit/api");
 
                     // 不发送 X-Rate-Key header
-                    let response = client.get(&url).header("host", "rate-limiter.example.com").send().await;
+                    let response = client.get(&url).header("host", "rate-limit.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
@@ -344,7 +344,7 @@ impl RateLimiterTestSuite {
                     for _ in 0..5 {
                         let _ = client
                             .get(&url)
-                            .header("host", "rate-limiter.example.com")
+                            .header("host", "rate-limit.example.com")
                             .header("X-Rate-Key", &test_key)
                             .send()
                             .await;
@@ -353,7 +353,7 @@ impl RateLimiterTestSuite {
                     // 触发 429
                     let response = client
                         .get(&url)
-                        .header("host", "rate-limiter.example.com")
+                        .header("host", "rate-limit.example.com")
                         .header("X-Rate-Key", &test_key)
                         .send()
                         .await;
@@ -386,9 +386,9 @@ impl RateLimiterTestSuite {
     }
 }
 
-impl TestSuite for RateLimiterTestSuite {
+impl TestSuite for RateLimitTestSuite {
     fn name(&self) -> &str {
-        "RateLimiter Plugin Tests"
+        "RateLimit Plugin Tests"
     }
 
     fn test_cases(&self) -> Vec<TestCase> {

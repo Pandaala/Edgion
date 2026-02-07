@@ -41,7 +41,7 @@ spec:
                         type: string
                         description: "Key name (required for header, cookie, query, ctx)"
 
-                  # KeyGet array schema - for multiple keys (e.g., RateLimiter composite key)
+                  # KeyGet array schema - for multiple keys (e.g., RateLimit composite key)
                   keyGetArray: &keyGetArraySchema
                     type: array
                     description: "Array of key accessors, combined with '_' separator"
@@ -137,7 +137,7 @@ spec:
                           - KeyAuth
                           - Mock
                           - ProxyRewrite
-                          - RateLimiter
+                          - RateLimit
                           - RealIp
                           - RequestRestriction
                           - RequestHeaderModifier

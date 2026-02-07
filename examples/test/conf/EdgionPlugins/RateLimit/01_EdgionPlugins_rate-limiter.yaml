@@ -1,15 +1,15 @@
-# RateLimiter 插件配置 - 基于 Header 的限流测试
+# RateLimit 插件配置 - 基于 Header 的限流测试
 # 使用 X-Rate-Key header 作为限流维度，便于测试不同 key 的独立限流
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: rate-limiter-header-key
+  name: rate-limit-header-key
   namespace: edgion-default
 spec:
   requestPlugins:
     # 单 key 限流示例
     - enable: true
-      type: RateLimiter
+      type: RateLimit
       config:
         rate: 5              # 每个窗口最多 5 个请求
         interval: "10s"      # 10 秒窗口
@@ -23,7 +23,7 @@ spec:
 
     # 多 key 联合限流示例（按 IP + API Key + Path 组合限流）
     - enable: false          # 默认禁用，仅作示例
-      type: RateLimiter
+      type: RateLimit
       config:
         rate: 100
         interval: "1m"

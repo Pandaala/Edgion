@@ -1,15 +1,15 @@
-# HTTPRoute for RateLimiter 集成测试
+# HTTPRoute for RateLimit 集成测试
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: rate-limiter-test-route
+  name: rate-limit-test-route
   namespace: edgion-default
 spec:
   parentRefs:
     - name: edgion-plugins-gateway
       namespace: edgion-test
   hostnames:
-    - "rate-limiter.example.com"
+    - "rate-limit.example.com"
   rules:
     # 1. 基于 Header Key 的限流测试
     - matches:
@@ -21,7 +21,7 @@ spec:
           extensionRef:
             group: edgion.io
             kind: EdgionPlugins
-            name: rate-limiter-header-key
+            name: rate-limit-header-key
       backendRefs:
         - name: test-http
           namespace: edgion-test

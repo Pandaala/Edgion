@@ -151,7 +151,7 @@ pub trait PluginSession: Send {
     /// Get a value using KeyGet accessor
     ///
     /// This is the unified way to extract values from the session context.
-    /// Used by RateLimiter, Conditions, and other plugins.
+    /// Used by RateLimit, Conditions, and other plugins.
     ///
     /// # Returns
     /// * `Some(String)` - The extracted value

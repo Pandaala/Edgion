@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
     BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig,
-    JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimiterConfig, RealIpConfig,
+    JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
     RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
@@ -57,8 +57,8 @@ pub enum EdgionPlugin {
     RequestRestriction(RequestRestrictionConfig),
     /// Response Rewrite filter (rewrite status code and headers before returning to client)
     ResponseRewrite(ResponseRewriteConfig),
-    /// RateLimiter filter (CMS algorithm for high-performance rate limiting)
-    RateLimiter(RateLimiterConfig),
+    /// RateLimit filter (CMS algorithm for high-performance rate limiting)
+    RateLimit(RateLimitConfig),
     /// CtxSet filter (set context variables from various sources with extraction, transformation, and mapping)
     CtxSet(CtxSetConfig),
     /// RealIp filter (extract real client IP from headers with trusted proxy support)
@@ -92,7 +92,7 @@ impl EdgionPlugin {
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
-            EdgionPlugin::RateLimiter(_) => "RateLimiter",
+            EdgionPlugin::RateLimit(_) => "RateLimit",
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
         }

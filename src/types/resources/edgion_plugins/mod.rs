@@ -27,9 +27,9 @@ pub use plugin_configs::{
     BasicAuthConfig, CaseType, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule, DebugAccessLogToHeaderConfig,
     DefaultAction, ExtractConfig, HeaderActions, HeaderEntry, HeaderRename, HttpMethod, IpRestrictionConfig, IpSource,
     JwtAlgorithm, JwtAuthConfig, KeyAuthConfig, KeyMetadata, LimitHeaderNames, MappingConfig, MockConfig, OnMissing,
-    OnMissingKey, ProxyRewriteConfig, RateLimiterConfig, RealIpConfig, RegexUri, ReplaceConfig,
-    RequestRestrictionConfig, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule,
-    RestrictionSource, RuleMatchMode, TransformConfig, TransformType,
+    OnMissingKey, ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig,
+    ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource,
+    RuleMatchMode, TransformConfig, TransformType,
 };
 
 /// API group for EdgionPlugins

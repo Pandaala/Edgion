@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 
 /// Key accessor for reading values from request context
 ///
-/// Used by RateLimiter, PluginConditions, and other plugins that need
+/// Used by RateLimit, PluginConditions, and other plugins that need
 /// to extract values from requests.
 ///
 /// ## Usage

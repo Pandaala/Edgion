@@ -2,7 +2,7 @@
 
 ## 概述
 
-`CtxSet` 插件用于在请求处理过程中设置上下文变量（Context Variables）。这些变量可以被后续的插件（如 RateLimiter, PluginConditions）使用，或者作为日志字段输出。
+`CtxSet` 插件用于在请求处理过程中设置上下文变量（Context Variables）。这些变量可以被后续的插件（如 RateLimit, PluginConditions）使用，或者作为日志字段输出。
 
 CtxSet 支持从多种数据源（Header, Query, Cookie 等）提取数据，并支持默认值、大小写转换、值映射（Mapping）以及基于模板的变量组合。
 
@@ -145,9 +145,9 @@ rules:
 
 ## 使用场景
 
-### 配合 RateLimiter 使用
+### 配合 RateLimit 使用
 
-RateLimiter 插件可以使用 `ctx` 作为限流键的数据源。通过 CtxSet，你可以构造复杂的限流键。
+RateLimit 插件可以使用 `ctx` 作为限流键的数据源。通过 CtxSet，你可以构造复杂的限流键。
 
 ```yaml
 # 1. 先设置变量
@@ -158,7 +158,7 @@ RateLimiter 插件可以使用 `ctx` 作为限流键的数据源。通过 CtxSet
         template: "{{ tenant_id }}_{{ remote_addr }}"
 
 # 2. 后限流
-- type: RateLimiter
+- type: RateLimit
   config:
     rate: 100
     key:
