@@ -109,11 +109,16 @@ impl RealIpExtractor {
     /// # Returns
     /// * `true` - IP is in trusted proxy list
     /// * `false` - IP is not trusted or no trusted proxies configured
-    fn is_trusted_proxy(&self, ip: &IpAddr) -> bool {
+    pub fn is_trusted_proxy(&self, ip: &IpAddr) -> bool {
         self.trusted_proxy_matcher
             .as_ref()
             .and_then(|m| m.match_ip(ip))
             .unwrap_or(false)
+    }
+
+    /// Get the configured real IP header name
+    pub fn real_ip_header(&self) -> &str {
+        &self.real_ip_header
     }
 
     /// Extracts the real client IP address using Nginx-style logic

@@ -27,7 +27,7 @@ pub use plugin_configs::{
     BasicAuthConfig, CaseType, CorsConfig, CsrfConfig, CtxSetterConfig, CtxVarRule, DebugAccessLogToHeaderConfig,
     DefaultAction, ExtractConfig, HeaderActions, HeaderEntry, HeaderRename, HttpMethod, IpRestrictionConfig, IpSource,
     JwtAlgorithm, JwtAuthConfig, KeyAuthConfig, KeyMetadata, LimitHeaderNames, MappingConfig, MockConfig, OnMissing,
-    OnMissingKey, ProxyRewriteConfig, RateLimiterConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig,
+    OnMissingKey, ProxyRewriteConfig, RateLimiterConfig, RealIpConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig,
     ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource,
     RuleMatchMode, TransformConfig, TransformType,
 };

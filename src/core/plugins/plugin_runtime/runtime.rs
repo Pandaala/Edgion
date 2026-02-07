@@ -26,6 +26,7 @@ use crate::core::plugins::edgion_plugins::key_auth::KeyAuth;
 use crate::core::plugins::edgion_plugins::mock::Mock;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
 use crate::core::plugins::edgion_plugins::rate_limiter::RateLimiter;
+use crate::core::plugins::edgion_plugins::real_ip::RealIp;
 use crate::core::plugins::edgion_plugins::request_restriction::RequestRestriction;
 use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
 use crate::core::plugins::gapi_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
@@ -270,6 +271,7 @@ impl PluginRuntime {
             EdgionPlugin::RequestRestriction(config) => Some(RequestRestriction::create(config)),
             EdgionPlugin::RateLimiter(config) => Some(RateLimiter::create(config)),
             EdgionPlugin::CtxSetter(config) => Some(CtxSetter::create(config)),
+            EdgionPlugin::RealIp(config) => Some(RealIp::create(config)),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
@@ -338,6 +340,7 @@ impl PluginRuntime {
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::RateLimiter(_) => "RateLimiter",
             EdgionPlugin::CtxSetter(_) => "CtxSetter",
+            EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::ExtensionRef(_) => "ExtensionRef",

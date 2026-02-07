@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
     BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetterConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig,
-    JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimiterConfig, RequestRestrictionConfig,
-    ResponseRewriteConfig,
+    JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimiterConfig, RealIpConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -61,6 +61,8 @@ pub enum EdgionPlugin {
     RateLimiter(RateLimiterConfig),
     /// CtxSetter filter (set context variables from various sources with extraction, transformation, and mapping)
     CtxSetter(CtxSetterConfig),
+    /// RealIp filter (extract real client IP from headers with trusted proxy support)
+    RealIp(RealIpConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -92,6 +94,7 @@ impl EdgionPlugin {
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::RateLimiter(_) => "RateLimiter",
             EdgionPlugin::CtxSetter(_) => "CtxSetter",
+            EdgionPlugin::RealIp(_) => "RealIp",
         }
     }
 }

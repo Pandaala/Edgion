@@ -138,6 +138,7 @@ spec:
                           - Mock
                           - ProxyRewrite
                           - RateLimiter
+                          - RealIp
                           - RequestRestriction
                           - RequestHeaderModifier
                           - ResponseHeaderModifier

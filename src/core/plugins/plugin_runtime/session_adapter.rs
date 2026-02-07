@@ -319,6 +319,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &self.ctx.request_info.remote_addr
     }
 
+    fn set_remote_addr(&mut self, addr: &str) -> PluginSessionResult<()> {
+        self.ctx.request_info.remote_addr = addr.to_string();
+        Ok(())
+    }
+
     fn ctx(&self) -> &EdgionHttpContext {
         self.ctx
     }

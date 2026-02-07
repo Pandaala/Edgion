@@ -383,6 +383,10 @@ mod tests {
             &self.client_ip
         }
 
+        fn set_remote_addr(&mut self, _addr: &str) -> super::super::traits::PluginSessionResult<()> {
+            Ok(())
+        }
+
         fn ctx(&self) -> &crate::types::EdgionHttpContext {
             unimplemented!("Not needed for condition tests")
         }

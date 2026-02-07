@@ -157,6 +157,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/KeyAuth" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
         "EdgionPlugins/RateLimiter" => "EdgionPlugins",
+        "EdgionPlugins/RealIp" => "EdgionPlugins",
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
         "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
@@ -393,6 +394,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RateLimiterTestSuite));
+        }
+        "EdgionPlugins/RealIp" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/RealIp tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RealIpPluginTestSuite));
         }
         "EdgionPlugins/RequestRestriction" => {
             if !gateway {
