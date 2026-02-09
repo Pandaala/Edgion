@@ -6,8 +6,12 @@
 
 use async_trait::async_trait;
 
+use std::time::Duration;
+
 use super::log::PluginLog;
-use super::traits::{PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseFilter};
+use super::traits::{
+    PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
+};
 use crate::core::plugins::plugins_cond::{EvaluationResult, PluginConditions};
 use crate::types::filters::PluginRunningResult;
 
@@ -113,6 +117,63 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
 
         // Conditions satisfied or none defined, run the inner filter
         self.inner.run_upstream_response_filter(session, log)
+    }
+}
+
+// ==================== ConditionalUpstreamResponseBodyFilter ====================
+
+/// Wrapper that adds condition evaluation to an UpstreamResponseBodyFilter (sync)
+///
+/// Before running the inner filter, conditions are evaluated:
+/// - If conditions is None or empty, the inner filter runs unconditionally
+/// - If conditions evaluate to Skip, the filter is skipped and returns None
+/// - If conditions evaluate to Run, the inner filter executes normally
+pub struct ConditionalUpstreamResponseBodyFilter {
+    inner: Box<dyn UpstreamResponseBodyFilter>,
+    conditions: Option<PluginConditions>,
+}
+
+impl ConditionalUpstreamResponseBodyFilter {
+    /// Create a new conditional upstream response body filter
+    pub fn new(inner: Box<dyn UpstreamResponseBodyFilter>, conditions: Option<PluginConditions>) -> Self {
+        Self { inner, conditions }
+    }
+
+    /// Create a wrapper without conditions (always runs)
+    #[allow(dead_code)]
+    pub fn without_conditions(inner: Box<dyn UpstreamResponseBodyFilter>) -> Self {
+        Self::new(inner, None)
+    }
+}
+
+impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn run_upstream_response_body_filter(
+        &self,
+        body: &Option<bytes::Bytes>,
+        end_of_stream: bool,
+        session: &dyn PluginSession,
+        log: &mut PluginLog,
+    ) -> Option<Duration> {
+        // Check conditions before running
+        if let Some(conditions) = &self.conditions {
+            if conditions.should_evaluate() {
+                let eval = conditions.evaluate_detail(session);
+                if eval.result == EvaluationResult::Skip {
+                    if let Some(cond) = eval.matched {
+                        log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
+                    }
+                    return None;
+                }
+            }
+        }
+
+        // Conditions satisfied or none defined, run the inner filter
+        self.inner
+            .run_upstream_response_body_filter(body, end_of_stream, session, log)
     }
 }
 

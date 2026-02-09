@@ -22,14 +22,17 @@ mod tests;
 
 // Re-exports
 pub use edgion_plugin::EdgionPlugin;
-pub use entry::{PluginEntry, RequestFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry};
+pub use entry::{
+    PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
+    UpstreamResponseFilterEntry,
+};
 pub use plugin_configs::{
-    BasicAuthConfig, CaseType, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule, DebugAccessLogToHeaderConfig,
-    DefaultAction, ExtractConfig, ForwardAuthConfig, HeaderActions, HeaderEntry, HeaderRename, HttpMethod,
-    IpRestrictionConfig, IpSource, JwtAlgorithm, JwtAuthConfig, KeyAuthConfig, KeyMetadata, LimitHeaderNames,
-    MappingConfig, MockConfig, OnMissing, OnMissingKey, ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RegexUri,
-    ReplaceConfig, RequestRestrictionConfig, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig,
-    RestrictionRule, RestrictionSource, RuleMatchMode, TransformConfig, TransformType,
+    BandwidthLimitConfig, BasicAuthConfig, CaseType, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule,
+    DebugAccessLogToHeaderConfig, DefaultAction, ExtractConfig, ForwardAuthConfig, HeaderActions, HeaderEntry,
+    HeaderRename, HttpMethod, IpRestrictionConfig, IpSource, JwtAlgorithm, JwtAuthConfig, KeyAuthConfig, KeyMetadata,
+    LimitHeaderNames, MappingConfig, MockConfig, OnMissing, OnMissingKey, ProxyRewriteConfig, RateLimitConfig,
+    RealIpConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig, ResponseHeaderActions, ResponseHeaderEntry,
+    ResponseRewriteConfig, RestrictionRule, RestrictionSource, RuleMatchMode, TransformConfig, TransformType,
 };
 
 /// API group for EdgionPlugins
@@ -58,6 +61,11 @@ pub struct EdgionPluginsSpec {
     /// Upstream response filter stage plugins (sync)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_response_filter_plugins: Option<Vec<UpstreamResponseFilterEntry>>,
+
+    /// Upstream response body filter stage plugins (sync)
+    /// These plugins run for each body chunk and can control bandwidth throttling
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_response_body_filter_plugins: Option<Vec<UpstreamResponseBodyFilterEntry>>,
 
     /// Upstream response stage plugins (async)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,6 +96,7 @@ impl Default for EdgionPluginsSpec {
         Self {
             request_plugins: None,
             upstream_response_filter_plugins: None,
+            upstream_response_body_filter_plugins: None,
             upstream_response_plugins: None,
             plugin_runtime: Arc::new(PluginRuntime::new()),
             preparse_errors: Vec::new(),
@@ -116,6 +125,11 @@ impl EdgionPlugins {
                 .is_some_and(|p| !p.is_empty())
             || self
                 .spec
+                .upstream_response_body_filter_plugins
+                .as_ref()
+                .is_some_and(|p| !p.is_empty())
+            || self
+                .spec
                 .upstream_response_plugins
                 .as_ref()
                 .is_some_and(|p| !p.is_empty())
@@ -129,8 +143,13 @@ impl EdgionPlugins {
             .upstream_response_filter_plugins
             .as_ref()
             .map_or(0, |p| p.len());
+        let body_filter_count = self
+            .spec
+            .upstream_response_body_filter_plugins
+            .as_ref()
+            .map_or(0, |p| p.len());
         let response_count = self.spec.upstream_response_plugins.as_ref().map_or(0, |p| p.len());
-        request_count + filter_count + response_count
+        request_count + filter_count + body_filter_count + response_count
     }
 
     /// Get request filter entries as a slice
@@ -141,6 +160,14 @@ impl EdgionPlugins {
     /// Get upstream response filter entries as a slice
     pub fn upstream_response_filter_entries(&self) -> &[UpstreamResponseFilterEntry] {
         self.spec.upstream_response_filter_plugins.as_deref().unwrap_or(&[])
+    }
+
+    /// Get upstream response body filter entries as a slice
+    pub fn upstream_response_body_filter_entries(&self) -> &[UpstreamResponseBodyFilterEntry] {
+        self.spec
+            .upstream_response_body_filter_plugins
+            .as_deref()
+            .unwrap_or(&[])
     }
 
     /// Get upstream response entries as a slice
@@ -168,6 +195,12 @@ impl EdgionPlugins {
         if let Some(upstream_response_filter_plugins) = &self.spec.upstream_response_filter_plugins {
             let filter_errors = runtime.add_from_upstream_response_filters(upstream_response_filter_plugins, namespace);
             errors.extend(filter_errors);
+        }
+
+        if let Some(upstream_response_body_filter_plugins) = &self.spec.upstream_response_body_filter_plugins {
+            let body_filter_errors =
+                runtime.add_from_upstream_response_body_filters(upstream_response_body_filter_plugins, namespace);
+            errors.extend(body_filter_errors);
         }
 
         if let Some(upstream_response_plugins) = &self.spec.upstream_response_plugins {

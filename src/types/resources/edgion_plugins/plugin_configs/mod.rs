@@ -1,3 +1,4 @@
+mod bandwidth_limit;
 mod basic_auth;
 mod cors;
 mod csrf;
@@ -14,6 +15,7 @@ mod real_ip;
 mod request_restriction;
 mod response_rewrite;
 
+pub use bandwidth_limit::BandwidthLimitConfig;
 pub use basic_auth::BasicAuthConfig;
 pub use cors::CorsConfig;
 pub use csrf::CsrfConfig;

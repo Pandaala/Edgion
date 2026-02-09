@@ -1,5 +1,7 @@
 //! Plugin runtime - manages plugin execution across different stages
 
+use std::time::Duration;
+
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
@@ -7,15 +9,19 @@ use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
 use crate::types::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
 };
-use crate::types::resources::{RequestFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry};
+use crate::types::resources::{
+    RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry,
+};
 use crate::types::EdgionHttpContext;
 
 use super::conditional_filter::{
-    ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseFilter,
+    ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseBodyFilter,
+    ConditionalUpstreamResponseFilter,
 };
 use super::log::{PluginLog, StageLogs};
 use super::session_adapter::PingoraSessionAdapter;
-use super::traits::{RequestFilter, UpstreamResponse, UpstreamResponseFilter};
+use super::traits::{RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter};
+use crate::core::plugins::edgion_plugins::bandwidth_limit::BandwidthLimit;
 use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
 use crate::core::plugins::edgion_plugins::cors::Cors;
 use crate::core::plugins::edgion_plugins::csrf::Csrf;
@@ -41,6 +47,8 @@ pub struct PluginRuntime {
     request_plugins: Vec<Box<dyn RequestFilter>>,
     /// Plugins for upstream_response_filter stage (sync)
     upstream_response_plugins: Vec<Box<dyn UpstreamResponseFilter>>,
+    /// Plugins for upstream_response_body_filter stage (sync, bandwidth throttling)
+    upstream_response_body_plugins: Vec<Box<dyn UpstreamResponseBodyFilter>>,
     /// Plugins for response_filter stage (async)
     upstream_response_async_plugins: Vec<Box<dyn UpstreamResponse>>,
 }
@@ -57,6 +65,10 @@ impl std::fmt::Debug for PluginRuntime {
         f.debug_struct("PluginRuntime")
             .field("request_plugins_count", &self.request_plugins.len())
             .field("upstream_response_plugins_count", &self.upstream_response_plugins.len())
+            .field(
+                "upstream_response_body_plugins_count",
+                &self.upstream_response_body_plugins.len(),
+            )
             .field(
                 "upstream_response_async_plugins_count",
                 &self.upstream_response_async_plugins.len(),
@@ -76,6 +88,7 @@ impl PluginRuntime {
         Self {
             request_plugins: vec![],
             upstream_response_plugins: vec![],
+            upstream_response_body_plugins: vec![],
             upstream_response_async_plugins: vec![],
         }
     }
@@ -250,6 +263,42 @@ impl PluginRuntime {
         errors
     }
 
+    /// Add upstream response body filters from entries (only enabled)
+    ///
+    /// Filters are wrapped with ConditionalUpstreamResponseBodyFilter to support condition-based execution.
+    ///
+    /// # Returns
+    /// A vector of validation error messages (empty if all plugins are valid)
+    pub fn add_from_upstream_response_body_filters(
+        &mut self,
+        entries: &[UpstreamResponseBodyFilterEntry],
+        namespace: &str,
+    ) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        for (index, entry) in entries.iter().enumerate() {
+            if entry.is_enabled() {
+                // Collect validation errors from plugin configs
+                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
+                        index, plugin_name, error
+                    ));
+                }
+
+                if let Some(filter) = Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace) {
+                    // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
+                    let conditional_filter =
+                        ConditionalUpstreamResponseBodyFilter::new(filter, entry.conditions.clone());
+                    self.add_upstream_response_body_filter(Box::new(conditional_filter));
+                }
+            }
+        }
+
+        errors
+    }
+
     /// Create a RequestFilter instance from EdgionPlugin enum
     ///
     /// # Arguments
@@ -312,6 +361,17 @@ impl PluginRuntime {
         None
     }
 
+    /// Create an UpstreamResponseBodyFilter instance from EdgionPlugin enum
+    fn create_upstream_response_body_filter_from_edgion(
+        plugin: &EdgionPlugin,
+        _namespace: &str,
+    ) -> Option<Box<dyn UpstreamResponseBodyFilter>> {
+        match plugin {
+            EdgionPlugin::BandwidthLimit(config) => Some(BandwidthLimit::create(config)),
+            _ => None,
+        }
+    }
+
     /// Get validation error from a plugin config (if any)
     fn get_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
         match plugin {
@@ -322,6 +382,7 @@ impl PluginRuntime {
             EdgionPlugin::ResponseRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::KeyAuth(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ForwardAuth(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::BandwidthLimit(config) => config.get_validation_error().map(|s| s.to_string()),
             _ => None,
         }
     }
@@ -347,6 +408,7 @@ impl PluginRuntime {
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
+            EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",
             EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
@@ -361,13 +423,20 @@ impl PluginRuntime {
         self.upstream_response_plugins.push(filter);
     }
 
+    fn add_upstream_response_body_filter(&mut self, filter: Box<dyn UpstreamResponseBodyFilter>) {
+        self.upstream_response_body_plugins.push(filter);
+    }
+
     fn add_upstream_response(&mut self, filter: Box<dyn UpstreamResponse>) {
         self.upstream_response_async_plugins.push(filter);
     }
 
     /// Get total plugin count across all stages
     pub fn total_plugin_count(&self) -> usize {
-        self.request_plugins.len() + self.upstream_response_plugins.len() + self.upstream_response_async_plugins.len()
+        self.request_plugins.len()
+            + self.upstream_response_plugins.len()
+            + self.upstream_response_body_plugins.len()
+            + self.upstream_response_async_plugins.len()
     }
 
     /// Get request stage plugin count
@@ -378,6 +447,11 @@ impl PluginRuntime {
     /// Get upstream_response_filter stage plugin count (sync)
     pub fn upstream_response_plugins_count(&self) -> usize {
         self.upstream_response_plugins.len()
+    }
+
+    /// Get upstream_response_body_filter stage plugin count (sync)
+    pub fn upstream_response_body_plugins_count(&self) -> usize {
+        self.upstream_response_body_plugins.len()
     }
 
     /// Get upstream_response stage plugin count (async)
@@ -393,6 +467,11 @@ impl PluginRuntime {
     /// Iterate over upstream_response_filter stage filters (sync)
     pub fn upstream_response_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn UpstreamResponseFilter>> {
         self.upstream_response_plugins.iter()
+    }
+
+    /// Iterate over upstream_response_body_filter stage filters (sync)
+    pub fn upstream_response_body_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn UpstreamResponseBodyFilter>> {
+        self.upstream_response_body_plugins.iter()
     }
 
     /// Iterate over response_filter stage filters (async)
@@ -471,6 +550,67 @@ impl PluginRuntime {
             filters: filter_logs,
             edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
         });
+    }
+
+    /// Run upstream_response_body_filter stage filters (sync)
+    ///
+    /// Called for each body chunk received from upstream. Each plugin can return
+    /// an optional Duration for bandwidth throttling. When multiple plugins return
+    /// a duration, the largest (most restrictive) one wins.
+    ///
+    /// NOTE: Unlike other stages, this does NOT log per-chunk execution to avoid
+    /// excessive logging overhead (body filter is called for every chunk).
+    /// The first invocation logs stage info only.
+    ///
+    /// # Arguments
+    /// * `s` - The Pingora session (for condition evaluation)
+    /// * `ctx` - The request context
+    /// * `body` - The body chunk data (read-only)
+    /// * `end_of_stream` - Whether this is the last chunk
+    ///
+    /// # Returns
+    /// * `None` - No throttling
+    /// * `Some(duration)` - Delay next chunk by this duration
+    pub fn run_upstream_response_body_plugins(
+        &self,
+        s: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        body: &Option<bytes::Bytes>,
+        end_of_stream: bool,
+    ) -> Option<Duration> {
+        if self.upstream_response_body_plugins.is_empty() {
+            return None;
+        }
+
+        let mut max_delay: Option<Duration> = None;
+
+        // Create a session adapter for condition evaluation
+        // Use a scoped borrow to avoid lifetime issues with ctx
+        {
+            let session_adapter = PingoraSessionAdapter::new(s, ctx);
+
+            for filter in &self.upstream_response_body_plugins {
+                let mut plugin_log = PluginLog::new(filter.name());
+
+                let delay = filter.run_upstream_response_body_filter(
+                    body,
+                    end_of_stream,
+                    &session_adapter,
+                    &mut plugin_log,
+                );
+
+                // Take the largest delay (most restrictive rate limit)
+                if let Some(d) = delay {
+                    max_delay = Some(match max_delay {
+                        Some(current) => current.max(d),
+                        None => d,
+                    });
+                }
+            }
+        }
+        // session_adapter dropped here, ctx borrow released
+
+        max_delay
     }
 
     /// Run response_filter stage filters (async)

@@ -4,9 +4,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
-    BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, ForwardAuthConfig,
-    IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig,
+    BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig,
+    ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig,
+    RateLimitConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -65,6 +65,8 @@ pub enum EdgionPlugin {
     RealIp(RealIpConfig),
     /// ForwardAuth filter (forward request to external auth service for authentication)
     ForwardAuth(ForwardAuthConfig),
+    /// BandwidthLimit filter (limit downstream response bandwidth per second)
+    BandwidthLimit(BandwidthLimitConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -98,6 +100,7 @@ impl EdgionPlugin {
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
+            EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",
         }
     }
 }
