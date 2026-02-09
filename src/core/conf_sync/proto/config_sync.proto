@@ -12,6 +12,10 @@ service ConfigSync {
     
     // Watch for changes to resources of a specific kind
     rpc Watch(WatchRequest) returns (stream WatchResponse);
+
+    // Watch server metadata changes (gateway count, etc.)
+    // Used by Gateway instances to track cluster size for Cluster scope rate limiting.
+    rpc WatchServerMeta(WatchServerMetaRequest) returns (stream ServerMetaEvent);
 }
 
 // List request
@@ -44,6 +48,19 @@ message WatchResponse {
     uint64 sync_version = 2;
     string err = 3;
     string server_id = 4;  // Server instance ID for detecting server restarts
+}
+
+// Request to watch server metadata (gateway instance count, etc.)
+message WatchServerMetaRequest {
+    string client_id = 1;      // Unique client identifier
+    string client_name = 2;    // Human-readable client name
+}
+
+// Server metadata event (pushed on change)
+message ServerMetaEvent {
+    string server_id = 1;                 // Server instance ID
+    uint32 gateway_instance_count = 2;    // Number of connected gateway instances
+    uint64 timestamp = 10;                // Event timestamp (millis since epoch)
 }
 
 // Server info request

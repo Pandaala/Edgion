@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::sync::mpsc;
 
+use super::client_registry::ClientRegistry;
 use super::traits::WatchObj;
 use crate::core::conf_mgr::conf_center::EndpointMode;
 
@@ -41,6 +42,9 @@ pub struct ConfigSyncServer {
 
     /// Watch objects by kind (registered by processors)
     watch_objects: RwLock<HashMap<String, Arc<dyn WatchObj>>>,
+
+    /// Registry for tracking connected gateway instances (for Cluster scope rate limiting)
+    client_registry: Arc<ClientRegistry>,
 }
 
 impl ConfigSyncServer {
@@ -58,7 +62,13 @@ impl ConfigSyncServer {
             server_id: RwLock::new(server_id),
             endpoint_mode: RwLock::new(None),
             watch_objects: RwLock::new(HashMap::new()),
+            client_registry: Arc::new(ClientRegistry::new()),
         }
+    }
+
+    /// Get the client registry (for WatchServerMeta)
+    pub fn client_registry(&self) -> Arc<ClientRegistry> {
+        self.client_registry.clone()
     }
 
     /// Generate a new server ID using millisecond timestamp

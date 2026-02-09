@@ -208,6 +208,13 @@ impl EdgionGatewayCli {
             "Started watching resources from Controller"
         );
 
+        // 5.1. Start watching server metadata (gateway instance count for Cluster scope rate limiting)
+        let sync_client_arc = Arc::new(sync_client);
+        let sync_client_for_meta = sync_client_arc.clone();
+        runtime.spawn(async move {
+            sync_client_for_meta.start_watch_server_meta().await;
+        });
+
         // 6. Start auxiliary services
         runtime.block_on(Self::start_auxiliary_services(config_client.clone()));
 

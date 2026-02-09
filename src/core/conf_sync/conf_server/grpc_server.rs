@@ -8,7 +8,8 @@ use tonic::{Request, Response, Status};
 use crate::core::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
-    ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, WatchRequest, WatchResponse,
+    ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, ServerMetaEvent, WatchRequest,
+    WatchResponse, WatchServerMetaRequest,
 };
 use crate::types::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 
@@ -301,6 +302,85 @@ impl ConfigSync for ConfigSyncGrpcServer {
                         }
                         // If provider returns None, server is reloading, keep waiting
                     }
+                }
+            }
+        });
+
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+    }
+
+    type WatchServerMetaStream = tokio_stream::wrappers::ReceiverStream<Result<ServerMetaEvent, Status>>;
+
+    async fn watch_server_meta(
+        &self,
+        request: Request<WatchServerMetaRequest>,
+    ) -> Result<Response<Self::WatchServerMetaStream>, Status> {
+        let server = self.get_server()?;
+        let req = request.into_inner();
+        let registry = server.client_registry();
+
+        // Register this client
+        registry.register(req.client_id.clone(), req.client_name.clone());
+
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let server_id = server.server_id();
+        let client_id = req.client_id.clone();
+
+        tracing::info!(
+            component = "grpc_server",
+            client_id = %client_id,
+            client_name = %req.client_name,
+            "WatchServerMeta stream started"
+        );
+
+        tokio::spawn(async move {
+            // Helper to get current timestamp in millis
+            let now_millis = || -> u64 {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0)
+            };
+
+            // Send initial state immediately
+            let initial_event = ServerMetaEvent {
+                server_id: server_id.clone(),
+                gateway_instance_count: registry.count(),
+                timestamp: now_millis(),
+            };
+            if tx.send(Ok(initial_event)).await.is_err() {
+                registry.unregister(&client_id);
+                return;
+            }
+
+            // Push on change (event-driven, not polling)
+            // Use a loop that re-checks count after each notification to avoid
+            // missing rapid successive changes
+            let mut last_count = registry.count();
+            loop {
+                registry.wait_for_change().await;
+
+                let new_count = registry.count();
+                if new_count == last_count {
+                    continue; // Spurious wakeup or concurrent change that reverted
+                }
+                last_count = new_count;
+
+                let event = ServerMetaEvent {
+                    server_id: server_id.clone(),
+                    gateway_instance_count: new_count,
+                    timestamp: now_millis(),
+                };
+
+                if tx.send(Ok(event)).await.is_err() {
+                    // Client disconnected, unregister
+                    tracing::info!(
+                        component = "grpc_server",
+                        client_id = %client_id,
+                        "WatchServerMeta client disconnected, unregistering"
+                    );
+                    registry.unregister(&client_id);
+                    break;
                 }
             }
         });

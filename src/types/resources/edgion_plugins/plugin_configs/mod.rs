@@ -25,7 +25,7 @@ pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential};
 pub use key_auth::{KeyAuthConfig, KeyMetadata};
 pub use mock::MockConfig;
 pub use proxy_rewrite::{HeaderActions, HeaderEntry, HttpMethod, ProxyRewriteConfig, RegexUri};
-pub use rate_limit::{LimitHeaderNames, OnMissingKey, RateLimitConfig};
+pub use rate_limit::{LimitHeaderNames, OnMissingKey, RateLimitConfig, RateLimitScope};
 pub use real_ip::RealIpConfig;
 pub use request_restriction::{OnMissing, RequestRestrictionConfig, RestrictionRule, RestrictionSource, RuleMatchMode};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};

@@ -21,6 +21,39 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing;
 
+// ========== Rate Limit Scope ==========
+
+/// Rate limit scope: determines how the rate quota is interpreted
+///
+/// - `Instance`: Each gateway instance enforces the full configured rate independently.
+/// - `Cluster`: The configured rate is the total quota for all instances combined.
+///   Effective per-instance rate = ceil(rate × skewTolerance / gateway_instance_count).
+///
+/// ## Example
+/// ```yaml
+/// rateLimit:
+///   rate: 1000
+///   scope: Cluster
+///   skewTolerance: 1.2
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum RateLimitScope {
+    /// Per-instance rate limit (default)
+    ///
+    /// Each gateway instance enforces the full configured rate independently.
+    /// Example: rate=100 means each instance allows 100 req/interval.
+    #[default]
+    Instance,
+
+    /// Cluster-wide rate limit
+    ///
+    /// The configured rate is the total quota for all instances combined.
+    /// Effective per-instance rate = ceil(rate × skewTolerance / gateway_instance_count).
+    /// Example: rate=1000, skewTolerance=1.2, 4 instances → each allows 300 req/interval.
+    Cluster,
+}
+
 // ========== Public Types (shared with other rate limiting plugins) ==========
 
 /// Custom header names for rate limit responses
@@ -213,6 +246,36 @@ pub struct RateLimitConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_names: Option<LimitHeaderNames>,
 
+    /// Rate limit scope (default: Instance)
+    ///
+    /// - `Instance`: rate is per-instance limit (skewTolerance is ignored)
+    /// - `Cluster`: rate is the total cluster limit, auto-divided by instance count
+    ///
+    /// ## Example
+    /// ```yaml
+    /// rateLimit:
+    ///   rate: 1000
+    ///   scope: Cluster
+    ///   skewTolerance: 1.2
+    /// ```
+    #[serde(default)]
+    pub scope: RateLimitScope,
+
+    /// Skew tolerance for Cluster scope (default: 1.2, range: 1.0 ~ 2.0)
+    ///
+    /// Compensates for uneven traffic distribution across gateway instances.
+    /// Each instance gets `ceil(rate × skewTolerance / instance_count)` as its
+    /// effective rate limit.
+    ///
+    /// - `1.0` = no headroom, strict split (never exceeds configured rate)
+    /// - `1.2` = 20% headroom (default, covers typical LB skew ≤60/40)
+    /// - `1.5` = 50% headroom (for sticky sessions or large skew)
+    /// - `2.0` = 100% headroom (maximum allowed)
+    ///
+    /// Ignored when scope is Instance.
+    #[serde(default = "default_skew_tolerance")]
+    pub skew_tolerance: f64,
+
     /// CMS estimator slots in K units (optional)
     ///
     /// Controls the precision of the Count-Min Sketch algorithm.
@@ -260,6 +323,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_skew_tolerance() -> f64 {
+    1.2
+}
+
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
@@ -272,6 +339,8 @@ impl Default for RateLimitConfig {
             reject_message: None,
             show_limit_headers: true,
             header_names: None,
+            scope: RateLimitScope::default(),
+            skew_tolerance: default_skew_tolerance(),
             estimator_slots_k: None,
             validation_error: None,
             interval_duration: None,
@@ -282,7 +351,8 @@ impl Default for RateLimitConfig {
 
 // Re-export from cli config for convenience
 pub use crate::core::cli::edgion_gateway::config::{
-    get_default_estimator_slots, get_max_estimator_slots, get_min_estimator_slots, SLOTS_K,
+    get_default_estimator_slots, get_gateway_instance_count, get_max_estimator_slots,
+    get_min_estimator_slots, SLOTS_K,
 };
 
 impl RateLimitConfig {
@@ -327,10 +397,53 @@ impl RateLimitConfig {
         self.effective_slots.unwrap_or_else(get_default_estimator_slots)
     }
 
+    /// Get the effective rate for this instance
+    ///
+    /// In Cluster scope, applies skewTolerance and divides by instance count.
+    /// Formula: ceil(rate × skew_tolerance / gateway_count)
+    ///
+    /// In Instance scope, returns the configured rate as-is.
+    pub fn get_effective_rate(&self) -> isize {
+        match self.scope {
+            RateLimitScope::Instance => self.rate,
+            RateLimitScope::Cluster => {
+                let count = get_gateway_instance_count() as f64;
+                let tolerance = self.skew_tolerance;
+                let effective = (self.rate as f64 * tolerance / count).ceil() as isize;
+                effective.max(1) // At least 1 request allowed
+            }
+        }
+    }
+
     fn validate_and_compile(&mut self, default_slots: usize, max_slots: usize) -> Result<(), String> {
         // Validate rate
         if self.rate <= 0 {
             return Err("rate must be greater than 0".to_string());
+        }
+
+        // Validate Cluster scope constraints
+        if self.scope == RateLimitScope::Cluster {
+            // Cluster scope with very low rate may result in 0 effective rate per instance
+            if self.rate < 2 {
+                return Err("rate must be >= 2 for Cluster scope (to ensure non-zero effective rate)".to_string());
+            }
+        }
+
+        // Validate and clamp skewTolerance (only meaningful for Cluster, but always validate)
+        if self.skew_tolerance < 1.0 {
+            tracing::warn!(
+                configured = self.skew_tolerance,
+                clamped = 1.0,
+                "skewTolerance below minimum, clamping to 1.0"
+            );
+            self.skew_tolerance = 1.0;
+        } else if self.skew_tolerance > 2.0 {
+            tracing::warn!(
+                configured = self.skew_tolerance,
+                clamped = 2.0,
+                "skewTolerance above maximum, clamping to 2.0"
+            );
+            self.skew_tolerance = 2.0;
         }
 
         // Validate reject_status
@@ -416,6 +529,7 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::cli::edgion_gateway::config::set_gateway_instance_count;
 
     #[test]
     fn test_default_config() {
@@ -611,5 +725,223 @@ rate: 50
 "#;
         let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.key.is_empty()); // serde default is empty vec
+    }
+
+    // ==================== Cluster Scope Tests ====================
+
+    #[test]
+    fn test_scope_default_is_instance() {
+        let config = RateLimitConfig::default();
+        assert_eq!(config.scope, RateLimitScope::Instance);
+        assert_eq!(config.skew_tolerance, 1.2); // default skewTolerance
+    }
+
+    #[test]
+    fn test_effective_rate_instance_scope() {
+        let config = RateLimitConfig {
+            rate: 100,
+            ..Default::default()
+        };
+        // Instance scope: always returns configured rate, skewTolerance ignored
+        assert_eq!(config.get_effective_rate(), 100);
+    }
+
+    #[test]
+    fn test_effective_rate_cluster_scope_with_default_skew() {
+        // Simulate 4 gateway instances
+        set_gateway_instance_count(4);
+
+        let config = RateLimitConfig {
+            rate: 1000,
+            scope: RateLimitScope::Cluster,
+            skew_tolerance: 1.2,
+            ..Default::default()
+        };
+        // ceil(1000 * 1.2 / 4) = ceil(300.0) = 300
+        assert_eq!(config.get_effective_rate(), 300);
+
+        // Cleanup
+        set_gateway_instance_count(1);
+    }
+
+    #[test]
+    fn test_effective_rate_cluster_scope_no_skew() {
+        set_gateway_instance_count(4);
+
+        let config = RateLimitConfig {
+            rate: 1000,
+            scope: RateLimitScope::Cluster,
+            skew_tolerance: 1.0,
+            ..Default::default()
+        };
+        // ceil(1000 * 1.0 / 4) = 250
+        assert_eq!(config.get_effective_rate(), 250);
+
+        set_gateway_instance_count(1);
+    }
+
+    #[test]
+    fn test_effective_rate_cluster_scope_high_skew() {
+        set_gateway_instance_count(3);
+
+        let config = RateLimitConfig {
+            rate: 100,
+            scope: RateLimitScope::Cluster,
+            skew_tolerance: 1.5,
+            ..Default::default()
+        };
+        // ceil(100 * 1.5 / 3) = ceil(50.0) = 50
+        assert_eq!(config.get_effective_rate(), 50);
+
+        set_gateway_instance_count(1);
+    }
+
+    #[test]
+    fn test_effective_rate_cluster_scope_ceiling() {
+        set_gateway_instance_count(3);
+
+        let config = RateLimitConfig {
+            rate: 10,
+            scope: RateLimitScope::Cluster,
+            skew_tolerance: 1.2,
+            ..Default::default()
+        };
+        // ceil(10 * 1.2 / 3) = ceil(4.0) = 4
+        assert_eq!(config.get_effective_rate(), 4);
+
+        set_gateway_instance_count(1);
+    }
+
+    #[test]
+    fn test_effective_rate_cluster_scope_fallback_to_one() {
+        // Default count is 1 (or controller unavailable)
+        set_gateway_instance_count(1);
+
+        let config = RateLimitConfig {
+            rate: 100,
+            scope: RateLimitScope::Cluster,
+            skew_tolerance: 1.2,
+            ..Default::default()
+        };
+        // ceil(100 * 1.2 / 1) = 120 (skewTolerance still applies)
+        assert_eq!(config.get_effective_rate(), 120);
+    }
+
+    #[test]
+    fn test_effective_rate_cluster_scope_minimum_one() {
+        set_gateway_instance_count(100);
+
+        let config = RateLimitConfig {
+            rate: 2,
+            scope: RateLimitScope::Cluster,
+            skew_tolerance: 1.0,
+            ..Default::default()
+        };
+        // ceil(2 * 1.0 / 100) = ceil(0.02) = 1 (clamped to at least 1)
+        assert_eq!(config.get_effective_rate(), 1);
+
+        set_gateway_instance_count(1);
+    }
+
+    #[test]
+    fn test_cluster_scope_validation_low_rate() {
+        let mut config = RateLimitConfig {
+            rate: 1,
+            scope: RateLimitScope::Cluster,
+            ..Default::default()
+        };
+        config.validate();
+        assert!(!config.is_valid());
+        assert!(config
+            .get_validation_error()
+            .unwrap()
+            .contains("Cluster scope"));
+    }
+
+    #[test]
+    fn test_skew_tolerance_clamped_low() {
+        let mut config = RateLimitConfig {
+            rate: 100,
+            scope: RateLimitScope::Cluster,
+            skew_tolerance: 0.5, // Below minimum
+            ..Default::default()
+        };
+        config.validate();
+        assert!(config.is_valid());
+        assert_eq!(config.skew_tolerance, 1.0); // Clamped to 1.0
+    }
+
+    #[test]
+    fn test_skew_tolerance_clamped_high() {
+        let mut config = RateLimitConfig {
+            rate: 100,
+            scope: RateLimitScope::Cluster,
+            skew_tolerance: 3.0, // Above maximum
+            ..Default::default()
+        };
+        config.validate();
+        assert!(config.is_valid());
+        assert_eq!(config.skew_tolerance, 2.0); // Clamped to 2.0
+    }
+
+    #[test]
+    fn test_yaml_scope_cluster_with_skew() {
+        let yaml = r#"
+rate: 1000
+interval: "1s"
+scope: Cluster
+skewTolerance: 1.5
+key:
+  - type: clientIp
+"#;
+        let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.scope, RateLimitScope::Cluster);
+        assert_eq!(config.rate, 1000);
+        assert_eq!(config.skew_tolerance, 1.5);
+    }
+
+    #[test]
+    fn test_yaml_scope_cluster_default_skew() {
+        let yaml = r#"
+rate: 1000
+scope: Cluster
+"#;
+        let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.scope, RateLimitScope::Cluster);
+        assert_eq!(config.skew_tolerance, 1.2); // default
+    }
+
+    #[test]
+    fn test_yaml_scope_default_instance() {
+        let yaml = r#"
+rate: 100
+"#;
+        let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.scope, RateLimitScope::Instance);
+    }
+
+    #[test]
+    fn test_effective_rate_dynamic_count_change() {
+        // Start with 2 instances
+        set_gateway_instance_count(2);
+
+        let config = RateLimitConfig {
+            rate: 10,
+            scope: RateLimitScope::Cluster,
+            skew_tolerance: 1.2,
+            ..Default::default()
+        };
+
+        // effective_rate = ceil(10 * 1.2 / 2) = 6
+        assert_eq!(config.get_effective_rate(), 6);
+
+        // Scale up to 4 instances mid-flight
+        set_gateway_instance_count(4);
+
+        // effective_rate = ceil(10 * 1.2 / 4) = ceil(3.0) = 3
+        assert_eq!(config.get_effective_rate(), 3);
+
+        // Cleanup
+        set_gateway_instance_count(1);
     }
 }

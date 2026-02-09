@@ -112,7 +112,7 @@ impl RateLimit {
             return;
         }
 
-        let limit = self.config.rate;
+        let limit = self.config.get_effective_rate();
         let reset_timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() + reset_after.as_secs())
@@ -161,10 +161,11 @@ impl RateLimit {
                 .map(|d| d.as_secs() + retry_after.as_secs())
                 .unwrap_or(0);
 
+            let effective_limit = self.config.get_effective_rate();
             if let Some(headers) = self.config.get_header_names() {
                 // Custom headers: only show what's explicitly configured
                 if let Some(limit_header) = headers.limit_header() {
-                    resp.insert_header(limit_header.to_string(), &self.config.rate.to_string())
+                    resp.insert_header(limit_header.to_string(), &effective_limit.to_string())
                         .ok();
                 }
                 if let Some(remaining_header) = headers.remaining_header() {
@@ -180,7 +181,7 @@ impl RateLimit {
                 }
             } else {
                 // Default: use X-RateLimit-* style
-                resp.insert_header("X-RateLimit-Limit", &self.config.rate.to_string())
+                resp.insert_header("X-RateLimit-Limit", &effective_limit.to_string())
                     .ok();
                 resp.insert_header("X-RateLimit-Remaining", "0").ok();
                 resp.insert_header("X-RateLimit-Reset", &reset_timestamp.to_string())
@@ -256,7 +257,7 @@ impl RequestFilter for RateLimit {
         };
 
         let interval = self.config.get_interval_duration();
-        let rate_limit = self.config.rate;
+        let rate_limit = self.config.get_effective_rate();
 
         // Get the Rate instance (lazily initialized on first access)
         let rate = self.get_rate();
@@ -271,8 +272,8 @@ impl RequestFilter for RateLimit {
         // Check if rate limit exceeded
         if curr_count > rate_limit {
             plugin_log.push(&format!(
-                "Rate limited (key: {}, count: {}, limit: {}); ",
-                limit_key, curr_count, rate_limit
+                "Rate limited (key: {}, count: {}, limit: {}, scope: {:?}); ",
+                limit_key, curr_count, rate_limit, self.config.scope
             ));
             // Use interval as retry_after since the window will reset after interval
             return self.reject_request(session, interval).await;
@@ -281,10 +282,11 @@ impl RequestFilter for RateLimit {
         // Add rate limit headers
         self.add_headers(session, remaining, interval);
         plugin_log.push(&format!(
-            "Allowed (key: {}, count: {}, remaining: {}); ",
+            "Allowed (key: {}, count: {}, remaining: {}, scope: {:?}); ",
             limit_key,
             curr_count,
-            remaining.max(0)
+            remaining.max(0),
+            self.config.scope
         ));
         PluginRunningResult::GoodNext
     }

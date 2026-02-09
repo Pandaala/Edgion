@@ -1,6 +1,7 @@
+use crate::core::cli::edgion_gateway::config::set_gateway_instance_count;
 use crate::core::conf_sync::conf_client::ConfigClient;
 use crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
-use crate::core::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse};
+use crate::core::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse, WatchServerMetaRequest};
 use crate::types::ResourceKind;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,6 +13,10 @@ use uuid::Uuid;
 pub struct ConfigSyncClient {
     config_client: Arc<ConfigClient>,
     conf_client_handle: ConfigSyncClientService<Channel>,
+    /// Client ID for WatchServerMeta registration
+    client_id: String,
+    /// Client name for WatchServerMeta registration
+    client_name: String,
 }
 
 impl ConfigSyncClient {
@@ -64,6 +69,8 @@ impl ConfigSyncClient {
         Ok(Self {
             config_client,
             conf_client_handle: client,
+            client_id,
+            client_name,
         })
     }
 
@@ -86,6 +93,74 @@ impl ConfigSyncClient {
         );
 
         Ok(info)
+    }
+
+    /// Start watching server metadata (gateway instance count, etc.)
+    ///
+    /// Runs as a background task. Updates the global GATEWAY_INSTANCE_COUNT
+    /// via set_gateway_instance_count(). Automatically reconnects on failure.
+    ///
+    /// This should be called once at startup via tokio::spawn.
+    pub async fn start_watch_server_meta(self: Arc<Self>) {
+        let client_id = self.client_id.clone();
+        let client_name = self.client_name.clone();
+
+        let mut backoff = Duration::from_secs(1);
+        let max_backoff = Duration::from_secs(30);
+
+        loop {
+            tracing::info!("Starting WatchServerMeta stream...");
+
+            match self
+                .conf_client_handle
+                .clone()
+                .watch_server_meta(WatchServerMetaRequest {
+                    client_id: client_id.clone(),
+                    client_name: client_name.clone(),
+                })
+                .await
+            {
+                Ok(response) => {
+                    backoff = Duration::from_secs(1); // Reset on success
+                    let mut stream = response.into_inner();
+
+                    loop {
+                        match stream.message().await {
+                            Ok(Some(event)) => {
+                                set_gateway_instance_count(event.gateway_instance_count);
+
+                                // Also track server_id for consistency
+                                if !event.server_id.is_empty() {
+                                    self.config_client
+                                        .set_current_server_id(event.server_id);
+                                }
+                            }
+                            Ok(None) => {
+                                tracing::warn!("WatchServerMeta stream ended, reconnecting...");
+                                break;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "WatchServerMeta stream error, reconnecting..."
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        backoff_secs = backoff.as_secs(),
+                        "WatchServerMeta connection failed, retrying..."
+                    );
+                }
+            }
+
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(max_backoff); // Exponential backoff
+        }
     }
 
     /// Start watching resource kinds based on server's supported kinds.
