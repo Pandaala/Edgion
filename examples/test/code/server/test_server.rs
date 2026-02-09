@@ -40,6 +40,10 @@ struct Cli {
     #[arg(long, default_value = "30011")]
     udp_port: u16,
 
+    /// Fake auth server port (for ForwardAuth plugin testing)
+    #[arg(long)]
+    auth_port: Option<u16>,
+
     /// HTTPS backend server port (for Backend TLS testing)
     #[arg(long)]
     https_backend_port: Option<u16>,
@@ -118,6 +122,12 @@ async fn main() -> Result<()> {
     // Start UDP server
     let handle = tokio::spawn(start_udp_server(cli.udp_port));
     handles.push(handle);
+
+    // Start Fake Auth server (if configured)
+    if let Some(auth_port) = cli.auth_port {
+        let handle = tokio::spawn(start_auth_server(auth_port));
+        handles.push(handle);
+    }
 
     // Start HTTPS backend server (if configured)
     if let Some(https_port) = cli.https_backend_port {
@@ -422,6 +432,163 @@ async fn start_udp_server(port: u16) -> Result<()> {
             Err(e) => {
                 error!("UDP recv error: {}", e);
             }
+        }
+    }
+}
+
+// ============================================================================
+// Fake Auth Server (for ForwardAuth plugin testing)
+// ============================================================================
+//
+// This server simulates an external authentication service.
+// It validates requests and returns appropriate responses:
+//
+// Authentication logic:
+//   - Authorization: Bearer valid-token   → 200 + user identity headers
+//   - Authorization: Bearer admin-token   → 200 + admin identity headers
+//   - Authorization: Bearer forbidden     → 403 + error body
+//   - No/invalid Authorization            → 401 + WWW-Authenticate header
+//
+// On success (2xx), returns headers that ForwardAuth should copy to upstream:
+//   - X-User-ID, X-User-Role, X-User-Email
+//
+// On failure (non-2xx), returns headers that ForwardAuth should copy to client:
+//   - WWW-Authenticate, X-Auth-Error-Code
+//
+// Also validates that X-Forwarded-* headers are correctly set by ForwardAuth plugin.
+
+async fn start_auth_server(port: u16) -> Result<()> {
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+
+    let app = Router::new()
+        .route("/verify", get(auth_verify_handler).post(auth_verify_handler))
+        .route("/health", get(health_handler));
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    info!("✓ Auth server listening on http://{}", addr);
+
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+/// Auth verification handler.
+///
+/// Validates the Authorization header and returns:
+/// - 200 + identity headers on success
+/// - 401 + WWW-Authenticate on missing/invalid auth
+/// - 403 + error body on forbidden token
+///
+/// Also echoes back X-Forwarded-* headers in response body for validation.
+async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    let headers = req.headers();
+
+    // Collect X-Forwarded-* headers for response body (so client can verify them)
+    let forwarded_host = headers
+        .get("x-forwarded-host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let forwarded_uri = headers
+        .get("x-forwarded-uri")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let forwarded_method = headers
+        .get("x-forwarded-method")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    // Collect all request headers for debugging
+    let mut received_headers = serde_json::Map::new();
+    for (key, value) in headers.iter() {
+        if let Ok(val) = value.to_str() {
+            received_headers.insert(key.as_str().to_lowercase(), json!(val));
+        }
+    }
+
+    // Check Authorization header
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    match auth_header {
+        // Valid regular user token
+        "Bearer valid-token" => {
+            let body = json!({
+                "status": "ok",
+                "user": "test-user",
+                "forwarded_host": forwarded_host,
+                "forwarded_uri": forwarded_uri,
+                "forwarded_method": forwarded_method,
+                "received_headers": received_headers,
+            });
+            (
+                StatusCode::OK,
+                [
+                    ("X-User-ID", "user-123"),
+                    ("X-User-Role", "member"),
+                    ("X-User-Email", "test@example.com"),
+                ],
+                Json(body),
+            )
+                .into_response()
+        }
+        // Valid admin token
+        "Bearer admin-token" => {
+            let body = json!({
+                "status": "ok",
+                "user": "admin-user",
+                "forwarded_host": forwarded_host,
+                "forwarded_uri": forwarded_uri,
+                "forwarded_method": forwarded_method,
+                "received_headers": received_headers,
+            });
+            (
+                StatusCode::OK,
+                [
+                    ("X-User-ID", "admin-001"),
+                    ("X-User-Role", "admin"),
+                    ("X-User-Email", "admin@example.com"),
+                ],
+                Json(body),
+            )
+                .into_response()
+        }
+        // Forbidden token
+        "Bearer forbidden" => {
+            let body = json!({
+                "error": "forbidden",
+                "message": "Access denied by auth service"
+            });
+            (
+                StatusCode::FORBIDDEN,
+                [("X-Auth-Error-Code", "FORBIDDEN_ROLE")],
+                Json(body),
+            )
+                .into_response()
+        }
+        // No auth or invalid token → 401
+        _ => {
+            let body = json!({
+                "error": "unauthorized",
+                "message": "Invalid or missing authentication token"
+            });
+            (
+                StatusCode::UNAUTHORIZED,
+                [
+                    ("WWW-Authenticate", "Bearer realm=\"test\""),
+                    ("X-Auth-Error-Code", "INVALID_TOKEN"),
+                ],
+                Json(body),
+            )
+                .into_response()
         }
     }
 }

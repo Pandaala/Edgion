@@ -252,6 +252,10 @@ mod tests {
             self.headers.get(name).cloned()
         }
 
+        fn request_headers(&self) -> Vec<(String, String)> {
+            self.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        }
+
         fn method(&self) -> String {
             self.method.clone()
         }

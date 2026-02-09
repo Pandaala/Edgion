@@ -26,6 +26,7 @@ use crate::core::plugins::edgion_plugins::key_auth::KeyAuth;
 use crate::core::plugins::edgion_plugins::mock::Mock;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
 use crate::core::plugins::edgion_plugins::rate_limit::RateLimit;
+use crate::core::plugins::edgion_plugins::forward_auth::ForwardAuth;
 use crate::core::plugins::edgion_plugins::real_ip::RealIp;
 use crate::core::plugins::edgion_plugins::request_restriction::RequestRestriction;
 use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
@@ -272,6 +273,7 @@ impl PluginRuntime {
             EdgionPlugin::RateLimit(config) => Some(RateLimit::create(config)),
             EdgionPlugin::CtxSet(config) => Some(CtxSet::create(config)),
             EdgionPlugin::RealIp(config) => Some(RealIp::create(config)),
+            EdgionPlugin::ForwardAuth(config) => Some(Box::new(ForwardAuth::new(config))),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
@@ -319,6 +321,7 @@ impl PluginRuntime {
             EdgionPlugin::ProxyRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ResponseRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::KeyAuth(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::ForwardAuth(config) => config.get_validation_error().map(|s| s.to_string()),
             _ => None,
         }
     }
@@ -341,6 +344,7 @@ impl PluginRuntime {
             EdgionPlugin::RateLimit(_) => "RateLimit",
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
+            EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::ExtensionRef(_) => "ExtensionRef",

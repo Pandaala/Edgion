@@ -198,6 +198,7 @@ start_test_server() {
         --websocket-port 30005 \
         --tcp-port 30010 \
         --udp-port 30011 \
+        --auth-port 30040 \
         --log-level info \
         > "${LOG_DIR}/test_server.log" 2>&1 &
     

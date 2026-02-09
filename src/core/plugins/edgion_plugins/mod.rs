@@ -1,10 +1,12 @@
 //! Plugin store module for EdgionPlugins resources
 
 pub mod basic_auth;
+pub mod common;
 mod conf_handler_impl;
 pub mod cors;
 pub mod csrf;
 pub mod ctx_set;
+pub mod forward_auth;
 pub mod ip_restriction;
 pub mod jwt_auth;
 pub mod key_auth;
@@ -21,6 +23,7 @@ pub use conf_handler_impl::create_plugin_handler;
 pub use cors::Cors;
 pub use csrf::Csrf;
 pub use ctx_set::CtxSet;
+pub use forward_auth::ForwardAuth;
 pub use ip_restriction::IpRestriction;
 pub use jwt_auth::JwtAuth;
 pub use key_auth::KeyAuth;
@@ -34,6 +37,7 @@ pub use response_rewrite::ResponseRewrite;
 
 // Re-export plugin configs from types
 pub use crate::types::resources::edgion_plugins::{
-    BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig,
-    MockConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig,
+    KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig,
+    ResponseRewriteConfig,
 };

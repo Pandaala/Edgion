@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
-    BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, IpRestrictionConfig,
-    JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
+    BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, ForwardAuthConfig,
+    IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
     RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
@@ -63,6 +63,8 @@ pub enum EdgionPlugin {
     CtxSet(CtxSetConfig),
     /// RealIp filter (extract real client IP from headers with trusted proxy support)
     RealIp(RealIpConfig),
+    /// ForwardAuth filter (forward request to external auth service for authentication)
+    ForwardAuth(ForwardAuthConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -95,6 +97,7 @@ impl EdgionPlugin {
             EdgionPlugin::RateLimit(_) => "RateLimit",
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
+            EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
         }
     }
 }
