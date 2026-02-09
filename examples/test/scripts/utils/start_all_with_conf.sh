@@ -475,8 +475,8 @@ get_suites_to_load() {
             if [ -d "$resource_dir" ]; then
                 local resource_name=$(basename "$resource_dir")
                 
-                # Skip base directory
-                if [ "$resource_name" = "base" ]; then
+                # Skip base directory and Services directory (ACME tests have their own script)
+                if [ "$resource_name" = "base" ] || [ "$resource_name" = "Services" ]; then
                     continue
                 fi
                 

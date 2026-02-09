@@ -7,6 +7,27 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::RwLock as AsyncRwLock;
 use tonic::transport::Channel;
 
+/// Type-erased trait for ClientCache operations that don't depend on T.
+///
+/// This allows ConfigClient to provide a unified dispatch method via ResourceKind,
+/// eliminating the need for hand-maintained string match arms in multiple places.
+/// When a new ResourceKind variant is added, the compiler will enforce exhaustiveness
+/// at the dispatch site (ConfigClient::get_dyn_cache), preventing silent omissions.
+#[async_trait::async_trait]
+pub trait DynClientCache: Send + Sync {
+    /// Check if this cache is ready (has completed first list)
+    fn is_ready(&self) -> bool;
+
+    /// Mark this cache as ready (used when watch is skipped)
+    fn set_ready(&self);
+
+    /// Set the gRPC client for this cache
+    async fn set_grpc_client_dyn(&self, client: ConfigSyncClientService<Channel>);
+
+    /// Start watching resources from gRPC server
+    async fn start_watch_dyn(&self) -> Result<(), tonic::Status>;
+}
+
 pub struct ClientCache<T>
 where
     T: kube::Resource,
@@ -146,5 +167,29 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
             key = %key,
             "Manually triggered update event for resource"
         );
+    }
+}
+
+// Implement DynClientCache for all ClientCache<T> with appropriate bounds
+#[async_trait::async_trait]
+impl<T> DynClientCache for ClientCache<T>
+where
+    T: ResourceMeta + Resource + Clone + Send + Sync + 'static,
+{
+    fn is_ready(&self) -> bool {
+        self.is_ready()
+    }
+
+    fn set_ready(&self) {
+        let mut cache = self.cache_data.write().unwrap();
+        cache.set_ready();
+    }
+
+    async fn set_grpc_client_dyn(&self, client: ConfigSyncClientService<Channel>) {
+        self.set_grpc_client(client).await;
+    }
+
+    async fn start_watch_dyn(&self) -> Result<(), tonic::Status> {
+        self.start_watch().await
     }
 }
