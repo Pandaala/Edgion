@@ -133,7 +133,7 @@ bcrypt = "0.18"
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
-jsonwebtoken = "9"
+jsonwebtoken = "10"
 
 # Pingora
 pingora-core = { version = "0.7.0", features = ["connection_filter"] }
