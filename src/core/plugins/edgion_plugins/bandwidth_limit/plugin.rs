@@ -17,6 +17,7 @@
 //! - Effective throughput ≈ 1MB/s
 
 use std::time::Duration;
+use tracing::{error, info};
 
 use crate::core::plugins::plugin_runtime::log::PluginLog;
 use crate::core::plugins::plugin_runtime::traits::{PluginSession, UpstreamResponseBodyFilter};
@@ -56,11 +57,12 @@ impl UpstreamResponseBodyFilter for BandwidthLimit {
         &self,
         body: &Option<bytes::Bytes>,
         _end_of_stream: bool,
-        _session: &dyn PluginSession,
+        _session: &mut dyn PluginSession,
         _log: &mut PluginLog,
     ) -> Option<Duration> {
         // Skip if rate is invalid or zero (misconfiguration, fail-open)
         if self.rate_bps == 0 {
+            info!("BandwidthLimit skipped: rate_bps is 0");
             return None;
         }
 
@@ -70,6 +72,10 @@ impl UpstreamResponseBodyFilter for BandwidthLimit {
                 // Calculate how long this chunk should take to transmit at the configured rate
                 // delay = chunk_size_bytes / rate_bytes_per_second
                 let delay_secs = chunk_size as f64 / self.rate_bps as f64;
+                error!(
+                    "BandwidthLimit applied: chunk_size={}, rate={}, delay={:.4}s",
+                    chunk_size, self.rate_bps, delay_secs
+                );
                 return Some(Duration::from_secs_f64(delay_secs));
             }
         }
@@ -81,6 +87,7 @@ impl UpstreamResponseBodyFilter for BandwidthLimit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
 
     fn create_test_plugin(rate: &str) -> Box<dyn UpstreamResponseBodyFilter> {
         let config = BandwidthLimitConfig {
@@ -97,8 +104,8 @@ mod tests {
         let mut log = PluginLog::new("test");
 
         // Create a minimal mock session
-        let session = MockSession;
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &session, &mut log);
+        let mut session = MockPluginSession::new();
+        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
 
         // 64KB / 1MB/s = 0.0625s = 62.5ms
         assert!(delay.is_some());
@@ -112,8 +119,8 @@ mod tests {
         let body: Option<bytes::Bytes> = Some(bytes::Bytes::new());
         let mut log = PluginLog::new("test");
 
-        let session = MockSession;
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &session, &mut log);
+        let mut session = MockPluginSession::new();
+        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
         assert!(delay.is_none());
     }
 
@@ -123,8 +130,8 @@ mod tests {
         let body: Option<bytes::Bytes> = None;
         let mut log = PluginLog::new("test");
 
-        let session = MockSession;
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &session, &mut log);
+        let mut session = MockPluginSession::new();
+        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
         assert!(delay.is_none());
     }
 
@@ -134,8 +141,8 @@ mod tests {
         let body = Some(bytes::Bytes::from(vec![0u8; 1024]));
         let mut log = PluginLog::new("test");
 
-        let session = MockSession;
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &session, &mut log);
+        let mut session = MockPluginSession::new();
+        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
         // Invalid rate -> fail-open, no throttling
         assert!(delay.is_none());
     }
@@ -146,154 +153,13 @@ mod tests {
         let body = Some(bytes::Bytes::from(vec![0u8; 1024])); // 1KB chunk
         let mut log = PluginLog::new("test");
 
-        let session = MockSession;
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &session, &mut log);
+        let mut session = MockPluginSession::new();
+        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
 
         // 1KB / 512KB/s = 1/512 ≈ 0.00195s ≈ 1.95ms
         assert!(delay.is_some());
         let d = delay.unwrap();
         let micros = d.as_micros();
         assert!(micros >= 1900 && micros <= 2000, "Expected ~1953us, got {}us", micros);
-    }
-
-    // Minimal mock session for unit tests (only needs Send)
-    struct MockSession;
-
-    // We need a minimal PluginSession impl for testing
-    #[async_trait::async_trait]
-    impl PluginSession for MockSession {
-        fn header_value(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn request_headers(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn method(&self) -> String {
-            "GET".to_string()
-        }
-        fn get_query_param(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn get_cookie(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn get_path(&self) -> &str {
-            "/"
-        }
-        fn get_query(&self) -> Option<String> {
-            None
-        }
-        fn get_method(&self) -> &str {
-            "GET"
-        }
-        fn get_ctx_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_ctx_var(&mut self, _key: &str, _value: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn remove_ctx_var(&mut self, _key: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn get_path_param(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        async fn write_response_header(
-            &mut self,
-            _resp: Box<pingora_http::ResponseHeader>,
-            _end_of_stream: bool,
-        ) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn write_response_header_boxed<'a>(
-            &'a mut self,
-            _resp: Box<pingora_http::ResponseHeader>,
-            _end_of_stream: bool,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()>> + Send + 'a>> {
-            Box::pin(async { Ok(()) })
-        }
-        fn set_response_header(&mut self, _name: &str, _value: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn append_response_header(&mut self, _name: &str, _value: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn remove_response_header(&mut self, _name: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn get_response_header(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_response_status(&mut self, _status: u16) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn set_request_header(&mut self, _name: &str, _value: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn append_request_header(&mut self, _name: &str, _value: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn remove_request_header(&mut self, _name: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn set_upstream_uri(&mut self, _uri: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn set_upstream_host(&mut self, _host: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn set_upstream_method(&mut self, _method: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        async fn write_response_body(
-            &mut self,
-            _body: Option<bytes::Bytes>,
-            _end_of_stream: bool,
-        ) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        async fn shutdown(&mut self) {}
-        fn client_addr(&self) -> &str {
-            "127.0.0.1"
-        }
-        fn remote_addr(&self) -> &str {
-            "127.0.0.1"
-        }
-        fn set_remote_addr(&mut self, _addr: &str) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
-        fn ctx(&self) -> &crate::types::EdgionHttpContext {
-            unimplemented!("Not needed for bandwidth limit tests")
-        }
-        fn push_plugin_ref(&mut self, _key: String) {}
-        fn pop_plugin_ref(&mut self) {}
-        fn plugin_ref_depth(&self) -> usize {
-            0
-        }
-        fn has_plugin_ref(&self, _key: &str) -> bool {
-            false
-        }
-        fn push_edgion_plugins_log(&mut self, _log: crate::core::plugins::plugin_runtime::log::EdgionPluginsLog) {}
-        fn start_edgion_plugins_log(
-            &mut self,
-            _name: String,
-        ) -> crate::core::plugins::plugin_runtime::log::EdgionPluginsLogToken {
-            crate::core::plugins::plugin_runtime::log::EdgionPluginsLogToken::new(0, 0)
-        }
-        fn push_to_edgion_plugins_log(
-            &mut self,
-            _token: &crate::core::plugins::plugin_runtime::log::EdgionPluginsLogToken,
-            _log: crate::core::plugins::plugin_runtime::log::PluginLog,
-        ) {}
-        fn key_get(&self, _key: &crate::types::common::KeyGet) -> Option<String> {
-            None
-        }
-        fn key_set(
-            &mut self,
-            _key: &crate::types::common::KeySet,
-            _value: Option<String>,
-        ) -> crate::core::plugins::plugin_runtime::traits::PluginSessionResult<()> {
-            Ok(())
-        }
     }
 }

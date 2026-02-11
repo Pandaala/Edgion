@@ -40,7 +40,7 @@ pub trait UpstreamResponseBodyFilter: Send + Sync {
         &self,
         body: &Option<bytes::Bytes>,
         end_of_stream: bool,
-        session: &dyn PluginSession,
+        session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> Option<Duration>;
 }

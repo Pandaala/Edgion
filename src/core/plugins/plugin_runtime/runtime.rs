@@ -26,13 +26,13 @@ use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
 use crate::core::plugins::edgion_plugins::cors::Cors;
 use crate::core::plugins::edgion_plugins::csrf::Csrf;
 use crate::core::plugins::edgion_plugins::ctx_set::CtxSet;
+use crate::core::plugins::edgion_plugins::forward_auth::ForwardAuth;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
 use crate::core::plugins::edgion_plugins::key_auth::KeyAuth;
 use crate::core::plugins::edgion_plugins::mock::Mock;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
 use crate::core::plugins::edgion_plugins::rate_limit::RateLimit;
-use crate::core::plugins::edgion_plugins::forward_auth::ForwardAuth;
 use crate::core::plugins::edgion_plugins::real_ip::RealIp;
 use crate::core::plugins::edgion_plugins::request_restriction::RequestRestriction;
 use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
@@ -94,6 +94,10 @@ impl PluginRuntime {
     }
 
     pub fn from_httproute_filters(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
+        tracing::error!(
+            "PluginRuntime: from_httproute_filters called with {} filters",
+            filters.len()
+        );
         let mut runtime = Self::new();
         runtime.add_from_httproute_filters(filters, namespace);
         runtime
@@ -122,7 +126,8 @@ impl PluginRuntime {
                         let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);
                         let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
                         self.add_request_filter(Box::new(ext_filter.clone()));
-                        self.add_upstream_response_filter(Box::new(ext_filter));
+                        self.add_upstream_response_filter(Box::new(ext_filter.clone()));
+                        self.add_upstream_response_body_filter(Box::new(ext_filter));
                     }
                 }
                 _ => {}
@@ -156,7 +161,8 @@ impl PluginRuntime {
                         let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);
                         let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
                         self.add_request_filter(Box::new(ext_filter.clone()));
-                        self.add_upstream_response_filter(Box::new(ext_filter));
+                        self.add_upstream_response_filter(Box::new(ext_filter.clone()));
+                        self.add_upstream_response_body_filter(Box::new(ext_filter));
                     }
                 }
                 _ => {}
@@ -364,10 +370,15 @@ impl PluginRuntime {
     /// Create an UpstreamResponseBodyFilter instance from EdgionPlugin enum
     fn create_upstream_response_body_filter_from_edgion(
         plugin: &EdgionPlugin,
-        _namespace: &str,
+        namespace: &str,
     ) -> Option<Box<dyn UpstreamResponseBodyFilter>> {
         match plugin {
             EdgionPlugin::BandwidthLimit(config) => Some(BandwidthLimit::create(config)),
+            EdgionPlugin::ExtensionRef(ext_ref) => {
+                let ext_filter =
+                    ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
+                Some(Box::new(ext_filter))
+            }
             _ => None,
         }
     }
@@ -423,7 +434,8 @@ impl PluginRuntime {
         self.upstream_response_plugins.push(filter);
     }
 
-    fn add_upstream_response_body_filter(&mut self, filter: Box<dyn UpstreamResponseBodyFilter>) {
+    pub fn add_upstream_response_body_filter(&mut self, filter: Box<dyn UpstreamResponseBodyFilter>) {
+        tracing::info!("PluginRuntime: adding body filter '{}'", filter.name());
         self.upstream_response_body_plugins.push(filter);
     }
 
@@ -587,7 +599,7 @@ impl PluginRuntime {
         // Create a session adapter for condition evaluation
         // Use a scoped borrow to avoid lifetime issues with ctx
         {
-            let session_adapter = PingoraSessionAdapter::new(s, ctx);
+            let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
             for filter in &self.upstream_response_body_plugins {
                 let mut plugin_log = PluginLog::new(filter.name());
@@ -595,7 +607,7 @@ impl PluginRuntime {
                 let delay = filter.run_upstream_response_body_filter(
                     body,
                     end_of_stream,
-                    &session_adapter,
+                    &mut session_adapter,
                     &mut plugin_log,
                 );
 

@@ -674,6 +674,8 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         let start_time = Instant::now();
         tracing::info!(component = "route_manager", cnt = data.len(), "full set start");
 
+        // Pre-parse all routes to populate runtime fields (plugin_runtime, etc.)
+
         // Step 0: Store all HTTPRoute resources for future lookups (e.g., during deletions)
         *self.http_routes.lock().unwrap() = data.clone();
         tracing::debug!(component = "route_manager", cnt = data.len(), "stored http_routes");
