@@ -344,6 +344,7 @@ start_gateway() {
     "${PROJECT_ROOT}/target/debug/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
         --work-dir "${WORK_DIR}" \
+        --integration-testing-mode \
         > "${LOG_DIR}/gateway.log" 2>&1 &
     
     local pid=$!

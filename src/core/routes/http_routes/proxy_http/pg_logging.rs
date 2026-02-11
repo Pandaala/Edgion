@@ -55,12 +55,30 @@ pub async fn logging(
 
     // Send to access logger
     edgion_http.access_logger.send(entry.to_json()).await;
+
+    // Store in Access Log Store when integration testing mode is enabled
+    if crate::core::cli::config::is_integration_testing_mode() {
+        let store = crate::core::observe::access_log_store::get_access_log_store();
+        // Use x_trace_id if available, otherwise generate a unique key
+        let trace_key = ctx
+            .request_info
+            .x_trace_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        if let Err(e) = store.store(trace_key, entry.to_json()) {
+            tracing::warn!(
+                component = "access_log_store",
+                error = %e,
+                "Failed to store access log"
+            );
+        }
+    }
 }
 
 /// Record HTTP request metrics for monitoring and testing
 ///
 /// Records request information to Prometheus for each completed request.
-/// Test fields (test_key, test_data) are only populated when --test-mode is enabled
+/// Test fields (test_key, test_data) are only populated when --integration-testing-mode is enabled
 /// AND the Gateway has the corresponding annotations set.
 #[inline]
 fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>) {
@@ -93,9 +111,9 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
     // Get protocol from discover_protocol (default "http", could be "grpc", "websocket", etc.)
     let protocol = ctx.request_info.discover_protocol.as_deref().unwrap_or("http");
 
-    // Get test metrics only when test_mode is enabled
+    // Get test metrics only when integration_testing_mode is enabled
     // This prevents processing test annotations in production
-    let (test_key, test_data) = if crate::core::cli::config::is_test_mode() {
+    let (test_key, test_data) = if crate::core::cli::config::is_integration_testing_mode() {
         let key = ctx.gateway_info.metrics_test_key.as_deref().unwrap_or("");
         let data = build_test_data(ctx, error);
         (key, data)

@@ -65,6 +65,15 @@ pub struct EdgionGatewayConfig {
     #[arg(skip)]
     #[serde(default, alias = "rate_limiter")]
     pub rate_limit: RateLimitGlobalConfig,
+
+    /// Enable integration testing mode.
+    /// When enabled, the gateway activates test subsystems:
+    /// - Access Log Store: stores complete access logs in DashMap, queryable via Admin API
+    /// - Metrics Test Data: collects test_key/test_data labels on backend_requests_total
+    /// This flag MUST NEVER be used in production.
+    #[arg(long = "integration-testing-mode", default_value = "false")]
+    #[serde(skip)]
+    pub integration_testing_mode: bool,
 }
 
 /// Gateway configuration
@@ -302,11 +311,7 @@ pub fn set_gateway_instance_count(count: u32) {
     let count = count.max(1); // Prevent division by zero
     let old = GATEWAY_INSTANCE_COUNT.swap(count, Ordering::Relaxed);
     if old != count {
-        tracing::info!(
-            old_count = old,
-            new_count = count,
-            "Gateway instance count updated"
-        );
+        tracing::info!(old_count = old, new_count = count, "Gateway instance count updated");
     }
 }
 

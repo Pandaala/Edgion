@@ -1,6 +1,7 @@
 //! Observability: metrics, logging, access log
 
 pub mod access_log;
+pub mod access_log_store;
 pub mod logger_factory;
 pub mod metrics;
 pub mod ssl_log;

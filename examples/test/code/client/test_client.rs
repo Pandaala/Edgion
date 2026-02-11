@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+pub mod access_log_client;
 mod framework;
 mod log_analyzer;
 pub mod metrics_helper;

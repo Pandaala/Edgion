@@ -264,6 +264,7 @@ start_gateway() {
     EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log" \
     "${PROJECT_ROOT}/target/debug/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
+        --integration-testing-mode \
         > "${LOG_DIR}/gateway.log" 2>&1 &
     
     local pid=$!

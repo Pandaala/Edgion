@@ -9,11 +9,18 @@ use std::sync::OnceLock;
 /// Global controller configuration for runtime access
 static CONTROLLER_CONFIG: OnceLock<EdgionControllerConfig> = OnceLock::new();
 
-/// Global test mode flag
+/// Global test mode flag (Controller)
 /// When enabled:
 /// - endpoint_mode is forced to Both (sync both Endpoints and EndpointSlice)
 /// - metrics test_key/test_type annotations are processed
 static GLOBAL_TEST_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Global integration testing mode flag (Gateway)
+/// When enabled via --integration-testing-mode:
+/// - Access Log Store: stores complete access logs in memory, queryable via Admin API
+/// - Metrics Test Data: collects test data labels on backend_requests_total metric
+/// This flag MUST NEVER be used in production.
+static GLOBAL_INTEGRATION_TESTING_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Initialize global test mode (called once at startup)
 pub fn init_global_test_mode(enabled: bool) {
@@ -29,6 +36,23 @@ pub fn init_global_test_mode(enabled: bool) {
 /// Check if test mode is enabled
 pub fn is_test_mode() -> bool {
     GLOBAL_TEST_MODE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Initialize global integration testing mode (called once at gateway startup)
+pub fn init_integration_testing_mode(enabled: bool) {
+    GLOBAL_INTEGRATION_TESTING_MODE.store(enabled, std::sync::atomic::Ordering::SeqCst);
+    if enabled {
+        tracing::info!(
+            component = "integration_testing",
+            "Integration testing mode enabled: Access Log Store + Metrics Test Data active"
+        );
+    }
+}
+
+/// Check if integration testing mode is enabled
+#[inline]
+pub fn is_integration_testing_mode() -> bool {
+    GLOBAL_INTEGRATION_TESTING_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Initialize global controller configuration (called once at startup)
