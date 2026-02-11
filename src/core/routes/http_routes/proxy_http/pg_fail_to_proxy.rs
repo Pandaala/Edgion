@@ -74,7 +74,7 @@ pub async fn fail_to_proxy(
 
     FailToProxy {
         error_code: code,
-        // default to no reuse, which is safest
-        can_reuse_downstream: false,
+        // Reuse connection if safe (clear client errors)
+        can_reuse_downstream: matches!(code, 400 | 403 | 404 | 429),
     }
 }
