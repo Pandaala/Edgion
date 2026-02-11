@@ -5,6 +5,8 @@ kind: Gateway
 metadata:
   name: edgion-plugins-gateway
   namespace: edgion-test
+  annotations:
+    edgion.io/metrics-test-type: "latency"
 spec:
   gatewayClassName: public-gateway
   listeners:

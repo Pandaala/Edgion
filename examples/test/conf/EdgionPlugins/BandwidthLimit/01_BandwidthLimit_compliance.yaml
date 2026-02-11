@@ -1,0 +1,22 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: bandwidth-limit-compliance
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        uri: /echo
+    - enable: true
+      type: RequestHeaderModifier
+      config:
+        set:
+          - name: X-Debug-Test
+            value: worked
+  upstreamResponseBodyFilterPlugins:
+    - enable: true
+      type: BandwidthLimit
+      config:
+        rate: "100kb" # 100KB/s
