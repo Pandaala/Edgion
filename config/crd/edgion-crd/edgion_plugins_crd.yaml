@@ -145,6 +145,7 @@ spec:
                           - ResponseHeaderModifier
                           - RequestRedirect
                           - ExtensionRef
+                          - ForwardAuth
                           - DebugAccessLogToHeader
                       config:
                         type: object

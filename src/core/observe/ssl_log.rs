@@ -21,6 +21,9 @@ static SSL_LOGGER: OnceLock<SslLogger> = OnceLock::new();
 pub struct SslLogEntry {
     /// Timestamp in milliseconds
     pub ts: i64,
+    /// TLS connection id for correlation with access log
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_id: Option<u64>,
     /// Server Name Indication from client
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sni: Option<String>,
@@ -42,6 +45,12 @@ impl SslLogEntry {
             ts: chrono::Utc::now().timestamp_millis(),
             ..Default::default()
         }
+    }
+
+    /// Set TLS connection id
+    pub fn tls_id(&mut self, tls_id: u64) -> &mut Self {
+        self.tls_id = Some(tls_id);
+        self
     }
 
     /// Set SNI

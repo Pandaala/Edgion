@@ -65,6 +65,10 @@ pub struct ClientCertInfo {
     pub fingerprint: String,
 }
 
+/// TLS connection identifier stored in SslDigestExtension
+#[derive(Debug, Clone)]
+pub struct TlsConnId(pub u64);
+
 /// Request information extracted from the incoming request
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {
@@ -110,6 +114,9 @@ pub struct RequestInfo {
     /// Client certificate information (for mTLS connections)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_cert_info: Option<ClientCertInfo>,
+    /// TLS connection id for correlating tls.log and access.log
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_id: Option<u64>,
 }
 
 /// Backend TLS connection information
