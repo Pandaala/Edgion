@@ -10,7 +10,4 @@ spec:
       type: ProxyRewrite
       config:
         uri: "/search/$arg_keyword/$arg_lang"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

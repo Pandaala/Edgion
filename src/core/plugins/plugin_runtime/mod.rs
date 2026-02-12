@@ -7,11 +7,13 @@ pub mod session_adapter;
 pub mod traits;
 
 pub use conditional_filter::{
-    ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseFilter,
+    ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseBodyFilter,
+    ConditionalUpstreamResponseFilter,
 };
 pub use log::{EdgionPluginsLog, PluginLog, StageLogs};
 pub use runtime::PluginRuntime;
 pub use session_adapter::PingoraSessionAdapter;
 pub use traits::{
-    PluginSession, PluginSessionError, PluginSessionResult, RequestFilter, UpstreamResponse, UpstreamResponseFilter,
+    PluginSession, PluginSessionError, PluginSessionResult, RequestFilter, UpstreamResponse,
+    UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };

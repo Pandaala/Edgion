@@ -31,24 +31,27 @@ impl WeightedBackendTestSuite {
                     let total_requests = 100;
                     let mut backend_counts = HashMap::new();
 
-                    // Send 100 requests
                     for _ in 0..total_requests {
+                        let trace_id = format!("weighted-dist-{}", uuid::Uuid::new_v4());
                         let request = ctx
                             .http_client
                             .get(format!("{}/echo", ctx.http_url()))
-                            .header("Host", "weighted-backend.example.com");
+                            .header("Host", "weighted-backend.example.com")
+                            .header("x-trace-id", &trace_id)
+                            .header("access_log", "test_store");
 
                         match request.send().await {
-                            Ok(response) => {
-                                // Parse X-Debug-Access-Log header
-                                if let Some(debug_header) = response.headers().get("X-Debug-Access-Log") {
-                                    if let Ok(debug_str) = debug_header.to_str() {
-                                        if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(debug_str) {
-                                            // Extract backend name
-                                            if let Some(backend_name) = debug_json["backend_context"]["name"].as_str() {
-                                                *backend_counts.entry(backend_name.to_string()).or_insert(0) += 1;
-                                            }
-                                        }
+                            Ok(_) => {
+                                // Fetch access log
+                                let al_client = ctx.access_log_client();
+                                if let Ok(entry) = al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                    if let Some(backend_name) = entry
+                                        .data
+                                        .get("backend_context")
+                                        .and_then(|bc| bc.get("name"))
+                                        .and_then(|n| n.as_str())
+                                    {
+                                        *backend_counts.entry(backend_name.to_string()).or_insert(0) += 1;
                                     }
                                 }
                             }
@@ -105,22 +108,27 @@ impl WeightedBackendTestSuite {
                     let total_requests = 30;
                     let mut backend_counts = HashMap::new();
 
-                    // Send 30 requests
                     for _ in 0..total_requests {
+                        let trace_id = format!("weighted-equal-{}", uuid::Uuid::new_v4());
                         let request = ctx
                             .http_client
                             .get(format!("{}/echo", ctx.http_url()))
-                            .header("Host", "weighted-backend.example.com");
+                            .header("Host", "weighted-backend.example.com")
+                            .header("x-trace-id", &trace_id)
+                            .header("access_log", "test_store");
 
                         match request.send().await {
-                            Ok(response) => {
-                                if let Some(debug_header) = response.headers().get("X-Debug-Access-Log") {
-                                    if let Ok(debug_str) = debug_header.to_str() {
-                                        if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(debug_str) {
-                                            if let Some(backend_name) = debug_json["backend_context"]["name"].as_str() {
-                                                *backend_counts.entry(backend_name.to_string()).or_insert(0) += 1;
-                                            }
-                                        }
+                            Ok(_) => {
+                                // Fetch access log
+                                let al_client = ctx.access_log_client();
+                                if let Ok(entry) = al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                    if let Some(backend_name) = entry
+                                        .data
+                                        .get("backend_context")
+                                        .and_then(|bc| bc.get("name"))
+                                        .and_then(|n| n.as_str())
+                                    {
+                                        *backend_counts.entry(backend_name.to_string()).or_insert(0) += 1;
                                     }
                                 }
                             }

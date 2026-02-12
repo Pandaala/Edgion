@@ -31,7 +31,12 @@ pub fn create_plugin_handler() -> Box<dyn ConfHandler<EdgionPlugins> + Send + Sy
 impl ConfHandler<EdgionPlugins> for PluginStore {
     fn full_set(&self, data: &HashMap<String, EdgionPlugins>) {
         tracing::info!(component = "plugin_store", cnt = data.len(), "full set");
-        self.replace_all(data.clone());
+        // Pre-parse plugins to initialize runtime
+        let mut prepared_data = data.clone();
+        for plugin in prepared_data.values_mut() {
+            plugin.preparse();
+        }
+        self.replace_all(prepared_data);
     }
 
     fn partial_update(
@@ -50,6 +55,11 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
 
         let mut add_or_update = add;
         add_or_update.extend(update);
+
+        // Pre-parse plugins
+        for plugin in add_or_update.values_mut() {
+            plugin.preparse();
+        }
 
         self.update(add_or_update, &remove);
     }

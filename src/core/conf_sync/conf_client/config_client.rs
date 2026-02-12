@@ -1,10 +1,10 @@
 use crate::core::backends::{create_endpoint_handler, create_ep_slice_handler, create_service_handler};
-use crate::core::conf_sync::cache_client::ClientCache;
+use crate::core::conf_sync::cache_client::{ClientCache, DynClientCache};
 use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::conf_sync::types::ListData;
 use crate::core::routes::create_route_manager_handler;
 use crate::types::prelude_resources::*;
-use crate::types::{all_resource_type_names, GatewayBaseConf, ResourceMeta};
+use crate::types::{all_resource_type_names, GatewayBaseConf, ResourceKind, ResourceMeta};
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Endpoints, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
@@ -148,6 +148,26 @@ impl ConfigClient {
         }
     }
 
+    /// Set gRPC client for all caches that have a DynClientCache entry.
+    ///
+    /// Iterates over all ResourceKind variants via get_dyn_cache (exhaustive match),
+    /// so adding a new kind without wiring it will cause a compile error.
+    pub async fn set_all_grpc_clients(
+        &self,
+        client: crate::core::conf_sync::proto::config_sync_client::ConfigSyncClient<tonic::transport::Channel>,
+    ) {
+        use crate::types::resource_defs::all_resource_kind_names;
+
+        // Use all_resource_kind_names to get every defined kind, then dispatch
+        for cache_field in all_resource_kind_names() {
+            if let Some(kind) = crate::types::resource_defs::resource_kind_from_cache_field(cache_field) {
+                if let Some(cache) = self.get_dyn_cache(kind) {
+                    cache.set_grpc_client_dyn(client.clone()).await;
+                }
+            }
+        }
+    }
+
     /// Get the current server_id from Controller
     pub fn current_server_id(&self) -> String {
         self.current_server_id.read().unwrap().clone()
@@ -217,6 +237,11 @@ impl ConfigClient {
         &self.edgion_tls
     }
 
+    /// Get edgion_acme cache for direct access
+    pub fn edgion_acme(&self) -> &ClientCache<EdgionAcme> {
+        &self.edgion_acme
+    }
+
     /// Get edgion_plugins cache for direct access
     pub fn edgion_plugins(&self) -> &ClientCache<EdgionPlugins> {
         &self.edgion_plugins
@@ -257,31 +282,46 @@ impl ConfigClient {
     //     &self.secrets
     // }
 
-    /// Get cache ready status by name
-    /// Returns None if the cache name is not recognized
-    fn get_cache_status(&self, name: &str) -> Option<bool> {
-        match name {
-            "gateway_classes" => Some(self.gateway_classes.is_ready()),
-            "gateways" => Some(self.gateways.is_ready()),
-            "edgion_gateway_configs" => Some(self.edgion_gateway_configs.is_ready()),
-            "routes" => Some(self.routes.is_ready()),
-            "grpc_routes" => Some(self.grpc_routes.is_ready()),
-            "tcp_routes" => Some(self.tcp_routes.is_ready()),
-            "udp_routes" => Some(self.udp_routes.is_ready()),
-            "tls_routes" => Some(self.tls_routes.is_ready()),
-            "link_sys" => Some(self.link_sys.is_ready()),
-            "services" => Some(self.services.is_ready()),
-            "endpoint_slices" => Some(self.endpoint_slices.is_ready()),
-            "endpoints" => Some(self.endpoints.is_ready()),
-            "edgion_tls" => Some(self.edgion_tls.is_ready()),
-            "edgion_plugins" => Some(self.edgion_plugins.is_ready()),
-            "edgion_stream_plugins" => Some(self.edgion_stream_plugins.is_ready()),
-            "backend_tls_policies" => Some(self.backend_tls_policies.is_ready()),
-            "plugin_metadata" => Some(self.plugin_metadata.is_ready()),
-            "edgion_acme" => Some(self.edgion_acme.is_ready()),
-            // "secrets" => Some(self.secrets.is_ready()),  // Secret follows related resources
-            _ => None,
+    /// Get the DynClientCache for a given ResourceKind.
+    ///
+    /// Uses exhaustive match on ResourceKind to ensure compile-time completeness.
+    /// When a new ResourceKind variant is added, the compiler will force you to
+    /// handle it here — eliminating the "UnknownKind" dead-wait bug.
+    ///
+    /// Returns None only for kinds that are intentionally not cached on Gateway
+    /// (Secret, ReferenceGrant, Unspecified).
+    pub fn get_dyn_cache(&self, kind: ResourceKind) -> Option<&dyn DynClientCache> {
+        match kind {
+            ResourceKind::GatewayClass => Some(&self.gateway_classes),
+            ResourceKind::Gateway => Some(&self.gateways),
+            ResourceKind::EdgionGatewayConfig => Some(&self.edgion_gateway_configs),
+            ResourceKind::HTTPRoute => Some(&self.routes),
+            ResourceKind::GRPCRoute => Some(&self.grpc_routes),
+            ResourceKind::TCPRoute => Some(&self.tcp_routes),
+            ResourceKind::UDPRoute => Some(&self.udp_routes),
+            ResourceKind::TLSRoute => Some(&self.tls_routes),
+            ResourceKind::LinkSys => Some(&self.link_sys),
+            ResourceKind::Service => Some(&self.services),
+            ResourceKind::EndpointSlice => Some(&self.endpoint_slices),
+            ResourceKind::Endpoint => Some(&self.endpoints),
+            ResourceKind::EdgionTls => Some(&self.edgion_tls),
+            ResourceKind::EdgionAcme => Some(&self.edgion_acme),
+            ResourceKind::EdgionPlugins => Some(&self.edgion_plugins),
+            ResourceKind::EdgionStreamPlugins => Some(&self.edgion_stream_plugins),
+            ResourceKind::BackendTLSPolicy => Some(&self.backend_tls_policies),
+            ResourceKind::PluginMetaData => Some(&self.plugin_metadata),
+            // These are intentionally not cached on Gateway side
+            ResourceKind::Secret => None,
+            ResourceKind::ReferenceGrant => None,
+            ResourceKind::Unspecified => None,
         }
+    }
+
+    /// Get cache ready status by name (delegates to get_dyn_cache)
+    fn get_cache_status(&self, name: &str) -> Option<bool> {
+        // Map cache field name -> ResourceKind
+        let kind = crate::types::resource_defs::resource_kind_from_cache_field(name)?;
+        self.get_dyn_cache(kind).map(|c| c.is_ready())
     }
 
     /// Get all caches status based on global resource registry

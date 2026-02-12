@@ -198,6 +198,7 @@ start_test_server() {
         --websocket-port 30005 \
         --tcp-port 30010 \
         --udp-port 30011 \
+        --auth-port 30040 \
         --log-level info \
         > "${LOG_DIR}/test_server.log" 2>&1 &
     
@@ -263,6 +264,7 @@ start_gateway() {
     EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log" \
     "${PROJECT_ROOT}/target/debug/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
+        --integration-testing-mode \
         > "${LOG_DIR}/gateway.log" 2>&1 &
     
     local pid=$!

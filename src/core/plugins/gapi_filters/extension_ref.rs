@@ -5,9 +5,13 @@
 use async_trait::async_trait;
 
 use crate::core::plugins::edgion_plugins::get_global_plugin_store;
+use crate::core::plugins::plugin_runtime::log::EdgionPluginsLogToken;
 use crate::core::plugins::plugin_runtime::log::PluginLog;
-use crate::core::plugins::plugin_runtime::traits::{PluginSession, RequestFilter, UpstreamResponseFilter};
+use crate::core::plugins::plugin_runtime::traits::{
+    PluginSession, RequestFilter, UpstreamResponseBodyFilter, UpstreamResponseFilter,
+};
 use crate::types::filters::{PluginRunningResult, PluginRunningStage};
+use crate::types::resources::edgion_plugins::EdgionPlugins;
 use crate::types::resources::LocalObjectReference;
 
 /// Default maximum allowed nested plugin references to avoid infinite loops
@@ -49,6 +53,54 @@ impl ExtensionRefFilter {
         self.ext_ref.kind == "EdgionPlugins" && (self.ext_ref.group.is_empty() || self.ext_ref.group == "edgion.io")
     }
 
+    /// Helper to prepare plugin execution: validation, lookup, logging setup
+    /// Returns:
+    /// - Ok(Some((plugin, token))): Success, session pushed (must be popped)
+    /// - Ok(None): Skip (not EdgionPlugins), no session modification
+    /// - Err(()): Error (cycle/depth/not found), logged, session clean (popped if needed)
+    fn prepare_execution(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+    ) -> Result<Option<(EdgionPlugins, EdgionPluginsLogToken)>, ()> {
+        if !self.is_edgion_plugins() {
+            log.push(&format!(
+                "ExtensionRef kind '{}' not supported, skipping",
+                self.ext_ref.kind
+            ));
+            return Ok(None);
+        }
+
+        log.set_refer_to(self.ext_ref.name.clone());
+
+        let key = self.plugin_key();
+
+        if session.has_plugin_ref(&key) {
+            log.push(&format!("Detected cyclic plugin reference '{}'", key));
+            return Err(());
+        }
+        if session.plugin_ref_depth() >= self.max_depth {
+            log.push(&format!(
+                "Plugin reference depth exceeded {} while resolving '{}'",
+                self.max_depth, key
+            ));
+            return Err(());
+        }
+
+        session.push_plugin_ref(key.clone());
+
+        // Use global store
+        let store = get_global_plugin_store();
+        let Some(edgion_plugins) = store.get(&key) else {
+            log.push(&format!("EdgionPlugins '{}' not found, returning 500", key));
+            session.pop_plugin_ref();
+            return Err(());
+        };
+
+        let token = session.start_edgion_plugins_log(self.ext_ref.name.clone());
+        Ok(Some((edgion_plugins, token)))
+    }
+
     /// Execute the referenced EdgionPlugins's plugin runtime
     fn run_extension(
         &self,
@@ -56,45 +108,14 @@ impl ExtensionRefFilter {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        if !self.is_edgion_plugins() {
-            log.push(&format!(
-                "ExtensionRef kind '{}' not supported, skipping",
-                self.ext_ref.kind
-            ));
-            return PluginRunningResult::GoodNext;
-        }
-
-        // Set refer_to name on the ExtensionRef log (simplified from full LocalObjectReference)
-        log.set_refer_to(self.ext_ref.name.clone());
-
-        let key = self.plugin_key();
-        let store = get_global_plugin_store();
-
-        // Detect recursion and depth overflow
-        if session.has_plugin_ref(&key) {
-            log.push(&format!("Detected cyclic plugin reference '{}'", key));
-            return PluginRunningResult::ErrTerminateRequest;
-        }
-        if session.plugin_ref_depth() >= self.max_depth {
-            log.push(&format!(
-                "Plugin reference depth exceeded {} while resolving '{}'",
-                self.max_depth, key
-            ));
-            return PluginRunningResult::ErrTerminateRequest;
-        }
-        session.push_plugin_ref(key.clone());
-
-        // Look up the EdgionPlugins in global store
-        let Some(edgion_plugins) = store.get(&key) else {
-            log.push(&format!("EdgionPlugins '{}' not found, returning 500", key));
-            return Self::finish(session, PluginRunningResult::ErrTerminateRequest);
+        let (edgion_plugins, log_token) = match self.prepare_execution(session, log) {
+            Ok(Some(res)) => res,
+            Ok(None) => return PluginRunningResult::GoodNext,
+            Err(_) => return PluginRunningResult::ErrTerminateRequest,
         };
 
         // Get the pre-compiled plugin runtime
         let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
-
-        // Start EdgionPlugins log with token (ensures correct order for nested refs)
-        let log_token = session.start_edgion_plugins_log(self.ext_ref.name.clone());
 
         // Run edgion_plugins based on stage
         match stage {
@@ -128,42 +149,13 @@ impl ExtensionRefFilter {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        if !self.is_edgion_plugins() {
-            log.push(&format!(
-                "ExtensionRef kind '{}' not supported, skipping",
-                self.ext_ref.kind
-            ));
-            return PluginRunningResult::GoodNext;
-        }
-
-        // Set refer_to name on the ExtensionRef log (simplified from full LocalObjectReference)
-        log.set_refer_to(self.ext_ref.name.clone());
-
-        let key = self.plugin_key();
-        let store = get_global_plugin_store();
-
-        if session.has_plugin_ref(&key) {
-            log.push(&format!("Detected cyclic plugin reference '{}'", key));
-            return PluginRunningResult::ErrTerminateRequest;
-        }
-        if session.plugin_ref_depth() >= self.max_depth {
-            log.push(&format!(
-                "Plugin reference depth exceeded {} while resolving '{}'",
-                self.max_depth, key
-            ));
-            return PluginRunningResult::ErrTerminateRequest;
-        }
-        session.push_plugin_ref(key.clone());
-
-        let Some(edgion_plugins) = store.get(&key) else {
-            log.push(&format!("EdgionPlugins '{}' not found, returning 500", key));
-            return Self::finish(session, PluginRunningResult::ErrTerminateRequest);
+        let (edgion_plugins, log_token) = match self.prepare_execution(session, log) {
+            Ok(Some(res)) => res,
+            Ok(None) => return PluginRunningResult::GoodNext,
+            Err(_) => return PluginRunningResult::ErrTerminateRequest,
         };
 
         let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
-
-        // Start EdgionPlugins log with token (ensures correct order for nested refs)
-        let log_token = session.start_edgion_plugins_log(self.ext_ref.name.clone());
 
         match stage {
             PluginRunningStage::Request => {
@@ -204,6 +196,42 @@ impl ExtensionRefFilter {
             }
         }
     }
+
+    /// Run extension ref for body filter stage
+    fn run_extension_body(
+        &self,
+        body: &Option<bytes::Bytes>,
+        end_of_stream: bool,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+    ) -> Option<std::time::Duration> {
+        let (edgion_plugins, log_token) = match self.prepare_execution(session, log) {
+            Ok(Some(res)) => res,
+            Ok(None) => return None,
+            Err(_) => return None,
+        };
+
+        // Start EdgionPlugins log
+        let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
+
+        let mut max_delay: Option<std::time::Duration> = None;
+
+        for plugin in plugin_runtime.upstream_response_body_plugins_iter() {
+            let mut inner_log = PluginLog::new(plugin.name());
+            let delay = plugin.run_upstream_response_body_filter(body, end_of_stream, session, &mut inner_log);
+            session.push_to_edgion_plugins_log(&log_token, inner_log);
+
+            if let Some(d) = delay {
+                max_delay = Some(match max_delay {
+                    Some(current) => current.max(d),
+                    None => d,
+                });
+            }
+        }
+
+        session.pop_plugin_ref();
+        max_delay
+    }
 }
 
 #[async_trait]
@@ -229,6 +257,22 @@ impl UpstreamResponseFilter for ExtensionRefFilter {
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         self.run_extension(PluginRunningStage::UpstreamResponseFilter, session, log)
+    }
+}
+
+impl UpstreamResponseBodyFilter for ExtensionRefFilter {
+    fn name(&self) -> &str {
+        "ExtensionRef"
+    }
+
+    fn run_upstream_response_body_filter(
+        &self,
+        body: &Option<bytes::Bytes>,
+        end_of_stream: bool,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+    ) -> Option<std::time::Duration> {
+        self.run_extension_body(body, end_of_stream, session, log)
     }
 }
 

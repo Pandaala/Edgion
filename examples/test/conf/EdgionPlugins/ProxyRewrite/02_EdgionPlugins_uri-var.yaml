@@ -10,7 +10,4 @@ spec:
       type: ProxyRewrite
       config:
         uri: "/prefix$uri/suffix"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

@@ -10,9 +10,12 @@ pub fn error_while_proxy(
     peer: &HttpPeer,
     session: &mut Session,
     e: Box<Error>,
-    _ctx: &mut EdgionHttpContext,
+    ctx: &mut EdgionHttpContext,
     client_reused: bool,
 ) -> Box<Error> {
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        upstream.set_response_body_size(session.upstream_body_bytes_received());
+    }
     let mut e = e.more_context(format!("Peer: {}", peer));
     // only reused client connections where retry buffer is not truncated
     e.retry

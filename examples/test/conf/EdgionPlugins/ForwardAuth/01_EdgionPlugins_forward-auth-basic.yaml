@@ -1,0 +1,27 @@
+# ForwardAuth basic test: forward all headers to auth service
+# Auth service: fake auth server at 127.0.0.1:30040
+#
+# Test scenario:
+#   - request_headers is NOT set → forward ALL headers (skip hop-by-hop)
+#   - upstreamHeaders: copy X-User-ID, X-User-Role, X-User-Email from auth response
+#   - clientHeaders: copy WWW-Authenticate, X-Auth-Error-Code on auth failure
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-basic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        uri: "http://127.0.0.1:30040/verify"
+        requestMethod: GET
+        timeoutMs: 5000
+        upstreamHeaders:
+          - X-User-ID
+          - X-User-Role
+          - X-User-Email
+        clientHeaders:
+          - WWW-Authenticate
+          - X-Auth-Error-Code

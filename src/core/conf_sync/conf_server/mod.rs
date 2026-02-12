@@ -8,10 +8,12 @@
 //! - `ConfigSyncServer`: Simplified server that holds HashMap<kind, Arc<dyn WatchObj>>
 //! - `ConfigSyncGrpcServer`: gRPC service implementation
 
+mod client_registry;
 mod config_sync_server;
 mod grpc_server;
 mod traits;
 
+pub use client_registry::ClientRegistry;
 pub use config_sync_server::ConfigSyncServer;
 pub use grpc_server::{ConfigSyncGrpcServer, ConfigSyncServerProvider};
 pub use traits::{WatchObj, WatchResponseSimple};

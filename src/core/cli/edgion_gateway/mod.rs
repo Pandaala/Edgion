@@ -191,10 +191,16 @@ impl EdgionGatewayCli {
         let test_mode_enabled = endpoint_mode == EndpointMode::Both;
         crate::core::cli::config::init_global_test_mode(test_mode_enabled);
 
+        // 4.4. Initialize integration testing mode from CLI flag
+        // This flag activates: Access Log Store + Metrics Test Data collection
+        let integration_testing = self.config.integration_testing_mode;
+        crate::core::cli::config::init_integration_testing_mode(integration_testing);
+
         tracing::info!(
             component = "startup",
             endpoint_mode = ?endpoint_mode,
             test_mode = test_mode_enabled,
+            integration_testing_mode = integration_testing,
             server_id = %server_info.server_id,
             "Global endpoint mode initialized from Controller"
         );
@@ -207,6 +213,13 @@ impl EdgionGatewayCli {
             supported_kinds = ?server_info.supported_kinds,
             "Started watching resources from Controller"
         );
+
+        // 5.1. Start watching server metadata (gateway instance count for Cluster scope rate limiting)
+        let sync_client_arc = Arc::new(sync_client);
+        let sync_client_for_meta = sync_client_arc.clone();
+        runtime.spawn(async move {
+            sync_client_for_meta.start_watch_server_meta().await;
+        });
 
         // 6. Start auxiliary services
         runtime.block_on(Self::start_auxiliary_services(config_client.clone()));

@@ -14,7 +14,4 @@ spec:
           set:
             - name: X-User-Id
               value: "$uid"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

@@ -271,6 +271,7 @@ start_test_server() {
         --websocket-port 30005 \
         --tcp-port 30010 \
         --udp-port 30011 \
+        --auth-port 30040 \
         --log-level info \
         $https_backend_args \
         > "${LOG_DIR}/test_server.log" 2>&1 &
@@ -335,12 +336,15 @@ start_controller() {
 # =============================================================================
 start_gateway() {
     log_section "Start edgion-gateway"
+    local gateway_rust_log="info,pingora_proxy=error,pingora_core=error"
     
     EDGION_ACCESS_LOG="${LOG_DIR}/access.log" \
+    RUST_LOG="${gateway_rust_log}" \
     EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log" \
     "${PROJECT_ROOT}/target/debug/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
         --work-dir "${WORK_DIR}" \
+        --integration-testing-mode \
         > "${LOG_DIR}/gateway.log" 2>&1 &
     
     local pid=$!
@@ -473,8 +477,8 @@ get_suites_to_load() {
             if [ -d "$resource_dir" ]; then
                 local resource_name=$(basename "$resource_dir")
                 
-                # Skip base directory
-                if [ "$resource_name" = "base" ]; then
+                # Skip base directory and Services directory (ACME tests have their own script)
+                if [ "$resource_name" = "base" ] || [ "$resource_name" = "Services" ]; then
                     continue
                 fi
                 

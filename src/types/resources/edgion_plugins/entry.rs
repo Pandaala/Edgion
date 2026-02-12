@@ -252,6 +252,78 @@ impl UpstreamResponseFilterEntry {
     }
 }
 
+/// UpstreamResponseBodyFilterEntry - for upstream response body filter stage plugins (sync)
+///
+/// Supports plugins:
+/// - BandwidthLimit (from edgion_plugins)
+///
+/// These plugins run during the upstream_response_body_filter hook for each body chunk.
+/// They return an optional Duration to control bandwidth throttling.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpstreamResponseBodyFilterEntry {
+    /// Whether this plugin is enabled (default: true)
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub enable: bool,
+
+    /// Plugin conditions for conditional execution
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<PluginConditions>,
+
+    /// The actual plugin configuration
+    #[serde(flatten)]
+    pub plugin: EdgionPlugin,
+}
+
+impl UpstreamResponseBodyFilterEntry {
+    /// Create a new enabled plugin entry
+    pub fn new(plugin: EdgionPlugin) -> Self {
+        Self {
+            enable: true,
+            conditions: None,
+            plugin,
+        }
+    }
+
+    /// Create a new plugin entry with specified enable state
+    pub fn with_enable(plugin: EdgionPlugin, enable: bool) -> Self {
+        Self {
+            enable,
+            conditions: None,
+            plugin,
+        }
+    }
+
+    /// Create a new plugin entry with conditions
+    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
+        Self {
+            enable: true,
+            conditions: Some(conditions),
+            plugin,
+        }
+    }
+
+    /// Check if this plugin is enabled
+    pub fn is_enabled(&self) -> bool {
+        self.enable
+    }
+
+    /// Get the conditions for runtime evaluation
+    pub fn conditions(&self) -> Option<&PluginConditions> {
+        self.conditions.as_ref()
+    }
+
+    /// Check if this entry has conditions defined
+    pub fn has_conditions(&self) -> bool {
+        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
+    }
+
+    /// Get the plugin type name
+    pub fn type_name(&self) -> &'static str {
+        self.plugin.type_name()
+    }
+}
+
 /// UpstreamResponseEntry - for upstream response stage plugins (async)
 ///
 /// Currently no plugins, reserved for future expansion

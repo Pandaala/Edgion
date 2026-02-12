@@ -21,7 +21,4 @@ spec:
             namespace: edgion-default
         upstreamHeaderFields:
           - "X-Consumer-Username"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

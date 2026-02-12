@@ -18,7 +18,4 @@ spec:
               - "^/api/.*"
         status: 404
         message: "Path not allowed"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

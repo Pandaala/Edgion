@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+pub mod access_log_client;
 mod framework;
 mod log_analyzer;
 pub mod metrics_helper;
@@ -113,6 +114,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "all-conditions" | "allconditions" => "EdgionPlugins/PluginCondition/AllConditions".to_string(),
             "jwt-auth" | "jwtauth" => "EdgionPlugins/JwtAuth".to_string(),
             "key-auth" | "keyauth" => "EdgionPlugins/KeyAuth".to_string(),
+            "forward-auth" | "forwardauth" => "EdgionPlugins/ForwardAuth".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -160,9 +162,11 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/KeyAuth" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
         "EdgionPlugins/RateLimit" => "EdgionPlugins",
+        "EdgionPlugins/BandwidthLimit" => "EdgionPlugins",
         "EdgionPlugins/RealIp" => "EdgionPlugins",
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
         "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
+        "EdgionPlugins/ForwardAuth" => "EdgionPlugins",
         "Gateway/StreamPlugins" => "Gateway/StreamPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
@@ -419,6 +423,20 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RequestRestrictionTestSuite));
+        }
+        "EdgionPlugins/ForwardAuth" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/ForwardAuth tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ForwardAuthTestSuite));
+        }
+        "EdgionPlugins/BandwidthLimit" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/BandwidthLimit tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::BandwidthLimitTestSuite));
         }
         "EdgionPlugins/CtxSet" => {
             if !gateway {

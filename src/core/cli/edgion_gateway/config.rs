@@ -65,6 +65,15 @@ pub struct EdgionGatewayConfig {
     #[arg(skip)]
     #[serde(default, alias = "rate_limiter")]
     pub rate_limit: RateLimitGlobalConfig,
+
+    /// Enable integration testing mode.
+    /// When enabled, the gateway activates test subsystems:
+    /// - Access Log Store: stores complete access logs in DashMap, queryable via Admin API
+    /// - Metrics Test Data: collects test_key/test_data labels on backend_requests_total
+    /// This flag MUST NEVER be used in production.
+    #[arg(long = "integration-testing-mode", default_value = "false")]
+    #[serde(skip)]
+    pub integration_testing_mode: bool,
 }
 
 /// Gateway configuration
@@ -245,6 +254,14 @@ pub struct RateLimitGlobalConfig {
     /// Maximum memory per Rate instance ≈ max_slots_k × 64KB
     #[serde(default = "default_max_estimator_slots_k")]
     pub max_estimator_slots_k: usize,
+
+    /// Static fallback for gateway instance count (default: 1)
+    ///
+    /// Used when controller is not available to push dynamic count.
+    /// Set this to your expected replica count for best-effort
+    /// cluster rate limiting without controller.
+    #[serde(default = "default_gateway_instance_count")]
+    pub gateway_instance_count: u32,
 }
 
 fn default_estimator_slots_k() -> usize {
@@ -255,11 +272,16 @@ fn default_max_estimator_slots_k() -> usize {
     DEFAULT_MAX_ESTIMATOR_SLOTS_K
 }
 
+fn default_gateway_instance_count() -> u32 {
+    1
+}
+
 impl Default for RateLimitGlobalConfig {
     fn default() -> Self {
         Self {
             default_estimator_slots_k: DEFAULT_ESTIMATOR_SLOTS_K,
             max_estimator_slots_k: DEFAULT_MAX_ESTIMATOR_SLOTS_K,
+            gateway_instance_count: default_gateway_instance_count(),
         }
     }
 }
@@ -268,7 +290,38 @@ impl Default for RateLimitGlobalConfig {
 // Global RateLimit Config Store
 // ============================================
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{LazyLock, RwLock};
+
+// ============================================
+// Gateway Instance Count (for Cluster scope)
+// ============================================
+
+/// Global gateway instance count.
+///
+/// Updated by the WatchServerMeta background task (control plane).
+/// Read by RateLimit plugins on every request (data plane hot path).
+///
+/// Default is 1: when controller is unavailable, Cluster scope
+/// degrades to Instance scope behavior (with skewTolerance applied).
+static GATEWAY_INSTANCE_COUNT: AtomicU32 = AtomicU32::new(1);
+
+/// Update the gateway instance count (called by control plane)
+pub fn set_gateway_instance_count(count: u32) {
+    let count = count.max(1); // Prevent division by zero
+    let old = GATEWAY_INSTANCE_COUNT.swap(count, Ordering::Relaxed);
+    if old != count {
+        tracing::info!(old_count = old, new_count = count, "Gateway instance count updated");
+    }
+}
+
+/// Get the current gateway instance count (called by data plane hot path)
+///
+/// Cost: ~0.3ns on x86 (single MOV instruction, no memory fence)
+#[inline]
+pub fn get_gateway_instance_count() -> u32 {
+    GATEWAY_INSTANCE_COUNT.load(Ordering::Relaxed)
+}
 
 /// Global store for RateLimit configuration
 static RATE_LIMIT_GLOBAL_CONFIG: LazyLock<RwLock<RateLimitGlobalConfig>> =
@@ -280,11 +333,17 @@ static RATE_LIMIT_GLOBAL_CONFIG: LazyLock<RwLock<RateLimitGlobalConfig>> =
 pub fn init_rate_limit_global_config(config: &RateLimitGlobalConfig) {
     if let Ok(mut global) = RATE_LIMIT_GLOBAL_CONFIG.write() {
         *global = config.clone();
+
+        // Initialize instance count from static config
+        // (may be overridden by WatchServerMeta later)
+        set_gateway_instance_count(config.gateway_instance_count);
+
         tracing::info!(
             default_slots_k = config.default_estimator_slots_k,
             max_slots_k = config.max_estimator_slots_k,
             default_slots = config.default_estimator_slots_k * SLOTS_K,
             max_slots = config.max_estimator_slots_k * SLOTS_K,
+            gateway_instance_count = config.gateway_instance_count,
             "RateLimit global config initialized"
         );
     }
@@ -406,5 +465,37 @@ impl EdgionGatewayConfig {
             console: self.logging.console,
             level: self.log_level(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gateway_instance_count_default() {
+        // Default should be at least 1
+        assert!(get_gateway_instance_count() >= 1);
+    }
+
+    #[test]
+    fn test_gateway_instance_count_set_and_get() {
+        set_gateway_instance_count(5);
+        assert_eq!(get_gateway_instance_count(), 5);
+        set_gateway_instance_count(1); // cleanup
+    }
+
+    #[test]
+    fn test_gateway_instance_count_never_zero() {
+        set_gateway_instance_count(0); // Try to set zero
+        assert_eq!(get_gateway_instance_count(), 1); // Should be clamped to 1
+    }
+
+    #[test]
+    fn test_rate_limit_global_config_default() {
+        let config = RateLimitGlobalConfig::default();
+        assert_eq!(config.default_estimator_slots_k, DEFAULT_ESTIMATOR_SLOTS_K);
+        assert_eq!(config.max_estimator_slots_k, DEFAULT_MAX_ESTIMATOR_SLOTS_K);
+        assert_eq!(config.gateway_instance_count, 1);
     }
 }

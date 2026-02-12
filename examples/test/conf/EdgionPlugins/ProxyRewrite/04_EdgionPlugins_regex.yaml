@@ -12,7 +12,4 @@ spec:
         regexUri:
           pattern: "^/regex/users/(\\d+)"
           replacement: "/user-service/$1"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

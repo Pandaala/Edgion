@@ -114,6 +114,20 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .map(|s| s.to_string())
     }
 
+    fn request_headers(&self) -> Vec<(String, String)> {
+        self.inner
+            .req_header()
+            .headers
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (name.as_str().to_string(), v.to_string()))
+            })
+            .collect()
+    }
+
     fn method(&self) -> String {
         self.inner.req_header().method.to_string()
     }

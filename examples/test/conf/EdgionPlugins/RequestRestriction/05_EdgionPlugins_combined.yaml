@@ -29,7 +29,4 @@ spec:
               - "1"
         status: 403
         message: "Access denied by security policy"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

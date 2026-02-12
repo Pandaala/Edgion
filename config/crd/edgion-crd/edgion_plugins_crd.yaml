@@ -132,6 +132,7 @@ spec:
                           - Cors
                           - Csrf
                           - CtxSet
+                          - ForwardAuth
                           - IpRestriction
                           - JwtAuth
                           - KeyAuth
@@ -173,6 +174,29 @@ spec:
                           - ExtensionRef
                       config:
                         type: object
+                        x-kubernetes-preserve-unknown-fields: true
+
+                # ============================================
+                # Upstream Response Body Filter Stage Plugins (sync)
+                # ============================================
+                upstreamResponseBodyFilterPlugins:
+                  type: array
+                  description: "Upstream response body filter stage plugins (sync, bandwidth throttling)"
+                  items:
+                    type: object
+                    properties:
+                      enable:
+                        type: boolean
+                        default: true
+                      conditionEnable: *conditionEnableSchema
+                      conditions: *conditionsSchema
+                      type:
+                        type: string
+                        enum:
+                          - BandwidthLimit
+                      config:
+                        type: object
+                        description: "Plugin-specific configuration"
                         x-kubernetes-preserve-unknown-fields: true
 
                 # ============================================

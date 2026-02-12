@@ -118,6 +118,19 @@ macro_rules! define_resources {
                 .collect()
         }
 
+        /// Get ResourceKind from cache field name (e.g. "gateway_classes" -> GatewayClass)
+        ///
+        /// This is the reverse mapping of cache_field_name -> ResourceKind,
+        /// used by ConfigClient to bridge between registry names and ResourceKind enum.
+        pub fn resource_kind_from_cache_field(cache_field: &str) -> Option<$crate::types::ResourceKind> {
+            match cache_field {
+                $(
+                    stringify!($cache_field) => Some($crate::types::ResourceKind::$variant),
+                )*
+                _ => None,
+            }
+        }
+
         /// Get base configuration resource names
         pub fn base_conf_kind_names() -> Vec<&'static str> {
             ALL_RESOURCE_INFOS

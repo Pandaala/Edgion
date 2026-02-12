@@ -224,7 +224,7 @@ async fn get_resource(
 
 /// Create the admin API router with dynamic endpoints
 pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
-    Router::new()
+    let mut router = Router::new()
         .route("/health", get(health_check))
         .route("/ready", get(readiness_check))
         // Server info endpoint (for reload testing)
@@ -232,7 +232,95 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
         // Dynamic endpoints for all resource types
         .route("/configclient/{kind}", get(get_resource))
         .route("/configclient/{kind}/list", get(list_resources))
-        .with_state(config_client)
+        .with_state(config_client);
+
+    // Add testing endpoints only when integration testing mode is enabled
+    if crate::core::cli::config::is_integration_testing_mode() {
+        router = router.merge(create_testing_router());
+    }
+
+    router
+}
+
+// ==================== Integration Testing Endpoints ====================
+
+/// Testing status response
+#[derive(Serialize)]
+struct TestingStatusResponse {
+    integration_testing_mode: bool,
+    access_log_store: crate::core::observe::access_log_store::AccessLogStoreStatus,
+}
+
+/// Get testing subsystem status
+async fn testing_status() -> Json<ApiResponse<TestingStatusResponse>> {
+    let store = crate::core::observe::access_log_store::get_access_log_store();
+    Json(ApiResponse::success(TestingStatusResponse {
+        integration_testing_mode: true,
+        access_log_store: store.status(),
+    }))
+}
+
+/// Get access log by trace_id
+async fn get_access_log(Path(trace_id): Path<String>) -> Json<ApiResponse<serde_json::Value>> {
+    let store = crate::core::observe::access_log_store::get_access_log_store();
+    match store.get(&trace_id) {
+        Some(json) => {
+            // Parse JSON string back to Value
+            match serde_json::from_str::<serde_json::Value>(&json) {
+                Ok(value) => Json(ApiResponse::success(value)),
+                Err(_) => Json(ApiResponse::success(serde_json::Value::String(json))),
+            }
+        }
+        None => Json(ApiResponse::error(format!(
+            "Access log not found for trace_id: {}",
+            trace_id
+        ))),
+    }
+}
+
+/// Delete access log by trace_id
+async fn delete_access_log(Path(trace_id): Path<String>) -> Json<ApiResponse<String>> {
+    let store = crate::core::observe::access_log_store::get_access_log_store();
+    if store.delete(&trace_id) {
+        Json(ApiResponse::success("Deleted".to_string()))
+    } else {
+        Json(ApiResponse::error(format!(
+            "Access log not found for trace_id: {}",
+            trace_id
+        )))
+    }
+}
+
+/// List all stored access logs
+async fn list_access_logs() -> Json<crate::core::observe::access_log_store::AccessLogListResponse> {
+    let store = crate::core::observe::access_log_store::get_access_log_store();
+    let items = store.list();
+    Json(crate::core::observe::access_log_store::AccessLogListResponse {
+        success: true,
+        count: items.len(),
+        data: items,
+    })
+}
+
+/// Delete all stored access logs
+async fn clear_access_logs() -> Json<ApiResponse<String>> {
+    let store = crate::core::observe::access_log_store::get_access_log_store();
+    store.clear();
+    Json(ApiResponse::success("All access logs cleared".to_string()))
+}
+
+/// Create testing-specific router (only added when integration testing mode is enabled)
+fn create_testing_router() -> Router {
+    Router::new()
+        .route("/api/v1/testing/status", get(testing_status))
+        .route(
+            "/api/v1/testing/access-log/{trace_id}",
+            get(get_access_log).delete(delete_access_log),
+        )
+        .route(
+            "/api/v1/testing/access-logs",
+            get(list_access_logs).delete(clear_access_logs),
+        )
 }
 
 /// Serve the admin API on the specified port
@@ -245,6 +333,7 @@ pub async fn serve(config_client: Arc<ConfigClient>, port: u16) -> anyhow::Resul
         component = "admin_api_gateway",
         event = "server_starting",
         addr = %addr,
+        integration_testing = crate::core::cli::config::is_integration_testing_mode(),
         "Gateway Admin API server listening"
     );
 

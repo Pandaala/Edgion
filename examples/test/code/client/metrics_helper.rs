@@ -119,6 +119,13 @@ impl MetricsClient {
         let metrics = self.fetch_backend_metrics_by_key(test_key).await?;
         analyze_chash_consistency(&metrics)
     }
+    /// Analyze latency for a specific test_key
+    ///
+    /// Returns latency statistics (min, max, avg) based on `latency_ms` in test_data.
+    pub async fn analyze_latency(&self, test_key: &str) -> Result<LatencyAnalysis> {
+        let metrics = self.fetch_backend_metrics_by_key(test_key).await?;
+        analyze_latency(&metrics)
+    }
 }
 
 /// LB distribution analysis result
@@ -153,6 +160,21 @@ pub struct ConsistentHashAnalysis {
     pub consistency_rate: f64,
     /// Inconsistent keys (if any)
     pub inconsistent_keys: Vec<String>,
+}
+
+/// Latency analysis result
+#[derive(Debug, Clone, Default)]
+pub struct LatencyAnalysis {
+    /// Total requests with latency data
+    pub total_requests: u64,
+    /// Minimum latency in ms
+    pub min_latency_ms: u64,
+    /// Maximum latency in ms
+    pub max_latency_ms: u64,
+    /// Average latency in ms
+    pub avg_latency_ms: f64,
+    /// All latency values
+    pub samples: Vec<u64>,
 }
 
 /// Parse backend metrics from Prometheus text format
@@ -405,6 +427,58 @@ fn analyze_chash_consistency(metrics: &[BackendMetric]) -> Result<ConsistentHash
         is_consistent,
         consistency_rate,
         inconsistent_keys,
+    })
+}
+
+/// Analyze latency statistics from metrics
+fn analyze_latency(metrics: &[BackendMetric]) -> Result<LatencyAnalysis> {
+    let mut samples: Vec<u64> = Vec::new();
+
+    for metric in metrics {
+        if let Some(ref test_data) = metric.test_data {
+            if let Some(latency) = test_data.latency_ms {
+                // If count > 1, we assume all requests in this bucket had similar latency?
+                // Or simply add it `count` times?
+                // Prometheus metrics are counters.
+                // But `edgion_backend_requests_total` is a Counter. The value is total requests ever made.
+                // Wait, if I fetch metrics, I get the current value of the counter.
+                // If I made 5 requests, the counter is 5.
+                // How does `test_data` work with counters?
+                // If `test_data` varies per request (e.g. latency), then each request MUST produce a unique metric line?
+                // Unless the labels are identical.
+                // If `latency_ms` is in `test_data` label, then for every unique latency, a new time series is created!
+                // This would be high cardinality.
+                // But for a test with 1 request, it's fine.
+                // For multiple requests, if latencies differ, we get multiple lines.
+                // So we shout iterate and add `latency` to samples `metric.count` times?
+                // No, metric.count is the value of the counter.
+                // If the metric line is for latency=100ms and count=1, we have 1 request.
+                // If latency=101ms and count=1, we have another.
+                // So yes, we should add `latency` `metric.count` times.
+
+                for _ in 0..metric.count {
+                    samples.push(latency);
+                }
+            }
+        }
+    }
+
+    if samples.is_empty() {
+        return Ok(LatencyAnalysis::default());
+    }
+
+    samples.sort_unstable();
+    let min_latency_ms = *samples.first().unwrap();
+    let max_latency_ms = *samples.last().unwrap();
+    let sum: u64 = samples.iter().sum();
+    let avg_latency_ms = sum as f64 / samples.len() as f64;
+
+    Ok(LatencyAnalysis {
+        total_requests: samples.len() as u64,
+        min_latency_ms,
+        max_latency_ms,
+        avg_latency_ms,
+        samples,
     })
 }
 

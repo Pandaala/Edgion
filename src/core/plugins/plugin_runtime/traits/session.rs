@@ -16,6 +16,13 @@ pub trait PluginSession: Send {
     /// Get a request header value by name
     fn header_value(&self, name: &str) -> Option<String>;
 
+    /// Get all request headers as key-value pairs.
+    ///
+    /// Returns a Vec of (name, value) tuples. Multi-value headers are
+    /// represented as separate entries with the same name.
+    /// Used by plugins that need to forward/inspect all headers (e.g., ForwardAuth).
+    fn request_headers(&self) -> Vec<(String, String)>;
+
     /// Get the HTTP method (returns owned String for compatibility)
     fn method(&self) -> String;
 
