@@ -131,6 +131,79 @@ config/crd/                                # CRD schemas (check before writing t
 └── gateway-api/
 ```
 
+## Verification Strategies
+
+Edgion provides two primary methods for verifying test results. Choose based on whether you are verifying specific behavior or statistical properties.
+
+### 1. Access Log Verification (Micro-Behavior)
+
+**Best For:** Plugin logic, Conditional execution, Header modifications, Request/Response body inspection, Internal Gateway state.
+
+Instead of parsing response headers (which are limited), we use the **Access Log Store**. This captures the complete execution context of a request, including which plugins ran and their internal decisions.
+
+*   **Mechanism:**
+    1.  Client generates a unique `x-trace-id` (UUID).
+    2.  Client sends request with `x-trace-id` and `access_log: test_store` headers.
+    3.  Client calls `ctx.access_log_client().get_access_log_with_retry(&trace_id, ...)` via Admin API.
+    4.  Gateway returns the full structured log (JSON), which the test asserts against.
+
+*   **Example Code:**
+    ```rust
+    // 1. Send Request
+    let trace_id = format!("test-case-{}", uuid::Uuid::new_v4());
+    let req = ctx.http_client.get(url)
+        .header("x-trace-id", &trace_id)
+        .header("access_log", "test_store"); // CRITICAL: Tells Gateway to store this log
+    let resp = req.send().await?;
+    
+    // 2. Retrieve Log
+    let log_entry = ctx.access_log_client()
+        .get_access_log_with_retry(&trace_id, 10, 200) // retry 10 times, 200ms interval
+        .await
+        .expect("Failed to retrieve access log");
+
+    // 3. Verify Internal State
+    // e.g., Verify a specific plugin filter ran
+    let stage_logs = log_entry.data["stage_logs"].as_array().unwrap();
+    assert!(stage_logs.iter().any(|stage| stage["filters"].as_array().unwrap().iter().any(|p| p["name"] == "my-plugin")));
+    ```
+
+### 2. Metrics Verification (Macro-Traffic)
+
+**Best For:** Load Balancing (RoundRobin, Weighted), Consistent Hashing, Retry counts, Upstream connection reusing, Latency distribution.
+
+This method verifies *statistical* properties across many requests using Prometheus metrics exposed by the Gateway.
+
+*   **Mechanism:**
+    1.  Client sends a batch of requests (e.g., 100 requests).
+    2.  Client initializes `MetricsClient` (from `metrics_helper.rs`).
+    3.  Client fetches `edgion_backend_requests_total` metric and parses it.
+    4.  Client runs analysis functions (e.g., to check variance or consistency).
+
+*   **Example Code (Load Balancing):**
+    ```rust
+    use crate::metrics_helper::MetricsClient;
+
+    // 1. Send Traffic
+    for _ in 0..100 {
+        ctx.http_client.get(url).send().await?;
+    }
+
+    // 2. Analyze Metrics
+    let metrics = MetricsClient::new(ctx.metrics_url());
+    // Analyze distribution for a specific test key (if configured) or generally
+    let analysis = metrics.analyze_lb_distribution("my-test-key").await?;
+
+    // 3. Verify Distribution
+    assert!(analysis.is_balanced, "Traffic should be balanced within variance");
+    assert_eq!(analysis.total_requests, 100);
+    ```
+
+*   **Available Analyzers (`metrics_helper.rs`):**
+    *   `analyze_lb_distribution`: Verifies traffic is evenly/proportionally distributed among backends.
+    *   `analyze_chash_consistency`: Verifies requests with same hash key go to same upstream.
+    *   `analyze_latency`: Calculates min/max/avg latency from test data.
+
 ## Adding a New Plugin Integration Test
 
 ### Checklist (7 steps)
