@@ -1,0 +1,18 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: backend-mtls
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: test-backend-mtls
+  validation:
+    caCertificateRefs:
+      - name: backend-ca
+        kind: Secret
+        group: ""
+    hostname: backend.example.com
+  options:
+    edgion.io/client-certificate-ref: backend-client-cert

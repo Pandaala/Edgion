@@ -186,20 +186,18 @@ impl EdgionGatewayCli {
         };
         init_global_endpoint_mode(endpoint_mode);
 
-        // 4.3. Initialize test mode if Controller is in Both mode
-        // Both mode indicates test-mode is enabled on Controller
-        let test_mode_enabled = endpoint_mode == EndpointMode::Both;
-        crate::core::cli::config::init_global_test_mode(test_mode_enabled);
-
-        // 4.4. Initialize integration testing mode from CLI flag
+        // 4.3. Initialize integration testing mode from CLI flag
         // This flag activates: Access Log Store + Metrics Test Data collection
         let integration_testing = self.config.integration_testing_mode;
         crate::core::cli::config::init_integration_testing_mode(integration_testing);
 
+        // 4.4. Initialize global test mode using the same flag
+        crate::core::cli::config::init_global_test_mode(integration_testing);
+
         tracing::info!(
             component = "startup",
             endpoint_mode = ?endpoint_mode,
-            test_mode = test_mode_enabled,
+            test_mode = integration_testing,
             integration_testing_mode = integration_testing,
             server_id = %server_info.server_id,
             "Global endpoint mode initialized from Controller"

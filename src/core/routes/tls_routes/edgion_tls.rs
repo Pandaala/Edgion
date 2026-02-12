@@ -57,7 +57,16 @@ pub struct EdgionTls {
 
 #[async_trait]
 impl ServerApp for EdgionTls {
-    async fn process_new(self: &Arc<Self>, mut downstream: Stream, _shutdown: &ShutdownWatch) -> Option<Stream> {
+    async fn process_new(self: &Arc<Self>, mut downstream: Stream, shutdown: &ShutdownWatch) -> Option<Stream> {
+        // Reject new connections if the server is shutting down
+        // This stops the Listener from accepting new work while we drain existing connections.
+        if *shutdown.borrow() {
+            tracing::info!(
+                listener_port = self.listener_port,
+                "Rejecting new TLS connection during shutdown"
+            );
+            return None;
+        }
         // Extract client address from the underlying socket
         let (client_addr, client_port) = downstream
             .get_socket_digest()

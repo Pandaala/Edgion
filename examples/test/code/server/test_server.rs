@@ -1,7 +1,7 @@
 // Edgion Unified Test Server
 // Supports all protocols: HTTP/HTTPS, gRPC, WebSocket, TCP, UDP
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     body::Body,
     extract::{ConnectInfo, Extension, Path, Request as AxumRequest},
@@ -48,6 +48,10 @@ struct Cli {
     #[arg(long)]
     https_backend_port: Option<u16>,
 
+    /// HTTPS backend mTLS server port (for Backend upstream mTLS testing)
+    #[arg(long)]
+    https_backend_mtls_port: Option<u16>,
+
     /// TLS certificate file path
     #[arg(long)]
     cert_file: Option<String>,
@@ -55,6 +59,10 @@ struct Cli {
     /// TLS private key file path
     #[arg(long)]
     key_file: Option<String>,
+
+    /// Client CA file path for mTLS backend server
+    #[arg(long)]
+    client_ca_file: Option<String>,
 
     /// Log level
     #[arg(long, default_value = "info")]
@@ -139,6 +147,25 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Start HTTPS backend mTLS server (if configured)
+    if let Some(https_mtls_port) = cli.https_backend_mtls_port {
+        if let (Some(cert), Some(key), Some(client_ca)) = (
+            cli.cert_file.as_ref(),
+            cli.key_file.as_ref(),
+            cli.client_ca_file.as_ref(),
+        ) {
+            let handle = tokio::spawn(start_https_backend_mtls_server(
+                https_mtls_port,
+                cert.clone(),
+                key.clone(),
+                client_ca.clone(),
+            ));
+            handles.push(handle);
+        } else {
+            error!("HTTPS backend mTLS port specified but cert_file, key_file, or client_ca_file missing");
+        }
+    }
+
     info!("");
     info!("========================================");
     info!("All servers started, press Ctrl+C to stop");
@@ -157,15 +184,7 @@ async fn main() -> Result<()> {
 async fn start_http_server(port: u16) -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let server_addr_str = format!("0.0.0.0:{}", port);
-
-    let app = Router::new()
-        .route("/health", get(health_handler))
-        .route("/echo", get(echo_handler).post(echo_post_handler))
-        .route("/headers", get(headers_handler))
-        .route("/status/{code}", get(status_handler))
-        .route("/delay/{seconds}", get(delay_handler))
-        .route("/{*path}", get(catch_all_handler))
-        .layer(Extension(server_addr_str.clone()));
+    let app = create_echo_router(server_addr_str.clone());
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("✓ HTTP server listening on http://{}", addr);
@@ -174,6 +193,17 @@ async fn start_http_server(port: u16) -> Result<()> {
     axum::serve(listener, app_with_connect_info).await?;
 
     Ok(())
+}
+
+fn create_echo_router(server_addr_str: String) -> Router {
+    Router::new()
+        .route("/health", get(health_handler))
+        .route("/echo", get(echo_handler).post(echo_post_handler))
+        .route("/headers", get(headers_handler))
+        .route("/status/{code}", get(status_handler))
+        .route("/delay/{seconds}", get(delay_handler))
+        .route("/{*path}", get(catch_all_handler))
+        .layer(Extension(server_addr_str))
 }
 
 async fn health_handler() -> impl IntoResponse {
@@ -513,10 +543,7 @@ async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     }
 
     // Check Authorization header
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let auth_header = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("");
 
     match auth_header {
         // Valid regular user token
@@ -598,6 +625,10 @@ async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
 // ============================================================================
 
 use axum_server::tls_rustls::RustlsConfig;
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls::server::WebPkiClientVerifier;
+use rustls::RootCertStore;
+use std::sync::Arc;
 
 async fn start_https_backend_server(port: u16, cert_path: String, key_path: String) -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -614,15 +645,7 @@ async fn start_https_backend_server(port: u16, cert_path: String, key_path: Stri
         }
     };
 
-    // Create router with same handlers as HTTP server
-    let app = Router::new()
-        .route("/health", get(health_handler))
-        .route("/echo", get(echo_handler).post(echo_post_handler))
-        .route("/headers", get(headers_handler))
-        .route("/status/{code}", get(status_handler))
-        .route("/delay/{seconds}", get(delay_handler))
-        .route("/{*path}", get(catch_all_handler))
-        .layer(Extension(server_addr_str.clone()));
+    let app = create_echo_router(server_addr_str.clone());
 
     info!("✓ HTTPS backend server listening on https://{}", addr);
     info!("  Certificate: {}", cert_path);
@@ -635,4 +658,62 @@ async fn start_https_backend_server(port: u16, cert_path: String, key_path: Stri
         .await?;
 
     Ok(())
+}
+
+async fn start_https_backend_mtls_server(
+    port: u16,
+    cert_path: String,
+    key_path: String,
+    client_ca_path: String,
+) -> Result<()> {
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let server_addr_str = format!("0.0.0.0:{}", port);
+
+    let tls_config = load_mtls_rustls_config(&cert_path, &key_path, &client_ca_path)?;
+    let tls_config = RustlsConfig::from_config(Arc::new(tls_config));
+    let app = create_echo_router(server_addr_str.clone());
+
+    info!("✓ HTTPS backend mTLS server listening on https://{}", addr);
+    info!("  Certificate: {}", cert_path);
+    info!("  Private key: {}", key_path);
+    info!("  Client CA: {}", client_ca_path);
+
+    let app_with_connect_info = app.into_make_service_with_connect_info::<SocketAddr>();
+    axum_server::bind_rustls(addr, tls_config)
+        .serve(app_with_connect_info)
+        .await?;
+
+    Ok(())
+}
+
+fn load_mtls_rustls_config(cert_path: &str, key_path: &str, client_ca_path: &str) -> Result<rustls::ServerConfig> {
+    let cert_chain = CertificateDer::pem_file_iter(cert_path)
+        .with_context(|| format!("failed to read certificate file {}", cert_path))?
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("failed to parse certificate chain {}", cert_path))?;
+
+    let private_key =
+        PrivateKeyDer::from_pem_file(key_path).with_context(|| format!("failed to parse private key {}", key_path))?;
+
+    let mut roots = RootCertStore::empty();
+    for cert in CertificateDer::pem_file_iter(client_ca_path)
+        .with_context(|| format!("failed to read client CA file {}", client_ca_path))?
+    {
+        let cert = cert.with_context(|| format!("failed to parse client CA file {}", client_ca_path))?;
+        roots
+            .add(cert)
+            .with_context(|| format!("failed to load client CA certificate from {}", client_ca_path))?;
+    }
+
+    let client_verifier = WebPkiClientVerifier::builder(Arc::new(roots))
+        .build()
+        .context("failed to build client certificate verifier")?;
+
+    let mut config = rustls::ServerConfig::builder()
+        .with_client_cert_verifier(client_verifier)
+        .with_single_cert(cert_chain, private_key)
+        .context("failed to build rustls server config for mTLS backend")?;
+
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(config)
 }

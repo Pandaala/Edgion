@@ -3,6 +3,8 @@
 //! BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
 
 use super::common::{Condition, ParentReference};
+use super::gateway::SecretObjectReference;
+use k8s_openapi::api::core::v1::Secret;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,12 @@ pub const BACKEND_TLS_POLICY_GROUP: &str = "gateway.networking.k8s.io";
 
 /// Kind for BackendTLSPolicy
 pub const BACKEND_TLS_POLICY_KIND: &str = "BackendTLSPolicy";
+/// Implementation-specific option key for upstream mTLS client certificate Secret reference.
+///
+/// Value format:
+/// - `secret-name` (same namespace as BackendTLSPolicy)
+/// - `namespace/secret-name` (currently treated as invalid by Edgion parser)
+pub const OPTION_CLIENT_CERTIFICATE_REF: &str = "edgion.io/client-certificate-ref";
 
 /// BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -37,6 +45,14 @@ pub struct BackendTLSPolicySpec {
     /// Implementation-specific field for configuring TLS options like minimum TLS version or cipher suites.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<HashMap<String, String>>,
+
+    /// Resolved CA certificate Secrets (runtime only, filled by controller).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_ca_certificates: Option<Vec<Secret>>,
+
+    /// Resolved client certificate Secret for upstream mTLS (runtime only, filled by controller).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_client_certificate: Option<Secret>,
 }
 
 /// BackendTLSPolicyTargetRef identifies an API object to apply policy to.
@@ -138,6 +154,41 @@ pub enum WellKnownCACertificates {
 }
 
 impl BackendTLSPolicy {
+    /// Parse implementation-specific client certificate Secret reference from options.
+    ///
+    /// Supported value format:
+    /// - `secret-name` (same namespace)
+    ///
+    /// Returns an error message if the value is present but invalid.
+    pub fn client_certificate_secret_ref(&self) -> Result<Option<SecretObjectReference>, String> {
+        let raw = self
+            .spec
+            .options
+            .as_ref()
+            .and_then(|o| o.get(OPTION_CLIENT_CERTIFICATE_REF))
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
+
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+
+        if raw.contains('/') {
+            let msg = format!(
+                "Option {} must be a secret name in the same namespace, got '{}'",
+                OPTION_CLIENT_CERTIFICATE_REF, raw
+            );
+            return Err(msg);
+        }
+
+        Ok(Some(SecretObjectReference {
+            group: Some(String::new()),
+            kind: Some("Secret".to_string()),
+            name: raw.to_string(),
+            namespace: None,
+        }))
+    }
+
     /// Get the namespace of this resource
     pub fn namespace(&self) -> Option<&str> {
         self.metadata.namespace.as_deref()
@@ -203,4 +254,68 @@ pub struct PolicyAncestorStatus {
 
     /// Conditions describes the status of the Policy with respect to the given Ancestor.
     pub conditions: Vec<Condition>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+    fn make_policy(options: Option<HashMap<String, String>>) -> BackendTLSPolicy {
+        BackendTLSPolicy {
+            metadata: ObjectMeta {
+                name: Some("test".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: BackendTLSPolicySpec {
+                target_refs: vec![BackendTLSPolicyTargetRef {
+                    group: "".to_string(),
+                    kind: "Service".to_string(),
+                    name: "svc".to_string(),
+                    section_name: None,
+                }],
+                validation: BackendTLSPolicyValidation {
+                    ca_certificate_refs: None,
+                    hostname: "backend.example.com".to_string(),
+                    subject_alt_names: None,
+                    well_known_ca_certificates: None,
+                },
+                options,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn test_client_certificate_secret_ref_none() {
+        let policy = make_policy(None);
+        assert!(policy.client_certificate_secret_ref().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_client_certificate_secret_ref_valid() {
+        let mut options = HashMap::new();
+        options.insert(
+            OPTION_CLIENT_CERTIFICATE_REF.to_string(),
+            "client-cert-secret".to_string(),
+        );
+        let policy = make_policy(Some(options));
+        let ref_ = policy.client_certificate_secret_ref().unwrap().unwrap();
+        assert_eq!(ref_.name, "client-cert-secret");
+        assert!(ref_.namespace.is_none());
+    }
+
+    #[test]
+    fn test_client_certificate_secret_ref_invalid_namespace_value() {
+        let mut options = HashMap::new();
+        options.insert(
+            OPTION_CLIENT_CERTIFICATE_REF.to_string(),
+            "default/client-cert-secret".to_string(),
+        );
+        let policy = make_policy(Some(options));
+        assert!(policy.client_certificate_secret_ref().is_err());
+    }
 }

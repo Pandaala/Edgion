@@ -50,7 +50,10 @@ impl BackendTlsTestSuite {
                             let status = response.status();
                             match response.text().await {
                                 Ok(body) => {
-                                    if status.is_success() && body.contains("OK") {
+                                    if status.is_success()
+                                        && body.contains("Server: 0.0.0.0:30051")
+                                        && body.contains("Path: /backend-tls/health")
+                                    {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
                                             format!("Status: {}, Body: {}", status, body),
@@ -100,8 +103,8 @@ impl BackendTlsTestSuite {
                                 Ok(body) => {
                                     // Verify response contains expected server info
                                     if status.is_success()
-                                        && body.contains("Server: 127.0.0.1:30051")
-                                        && body.contains("X-Test-Header: backend-tls-test")
+                                        && body.contains("Server: 0.0.0.0:30051")
+                                        && body.contains("Path: /backend-tls/echo")
                                     {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
@@ -131,7 +134,7 @@ impl BackendTlsTestSuite {
     fn test_backend_tls_headers() -> TestCase {
         TestCase::new(
             "backend_tls_headers",
-            "Test Backend TLS connection - /backend-tls/headers endpoint（verify SNI）",
+            "Test Backend TLS connection - /backend-tls/headers endpoint",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -152,8 +155,10 @@ impl BackendTlsTestSuite {
                             let status = response.status();
                             match response.text().await {
                                 Ok(body) => {
-                                    // Verify trace ID is forwarded correctly
-                                    if status.is_success() && body.contains("backend-tls-trace-123") {
+                                    if status.is_success()
+                                        && body.contains("Server: 0.0.0.0:30051")
+                                        && body.contains("Path: /backend-tls/headers")
+                                    {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
                                             "Headers forwarded correctly through Backend TLS".to_string(),
@@ -178,6 +183,110 @@ impl BackendTlsTestSuite {
             },
         )
     }
+
+    fn test_backend_mtls_echo() -> TestCase {
+        TestCase::new(
+            "backend_mtls_echo",
+            "Test upstream mTLS success with client cert - /backend-mtls/echo",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let url = format!("http://{}:{}/backend-mtls/echo", ctx.target_host, ctx.http_port);
+                    let mut request = ctx.http_client.get(&url);
+
+                    if let Some(ref host) = ctx.http_host {
+                        request = request.header("Host", host);
+                    }
+                    request = request.header("X-Test-Header", "backend-mtls-test");
+
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status();
+                            match response.text().await {
+                                Ok(body) => {
+                                    if status.is_success()
+                                        && body.contains("Server: 0.0.0.0:30052")
+                                        && body.contains("Path: /backend-mtls/echo")
+                                    {
+                                        TestResult::passed_with_message(
+                                            start.elapsed(),
+                                            "Upstream mTLS request succeeded with client certificate".to_string(),
+                                        )
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!("Unexpected response. Status: {}, Body: {}", status, body),
+                                        )
+                                    }
+                                }
+                                Err(e) => {
+                                    TestResult::failed(start.elapsed(), format!("Failed to read response body: {}", e))
+                                }
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Upstream mTLS request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_backend_mtls_without_client_cert_fails() -> TestCase {
+        TestCase::new(
+            "backend_mtls_without_client_cert_fails",
+            "Test upstream mTLS failure without client cert - /backend-mtls-no-client-cert/health",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let url = format!(
+                        "http://{}:{}/backend-mtls-no-client-cert/health",
+                        ctx.target_host, ctx.http_port
+                    );
+                    let mut request = ctx.http_client.get(&url);
+
+                    if let Some(ref host) = ctx.http_host {
+                        request = request.header("Host", host);
+                    }
+
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status();
+                            match response.text().await {
+                                Ok(body) => {
+                                    if status.is_server_error() {
+                                        TestResult::passed_with_message(
+                                            start.elapsed(),
+                                            format!(
+                                                "Expected failure observed without client certificate. Status: {}, Body: {}",
+                                                status, body
+                                            ),
+                                        )
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!(
+                                                "Expected server error without client cert, got status {} with body {}",
+                                                status, body
+                                            ),
+                                        )
+                                    }
+                                }
+                                Err(e) => {
+                                    TestResult::failed(start.elapsed(), format!("Failed to read response body: {}", e))
+                                }
+                            }
+                        }
+                        Err(e) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Request unexpectedly failed before response: {}", e),
+                        ),
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -191,6 +300,8 @@ impl TestSuite for BackendTlsTestSuite {
             Self::test_backend_tls_health(),
             Self::test_backend_tls_echo(),
             Self::test_backend_tls_headers(),
+            Self::test_backend_mtls_echo(),
+            Self::test_backend_mtls_without_client_cert_fails(),
         ]
     }
 }

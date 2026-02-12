@@ -255,6 +255,7 @@ start_test_server() {
     # Backend TLS certificatepath
     BACKEND_CERT="${PROJECT_ROOT}/examples/test/certs/backend/server.crt"
     BACKEND_KEY="${PROJECT_ROOT}/examples/test/certs/backend/server.key"
+    BACKEND_MTLS_CLIENT_CA="${PROJECT_ROOT}/examples/test/certs/mtls/client-ca.crt"
     
     # Checkafter端 TLS certificate是否存在
     local https_backend_args=""
@@ -263,6 +264,14 @@ start_test_server() {
         log_info "启用 HTTPS after端port 30051"
     else
         log_warning "Backend TLS certificate不存在，Skip HTTPS after端"
+    fi
+
+    local https_backend_mtls_args=""
+    if [ -f "$BACKEND_CERT" ] && [ -f "$BACKEND_KEY" ] && [ -f "$BACKEND_MTLS_CLIENT_CA" ]; then
+        https_backend_mtls_args="--https-backend-mtls-port 30052 --client-ca-file $BACKEND_MTLS_CLIENT_CA"
+        log_info "启用 HTTPS mTLS after端port 30052"
+    else
+        log_warning "Backend mTLS 所需证书不存在，Skip HTTPS mTLS after端"
     fi
     
     "${PROJECT_ROOT}/target/debug/examples/test_server" \
@@ -274,6 +283,7 @@ start_test_server() {
         --auth-port 30040 \
         --log-level info \
         $https_backend_args \
+        $https_backend_mtls_args \
         > "${LOG_DIR}/test_server.log" 2>&1 &
     
     local pid=$!
@@ -448,15 +458,6 @@ generate_certs() {
         fi
     fi
     
-    # Generateafter端 TLS certificate
-    if [ -f "${CERTS_DIR}/generate_backend_certs.sh" ]; then
-        log_info "Run generate_backend_certs.sh..."
-        if bash "${CERTS_DIR}/generate_backend_certs.sh" > /dev/null 2>&1; then
-            log_success "Backend TLS certificateGeneratecompleted"
-        else
-            log_warning "Backend TLS certificatealready存在或GenerateSkip"
-        fi
-    fi
 }
 
 # =============================================================================
