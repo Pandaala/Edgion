@@ -20,7 +20,17 @@ pub async fn early_request_filter(
     let client_timeout = &edgion_http.parsed_timeouts.client;
     session.set_read_timeout(Some(client_timeout.read_timeout));
     session.set_write_timeout(Some(client_timeout.write_timeout));
-    session.set_keepalive(Some(client_timeout.keepalive_timeout));
+
+    // Handle graceful shutdown:
+    // If the process is shutting down, disable keepalive for this connection.
+    // This prevents the client from trying to reuse this connection for subsequent requests,
+    // which helps in draining traffic away from this instance.
+    if session.is_process_shutting_down() {
+        session.set_keepalive(None);
+        tracing::debug!("Process shutting down, disabling keepalive for new request");
+    } else {
+        session.set_keepalive(Some(client_timeout.keepalive_timeout));
+    }
 
     Ok(())
 }
@@ -62,19 +72,13 @@ async fn try_serve_acme_challenge(session: &mut Session) -> pingora_core::Result
         None => return Ok(()),
     };
 
-    tracing::info!(
-        token = token,
-        host = host,
-        "Serving ACME HTTP-01 challenge response"
-    );
+    tracing::info!(token = token, host = host, "Serving ACME HTTP-01 challenge response");
 
     let mut resp = ResponseHeader::build(200, None)?;
     resp.insert_header("Content-Type", "text/plain")?;
     resp.insert_header("Content-Length", &key_auth.len().to_string())?;
 
-    session
-        .write_response_header(Box::new(resp), false)
-        .await?;
+    session.write_response_header(Box::new(resp), false).await?;
     session
         .write_response_body(Some(bytes::Bytes::from(key_auth)), true)
         .await?;
