@@ -3,9 +3,4 @@ kind: EdgionPlugins
 metadata:
   name: timeout-debug
   namespace: edgion-default
-spec:
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
-
+spec: {}

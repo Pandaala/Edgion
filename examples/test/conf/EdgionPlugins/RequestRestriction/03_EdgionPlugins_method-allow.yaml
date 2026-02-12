@@ -18,7 +18,4 @@ spec:
               - "OPTIONS"
         status: 405
         message: "Method not allowed"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

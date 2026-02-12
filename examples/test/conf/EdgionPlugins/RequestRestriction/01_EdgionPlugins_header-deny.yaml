@@ -20,7 +20,4 @@ spec:
             onMissing: Allow
         status: 403
         message: "Bot access denied"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

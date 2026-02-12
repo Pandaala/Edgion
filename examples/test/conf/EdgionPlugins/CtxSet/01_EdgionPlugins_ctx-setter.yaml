@@ -47,8 +47,4 @@ spec:
             from:
               type: path
 
-  # 使用 DebugAccessLogToHeader 来验证 ctx 变量
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

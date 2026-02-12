@@ -54,61 +54,79 @@ impl PluginConditionTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
+                    let trace_id = format!("test-cond-cors-run-{}", uuid::Uuid::new_v4());
                     let url = format!("{}/health", ctx.http_url());
 
                     let request = client
                         .get(&url)
                         .header("host", "condition-test.example.com")
-                        .header("origin", "http://example.com"); // Required for CORS to take effect
+                        .header("origin", "http://example.com")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store");
 
                     match request.send().await {
                         Ok(response) => {
-                            if let Some(debug_header) = response.headers().get("x-debug-access-log") {
-                                let json_str = debug_header.to_str().unwrap_or("");
-                                match serde_json::from_str::<AccessLog>(json_str) {
-                                    Ok(access_log) => {
-                                        // Find Cors plugin log in edgion_plugins
-                                        let cors_log = access_log
-                                            .stage_logs
-                                            .iter()
-                                            .flat_map(|stage| &stage.edgion_plugins)
-                                            .flat_map(|ep| &ep.logs)
-                                            .find(|log| log.name == "Cors");
+                            if !response.status().is_success() {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Request failed with status: {}", response.status()),
+                                );
+                            }
 
-                                        match cors_log {
-                                            Some(log) => {
-                                                // Check if cond_skip is None (CORS ran)
-                                                if log.cond_skip.is_none() {
-                                                    // Check if log contains CORS output
-                                                    let has_cors_output = log.log.iter().any(|l| l.contains("CORS"));
-                                                    if has_cors_output {
-                                                        TestResult::passed_with_message(
-                                                            start.elapsed(),
-                                                            "CORS plugin ran (no cond_skip)".to_string(),
-                                                        )
+                            // Fetch access log from store
+                            let al_client = ctx.access_log_client();
+                            match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(entry) => {
+                                    match serde_json::from_value::<AccessLog>(entry.data) {
+                                        Ok(access_log) => {
+                                            // Find Cors plugin log in edgion_plugins
+                                            let cors_log = access_log
+                                                .stage_logs
+                                                .iter()
+                                                .flat_map(|stage| &stage.edgion_plugins)
+                                                .flat_map(|ep| &ep.logs)
+                                                .find(|log| log.name == "Cors");
+
+                                            match cors_log {
+                                                Some(log) => {
+                                                    // Check if cond_skip is None (CORS ran)
+                                                    if log.cond_skip.is_none() {
+                                                        // Check if log contains CORS output
+                                                        let has_cors_output =
+                                                            log.log.iter().any(|l| l.contains("CORS"));
+                                                        if has_cors_output {
+                                                            TestResult::passed_with_message(
+                                                                start.elapsed(),
+                                                                "CORS plugin ran (no cond_skip)".to_string(),
+                                                            )
+                                                        } else {
+                                                            TestResult::passed_with_message(
+                                                                start.elapsed(),
+                                                                "CORS plugin ran (cond_skip is None)".to_string(),
+                                                            )
+                                                        }
                                                     } else {
-                                                        TestResult::passed_with_message(
+                                                        TestResult::failed(
                                                             start.elapsed(),
-                                                            "CORS plugin ran (cond_skip is None)".to_string(),
+                                                            format!(
+                                                                "CORS was skipped unexpectedly: {:?}",
+                                                                log.cond_skip
+                                                            ),
                                                         )
                                                     }
-                                                } else {
-                                                    TestResult::failed(
-                                                        start.elapsed(),
-                                                        format!("CORS was skipped unexpectedly: {:?}", log.cond_skip),
-                                                    )
                                                 }
+                                                None => TestResult::failed(
+                                                    start.elapsed(),
+                                                    "Cors plugin log not found in edgion_plugins".to_string(),
+                                                ),
                                             }
-                                            None => TestResult::failed(
-                                                start.elapsed(),
-                                                "Cors plugin log not found in edgion_plugins".to_string(),
-                                            ),
                                         }
+                                        Err(e) => TestResult::failed(start.elapsed(), format!("Parse error: {}", e)),
                                     }
-                                    Err(e) => TestResult::failed(start.elapsed(), format!("Parse error: {}", e)),
                                 }
-                            } else {
-                                TestResult::failed(start.elapsed(), "X-Debug-Access-Log not found".to_string())
+                                Err(e) => {
+                                    TestResult::failed(start.elapsed(), format!("Failed to fetch access log: {}", e))
+                                }
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -127,66 +145,81 @@ impl PluginConditionTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
+                    let trace_id = format!("test-cond-cors-skip-{}", uuid::Uuid::new_v4());
                     let url = format!("{}/health", ctx.http_url());
 
                     let request = client
                         .get(&url)
                         .header("host", "condition-test.example.com")
-                        .header("X-Skip-Cors", "true"); // 触发 skip 条件
+                        .header("X-Skip-Cors", "true") // 触发 skip 条件
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store");
 
                     match request.send().await {
                         Ok(response) => {
-                            if let Some(debug_header) = response.headers().get("x-debug-access-log") {
-                                let json_str = debug_header.to_str().unwrap_or("");
-                                match serde_json::from_str::<AccessLog>(json_str) {
-                                    Ok(access_log) => {
-                                        // Find Cors plugin log in edgion_plugins
-                                        let cors_log = access_log
-                                            .stage_logs
-                                            .iter()
-                                            .flat_map(|stage| &stage.edgion_plugins)
-                                            .flat_map(|ep| &ep.logs)
-                                            .find(|log| log.name == "Cors");
+                            // Check status first to fail fast
+                            if !response.status().is_success() {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Request failed with status: {}", response.status()),
+                                );
+                            }
 
-                                        match cors_log {
-                                            Some(log) => {
-                                                // Check if cond_skip is set
-                                                if let Some(ref skip_reason) = log.cond_skip {
-                                                    // Verify skip reason format: "skip:keyExist,hdr:X-Skip-Cors"
-                                                    if skip_reason.contains("skip:keyExist")
-                                                        && skip_reason.contains("hdr:X-Skip-Cors")
-                                                    {
-                                                        TestResult::passed_with_message(
-                                                            start.elapsed(),
-                                                            format!("CORS skipped correctly: {}", skip_reason),
-                                                        )
+                            // Fetch access log from store
+                            let al_client = ctx.access_log_client();
+                            match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(entry) => {
+                                    match serde_json::from_value::<AccessLog>(entry.data) {
+                                        Ok(access_log) => {
+                                            // Find Cors plugin log in edgion_plugins
+                                            let cors_log = access_log
+                                                .stage_logs
+                                                .iter()
+                                                .flat_map(|stage| &stage.edgion_plugins)
+                                                .flat_map(|ep| &ep.logs)
+                                                .find(|log| log.name == "Cors");
+
+                                            match cors_log {
+                                                Some(log) => {
+                                                    // Check if cond_skip is set
+                                                    if let Some(ref skip_reason) = log.cond_skip {
+                                                        // Verify skip reason format: "skip:keyExist,hdr:X-Skip-Cors"
+                                                        if skip_reason.contains("skip:keyExist")
+                                                            && skip_reason.contains("hdr:X-Skip-Cors")
+                                                        {
+                                                            TestResult::passed_with_message(
+                                                                start.elapsed(),
+                                                                format!("CORS skipped correctly: {}", skip_reason),
+                                                            )
+                                                        } else {
+                                                            TestResult::failed(
+                                                                start.elapsed(),
+                                                                format!("Unexpected skip reason: {}", skip_reason),
+                                                            )
+                                                        }
                                                     } else {
+                                                        // No cond_skip found - CORS ran but should have been skipped
                                                         TestResult::failed(
                                                             start.elapsed(),
-                                                            format!("Unexpected skip reason: {}", skip_reason),
+                                                            format!(
+                                                                "CORS ran but should have been skipped. Log: {:?}",
+                                                                log.log
+                                                            ),
                                                         )
                                                     }
-                                                } else {
-                                                    // No cond_skip found - CORS ran but should have been skipped
-                                                    TestResult::failed(
-                                                        start.elapsed(),
-                                                        format!(
-                                                            "CORS ran but should have been skipped. Log: {:?}",
-                                                            log.log
-                                                        ),
-                                                    )
                                                 }
+                                                None => TestResult::failed(
+                                                    start.elapsed(),
+                                                    "Cors plugin log not found in edgion_plugins".to_string(),
+                                                ),
                                             }
-                                            None => TestResult::failed(
-                                                start.elapsed(),
-                                                "Cors plugin log not found in edgion_plugins".to_string(),
-                                            ),
                                         }
+                                        Err(e) => TestResult::failed(start.elapsed(), format!("Parse error: {}", e)),
                                     }
-                                    Err(e) => TestResult::failed(start.elapsed(), format!("Parse error: {}", e)),
                                 }
-                            } else {
-                                TestResult::failed(start.elapsed(), "X-Debug-Access-Log not found".to_string())
+                                Err(e) => {
+                                    TestResult::failed(start.elapsed(), format!("Failed to fetch access log: {}", e))
+                                }
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),

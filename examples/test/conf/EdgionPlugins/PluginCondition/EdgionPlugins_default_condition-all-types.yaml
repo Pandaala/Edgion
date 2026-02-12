@@ -8,7 +8,7 @@
 # 5. include - 包含条件
 # 6. exclude - 排除条件
 #
-# 使用 Mock 插件来测试条件，通过检查 X-Debug-Access-Log 中的 cond_skip 字段验证
+# 使用 Mock 插件来测试条件，通过 Access Log Store 检查 cond_skip 字段验证
 
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -332,9 +332,4 @@ spec:
               - "^/debug/.*"
               - "^/admin/.*"
 
-  # DebugAccessLogToHeader - 必须放在 upstreamResponseFilterPlugins 中
-  # 用于获取插件执行日志
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

@@ -22,7 +22,4 @@ spec:
         upstreamHeaderFields:
           - "X-Consumer-Username"
           - "X-Customer-ID"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

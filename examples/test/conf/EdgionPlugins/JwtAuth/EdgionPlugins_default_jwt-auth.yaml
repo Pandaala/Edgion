@@ -17,7 +17,4 @@ spec:
         cookie: jwt
         keyClaimName: key
         hideCredentials: false
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

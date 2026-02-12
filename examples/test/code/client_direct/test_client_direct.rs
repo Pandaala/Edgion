@@ -15,6 +15,8 @@
 // Reuse client modules
 #![allow(dead_code)]
 #![allow(unused_imports)]
+#[path = "../client/access_log_client.rs"]
+pub mod access_log_client;
 #[path = "../client/framework.rs"]
 mod framework;
 #[path = "../client/log_analyzer.rs"]

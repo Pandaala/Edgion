@@ -103,12 +103,15 @@ fn was_skipped_by_condition(log: &PluginLog, condition_type: &str) -> bool {
 
 /// Helper function to send request and parse access log
 async fn send_request_and_get_log(
-    client: &reqwest::Client,
+    ctx: &TestContext,
     url: &str,
     host: &str,
     extra_headers: Vec<(&str, &str)>,
     method: &str,
 ) -> Result<AccessLog, String> {
+    let client = &ctx.http_client;
+    let trace_id = format!("test-all-cond-{}", uuid::Uuid::new_v4());
+
     let mut request_builder = match method {
         "POST" => client.post(url),
         "PUT" => client.put(url),
@@ -117,19 +120,22 @@ async fn send_request_and_get_log(
         _ => client.get(url),
     };
 
-    request_builder = request_builder.header("host", host);
+    request_builder = request_builder
+        .header("host", host)
+        .header("x-trace-id", &trace_id)
+        .header("access_log", "test_store");
+
     for (key, value) in extra_headers {
         request_builder = request_builder.header(key, value);
     }
 
     match request_builder.send().await {
-        Ok(response) => {
-            if let Some(debug_header) = response.headers().get("x-debug-access-log") {
-                let json_str = debug_header.to_str().unwrap_or("");
-                serde_json::from_str::<AccessLog>(json_str)
-                    .map_err(|e| format!("Parse error: {}. JSON: {}", e, json_str))
-            } else {
-                Err("X-Debug-Access-Log header not found".to_string())
+        Ok(_) => {
+            // Fetch access log from store
+            let al_client = ctx.access_log_client();
+            match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                Ok(entry) => serde_json::from_value::<AccessLog>(entry.data).map_err(|e| format!("Parse error: {}", e)),
+                Err(e) => Err(format!("Failed to fetch access log: {}", e)),
             }
         }
         Err(e) => Err(format!("Request failed: {}", e)),
@@ -153,7 +159,7 @@ impl AllConditionsTestSuite {
 
                     // With skip header - plugin should be skipped
                     match send_request_and_get_log(
-                        &ctx.http_client,
+                        &ctx,
                         &url,
                         TEST_HOST,
                         vec![("X-Skip-KeyExist-Header", "true")],
@@ -207,7 +213,7 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     // Without skip header - plugin should run
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             // Find a Mock plugin that ran (no cond_skip)
                             let ran_count = count_mock_plugins_ran(&access_log);
@@ -240,7 +246,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test?skip_query=1");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let found_skipped = access_log
                                 .stage_logs
@@ -282,14 +288,8 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test");
 
-                    match send_request_and_get_log(
-                        &ctx.http_client,
-                        &url,
-                        TEST_HOST,
-                        vec![("Cookie", "session_id=abc123")],
-                        "GET",
-                    )
-                    .await
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("Cookie", "session_id=abc123")], "GET")
+                        .await
                     {
                         Ok(access_log) => {
                             // The Cookie condition is a "run" condition, so plugin runs when cookie exists
@@ -324,7 +324,7 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     // No cookie - the "run" condition should fail, plugin skipped
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             // Find plugin skipped due to run condition not met
                             let found_skipped = access_log
@@ -374,15 +374,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test");
 
-                    match send_request_and_get_log(
-                        &ctx.http_client,
-                        &url,
-                        TEST_HOST,
-                        vec![("X-Env", "production")],
-                        "GET",
-                    )
-                    .await
-                    {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("X-Env", "production")], "GET").await {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
                             if ran_count > 0 {
@@ -418,7 +410,7 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     match send_request_and_get_log(
-                        &ctx.http_client,
+                        &ctx,
                         &url,
                         TEST_HOST,
                         vec![("X-Env", "staging")], // Not 'production'
@@ -470,14 +462,8 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test");
 
-                    match send_request_and_get_log(
-                        &ctx.http_client,
-                        &url,
-                        TEST_HOST,
-                        vec![("User-Agent", "TestBot/1.0")],
-                        "GET",
-                    )
-                    .await
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("User-Agent", "TestBot/1.0")], "GET")
+                        .await
                     {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
@@ -511,7 +497,7 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     match send_request_and_get_log(
-                        &ctx.http_client,
+                        &ctx,
                         &url,
                         TEST_HOST,
                         vec![("User-Agent", "Mozilla/5.0")], // Doesn't match ^TestBot.*
@@ -546,7 +532,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test?version=v2");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
                             if ran_count > 0 {
@@ -580,7 +566,7 @@ impl AllConditionsTestSuite {
 
                     // Test Mozilla
                     match send_request_and_get_log(
-                        &ctx.http_client,
+                        &ctx,
                         &url,
                         TEST_HOST,
                         vec![("User-Agent", "Mozilla/5.0 Firefox")],
@@ -601,14 +587,8 @@ impl AllConditionsTestSuite {
                     }
 
                     // Test Chrome
-                    match send_request_and_get_log(
-                        &ctx.http_client,
-                        &url,
-                        TEST_HOST,
-                        vec![("User-Agent", "Chrome/100.0")],
-                        "GET",
-                    )
-                    .await
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("User-Agent", "Chrome/100.0")], "GET")
+                        .await
                     {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
@@ -623,14 +603,8 @@ impl AllConditionsTestSuite {
                     }
 
                     // Test Safari (case-insensitive - (?i:^safari.*))
-                    match send_request_and_get_log(
-                        &ctx.http_client,
-                        &url,
-                        TEST_HOST,
-                        vec![("User-Agent", "SAFARI/605.1")],
-                        "GET",
-                    )
-                    .await
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("User-Agent", "SAFARI/605.1")], "GET")
+                        .await
                     {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
@@ -665,7 +639,7 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     match send_request_and_get_log(
-                        &ctx.http_client,
+                        &ctx,
                         &url,
                         TEST_HOST,
                         vec![("User-Agent", "curl/7.64.1")], // Doesn't match any pattern
@@ -701,15 +675,7 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     // Test us-east
-                    match send_request_and_get_log(
-                        &ctx.http_client,
-                        &url,
-                        TEST_HOST,
-                        vec![("X-Region", "us-east")],
-                        "GET",
-                    )
-                    .await
-                    {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("X-Region", "us-east")], "GET").await {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
                             if ran_count == 0 {
@@ -723,15 +689,7 @@ impl AllConditionsTestSuite {
                     }
 
                     // Test eu-west
-                    match send_request_and_get_log(
-                        &ctx.http_client,
-                        &url,
-                        TEST_HOST,
-                        vec![("X-Region", "eu-west")],
-                        "GET",
-                    )
-                    .await
-                    {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("X-Region", "eu-west")], "GET").await {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
                             if ran_count > 0 {
@@ -763,14 +721,8 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test");
 
-                    match send_request_and_get_log(
-                        &ctx.http_client,
-                        &url,
-                        TEST_HOST,
-                        vec![("X-Region", "unknown-region")],
-                        "GET",
-                    )
-                    .await
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("X-Region", "unknown-region")], "GET")
+                        .await
                     {
                         Ok(access_log) => {
                             let skipped_count = count_mock_plugins_skipped(&access_log);
@@ -803,7 +755,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             // TimeRange 2020-2099 should always run
                             let ran_count = count_mock_plugins_ran(&access_log);
@@ -836,7 +788,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             // TimeRange 2020 only should be skipped (it's past 2020)
                             let found_skipped = access_log
@@ -885,7 +837,7 @@ impl AllConditionsTestSuite {
 
                     // Send multiple requests to verify 100% probability
                     for i in 0..3 {
-                        match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                        match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                             Ok(access_log) => {
                                 let ran_count = count_mock_plugins_ran(&access_log);
                                 if ran_count == 0 {
@@ -918,7 +870,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let found_skipped = access_log
                                 .stage_logs
@@ -965,14 +917,7 @@ impl AllConditionsTestSuite {
                     let mut results = Vec::new();
 
                     for _ in 0..5 {
-                        match send_request_and_get_log(
-                            &ctx.http_client,
-                            &url,
-                            TEST_HOST,
-                            vec![("X-User-ID", user_id)],
-                            "GET",
-                        )
-                        .await
+                        match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("X-User-ID", user_id)], "GET").await
                         {
                             Ok(access_log) => {
                                 let ran = count_mock_plugins_ran(&access_log) > 0;
@@ -1019,7 +964,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/api/users");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
                             if ran_count > 0 {
@@ -1051,7 +996,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/other/path");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let found_skipped = access_log
                                 .stage_logs
@@ -1093,7 +1038,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "POST").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "POST").await {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
                             if ran_count > 0 {
@@ -1125,7 +1070,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let skipped_count = count_mock_plugins_skipped(&access_log);
                             TestResult::passed_with_message(
@@ -1150,7 +1095,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/api/v1/users");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
                             if ran_count > 0 {
@@ -1182,7 +1127,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/INTERNAL/debug");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
                             if ran_count > 0 {
@@ -1221,7 +1166,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/api/data");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
                             if ran_count > 0 {
@@ -1253,7 +1198,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/health");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let found_skipped = access_log
                                 .stage_logs
@@ -1295,7 +1240,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/test");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "OPTIONS").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "OPTIONS").await {
                         Ok(access_log) => {
                             let found_skipped = access_log
                                 .stage_logs
@@ -1340,7 +1285,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/debug/pprof");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let found_skipped = access_log
                                 .stage_logs
@@ -1385,7 +1330,7 @@ impl AllConditionsTestSuite {
                     let start = Instant::now();
                     let url = build_url(&ctx, "/api/v1/data");
 
-                    match send_request_and_get_log(&ctx.http_client, &url, TEST_HOST, vec![], "GET").await {
+                    match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                         Ok(access_log) => {
                             let ran_count = count_mock_plugins_ran(&access_log);
                             if ran_count > 0 {

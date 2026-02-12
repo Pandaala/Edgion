@@ -10,7 +10,4 @@ spec:
       type: ProxyRewrite
       config:
         uri: "/internal/api/v2"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

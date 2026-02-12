@@ -19,7 +19,4 @@ spec:
             onMissing: Deny
         status: 401
         message: "Authentication required"
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

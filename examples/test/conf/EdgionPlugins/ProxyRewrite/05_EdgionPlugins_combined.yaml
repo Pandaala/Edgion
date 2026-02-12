@@ -23,7 +23,4 @@ spec:
           remove:
             - X-Debug
             - X-Internal-Token
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+

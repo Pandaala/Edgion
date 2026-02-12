@@ -57,20 +57,32 @@ pub async fn logging(
     edgion_http.access_logger.send(entry.to_json()).await;
 
     // Store in Access Log Store when integration testing mode is enabled
+    // Only store when request has "access_log: test_store" header to avoid
+    // flooding the store during high-volume tests (e.g., LB distribution tests)
     if crate::core::cli::config::is_integration_testing_mode() {
-        let store = crate::core::observe::access_log_store::get_access_log_store();
-        // Use x_trace_id if available, otherwise generate a unique key
-        let trace_key = ctx
-            .request_info
-            .x_trace_id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        if let Err(e) = store.store(trace_key, entry.to_json()) {
-            tracing::warn!(
-                component = "access_log_store",
-                error = %e,
-                "Failed to store access log"
-            );
+        let should_store = session
+            .req_header()
+            .headers
+            .get("access_log")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v == "test_store")
+            .unwrap_or(false);
+
+        if should_store {
+            let store = crate::core::observe::access_log_store::get_access_log_store();
+            // Use x_trace_id if available, otherwise generate a unique key
+            let trace_key = ctx
+                .request_info
+                .x_trace_id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            if let Err(e) = store.store(trace_key, entry.to_json()) {
+                tracing::warn!(
+                    component = "access_log_store",
+                    error = %e,
+                    "Failed to store access log"
+                );
+            }
         }
     }
 }

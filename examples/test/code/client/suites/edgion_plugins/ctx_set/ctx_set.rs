@@ -1,8 +1,8 @@
 // CtxSet Plugin Test Suite
 //
 // 测试策略：
-// - 通过 DebugAccessLogToHeader 插件验证 ctx 变量被正确设置
-// - DebugAccessLogToHeader 会在响应头中添加 X-Edgion-Ctx-{name} 格式的头
+// - 通过 Access Log Store 验证 ctx 变量被正确设置
+// - 检查 Access Log 中的 stage_logs 或自定义上下文数据
 //
 // 配置参考：conf/EdgionPlugins/CtxSet/01_EdgionPlugins_ctx-setter.yaml
 
@@ -23,10 +23,14 @@ impl CtxSetTestSuite {
                     let client = &ctx.http_client;
                     let url = "http://127.0.0.1:31180/test/ctx-setter/api";
 
+                    let trace_id = format!("test-ctx-header-{}", uuid::Uuid::new_v4());
+
                     let response = client
                         .get(url)
                         .header("host", "ctx-setter.example.com")
                         .header("X-Tenant-Id", "acme-corp")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
                         .send()
                         .await;
 
@@ -37,13 +41,19 @@ impl CtxSetTestSuite {
                                 return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
-                            // 检查 DebugAccessLogToHeader 设置的响应头
-                            // ctx 变量通过 X-Edgion-Access-Log 头传递
-                            let access_log = resp
-                                .headers()
-                                .get("X-Debug-Access-Log")
-                                .and_then(|v| v.to_str().ok())
-                                .unwrap_or("");
+                            // 从 Access Log Store 获取日志
+                            let al_client = ctx.access_log_client();
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Failed to fetch access log: {}", e),
+                                    )
+                                }
+                            };
+
+                            let access_log = entry.data.to_string();
 
                             // 验证 tenant_id 被设置
                             if access_log.contains(r#""tenant_id":"acme-corp""#) {
@@ -76,8 +86,16 @@ impl CtxSetTestSuite {
                     let client = &ctx.http_client;
                     let url = "http://127.0.0.1:31180/test/ctx-setter/api";
 
+                    let trace_id = format!("test-ctx-default-{}", uuid::Uuid::new_v4());
+
                     // 不发送 X-Tenant-Id header，应使用默认值
-                    let response = client.get(url).header("host", "ctx-setter.example.com").send().await;
+                    let response = client
+                        .get(url)
+                        .header("host", "ctx-setter.example.com")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await;
 
                     match response {
                         Ok(resp) => {
@@ -86,11 +104,18 @@ impl CtxSetTestSuite {
                                 return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
-                            let access_log = resp
-                                .headers()
-                                .get("X-Debug-Access-Log")
-                                .and_then(|v| v.to_str().ok())
-                                .unwrap_or("");
+                            let al_client = ctx.access_log_client();
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Failed to fetch access log: {}", e),
+                                    )
+                                }
+                            };
+
+                            let access_log = entry.data.to_string();
 
                             // 验证使用了默认值
                             if access_log.contains(r#""tenant_id":"default-tenant""#) {
@@ -123,7 +148,15 @@ impl CtxSetTestSuite {
                     let client = &ctx.http_client;
                     let url = "http://127.0.0.1:31180/test/ctx-setter/api";
 
-                    let response = client.get(url).header("host", "ctx-setter.example.com").send().await;
+                    let trace_id = format!("test-ctx-transform-{}", uuid::Uuid::new_v4());
+
+                    let response = client
+                        .get(url)
+                        .header("host", "ctx-setter.example.com")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await;
 
                     match response {
                         Ok(resp) => {
@@ -132,11 +165,18 @@ impl CtxSetTestSuite {
                                 return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
-                            let access_log = resp
-                                .headers()
-                                .get("X-Debug-Access-Log")
-                                .and_then(|v| v.to_str().ok())
-                                .unwrap_or("");
+                            let al_client = ctx.access_log_client();
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Failed to fetch access log: {}", e),
+                                    )
+                                }
+                            };
+
+                            let access_log = entry.data.to_string();
 
                             // 验证 method 被转换为小写
                             if access_log.contains(r#""method_lower":"get""#) {
@@ -169,10 +209,14 @@ impl CtxSetTestSuite {
                     let client = &ctx.http_client;
                     let url = "http://127.0.0.1:31180/test/ctx-setter/api";
 
+                    let trace_id = format!("test-ctx-mapping-{}", uuid::Uuid::new_v4());
+
                     let response = client
                         .get(url)
                         .header("host", "ctx-setter.example.com")
                         .header("X-Plan", "premium")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
                         .send()
                         .await;
 
@@ -183,11 +227,18 @@ impl CtxSetTestSuite {
                                 return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
-                            let access_log = resp
-                                .headers()
-                                .get("X-Debug-Access-Log")
-                                .and_then(|v| v.to_str().ok())
-                                .unwrap_or("");
+                            let al_client = ctx.access_log_client();
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Failed to fetch access log: {}", e),
+                                    )
+                                }
+                            };
+
+                            let access_log = entry.data.to_string();
 
                             // 验证 premium 被映射为 tier_1
                             if access_log.contains(r#""tier":"tier_1""#) {
@@ -220,10 +271,14 @@ impl CtxSetTestSuite {
                     let client = &ctx.http_client;
                     let url = "http://127.0.0.1:31180/test/ctx-setter/api";
 
+                    let trace_id = format!("test-ctx-map-def-{}", uuid::Uuid::new_v4());
+
                     let response = client
                         .get(url)
                         .header("host", "ctx-setter.example.com")
                         .header("X-Plan", "unknown-plan")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
                         .send()
                         .await;
 
@@ -234,11 +289,18 @@ impl CtxSetTestSuite {
                                 return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
-                            let access_log = resp
-                                .headers()
-                                .get("X-Debug-Access-Log")
-                                .and_then(|v| v.to_str().ok())
-                                .unwrap_or("");
+                            let al_client = ctx.access_log_client();
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Failed to fetch access log: {}", e),
+                                    )
+                                }
+                            };
+
+                            let access_log = entry.data.to_string();
 
                             // 验证未匹配时使用 mapping.default
                             if access_log.contains(r#""tier":"tier_3""#) {

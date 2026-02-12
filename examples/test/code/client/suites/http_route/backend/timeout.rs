@@ -25,13 +25,17 @@ impl TimeoutTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let mut request = ctx.http_client.get(format!("{}/delay/1", ctx.http_url()));
-                    request = request.header("Host", "timeout-backend.example.com");
+                    let trace_id = format!("timeout-normal-{}", uuid::Uuid::new_v4());
+                    let request = ctx
+                        .http_client
+                        .get(format!("{}/delay/1", ctx.http_url()))
+                        .header("Host", "timeout-backend.example.com")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store");
 
                     match request.send().await {
                         Ok(response) => {
                             let status = response.status();
-                            let headers = response.headers().clone();
 
                             if !status.is_success() {
                                 return TestResult::failed(
@@ -40,47 +44,33 @@ impl TimeoutTestSuite {
                                 );
                             }
 
-                            // Check Debug header
-                            if let Some(debug_header) = headers.get("X-Debug-Access-Log") {
-                                if let Ok(debug_str) = debug_header.to_str() {
-                                    if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(debug_str) {
-                                        let internal_status =
-                                            debug_json["request_info"]["status"].as_u64().unwrap_or(0);
-                                        if internal_status == 200 {
-                                            TestResult::passed_with_message(
-                                                start.elapsed(),
-                                                format!(
-                                                    "Normal response: HTTP {} / Internal {}",
-                                                    status.as_u16(),
-                                                    internal_status
-                                                ),
-                                            )
-                                        } else {
-                                            TestResult::failed(
-                                                start.elapsed(),
-                                                format!(
-                                                    "Status mismatch: HTTP {} but Internal {}",
-                                                    status.as_u16(),
-                                                    internal_status
-                                                ),
-                                            )
-                                        }
-                                    } else {
-                                        TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            format!("Response OK but failed to parse debug JSON: {}", debug_str),
-                                        )
-                                    }
-                                } else {
+                            // Fetch Access Log
+                            let al_client = ctx.access_log_client();
+                            if let Ok(entry) = al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                let internal_status = entry.data["request_info"]["status"].as_u64().unwrap_or(0);
+                                if internal_status == 200 {
                                     TestResult::passed_with_message(
                                         start.elapsed(),
-                                        "Response OK but debug header not valid UTF-8".to_string(),
+                                        format!(
+                                            "Normal response: HTTP {} / Internal {}",
+                                            status.as_u16(),
+                                            internal_status
+                                        ),
+                                    )
+                                } else {
+                                    TestResult::failed(
+                                        start.elapsed(),
+                                        format!(
+                                            "Status mismatch: HTTP {} but Internal {}",
+                                            status.as_u16(),
+                                            internal_status
+                                        ),
                                     )
                                 }
                             } else {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "Response OK but no debug header found".to_string(),
+                                    "Response OK but failed to fetch access log".to_string(),
                                 )
                             }
                         }
@@ -99,15 +89,19 @@ impl TimeoutTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let mut request = ctx.http_client.get(format!("{}/delay/2", ctx.http_url()));
-                    request = request.header("Host", "timeout-backend.example.com");
+                    let trace_id = format!("timeout-backend-{}", uuid::Uuid::new_v4());
+                    let request = ctx
+                        .http_client
+                        .get(format!("{}/delay/2", ctx.http_url()))
+                        .header("Host", "timeout-backend.example.com")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store");
 
                     match request.send().await {
                         Ok(response) => {
                             let status = response.status();
-                            let headers = response.headers().clone();
 
-                            // 期望504
+                            // Expect 504
                             if status.as_u16() != 504 {
                                 return TestResult::failed(
                                     start.elapsed(),
@@ -115,36 +109,25 @@ impl TimeoutTestSuite {
                                 );
                             }
 
-                            // Check Debug headerinternal status code
-                            if let Some(debug_header) = headers.get("X-Debug-Access-Log") {
-                                if let Ok(debug_str) = debug_header.to_str() {
-                                    if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(debug_str) {
-                                        let internal_status =
-                                            debug_json["request_info"]["status"].as_u64().unwrap_or(0);
-                                        if internal_status == 504 {
-                                            TestResult::passed_with_message(
-                                                start.elapsed(),
-                                                "Backend request timeout: HTTP 504 / Internal 504 ✓".to_string(),
-                                            )
-                                        } else {
-                                            TestResult::failed(
-                                                start.elapsed(),
-                                                format!("Status mismatch: HTTP 504 but Internal {}", internal_status),
-                                            )
-                                        }
-                                    } else {
-                                        TestResult::failed(
-                                            start.elapsed(),
-                                            "Got 504 but failed to parse debug JSON".to_string(),
-                                        )
-                                    }
+                            // Fetch Access Log for internal status
+                            let al_client = ctx.access_log_client();
+                            if let Ok(entry) = al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                let internal_status = entry.data["request_info"]["status"].as_u64().unwrap_or(0);
+                                if internal_status == 504 {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "Backend request timeout: HTTP 504 / Internal 504 ✓".to_string(),
+                                    )
                                 } else {
-                                    TestResult::failed(start.elapsed(), "Debug header not valid UTF-8".to_string())
+                                    TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Status mismatch: HTTP 504 but Internal {}", internal_status),
+                                    )
                                 }
                             } else {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "Got HTTP 504 (debug header missing)".to_string(),
+                                    "Got HTTP 504 (access log fetch failed)".to_string(),
                                 )
                             }
                         }
@@ -240,14 +223,17 @@ impl TimeoutTestSuite {
                         .build()
                         .expect("Failed to create long timeout client");
 
+                    let trace_id = format!("timeout-read-{}", uuid::Uuid::new_v4());
                     let mut request = long_timeout_client.get(format!("{}/delay/3", ctx.http_url()));
-                    request = request.header("Host", "timeout-client.example.com");
+                    request = request
+                        .header("Host", "timeout-client.example.com")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store");
 
                     match request.send().await {
                         Ok(response) => {
                             let status = response.status();
                             let status_code = status.as_u16();
-                            let headers = response.headers().clone();
                             let elapsed = start.elapsed();
 
                             // normally should return in3s or so200
@@ -261,30 +247,22 @@ impl TimeoutTestSuite {
                                     ),
                                 )
                             } else {
-                                // Check Debug headerget internal status code
-                                if let Some(debug_header) = headers.get("X-Debug-Access-Log") {
-                                    if let Ok(debug_str) = debug_header.to_str() {
-                                        if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(debug_str) {
-                                            let internal_status =
-                                                debug_json["request_info"]["status"].as_u64().unwrap_or(0);
-                                            TestResult::failed(
-                                                elapsed,
-                                                format!(
-                                                    "Expected 200 but got HTTP {} / Internal {}",
-                                                    status_code, internal_status
-                                                ),
-                                            )
-                                        } else {
-                                            TestResult::failed(
-                                                elapsed,
-                                                format!("Got HTTP {} (debug JSON parse error)", status_code),
-                                            )
-                                        }
-                                    } else {
-                                        TestResult::failed(elapsed, "Debug header not valid UTF-8".to_string())
-                                    }
+                                // Fetch Access Log for internal status
+                                let al_client = ctx.access_log_client();
+                                if let Ok(entry) = al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                    let internal_status = entry.data["request_info"]["status"].as_u64().unwrap_or(0);
+                                    TestResult::failed(
+                                        elapsed,
+                                        format!(
+                                            "Expected 200 but got HTTP {} / Internal {}",
+                                            status_code, internal_status
+                                        ),
+                                    )
                                 } else {
-                                    TestResult::failed(elapsed, format!("Got HTTP {} (no debug header)", status_code))
+                                    TestResult::failed(
+                                        elapsed,
+                                        format!("Got HTTP {} (access log fetch failed)", status_code),
+                                    )
                                 }
                             }
                         }

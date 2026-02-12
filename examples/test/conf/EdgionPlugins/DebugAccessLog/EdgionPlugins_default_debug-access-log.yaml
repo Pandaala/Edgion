@@ -24,7 +24,4 @@ spec:
         add:
           - name: "X-Test-Header"
             value: "test-value"
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
 

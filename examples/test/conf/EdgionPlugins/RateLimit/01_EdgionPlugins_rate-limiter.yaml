@@ -37,7 +37,4 @@ spec:
         rejectMessage: "API rate limit exceeded"
         showLimitHeaders: true
 
-  upstreamResponseFilterPlugins:
-    - enable: true
-      type: DebugAccessLogToHeader
-      config: {}
+
