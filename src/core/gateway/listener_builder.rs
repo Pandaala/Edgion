@@ -26,7 +26,7 @@ use crate::core::routes::tcp_routes::{get_global_tcp_route_manager, EdgionTcp};
 use crate::core::routes::tls_routes::{get_global_tls_route_manager, EdgionTls};
 use crate::core::routes::udp_routes::{get_global_udp_route_manager, EdgionUdp};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
-use crate::core::tls::backend_common::tls_pingora::TlsCallback;
+use crate::core::tls::gateway_common::tls_pingora::TlsCallback;
 use crate::types::constants::annotations::edgion as annotations;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::gateway::Listener;

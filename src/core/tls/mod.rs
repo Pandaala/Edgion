@@ -15,6 +15,10 @@ pub mod openssl;
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 pub mod backend_common;
 
+// Gateway (downstream) TLS callbacks and helpers
+#[cfg(any(feature = "boringssl", feature = "openssl"))]
+pub mod gateway_common;
+
 pub use cert_validator::{validate_cert, CertValidationError, CertValidationResult};
 
 pub use conf_handler_impl::create_tls_handler;

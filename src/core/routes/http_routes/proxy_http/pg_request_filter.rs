@@ -4,7 +4,7 @@ use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 use crate::core::routes::grpc_routes::try_match_grpc_route;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::{CorsConfig, EdgionPlugin, HTTPRouteFilter, HTTPRouteFilterType};
-use crate::types::{EdgionHttpContext, EdgionStatus};
+use crate::types::{EdgionHttpContext, EdgionStatus, TlsConnId};
 use pingora_proxy::Session;
 use std::sync::Arc;
 
@@ -238,6 +238,15 @@ async fn build_request_metadata(
         .get("X-Forwarded-For")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
+
+    // Extract TLS connection id (for correlating tls.log and access.log)
+    if let Some(digest) = session.as_downstream().digest() {
+        if let Some(ssl_digest) = digest.ssl_digest.as_ref() {
+            if let Some(tls_id) = ssl_digest.extension.get::<TlsConnId>() {
+                ctx.request_info.tls_id = Some(tls_id.0);
+            }
+        }
+    }
 
     // Validate X-Forwarded-For length against security configuration
     if let Some(security_config) = &edgion_http.edgion_gateway_config.spec.security_protect {

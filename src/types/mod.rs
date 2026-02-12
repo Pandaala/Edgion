@@ -41,7 +41,9 @@ pub use self::resource::{
 
 // Re-export from other modules
 pub use self::constants::app::*;
-pub use self::ctx::{BackendContext, BackendTlsInfo, EdgionHttpContext, MatchInfo, RequestInfo, UpstreamInfo};
+pub use self::ctx::{
+    BackendContext, BackendTlsInfo, EdgionHttpContext, MatchInfo, RequestInfo, TlsConnId, UpstreamInfo,
+};
 pub use self::edgion_status::EdgionStatus;
 pub use self::err::{
     EdError, WATCH_ERR_EVENTS_LOST, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD,

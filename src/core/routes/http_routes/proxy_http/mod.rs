@@ -206,4 +206,13 @@ impl ProxyHttp for EdgionHttp {
         )
         .await
     }
+
+    fn allow_spawning_subrequest(&self, _session: &Session, ctx: &Self::CTX) -> bool
+    where
+        Self::CTX: Send + Sync,
+    {
+        // Allow subrequests if explicitly enabled via context variable
+        // This allows plugins (like Mirror plugin) to enable it on demand
+        ctx.get_ctx_var("_enable_subrequest") == Some("true")
+    }
 }

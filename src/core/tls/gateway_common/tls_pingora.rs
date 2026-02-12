@@ -1,7 +1,9 @@
 use crate::core::conf_mgr::sync_runtime::resource_processor::get_secret_by_name;
 use crate::core::gateway::gateway::{match_gateway_tls, match_gateway_tls_with_port, GatewayTlsEntry};
 use crate::core::observe::ssl_log::{log_ssl, SslLogEntry};
+use crate::core::tls::backend_common::set_mtls_verify_callback;
 use crate::core::tls::tls_cert_matcher::match_sni;
+use crate::types::TlsConnId;
 use crate::types::constants::secret_keys::tls::{CERT, KEY};
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
@@ -32,7 +34,13 @@ impl TlsAccept for TlsCallback {
     async fn certificate_callback(&self, ssl: &mut TlsRef) {
         let mut entry = SslLogEntry::new();
         self.load_cert_from_sni(ssl, &mut entry).await;
+    }
+
+    async fn handshake_complete_callback(&self, ssl: &TlsRef) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        let tls_id = rand::random::<u64>();
+        let entry = self.build_ssl_log_entry(ssl, tls_id);
         log_ssl(&entry);
+        Some(Arc::new(TlsConnId(tls_id)))
     }
 }
 
@@ -123,6 +131,59 @@ impl TlsCallback {
         }
 
         entry.error(format!("Certificate not found for port={}, SNI={}", self.port, sni));
+    }
+
+    /// Build SSL log entry after handshake completes (read-only, no cert mutation)
+    fn build_ssl_log_entry(&self, ssl: &TlsRef, tls_id: u64) -> SslLogEntry {
+        let mut entry = SslLogEntry::new();
+        entry.tls_id(tls_id);
+
+        let sni = match ssl.servername(NameType::HOST_NAME) {
+            Some(s) => s.to_string(),
+            None => {
+                if let Some(ref security_protect) = self.edgion_gateway_config.spec.security_protect {
+                    if let Some(ref fallback) = security_protect.fallback_sni {
+                        fallback.clone()
+                    } else {
+                        entry.error("No SNI provided and no fallback configured");
+                        return entry;
+                    }
+                } else {
+                    entry.error("No SNI provided and no security config");
+                    return entry;
+                }
+            }
+        };
+        entry.sni(&sni);
+
+        if let Ok(edgion_tls) = match_sni(&sni) {
+            let ns = edgion_tls.metadata.namespace.as_deref().unwrap_or("-");
+            let name = edgion_tls.metadata.name.as_deref().unwrap_or("-");
+            entry.cert(format!("EdgionTls:{}/{}", ns, name));
+            entry.mtls(edgion_tls.spec.client_auth.is_some());
+            return entry;
+        }
+
+        if let Ok(gateway_tls) = match_gateway_tls_with_port(self.port, &sni) {
+            entry.cert(format!(
+                "Gateway:{}/{}/{}",
+                gateway_tls.gateway_namespace, gateway_tls.gateway_name, gateway_tls.listener_name
+            ));
+            entry.mtls(false);
+            return entry;
+        }
+
+        if let Ok(gateway_tls) = match_gateway_tls(&sni) {
+            entry.cert(format!(
+                "Gateway:{}/{}/{}",
+                gateway_tls.gateway_namespace, gateway_tls.gateway_name, gateway_tls.listener_name
+            ));
+            entry.mtls(false);
+            return entry;
+        }
+
+        entry.error(format!("Certificate not found for port={}, SNI={}", self.port, sni));
+        entry
     }
 
     /// Apply certificate from EdgionTls resource
@@ -412,7 +473,7 @@ impl TlsCallback {
             tracing::debug!("Setting custom verify callback for SAN/CN whitelist");
 
             // Use backend_api unified interface, backend differences are centrally handled
-            if let Err(e) = super::set_mtls_verify_callback(ssl, verify_mode, edgion_tls) {
+            if let Err(e) = set_mtls_verify_callback(ssl, verify_mode, edgion_tls) {
                 tracing::error!(
                     "Failed to set mTLS verify callback: {}. \
                     Make sure you're using a compatible TLS backend (BoringSSL).",
