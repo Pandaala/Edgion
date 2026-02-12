@@ -354,6 +354,7 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
                     run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
+                    run_test "Gateway_TLS_BackendTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/BackendTLS" || test_failed=true
                     run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
                     run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
                     run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
@@ -450,6 +451,7 @@ run_all_tests() {
         # Gateway Tests
         run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
         run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
+        run_test "Gateway_TLS_BackendTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/BackendTLS" || test_failed=true
         # EdgionPlugins Tests
         run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
         run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
@@ -577,7 +579,11 @@ main() {
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi
         elif [ -n "$G_ITEM" ]; then
-            suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
+            if [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLS" ]; then
+                suites="${base_suites},HTTPRoute/Backend/BackendTLS"
+            else
+                suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
+            fi
         fi
     fi
     

@@ -87,6 +87,8 @@ mod tests {
                     subject_alt_names: None,
                 },
                 options: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
             },
             status: None,
         }

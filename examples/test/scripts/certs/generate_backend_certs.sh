@@ -34,7 +34,7 @@ trap "rm -rf $TEMP_DIR; echo_info 'Temporary certificate files cleaned up'" EXIT
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-CONF_DIR="$PROJECT_ROOT/examples/test/conf/backend-tls"
+CONF_DIR="$PROJECT_ROOT/examples/test/conf/HTTPRoute/Backend/BackendTLS"
 CERTS_DIR="$PROJECT_ROOT/examples/test/certs/backend"
 
 # Create directories
