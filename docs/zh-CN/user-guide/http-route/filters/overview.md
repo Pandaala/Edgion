@@ -25,6 +25,7 @@
 | 插件 | 说明 | 文档 |
 |------|------|------|
 | BasicAuth | HTTP 基础认证 | [详情](./edgion-plugins/basic-auth.md) |
+| LdapAuth | LDAP 目录认证 | [详情](../../../edgion-plugins/ldap-auth.md) |
 | CORS | 跨域资源共享 | [详情](./edgion-plugins/cors.md) |
 | CSRF | CSRF 防护 | [详情](./edgion-plugins/csrf.md) |
 | IpRestriction | IP 黑白名单 | [详情](./edgion-plugins/ip-restriction.md) |

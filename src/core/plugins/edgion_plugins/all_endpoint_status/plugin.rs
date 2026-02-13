@@ -228,8 +228,8 @@ async fn read_body_limited(resp: reqwest::Response, max_size: usize) -> (Vec<u8>
 
 /// Information about a resolved endpoint for fan-out
 struct ResolvedEndpoint {
-    address: String,       // "ip:port"
-    backend_name: String,  // service name (used for Host header)
+    address: String,      // "ip:port"
+    backend_name: String, // service name (used for Host header)
     use_tls: bool,
 }
 
@@ -303,8 +303,7 @@ impl AllEndpointStatus {
         status: u16,
         body: &str,
     ) -> PluginRunningResult {
-        self.send_json_response_with_headers(session, status, body, &[])
-            .await
+        self.send_json_response_with_headers(session, status, body, &[]).await
     }
 
     /// Write a JSON response with extra headers and return ErrTerminateRequest.
@@ -399,9 +398,7 @@ impl AllEndpointStatus {
                                 Some(
                                     resp.headers()
                                         .iter()
-                                        .filter_map(|(k, v)| {
-                                            v.to_str().ok().map(|v| (k.to_string(), v.to_string()))
-                                        })
+                                        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
                                         .collect::<HashMap<String, String>>(),
                                 )
                             } else {
@@ -493,11 +490,7 @@ impl RequestFilter for AllEndpointStatus {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         let global_config = get_all_endpoint_status_global_config();
 
         // === Global rate limit check ===
@@ -510,10 +503,7 @@ impl RequestFilter for AllEndpointStatus {
             if since_last < min_interval {
                 let retry_after_s = (min_interval - since_last + 999) / 1000;
                 log.push("FAIL rate-limited; ");
-                let body = format!(
-                    r#"{{"error":"rate limited, retry after {}s"}}"#,
-                    retry_after_s
-                );
+                let body = format!(r#"{{"error":"rate limited, retry after {}s"}}"#, retry_after_s);
                 return self
                     .send_json_response_with_headers(
                         session,
@@ -529,12 +519,7 @@ impl RequestFilter for AllEndpointStatus {
         }
 
         // === Global concurrency gate ===
-        let _global_permit = match tokio::time::timeout(
-            Duration::from_secs(5),
-            GLOBAL_CONCURRENCY.acquire(),
-        )
-        .await
-        {
+        let _global_permit = match tokio::time::timeout(Duration::from_secs(5), GLOBAL_CONCURRENCY.acquire()).await {
             Ok(Ok(permit)) => permit,
             _ => {
                 log.push("FAIL concurrency-limit; ");
@@ -576,10 +561,7 @@ impl RequestFilter for AllEndpointStatus {
         let original_path = session.get_path().to_string();
         let original_query = session.get_query();
         let original_headers = session.request_headers();
-        let route_namespace = route_unit
-            .matched_info
-            .rns
-            .clone();
+        let route_namespace = route_unit.matched_info.rns.clone();
 
         // 2. Resolve all endpoints from all backends
         let effective_max = self.config.effective_max_endpoints(global_config.max_endpoints);
@@ -588,10 +570,7 @@ impl RequestFilter for AllEndpointStatus {
         let mut total_truncated = false;
 
         for backend_ref in &backend_refs {
-            let namespace = backend_ref
-                .namespace
-                .as_deref()
-                .unwrap_or(&route_namespace);
+            let namespace = backend_ref.namespace.as_deref().unwrap_or(&route_namespace);
             let port = backend_ref.port.map(|p| p as u16).unwrap_or(80);
             let use_tls = backend_ref.backend_tls_policy.is_some();
 
@@ -662,9 +641,9 @@ impl RequestFilter for AllEndpointStatus {
         let mut ep_offset = 0usize;
 
         for backend in &mut all_backend_results {
-            let count = backend.endpoint_count.min(
-                all_endpoints.len().saturating_sub(ep_offset),
-            );
+            let count = backend
+                .endpoint_count
+                .min(all_endpoints.len().saturating_sub(ep_offset));
             for i in 0..count {
                 let idx = ep_offset + i;
                 if idx >= all_endpoints.len() {

@@ -48,6 +48,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 CONF_DIR="$PROJECT_ROOT/examples/test/conf/EdgionTls/mTLS"
 CERTS_DIR="$PROJECT_ROOT/examples/test/certs/mtls"
+BACKEND_TLS_CONF_DIR="$PROJECT_ROOT/examples/test/conf/HTTPRoute/Backend/BackendTLS"
 
 # Create directories
 mkdir -p "$CONF_DIR"
@@ -58,9 +59,40 @@ log_info "临时directory: $TEMP_DIR"
 log_info "configdirectory: $CONF_DIR"
 log_info "certificatedirectory: $CERTS_DIR"
 
+# Always keep BackendTLS mTLS client Secret in sync with current cert files.
+write_backend_tls_client_secret_from_existing_certs() {
+    if [ ! -f "$CERTS_DIR/valid-client.crt" ] || [ ! -f "$CERTS_DIR/valid-client.key" ]; then
+        return 1
+    fi
+
+    mkdir -p "$BACKEND_TLS_CONF_DIR"
+    local client_crt_b64
+    local client_key_b64
+    client_crt_b64=$(base64 < "$CERTS_DIR/valid-client.crt" | tr -d '\n')
+    client_key_b64=$(base64 < "$CERTS_DIR/valid-client.key" | tr -d '\n')
+
+    cat > "$BACKEND_TLS_CONF_DIR/ClientCert_edge_backend-client-cert.yaml" << EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backend-client-cert
+  namespace: edgion-test
+type: kubernetes.io/tls
+data:
+  tls.crt: $client_crt_b64
+  tls.key: $client_key_b64
+EOF
+    return 0
+}
+
 # Check if certificates already exist
 if [ -f "$CERTS_DIR/valid-client.crt" ]; then
     log_info "mTLS certificatealready存在，SkipGenerate..."
+    if write_backend_tls_client_secret_from_existing_certs; then
+        log_info "已同步 BackendTLS mTLS 客户端 Secret: ClientCert_edge_backend-client-cert.yaml"
+    else
+        log_warning "未能同步 BackendTLS mTLS 客户端 Secret（缺少 valid-client 证书或私钥）"
+    fi
     log_warning "如需重新Generate，Please先删除certificatedirectory:"
     log_warning "  rm -rf $CERTS_DIR"
     exit 0
@@ -315,7 +347,6 @@ EOF
 log_success "创建 Secret_edge_mtls-server.yaml"
 
 # Backend mTLS Client Certificate Secret (for BackendTLSPolicy upstream mTLS)
-BACKEND_TLS_CONF_DIR="$PROJECT_ROOT/examples/test/conf/HTTPRoute/Backend/BackendTLS"
 mkdir -p "$BACKEND_TLS_CONF_DIR"
 
 CLIENTCERT_B64=$(base64 < "$TEMP_DIR/valid-client.crt" | tr -d '\n')

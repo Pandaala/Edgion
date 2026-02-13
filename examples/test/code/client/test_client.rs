@@ -113,7 +113,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
             "all-conditions" | "allconditions" => "EdgionPlugins/PluginCondition/AllConditions".to_string(),
             "jwt-auth" | "jwtauth" => "EdgionPlugins/JwtAuth".to_string(),
+            "jwe-decrypt" | "jwedecrypt" => "EdgionPlugins/JweDecrypt".to_string(),
             "key-auth" | "keyauth" => "EdgionPlugins/KeyAuth".to_string(),
+            "ldap-auth" | "ldapauth" => "EdgionPlugins/LdapAuth".to_string(),
             "forward-auth" | "forwardauth" => "EdgionPlugins/ForwardAuth".to_string(),
             "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
@@ -161,7 +163,9 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
         "EdgionPlugins/CtxSet" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
+        "EdgionPlugins/JweDecrypt" => "EdgionPlugins",
         "EdgionPlugins/KeyAuth" => "EdgionPlugins",
+        "EdgionPlugins/LdapAuth" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
         "EdgionPlugins/RateLimit" => "EdgionPlugins",
         "EdgionPlugins/BandwidthLimit" => "EdgionPlugins",
@@ -390,12 +394,26 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::JwtAuthTestSuite));
         }
+        "EdgionPlugins/JweDecrypt" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/JweDecrypt tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::JweDecryptTestSuite));
+        }
         "EdgionPlugins/KeyAuth" => {
             if !gateway {
                 eprintln!("Error: EdgionPlugins/KeyAuth tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::KeyAuthTestSuite));
+        }
+        "EdgionPlugins/LdapAuth" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/LdapAuth tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::LdapAuthTestSuite));
         }
         "EdgionPlugins/ProxyRewrite" => {
             if !gateway {
