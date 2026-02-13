@@ -25,6 +25,7 @@ pub mod rate_limit;
 pub mod real_ip;
 pub mod request_restriction;
 pub mod response_rewrite;
+pub mod dsl;
 
 pub use all_endpoint_status::AllEndpointStatus;
 pub use bandwidth_limit::BandwidthLimit;

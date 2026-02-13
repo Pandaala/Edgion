@@ -171,6 +171,7 @@ spec:
                           - DynamicInternalUpstream
                           - DynamicExternalUpstream
                           - AllEndpointStatus
+                          - Dsl
                       config:
                         type: object
                         description: "Plugin-specific configuration"

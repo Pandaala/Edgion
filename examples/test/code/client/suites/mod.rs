@@ -40,6 +40,7 @@ pub use edgion_plugins::{
     JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite,
     PluginConditionTestSuite, PluginLogsTestSuite, ProxyRewriteTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
     RequestRestrictionTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
+    DslTestSuite,
 };
 
 // ReferenceGrant Status tests

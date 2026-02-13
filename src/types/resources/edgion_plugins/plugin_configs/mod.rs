@@ -1,6 +1,7 @@
 pub mod all_endpoint_status;
 mod bandwidth_limit;
 mod basic_auth;
+mod dsl;
 mod cors;
 mod csrf;
 mod ctx_set;
@@ -24,6 +25,7 @@ mod response_rewrite;
 
 pub use all_endpoint_status::AllEndpointStatusConfig;
 pub use bandwidth_limit::BandwidthLimitConfig;
+pub use dsl::DslConfig;
 pub use basic_auth::BasicAuthConfig;
 pub use cors::CorsConfig;
 pub use csrf::CsrfConfig;

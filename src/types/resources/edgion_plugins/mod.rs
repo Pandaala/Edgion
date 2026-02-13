@@ -27,7 +27,7 @@ pub use entry::{
     UpstreamResponseFilterEntry,
 };
 pub use plugin_configs::{
-    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CaseType, CorsConfig, CsrfConfig, CtxSetConfig,
+    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CaseType, CorsConfig, CsrfConfig, CtxSetConfig, DslConfig,
     CtxVarRule, DebugAccessLogToHeaderConfig, DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid,
     DirectEndpointOnMissing, DomainTarget, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract,

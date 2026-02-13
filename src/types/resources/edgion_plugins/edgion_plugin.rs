@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
-    DebugAccessLogToHeaderConfig, DirectEndpointConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig,
-    ForwardAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
-    OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig,
-    ResponseRewriteConfig,
+    DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, DynamicExternalUpstreamConfig,
+    DynamicInternalUpstreamConfig, ForwardAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig,
+    KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -83,6 +83,8 @@ pub enum EdgionPlugin {
     DynamicInternalUpstream(DynamicInternalUpstreamConfig),
     /// DynamicExternalUpstream filter (route to external domain via domainMap)
     DynamicExternalUpstream(DynamicExternalUpstreamConfig),
+    /// DSL plugin — custom inline scripting with sandboxed VM execution
+    Dsl(DslConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -124,6 +126,7 @@ impl EdgionPlugin {
             EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
             EdgionPlugin::DynamicInternalUpstream(_) => "DynamicInternalUpstream",
             EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
+            EdgionPlugin::Dsl(_) => "Dsl",
         }
     }
 }

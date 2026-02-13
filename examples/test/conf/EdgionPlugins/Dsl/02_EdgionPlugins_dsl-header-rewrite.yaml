@@ -1,0 +1,21 @@
+# DSL Plugin - Header Rewrite 测试
+# 读取 X-User-Id 请求头，设置响应头 X-Processed-By 和 X-User-Upper
+# 使用 resp.set_header 以便测试客户端可以直接从响应头验证
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-header-rewrite
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "header-rewrite"
+        source: |
+          let user_id = req.header("X-User-Id")
+          if user_id != nil {
+            resp.set_header("X-Processed-By", "edgion-dsl")
+            let upper = to_upper(user_id)
+            resp.set_header("X-User-Upper", upper)
+          }

@@ -46,6 +46,7 @@ use crate::core::plugins::edgion_plugins::rate_limit::RateLimit;
 use crate::core::plugins::edgion_plugins::real_ip::RealIp;
 use crate::core::plugins::edgion_plugins::request_restriction::RequestRestriction;
 use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
+use crate::core::plugins::edgion_plugins::dsl::plugin::DslPlugin;
 use crate::core::plugins::gapi_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
 use crate::core::plugins::gapi_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter,
@@ -351,6 +352,7 @@ impl PluginRuntime {
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
                 Some(Box::new(ext_filter))
             }
+            EdgionPlugin::Dsl(config) => DslPlugin::from_config(config),
             _ => None,
         }
     }
@@ -421,6 +423,7 @@ impl PluginRuntime {
             EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicInternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicExternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::Dsl(config) => config.get_validation_error().map(|s| s.to_string()),
             _ => None,
         }
     }
@@ -457,6 +460,7 @@ impl PluginRuntime {
             EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
+            EdgionPlugin::Dsl(_) => "Dsl",
         }
     }
 

@@ -556,6 +556,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
+                    run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
                         run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
                     else
@@ -660,6 +661,7 @@ run_all_tests() {
         run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
         run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
         run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
+        run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
         if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
             run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
         else
@@ -773,7 +775,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/WebhookKeyGet,EdgionPlugins/AllEndpointStatus"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/AllEndpointStatus"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth"
                 fi
