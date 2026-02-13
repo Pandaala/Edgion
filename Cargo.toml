@@ -142,7 +142,16 @@ pingora-http = "0.7.0"
 pingora-limits = "0.7.0"
 pingora-load-balancing = "0.7.0"
 pingora-proxy = { version = "0.7.0" }
-etcd-client = "0.18"
+etcd-client = { version = "0.18", features = ["tls"] }
+fred = { version = "10", default-features = false, features = [
+    "enable-rustls",       # TLS via rustls (consistent with Edgion)
+    "i-std",               # Standard data structures (GET, SET, lists, etc.)
+    "i-keys",              # Key commands (EXPIRE, TTL, EXISTS, etc.)
+    "i-hashes",            # Hash commands (HGET, HSET, HGETALL, etc.)
+    "i-scripts",           # Lua scripting (for distributed locks)
+    "i-lists",             # List commands (RPUSH, LPOP, LLEN, LTRIM)
+    "partial-tracing",     # Tracing integration
+] }
 
 # BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
 boring-sys = { version = "4", optional = true }
@@ -176,6 +185,7 @@ cookie = "0.18.1"
 instant-acme = "0.8.4"
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
 sha1 = "0.10.6"
+ldap3 = "0.12"
 
 [build-dependencies]
 tonic-build = "0.12"

@@ -1,0 +1,20 @@
+# Elasticsearch single-node instance for LinkSys integration testing.
+# Started/stopped by run_es_test.sh.
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    container_name: edgion-test-elasticsearch
+    ports:
+      - "19200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      - cluster.name=edgion-test
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    restart: "no"

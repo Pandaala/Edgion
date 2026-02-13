@@ -3,10 +3,10 @@ use crate::core::gateway::gateway::{match_gateway_tls, match_gateway_tls_with_po
 use crate::core::observe::ssl_log::{log_ssl, SslLogEntry};
 use crate::core::tls::backend_common::set_mtls_verify_callback;
 use crate::core::tls::tls_cert_matcher::match_sni;
-use crate::types::TlsConnId;
 use crate::types::constants::secret_keys::tls::{CERT, KEY};
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
+use crate::types::TlsConnId;
 use anyhow::anyhow;
 use anyhow::Result;
 use pingora_core::listeners::tls::TlsSettings;

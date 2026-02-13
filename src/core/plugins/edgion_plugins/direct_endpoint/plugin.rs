@@ -103,7 +103,7 @@ impl RequestFilter for DirectEndpoint {
         }
 
         // 2. Extract raw endpoint value via KeyGet
-        let raw_value = match session.key_get(&self.config.from) {
+        let raw_value = match session.key_get(&self.config.from).await {
             Some(v) if !v.is_empty() => v,
             _ => match self.config.on_missing {
                 DirectEndpointOnMissing::Fallback => {

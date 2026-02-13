@@ -1,0 +1,14 @@
+# Minimal Gateway resource to satisfy Gateway startup requirement.
+# Etcd LinkSys tests don't route traffic through this listener,
+# but the Gateway process requires at least one Gateway resource.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: etcd-test-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31901

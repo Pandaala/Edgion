@@ -6,10 +6,14 @@ mod csrf;
 mod ctx_set;
 mod debug_access_log;
 mod direct_endpoint;
+mod dynamic_external_upstream;
+mod dynamic_internal_upstream;
 mod forward_auth;
 mod ip_restriction;
+mod jwe_decrypt;
 mod jwt_auth;
 mod key_auth;
+mod ldap_auth;
 mod mock;
 mod openid_connect;
 mod proxy_rewrite;
@@ -28,10 +32,19 @@ pub use ctx_set::{
 };
 pub use debug_access_log::DebugAccessLogToHeaderConfig;
 pub use direct_endpoint::{DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing, EndpointExtract};
+pub use dynamic_external_upstream::{
+    DomainTarget, DynamicExternalUpstreamConfig, ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch,
+};
+pub use dynamic_internal_upstream::{
+    DynUpstreamExtract, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynUpstreamRule,
+    DynUpstreamTarget, DynamicInternalUpstreamConfig,
+};
 pub use forward_auth::ForwardAuthConfig;
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
+pub use jwe_decrypt::{JweContentEncryption, JweDecryptConfig, JweKeyManagement, ResolvedJweCredential};
 pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential};
 pub use key_auth::{KeyAuthConfig, KeyMetadata};
+pub use ldap_auth::LdapAuthConfig;
 pub use mock::MockConfig;
 pub use openid_connect::{EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode};
 pub use proxy_rewrite::{HeaderActions, HeaderEntry, HttpMethod, ProxyRewriteConfig, RegexUri};

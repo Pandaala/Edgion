@@ -12,4 +12,4 @@
 
 mod key_accessor;
 
-pub use key_accessor::{KeyGet, KeySet};
+pub use key_accessor::{KeyGet, KeySet, WebhookExtract};

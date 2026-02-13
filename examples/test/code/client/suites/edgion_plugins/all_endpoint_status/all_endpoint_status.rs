@@ -49,12 +49,7 @@ impl AllEndpointStatusTestSuite {
                         if attempt > 0 {
                             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
                         }
-                        match ctx.http_client
-                            .get(&url)
-                            .header("host", TEST_HOST)
-                            .send()
-                            .await
-                        {
+                        match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
                             Ok(resp) => {
                                 last_status = resp.status().as_u16();
                                 content_type_str = resp
@@ -69,10 +64,7 @@ impl AllEndpointStatusTestSuite {
                                 }
                             }
                             Err(e) => {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Request failed: {}", e),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Request failed: {}", e));
                             }
                         }
                     }
@@ -134,12 +126,7 @@ impl AllEndpointStatusTestSuite {
                     // Wait a bit to avoid rate limiting from previous test
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
-                    match ctx.http_client
-                        .get(&url)
-                        .header("host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             let body = resp.text().await.unwrap_or_default();
@@ -222,16 +209,10 @@ impl AllEndpointStatusTestSuite {
                                         ),
                                     )
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Invalid JSON: {}", e),
-                                ),
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Invalid JSON: {}", e)),
                             }
                         }
-                        Err(e) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Request failed: {}", e),
-                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
                 })
             },
@@ -251,12 +232,7 @@ impl AllEndpointStatusTestSuite {
                     // Wait to avoid rate limiting
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
-                    match ctx.http_client
-                        .get(&url)
-                        .header("host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             let body = resp.text().await.unwrap_or_default();
@@ -356,16 +332,10 @@ impl AllEndpointStatusTestSuite {
                                         ),
                                     )
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Invalid JSON: {}", e),
-                                ),
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Invalid JSON: {}", e)),
                             }
                         }
-                        Err(e) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Request failed: {}", e),
-                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
                 })
             },
@@ -389,12 +359,7 @@ impl AllEndpointStatusTestSuite {
                     // Wait to avoid rate limiting
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
-                    match ctx.http_client
-                        .get(&url)
-                        .header("host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
@@ -423,10 +388,7 @@ impl AllEndpointStatusTestSuite {
                                 )
                             }
                         }
-                        Err(e) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Request failed: {}", e),
-                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
                 })
             },
@@ -446,12 +408,7 @@ impl AllEndpointStatusTestSuite {
                     // Wait to avoid rate limiting
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
-                    match ctx.http_client
-                        .get(&url)
-                        .header("host", HEADERS_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("host", HEADERS_HOST).send().await {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             let body = resp.text().await.unwrap_or_default();
@@ -511,16 +468,10 @@ impl AllEndpointStatusTestSuite {
                                         )
                                     }
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Invalid JSON: {}", e),
-                                ),
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Invalid JSON: {}", e)),
                             }
                         }
-                        Err(e) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Request failed: {}", e),
-                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
                 })
             },
@@ -545,18 +496,10 @@ impl AllEndpointStatusTestSuite {
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
                     // First request should succeed
-                    let resp1 = match ctx.http_client
-                        .get(&url)
-                        .header("host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    let resp1 = match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
                         Ok(r) => r,
                         Err(e) => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!("First request failed: {}", e),
-                            );
+                            return TestResult::failed(start.elapsed(), format!("First request failed: {}", e));
                         }
                     };
 
@@ -571,18 +514,10 @@ impl AllEndpointStatusTestSuite {
                     }
 
                     // Second request immediately should be rate-limited
-                    let resp2 = match ctx.http_client
-                        .get(&url)
-                        .header("host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    let resp2 = match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
                         Ok(r) => r,
                         Err(e) => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!("Second request failed: {}", e),
-                            );
+                            return TestResult::failed(start.elapsed(), format!("Second request failed: {}", e));
                         }
                     };
 
@@ -630,18 +565,10 @@ impl AllEndpointStatusTestSuite {
                     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
 
                     // First request
-                    let resp1 = match ctx.http_client
-                        .get(&url)
-                        .header("host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    let resp1 = match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
                         Ok(r) => r,
                         Err(e) => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!("First request failed: {}", e),
-                            );
+                            return TestResult::failed(start.elapsed(), format!("First request failed: {}", e));
                         }
                     };
 
@@ -659,18 +586,10 @@ impl AllEndpointStatusTestSuite {
                     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
 
                     // Second request should succeed
-                    let resp2 = match ctx.http_client
-                        .get(&url)
-                        .header("host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    let resp2 = match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
                         Ok(r) => r,
                         Err(e) => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!("Second request failed: {}", e),
-                            );
+                            return TestResult::failed(start.elapsed(), format!("Second request failed: {}", e));
                         }
                     };
 
@@ -710,12 +629,7 @@ impl AllEndpointStatusTestSuite {
                     // Wait to avoid rate limiting
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
-                    match ctx.http_client
-                        .get(&url)
-                        .header("host", NO_BACKEND_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("host", NO_BACKEND_HOST).send().await {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             let body = resp.text().await.unwrap_or_default();
@@ -729,8 +643,7 @@ impl AllEndpointStatusTestSuite {
 
                             match serde_json::from_str::<serde_json::Value>(&body) {
                                 Ok(json) => {
-                                    let total_endpoints =
-                                        json["summary"]["total_endpoints"].as_u64().unwrap_or(999);
+                                    let total_endpoints = json["summary"]["total_endpoints"].as_u64().unwrap_or(999);
 
                                     if total_endpoints == 0 {
                                         TestResult::passed_with_message(
@@ -747,16 +660,12 @@ impl AllEndpointStatusTestSuite {
                                         )
                                     }
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Invalid JSON: {}. Body: {}", e, body),
-                                ),
+                                Err(e) => {
+                                    TestResult::failed(start.elapsed(), format!("Invalid JSON: {}. Body: {}", e, body))
+                                }
                             }
                         }
-                        Err(e) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Request failed: {}", e),
-                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
                 })
             },
@@ -781,12 +690,7 @@ impl AllEndpointStatusTestSuite {
                     // Wait to avoid rate limiting
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
-                    match ctx.http_client
-                        .get(&url)
-                        .header("host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             let body = resp.text().await.unwrap_or_default();
@@ -809,22 +713,15 @@ impl AllEndpointStatusTestSuite {
                                             "pathOverride working: request intercepted and JSON returned".to_string(),
                                         )
                                     } else {
-                                        TestResult::failed(
-                                            start.elapsed(),
-                                            "Response JSON missing summary".to_string(),
-                                        )
+                                        TestResult::failed(start.elapsed(), "Response JSON missing summary".to_string())
                                     }
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Invalid JSON: {}. Body: {}", e, body),
-                                ),
+                                Err(e) => {
+                                    TestResult::failed(start.elapsed(), format!("Invalid JSON: {}. Body: {}", e, body))
+                                }
                             }
                         }
-                        Err(e) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Request failed: {}", e),
-                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
                 })
             },
@@ -848,12 +745,7 @@ impl AllEndpointStatusTestSuite {
                     // Wait to avoid rate limiting
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
-                    match ctx.http_client
-                        .get(&url)
-                        .header("host", TEST_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
@@ -871,10 +763,7 @@ impl AllEndpointStatusTestSuite {
                                 "Response received with expected status 200".to_string(),
                             )
                         }
-                        Err(e) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Request failed: {}", e),
-                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
                 })
             },

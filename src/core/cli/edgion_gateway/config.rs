@@ -69,7 +69,8 @@ pub struct EdgionGatewayConfig {
     /// AllEndpointStatus plugin global configuration
     #[arg(skip)]
     #[serde(default)]
-    pub all_endpoint_status: crate::core::plugins::edgion_plugins::all_endpoint_status::plugin::AllEndpointStatusGlobalConfig,
+    pub all_endpoint_status:
+        crate::core::plugins::edgion_plugins::all_endpoint_status::plugin::AllEndpointStatusGlobalConfig,
 
     /// Enable integration testing mode.
     /// When enabled, the gateway activates test subsystems:

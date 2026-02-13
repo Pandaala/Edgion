@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
-    DebugAccessLogToHeaderConfig, DirectEndpointConfig, ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig,
-    KeyAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig,
+    DebugAccessLogToHeaderConfig, DirectEndpointConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig,
+    ForwardAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
+    OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig,
+    ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -46,8 +47,12 @@ pub enum EdgionPlugin {
     IpRestriction(IpRestrictionConfig),
     /// JWT Authentication filter (verify JWT in header/query/cookie)
     JwtAuth(JwtAuthConfig),
+    /// JWE Decrypt filter (decrypt compact JWE from request header)
+    JweDecrypt(JweDecryptConfig),
     /// Key Authentication filter (API Key in header/query)
     KeyAuth(KeyAuthConfig),
+    /// LDAP Authentication filter (username/password bind to LDAP server)
+    LdapAuth(LdapAuthConfig),
     /// Mock filter (return predefined responses for testing/prototyping)
     Mock(MockConfig),
     /// Debug Access Log to Header filter (for debugging)
@@ -74,6 +79,10 @@ pub enum EdgionPlugin {
     DirectEndpoint(DirectEndpointConfig),
     /// AllEndpointStatus filter (query all backend endpoints and return aggregated status)
     AllEndpointStatus(AllEndpointStatusConfig),
+    /// DynamicInternalUpstream filter (route to specific BackendRef, bypass weighted selection)
+    DynamicInternalUpstream(DynamicInternalUpstreamConfig),
+    /// DynamicExternalUpstream filter (route to external domain via domainMap)
+    DynamicExternalUpstream(DynamicExternalUpstreamConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -97,7 +106,9 @@ impl EdgionPlugin {
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
+            EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
             EdgionPlugin::KeyAuth(_) => "KeyAuth",
+            EdgionPlugin::LdapAuth(_) => "LdapAuth",
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
@@ -111,6 +122,8 @@ impl EdgionPlugin {
             EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",
             EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
             EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
+            EdgionPlugin::DynamicInternalUpstream(_) => "DynamicInternalUpstream",
+            EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
         }
     }
 }

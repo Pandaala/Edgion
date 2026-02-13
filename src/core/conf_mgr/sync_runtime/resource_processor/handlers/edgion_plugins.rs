@@ -11,7 +11,9 @@ use crate::core::conf_mgr::sync_runtime::resource_processor::{
     condition_types, format_secret_key, get_secret, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionPlugins;
-use crate::types::resources::edgion_plugins::plugin_configs::{KeyMetadata, ResolvedJwtCredential};
+use crate::types::resources::edgion_plugins::plugin_configs::{
+    KeyMetadata, ResolvedJweCredential, ResolvedJwtCredential,
+};
 use crate::types::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsStatus};
 use crate::types::ResourceKind;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -281,6 +283,63 @@ impl EdgionPluginsHandler {
         }
     }
 
+    /// Resolve JWE decrypt credentials from Secrets and register references.
+    fn resolve_jwe_credentials(ep: &mut EdgionPlugins, resource_ref: &ResourceRef, ctx: &HandlerContext) {
+        let ep_ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+
+        if let Some(ref mut plugins) = ep.spec.request_plugins {
+            for entry in plugins.iter_mut() {
+                if let EdgionPlugin::JweDecrypt(ref mut config) = entry.plugin {
+                    config.resolved_credential = None;
+
+                    let Some(secret_ref) = config.secret_ref.clone() else {
+                        continue;
+                    };
+
+                    let ns = secret_ref.namespace.as_ref().or(ep.metadata.namespace.as_ref());
+                    let secret_key = format_secret_key(ns, &secret_ref.name);
+                    let ns_str = ns.map(|s| s.as_str()).unwrap_or(ep_ns);
+
+                    ctx.secret_ref_manager()
+                        .add_ref(secret_key.clone(), resource_ref.clone());
+
+                    if let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) {
+                        let mut resolved = ResolvedJweCredential::default();
+
+                        if let Some(data) = &secret.data {
+                            if let Some(secret_bytes) = data.get("secret") {
+                                resolved.secret = Some(STANDARD.encode(&secret_bytes.0));
+                            }
+                        }
+
+                        if resolved.secret.is_none() {
+                            if let Some(string_data) = &secret.string_data {
+                                if let Some(secret_str) = string_data.get("secret") {
+                                    resolved.secret = Some(STANDARD.encode(secret_str.as_bytes()));
+                                }
+                            }
+                        }
+
+                        if resolved.secret.is_some() {
+                            config.resolved_credential = Some(resolved);
+                            tracing::debug!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "JweDecrypt: Secret resolved and credential filled"
+                            );
+                        }
+                    } else {
+                        tracing::info!(
+                            edgion_plugins = %resource_ref.key(),
+                            secret_key = %secret_key,
+                            "JweDecrypt: Secret not found yet, will be reprocessed when Secret arrives"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn read_secret_utf8(secret: &k8s_openapi::api::core::v1::Secret, keys: &[&str]) -> Option<String> {
         if let Some(data) = &secret.data {
             for key in keys {
@@ -415,6 +474,9 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // Resolve JWT credentials from Secrets and register references
         Self::resolve_jwt_credentials(&mut ep, &resource_ref, ctx);
 
+        // Resolve JWE decrypt credentials from Secrets and register references
+        Self::resolve_jwe_credentials(&mut ep, &resource_ref, ctx);
+
         // Resolve KeyAuth keys from Secrets and register references
         Self::resolve_key_auth_keys(&mut ep, &resource_ref, ctx);
 
@@ -524,14 +586,16 @@ mod tests {
         replace_all_secrets, HandlerContext, ProcessResult, ProcessorHandler, SecretRefManager,
     };
     use crate::types::resources::edgion_plugins::{
-        EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, OpenidConnectConfig, RequestFilterEntry,
+        EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, JweDecryptConfig, OpenidConnectConfig, RequestFilterEntry,
     };
     use crate::types::resources::gateway::SecretObjectReference;
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
     use std::collections::{BTreeMap, HashMap};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    static SECRET_STORE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn build_secret(namespace: &str, name: &str, key: &str, value: &str) -> Secret {
         let mut data = BTreeMap::new();
@@ -549,6 +613,10 @@ mod tests {
 
     #[test]
     fn test_parse_resolves_openid_connect_secrets_and_registers_refs() {
+        let _guard = SECRET_STORE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("secret store test lock poisoned");
         replace_all_secrets(HashMap::new());
 
         let client_secret = build_secret("default", "oidc-client", "clientSecret", "client-secret-value");
@@ -603,6 +671,64 @@ mod tests {
         assert_eq!(config.resolved_session_secret.as_deref(), Some("session-secret-value"));
         assert_eq!(ctx.secret_ref_manager().get_refs("default/oidc-client").len(), 1);
         assert_eq!(ctx.secret_ref_manager().get_refs("default/oidc-session").len(), 1);
+
+        replace_all_secrets(HashMap::new());
+    }
+
+    #[test]
+    fn test_parse_resolves_jwe_secret_and_registers_refs() {
+        let _guard = SECRET_STORE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("secret store test lock poisoned");
+        replace_all_secrets(HashMap::new());
+
+        let jwe_secret = build_secret("default", "jwe-secret", "secret", "0123456789abcdef0123456789abcdef");
+        let mut secrets = HashMap::new();
+        secrets.insert("default/jwe-secret".to_string(), jwe_secret);
+        replace_all_secrets(secrets);
+
+        let mut ep = EdgionPlugins::new("jwe-plugins", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::JweDecrypt(
+            JweDecryptConfig {
+                secret_ref: Some(SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "jwe-secret".to_string(),
+                    namespace: None,
+                }),
+                ..Default::default()
+            },
+        ))]);
+
+        let secret_ref_manager = Arc::new(SecretRefManager::new());
+        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None);
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx) {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let entry = parsed
+            .spec
+            .request_plugins
+            .as_ref()
+            .and_then(|v| v.first())
+            .expect("missing request plugin");
+        let config = match &entry.plugin {
+            EdgionPlugin::JweDecrypt(c) => c,
+            _ => panic!("unexpected plugin type"),
+        };
+
+        assert!(config.resolved_credential.is_some());
+        let resolved_secret = config
+            .resolved_credential
+            .as_ref()
+            .and_then(|c| c.secret.as_ref())
+            .expect("expected resolved secret");
+        assert!(!resolved_secret.is_empty());
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/jwe-secret").len(), 1);
 
         replace_all_secrets(HashMap::new());
     }

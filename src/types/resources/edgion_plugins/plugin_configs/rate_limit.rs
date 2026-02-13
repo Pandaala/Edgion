@@ -403,10 +403,18 @@ impl RateLimitConfig {
     ///
     /// In Instance scope, returns the configured rate as-is.
     pub fn get_effective_rate(&self) -> isize {
+        self.effective_rate_for_instances(get_gateway_instance_count())
+    }
+
+    /// Compute the effective rate for a given number of gateway instances.
+    ///
+    /// This is the pure-computation core extracted for testability
+    /// (avoids global state dependency in unit tests).
+    pub fn effective_rate_for_instances(&self, gateway_count: u32) -> isize {
         match self.scope {
             RateLimitScope::Instance => self.rate,
             RateLimitScope::Cluster => {
-                let count = get_gateway_instance_count() as f64;
+                let count = (gateway_count.max(1)) as f64;
                 let tolerance = self.skew_tolerance;
                 let effective = (self.rate as f64 * tolerance / count).ceil() as isize;
                 effective.max(1) // At least 1 request allowed
@@ -529,6 +537,19 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
 mod tests {
     use super::*;
     use crate::core::cli::edgion_gateway::config::set_gateway_instance_count;
+    use std::sync::{Mutex, OnceLock};
+
+    static GATEWAY_INSTANCE_COUNT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn with_gateway_instance_count_lock<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = GATEWAY_INSTANCE_COUNT_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("gateway instance count test lock poisoned");
+        let result = f();
+        set_gateway_instance_count(1);
+        result
+    }
 
     #[test]
     fn test_default_config() {
@@ -742,104 +763,105 @@ rate: 50
             ..Default::default()
         };
         // Instance scope: always returns configured rate, skewTolerance ignored
-        assert_eq!(config.get_effective_rate(), 100);
+        assert_eq!(config.effective_rate_for_instances(4), 100);
     }
 
     #[test]
     fn test_effective_rate_cluster_scope_with_default_skew() {
-        // Simulate 4 gateway instances
-        set_gateway_instance_count(4);
+        with_gateway_instance_count_lock(|| {
+            // Simulate 4 gateway instances
+            set_gateway_instance_count(4);
 
-        let config = RateLimitConfig {
-            rate: 1000,
-            scope: RateLimitScope::Cluster,
-            skew_tolerance: 1.2,
-            ..Default::default()
-        };
-        // ceil(1000 * 1.2 / 4) = ceil(300.0) = 300
-        assert_eq!(config.get_effective_rate(), 300);
-
-        // Cleanup
-        set_gateway_instance_count(1);
+            let config = RateLimitConfig {
+                rate: 1000,
+                scope: RateLimitScope::Cluster,
+                skew_tolerance: 1.2,
+                ..Default::default()
+            };
+            // ceil(1000 * 1.2 / 4) = ceil(300.0) = 300
+            assert_eq!(config.get_effective_rate(), 300);
+        });
     }
 
     #[test]
     fn test_effective_rate_cluster_scope_no_skew() {
-        set_gateway_instance_count(4);
+        with_gateway_instance_count_lock(|| {
+            set_gateway_instance_count(4);
 
-        let config = RateLimitConfig {
-            rate: 1000,
-            scope: RateLimitScope::Cluster,
-            skew_tolerance: 1.0,
-            ..Default::default()
-        };
-        // ceil(1000 * 1.0 / 4) = 250
-        assert_eq!(config.get_effective_rate(), 250);
-
-        set_gateway_instance_count(1);
+            let config = RateLimitConfig {
+                rate: 1000,
+                scope: RateLimitScope::Cluster,
+                skew_tolerance: 1.0,
+                ..Default::default()
+            };
+            // ceil(1000 * 1.0 / 4) = 250
+            assert_eq!(config.get_effective_rate(), 250);
+        });
     }
 
     #[test]
     fn test_effective_rate_cluster_scope_high_skew() {
-        set_gateway_instance_count(3);
+        with_gateway_instance_count_lock(|| {
+            set_gateway_instance_count(3);
 
-        let config = RateLimitConfig {
-            rate: 100,
-            scope: RateLimitScope::Cluster,
-            skew_tolerance: 1.5,
-            ..Default::default()
-        };
-        // ceil(100 * 1.5 / 3) = ceil(50.0) = 50
-        assert_eq!(config.get_effective_rate(), 50);
-
-        set_gateway_instance_count(1);
+            let config = RateLimitConfig {
+                rate: 100,
+                scope: RateLimitScope::Cluster,
+                skew_tolerance: 1.5,
+                ..Default::default()
+            };
+            // ceil(100 * 1.5 / 3) = ceil(50.0) = 50
+            assert_eq!(config.get_effective_rate(), 50);
+        });
     }
 
     #[test]
     fn test_effective_rate_cluster_scope_ceiling() {
-        set_gateway_instance_count(3);
+        with_gateway_instance_count_lock(|| {
+            set_gateway_instance_count(3);
 
-        let config = RateLimitConfig {
-            rate: 10,
-            scope: RateLimitScope::Cluster,
-            skew_tolerance: 1.2,
-            ..Default::default()
-        };
-        // ceil(10 * 1.2 / 3) = ceil(4.0) = 4
-        assert_eq!(config.get_effective_rate(), 4);
-
-        set_gateway_instance_count(1);
+            let config = RateLimitConfig {
+                rate: 10,
+                scope: RateLimitScope::Cluster,
+                skew_tolerance: 1.2,
+                ..Default::default()
+            };
+            // ceil(10 * 1.2 / 3) = ceil(4.0) = 4
+            assert_eq!(config.get_effective_rate(), 4);
+        });
     }
 
     #[test]
     fn test_effective_rate_cluster_scope_fallback_to_one() {
-        // Default count is 1 (or controller unavailable)
-        set_gateway_instance_count(1);
+        with_gateway_instance_count_lock(|| {
+            // Default count is 1 (or controller unavailable)
+            set_gateway_instance_count(1);
 
-        let config = RateLimitConfig {
-            rate: 100,
-            scope: RateLimitScope::Cluster,
-            skew_tolerance: 1.2,
-            ..Default::default()
-        };
-        // ceil(100 * 1.2 / 1) = 120 (skewTolerance still applies)
-        assert_eq!(config.get_effective_rate(), 120);
+            let config = RateLimitConfig {
+                rate: 100,
+                scope: RateLimitScope::Cluster,
+                skew_tolerance: 1.2,
+                ..Default::default()
+            };
+            // ceil(100 * 1.2 / 1) = 120 (skewTolerance still applies)
+            assert_eq!(config.get_effective_rate(), 120);
+        });
     }
 
     #[test]
     fn test_effective_rate_cluster_scope_minimum_one() {
-        set_gateway_instance_count(100);
+        with_gateway_instance_count_lock(|| {
+            set_gateway_instance_count(100);
 
-        let config = RateLimitConfig {
-            rate: 2,
-            scope: RateLimitScope::Cluster,
-            skew_tolerance: 1.0,
-            ..Default::default()
-        };
-        // ceil(2 * 1.0 / 100) = ceil(0.02) = 1 (clamped to at least 1)
-        assert_eq!(config.get_effective_rate(), 1);
-
-        set_gateway_instance_count(1);
+            let config = RateLimitConfig {
+                rate: 2,
+                scope: RateLimitScope::Cluster,
+                skew_tolerance: 1.0,
+                ..Default::default()
+            };
+            // ceil(2 * 1.0 / 100) = ceil(0.02) = 1 (clamped to at least 1)
+            assert_eq!(config.get_effective_rate(), 1);
+        });
     }
 
     #[test]
@@ -918,26 +940,25 @@ rate: 100
 
     #[test]
     fn test_effective_rate_dynamic_count_change() {
-        // Start with 2 instances
-        set_gateway_instance_count(2);
+        with_gateway_instance_count_lock(|| {
+            // Start with 2 instances
+            set_gateway_instance_count(2);
 
-        let config = RateLimitConfig {
-            rate: 10,
-            scope: RateLimitScope::Cluster,
-            skew_tolerance: 1.2,
-            ..Default::default()
-        };
+            let config = RateLimitConfig {
+                rate: 10,
+                scope: RateLimitScope::Cluster,
+                skew_tolerance: 1.2,
+                ..Default::default()
+            };
 
-        // effective_rate = ceil(10 * 1.2 / 2) = 6
-        assert_eq!(config.get_effective_rate(), 6);
+            // effective_rate = ceil(10 * 1.2 / 2) = 6
+            assert_eq!(config.get_effective_rate(), 6);
 
-        // Scale up to 4 instances mid-flight
-        set_gateway_instance_count(4);
+            // Scale up to 4 instances mid-flight
+            set_gateway_instance_count(4);
 
-        // effective_rate = ceil(10 * 1.2 / 4) = ceil(3.0) = 3
-        assert_eq!(config.get_effective_rate(), 3);
-
-        // Cleanup
-        set_gateway_instance_count(1);
+            // effective_rate = ceil(10 * 1.2 / 4) = ceil(3.0) = 3
+            assert_eq!(config.get_effective_rate(), 3);
+        });
     }
 }

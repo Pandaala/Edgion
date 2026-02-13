@@ -32,6 +32,12 @@ TOTAL_TESTS=0
 PASSED_TESTS=0
 FAILED_TESTS=0
 
+# LDAP integration dependency (OpenLDAP via Docker Compose)
+LDAP_COMPOSE_DIR=""
+LDAP_COMPOSE_FILE=""
+LDAP_SERVICE_REQUIRED=false
+LDAP_SERVICE_STARTED=false
+
 # =============================================================================
 # Log functions
 # =============================================================================
@@ -61,6 +67,7 @@ log_section() {
 SLOW_TESTS=(
     "HTTPRoute_Backend_Timeout"
     "EdgionPlugins_AllEndpointStatus"
+    "EdgionPlugins_LdapAuth"
 )
 
 is_slow_test() {
@@ -79,6 +86,32 @@ should_skip_test() {
         return 0  # Should skip
     fi
     return 1  # Don't skip
+}
+
+check_docker_environment_ready() {
+    if ! $FULL_TEST; then
+        return 0
+    fi
+
+    log_section "Full Test Check: Docker Environment"
+
+    if ! command -v docker >/dev/null 2>&1; then
+        log_error "docker command not found"
+        return 1
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        log_error "docker daemon is not reachable"
+        return 1
+    fi
+
+    if ! docker compose version >/dev/null 2>&1; then
+        log_error "docker compose is not available"
+        return 1
+    fi
+
+    log_success "Docker environment is ready"
+    return 0
 }
 
 # =============================================================================
@@ -213,8 +246,137 @@ run_dynamic_tests() {
 cleanup() {
     if $DO_CLEANUP; then
         log_section "Cleanup: Stop all services"
+        if $LDAP_SERVICE_STARTED; then
+            log_info "Stopping OpenLDAP test service..."
+            docker compose -f "${LDAP_COMPOSE_FILE}" down --timeout 5 >/dev/null 2>&1 || true
+        fi
         "${UTILS_DIR}/kill_all.sh" 2>&1 || true
+    else
+        if $LDAP_SERVICE_STARTED; then
+            log_info "OpenLDAP test service still running (keep-alive mode): ${LDAP_COMPOSE_FILE}"
+        fi
     fi
+}
+
+is_ldap_service_required() {
+    # LDAP integration tests are full-test only.
+    if ! $FULL_TEST; then
+        return 1
+    fi
+
+    # Any full run contains EdgionPlugins/LdapAuth.
+    if [ -z "$G_RESOURCE" ]; then
+        return 0
+    fi
+
+    # Resource/item targeting.
+    if [ "$G_RESOURCE" = "EdgionPlugins" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "LdapAuth" ]; then
+            return 0
+        fi
+    fi
+
+    # Explicit suites override.
+    if [[ ",$1," == *",EdgionPlugins/LdapAuth,"* ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+start_ldap_service_if_needed() {
+    if ! $LDAP_SERVICE_REQUIRED; then
+        return 0
+    fi
+
+    LDAP_COMPOSE_DIR="${PROJECT_ROOT}/examples/test/conf/Services/ldap-openldap"
+    LDAP_COMPOSE_FILE="${LDAP_COMPOSE_DIR}/docker-compose.yml"
+
+    if ! command -v docker >/dev/null 2>&1; then
+        log_error "docker not found, but LdapAuth test requires OpenLDAP service"
+        return 1
+    fi
+
+    if [ ! -f "${LDAP_COMPOSE_FILE}" ]; then
+        log_error "LDAP compose file not found: ${LDAP_COMPOSE_FILE}"
+        return 1
+    fi
+
+    log_section "LDAP dependency: start OpenLDAP"
+    local compose_output=""
+    compose_output=$(docker compose -f "${LDAP_COMPOSE_FILE}" up -d 2>&1) || {
+        log_error "Failed to start OpenLDAP via docker compose"
+        echo "$compose_output"
+        return 1
+    }
+
+    local container_id=""
+    container_id=$(docker compose -f "${LDAP_COMPOSE_FILE}" ps -q openldap 2>/dev/null || true)
+    if [ -z "$container_id" ]; then
+        log_error "OpenLDAP container was not created"
+        return 1
+    fi
+
+    local elapsed=0
+    local timeout=60
+    while [ $elapsed -lt $timeout ]; do
+        local health=""
+        local state=""
+        health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)
+        state=$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null || true)
+
+        if [ "$health" = "healthy" ] || { [ -z "$health" ] && [ "$state" = "running" ]; }; then
+            LDAP_SERVICE_STARTED=true
+            log_success "OpenLDAP is ready"
+            break
+        fi
+
+        if [ "$state" = "exited" ] || [ "$state" = "dead" ]; then
+            log_error "OpenLDAP container is not running (state=${state})"
+            docker compose -f "${LDAP_COMPOSE_FILE}" logs --no-color --tail=80 || true
+            return 1
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    if ! $LDAP_SERVICE_STARTED; then
+        log_error "OpenLDAP did not become ready within ${timeout}s"
+        docker compose -f "${LDAP_COMPOSE_FILE}" logs --no-color --tail=80 || true
+        return 1
+    fi
+
+    local seed_file="${LDAP_COMPOSE_DIR}/bootstrap/10-users.ldif"
+    if [ ! -f "$seed_file" ]; then
+        log_error "LDAP seed file not found: $seed_file"
+        return 1
+    fi
+
+    if docker exec edgion-test-openldap ldapsearch -x -H ldap://127.0.0.1:389 \
+        -D cn=admin,dc=example,dc=org -w admin \
+        -b ou=people,dc=example,dc=org '(uid=alice)' 2>/dev/null | grep -q "uid: alice"; then
+        log_info "OpenLDAP seed data already present"
+        return 0
+    fi
+
+    log_info "Seeding OpenLDAP test data..."
+    if ! docker exec -i edgion-test-openldap ldapadd -x -H ldap://127.0.0.1:389 \
+        -D cn=admin,dc=example,dc=org -w admin < "$seed_file" >/dev/null 2>&1; then
+        log_error "Failed to seed OpenLDAP test data"
+        docker compose -f "${LDAP_COMPOSE_FILE}" logs --no-color --tail=80 || true
+        return 1
+    fi
+
+    if ! docker exec edgion-test-openldap ldapsearch -x -H ldap://127.0.0.1:389 \
+        -D cn=admin,dc=example,dc=org -w admin \
+        -b ou=people,dc=example,dc=org '(uid=alice)' 2>/dev/null | grep -q "uid: alice"; then
+        log_error "OpenLDAP seed verification failed (alice not found)"
+        return 1
+    fi
+
+    log_success "OpenLDAP test data seeded"
+    return 0
 }
 
 # =============================================================================
@@ -377,6 +539,11 @@ run_all_tests() {
                     run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true
                     run_test "EdgionPlugins_JwtAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i JwtAuth" || test_failed=true
                     run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
+                    if ! should_skip_test "EdgionPlugins_LdapAuth"; then
+                        run_test "EdgionPlugins_LdapAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i LdapAuth" || test_failed=true
+                    else
+                        log_info "Skipping complex test: EdgionPlugins_LdapAuth (requires --full-test)"
+                    fi
                     run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
                     run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
                     run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
@@ -386,6 +553,9 @@ run_all_tests() {
                     run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
                     run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
                     run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
+                    run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
+                    run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
+                    run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
                         run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
                     else
@@ -393,7 +563,12 @@ run_all_tests() {
                     fi
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
-                    run_test "EdgionPlugins_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
+                    local test_name="EdgionPlugins_${item_safe}"
+                    if ! should_skip_test "$test_name"; then
+                        run_test "$test_name" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
+                    else
+                        log_info "Skipping complex test: ${test_name} (requires --full-test)"
+                    fi
                 fi
                 ;;
             EdgionTls)
@@ -468,6 +643,11 @@ run_all_tests() {
         run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true
         run_test "EdgionPlugins_JwtAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i JwtAuth" || test_failed=true
         run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
+        if ! should_skip_test "EdgionPlugins_LdapAuth"; then
+            run_test "EdgionPlugins_LdapAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i LdapAuth" || test_failed=true
+        else
+            log_info "Skipping complex test: EdgionPlugins_LdapAuth (requires --full-test)"
+        fi
         run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
         run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
         run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
@@ -477,6 +657,9 @@ run_all_tests() {
         run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
         run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
         run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
+        run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
+        run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
+        run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
         if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
             run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
         else
@@ -590,9 +773,17 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/AllEndpointStatus"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/WebhookKeyGet,EdgionPlugins/AllEndpointStatus"
+                if $FULL_TEST; then
+                    suites="${suites},EdgionPlugins/LdapAuth"
+                fi
             else
-                suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
+                suites="${base_suites}"
+                if [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/LdapAuth" ] && ! $FULL_TEST; then
+                    log_info "LdapAuth suite requires --full-test, config load will be skipped"
+                else
+                    suites="${suites},${G_RESOURCE}/${G_ITEM}"
+                fi
             fi
         elif [ -n "$G_ITEM" ]; then
             if [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLS" ]; then
@@ -601,6 +792,17 @@ main() {
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi
         fi
+    fi
+
+    # Fast mode guard: LDAP integration test is complex (Docker-required), full-test only.
+    if ! $FULL_TEST && [ "$G_RESOURCE" = "EdgionPlugins" ] && [ "$G_ITEM" = "LdapAuth" ]; then
+        log_info "EdgionPlugins/LdapAuth is a complex Docker-based test and requires --full-test"
+        DO_CLEANUP=false
+        exit 0
+    fi
+
+    if is_ldap_service_required "$suites"; then
+        LDAP_SERVICE_REQUIRED=true
     fi
     
     echo ""
@@ -625,7 +827,18 @@ main() {
     echo ""
     
     cd "$PROJECT_ROOT"
-    
+
+    if ! check_docker_environment_ready; then
+        log_error "Docker environment check failed"
+        exit 1
+    fi
+
+    # Step 0: Start external dependencies when needed
+    if ! start_ldap_service_if_needed; then
+        log_error "Failed to start external LDAP dependency"
+        exit 1
+    fi
+
     # Step 1: Build
     if $do_prepare; then
         log_section "Step 1: Build all components"

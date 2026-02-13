@@ -9,10 +9,14 @@ pub mod cors;
 pub mod csrf;
 pub mod ctx_set;
 pub mod direct_endpoint;
+pub mod dynamic_external_upstream;
+pub mod dynamic_internal_upstream;
 pub mod forward_auth;
 pub mod ip_restriction;
+pub mod jwe_decrypt;
 pub mod jwt_auth;
 pub mod key_auth;
+pub mod ldap_auth;
 pub mod mock;
 pub mod openid_connect;
 mod plugin_store;
@@ -31,8 +35,10 @@ pub use csrf::Csrf;
 pub use ctx_set::CtxSet;
 pub use forward_auth::ForwardAuth;
 pub use ip_restriction::IpRestriction;
+pub use jwe_decrypt::JweDecrypt;
 pub use jwt_auth::JwtAuth;
 pub use key_auth::KeyAuth;
+pub use ldap_auth::LdapAuth;
 pub use mock::Mock;
 pub use openid_connect::OpenidConnect;
 pub use plugin_store::{get_global_plugin_store, PluginStore};
@@ -45,6 +51,7 @@ pub use response_rewrite::ResponseRewrite;
 // Re-export plugin configs from types
 pub use crate::types::resources::edgion_plugins::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
-    ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig, MockConfig, OpenidConnectConfig,
+    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ForwardAuthConfig, IpRestrictionConfig,
+    JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig,
     ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig,
 };

@@ -169,10 +169,16 @@ impl KeyAuthConfig {
                         return Err(format!("key_sources[{}]: name cannot be empty", i));
                     }
                 }
+                // Webhook is a valid key source for remote key resolution
+                KeyGet::Webhook { webhook_ref, .. } => {
+                    if webhook_ref.is_empty() {
+                        return Err(format!("key_sources[{}]: webhookRef cannot be empty", i));
+                    }
+                }
                 // Unsupported sources for API key extraction
                 KeyGet::ClientIp | KeyGet::Path | KeyGet::Method | KeyGet::ClientIpAndPath => {
                     return Err(format!(
-                        "key_sources[{}]: unsupported source type '{}' for API key extraction. Use header, query, cookie, or ctx",
+                        "key_sources[{}]: unsupported source type '{}' for API key extraction. Use header, query, cookie, ctx, or webhook",
                         i,
                         source.source_type()
                     ));

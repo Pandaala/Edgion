@@ -9,13 +9,17 @@ use serde::{Deserialize, Serialize};
 
 // Submodules
 pub mod common;
+pub mod elasticsearch;
 pub mod etcd;
 pub mod redis;
+pub mod webhook;
 
 // Re-export common types for convenient access
 pub use common::SecretReference;
+pub use elasticsearch::ElasticsearchClientConfig;
 pub use etcd::EtcdClientConfig;
 pub use redis::RedisClientConfig;
+pub use webhook::WebhookServiceConfig;
 
 /// API group for LinkSys
 pub const LINK_SYS_GROUP: &str = "edgion.io";
@@ -52,15 +56,11 @@ pub enum SystemConfig {
     Elasticsearch(ElasticsearchClientConfig),
     /// Kafka client configuration (future)
     Kafka(KafkaClientConfig),
+    /// HTTP webhook service configuration
+    Webhook(WebhookServiceConfig),
 }
 
 // Placeholder types for future implementations
-/// Elasticsearch client configuration (placeholder)
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-pub struct ElasticsearchClientConfig {
-    /// Elasticsearch endpoints
-    pub endpoints: Vec<String>,
-}
 
 /// Kafka client configuration (placeholder)
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -77,6 +77,15 @@ impl SystemConfig {
             SystemConfig::Etcd(_) => SystemType::Etcd,
             SystemConfig::Elasticsearch(_) => SystemType::Elasticsearch,
             SystemConfig::Kafka(_) => SystemType::Kafka,
+            SystemConfig::Webhook(_) => SystemType::Webhook,
+        }
+    }
+
+    /// Get Webhook configuration if this is a Webhook system
+    pub fn as_webhook(&self) -> Option<&WebhookServiceConfig> {
+        match self {
+            SystemConfig::Webhook(config) => Some(config),
+            _ => None,
         }
     }
 
@@ -95,6 +104,14 @@ impl SystemConfig {
             _ => None,
         }
     }
+
+    /// Get Elasticsearch configuration if this is an Elasticsearch system
+    pub fn as_elasticsearch(&self) -> Option<&ElasticsearchClientConfig> {
+        match self {
+            SystemConfig::Elasticsearch(config) => Some(config),
+            _ => None,
+        }
+    }
 }
 
 /// System type enumeration (for helper methods and logging)
@@ -105,6 +122,7 @@ pub enum SystemType {
     Etcd,
     Elasticsearch,
     Kafka,
+    Webhook,
 }
 
 impl LinkSys {
@@ -145,6 +163,17 @@ impl LinkSys {
                 // Validate endpoints
                 if etcd_config.endpoints.is_empty() {
                     tracing::warn!("LinkSys {}: Etcd configuration has no endpoints", key_name);
+                }
+            }
+            SystemConfig::Elasticsearch(es_config) => {
+                // Validate endpoints
+                if es_config.endpoints.is_empty() {
+                    tracing::warn!("LinkSys {}: Elasticsearch configuration has no endpoints", key_name);
+                }
+            }
+            SystemConfig::Webhook(webhook_config) => {
+                if let Some(err) = webhook_config.get_validation_error() {
+                    tracing::warn!("LinkSys {}: Webhook configuration error: {}", key_name, err);
                 }
             }
             _ => {

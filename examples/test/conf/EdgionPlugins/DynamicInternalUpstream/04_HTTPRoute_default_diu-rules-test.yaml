@@ -1,0 +1,32 @@
+# HTTPRoute for DynamicInternalUpstream rules mode test
+# Three backends: stable (weight 90), canary (weight 10), debug (weight 0)
+# debug is only reachable via DynamicInternalUpstream
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: diu-rules-test
+  namespace: default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "diu-rules-test.example.com"
+  rules:
+    - backendRefs:
+        - name: diu-backend-stable
+          port: 30001
+          weight: 90
+        - name: diu-backend-canary
+          port: 30002
+          weight: 10
+        - name: diu-backend-debug
+          port: 30003
+          weight: 0
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: diu-rules

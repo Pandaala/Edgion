@@ -2,7 +2,7 @@
 
 use crate::core::plugins::plugin_runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::types::common::{KeyGet, KeySet};
-use crate::types::{DirectEndpointPreset, EdgionHttpContext};
+use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
@@ -12,7 +12,7 @@ pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub trait PluginSession: Send {
+pub trait PluginSession: Send + Sync {
     /// Get a request header value by name
     fn header_value(&self, name: &str) -> Option<String>;
 
@@ -160,10 +160,21 @@ pub trait PluginSession: Send {
     /// This is the unified way to extract values from the session context.
     /// Used by RateLimit, Conditions, and other plugins.
     ///
+    /// This method is async to support remote key sources (e.g., Webhook).
+    /// For local key sources (Header, Cookie, Query, etc.), the async overhead
+    /// is negligible (nanosecond-level state machine creation + 1 poll(Ready)).
+    ///
     /// # Returns
     /// * `Some(String)` - The extracted value
     /// * `None` - If the value doesn't exist or is empty (for ClientIp)
-    fn key_get(&self, key: &KeyGet) -> Option<String>;
+    async fn key_get(&self, key: &KeyGet) -> Option<String>;
+
+    /// Synchronous version of key_get for local key sources only.
+    ///
+    /// Used by sync filter contexts (UpstreamResponseFilter, UpstreamResponseBodyFilter)
+    /// where async is not available. Only supports local variants (Header, Cookie, Query,
+    /// Path, Method, Ctx, ClientIp, ClientIpAndPath). Returns None for Webhook variants.
+    fn key_get_local(&self, key: &KeyGet) -> Option<String>;
 
     /// Set a value using KeySet accessor
     ///
@@ -179,4 +190,14 @@ pub trait PluginSession: Send {
     /// Called by DirectEndpoint plugin to bypass normal LB.
     /// The info persists across retries (Clone, not consumed).
     fn set_direct_endpoint(&mut self, info: DirectEndpointPreset);
+
+    /// Set internal jump target for backend selection.
+    /// Called by DynamicInternalUpstream plugin to target a specific BackendRef.
+    /// The info persists in ctx and is consumed by select_http_backend().
+    fn set_internal_jump(&mut self, info: InternalJumpPreset);
+
+    /// Set external jump target for domain-based routing.
+    /// Called by DynamicExternalUpstream plugin to route to an external domain.
+    /// DNS resolution happens later in upstream_peer phase.
+    fn set_external_jump(&mut self, info: ExternalJumpPreset);
 }

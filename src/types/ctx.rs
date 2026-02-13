@@ -204,6 +204,44 @@ pub struct BackendContext {
     pub current_upstream_id: Option<usize>,
 }
 
+/// Stored internal jump target info (lightweight, survives retries via Clone)
+///
+/// Unlike DirectEndpointPreset which specifies an exact endpoint address,
+/// InternalJumpPreset specifies a BackendRef by name. The actual endpoint
+/// selection happens via normal LB in get_peer().
+///
+/// This preset is consumed by select_http_backend() to find the matching
+/// BackendRef instead of using weighted round-robin selection.
+#[derive(Debug, Clone)]
+pub struct InternalJumpPreset {
+    /// Name of the target backend_ref (must match a backend_ref in the route)
+    pub backend_ref_name: String,
+    /// Optional namespace of the target backend_ref
+    /// If None, matches by name only
+    pub backend_ref_namespace: Option<String>,
+}
+
+/// Stored external jump target info (lightweight, survives retries via Clone)
+///
+/// Unlike DirectEndpointPreset (exact IP) or InternalJumpPreset (BackendRef name),
+/// ExternalJumpPreset stores a domain name that requires DNS resolution
+/// before creating the HttpPeer.
+///
+/// DNS resolution happens in upstream_peer_http() phase (async context).
+/// On retry, DNS resolution is redone — the domain may resolve to a different
+/// IP, providing natural DNS-level failover.
+#[derive(Debug, Clone)]
+pub struct ExternalJumpPreset {
+    /// Target domain name (e.g., "api-us.example.com")
+    pub domain: String,
+    /// Target port
+    pub port: u16,
+    /// Whether to use TLS
+    pub use_tls: bool,
+    /// TLS SNI (Server Name Indication)
+    pub sni: String,
+}
+
 /// Stored direct endpoint info (lightweight, survives retries via Clone)
 ///
 /// Unlike Box<HttpPeer> which would be consumed on first use,
@@ -288,6 +326,19 @@ pub struct EdgionHttpContext {
     /// Direct endpoint set by DirectEndpoint plugin in request_filter stage.
     pub direct_endpoint: Option<DirectEndpointPreset>,
 
+    /// Internal jump target set by DynamicInternalUpstream plugin in request_filter stage.
+    /// When present, select_http_backend() finds the matching BackendRef by name
+    /// instead of using weighted round-robin selection.
+    /// Normal LB within the selected service's endpoints still applies.
+    pub internal_jump: Option<InternalJumpPreset>,
+
+    /// External jump target set by DynamicExternalUpstream plugin in request_filter stage.
+    /// When present, upstream_peer_http() resolves the domain and builds
+    /// HttpPeer from this info, bypassing normal select_http_backend().
+    /// Host header override is applied separately via set_upstream_host()
+    /// during request_filter.
+    pub external_jump: Option<ExternalJumpPreset>,
+
     /// Response headers to add (queued from request stage)
     pub response_headers_to_add: Vec<(String, String)>,
 }
@@ -321,6 +372,8 @@ impl EdgionHttpContext {
             ctx_map: HashMap::new(),
             path_params: None,
             direct_endpoint: None,
+            internal_jump: None,
+            external_jump: None,
             response_headers_to_add: Vec::new(),
         }
     }
