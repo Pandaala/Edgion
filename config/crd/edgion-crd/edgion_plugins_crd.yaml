@@ -135,6 +135,7 @@ spec:
                           - ForwardAuth
                           - IpRestriction
                           - JwtAuth
+                          - JweDecrypt
                           - KeyAuth
                           - LdapAuth
                           - OpenidConnect

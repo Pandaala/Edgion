@@ -25,6 +25,7 @@
     - [CORS](./http-route/filters/edgion-plugins/cors.md)
     - [CSRF](./http-route/filters/edgion-plugins/csrf.md)
     - [CtxSet](./edgion-plugins/ctx-setter.md)
+    - [JWE Decrypt](./edgion-plugins/jwe-decrypt.md)
     - [IP 限制](./http-route/filters/edgion-plugins/ip-restriction.md)
     - [ProxyRewrite](./http-route/filters/edgion-plugins/proxy-rewrite.md)
     - [限流](./http-route/filters/edgion-plugins/rate-limit.md)

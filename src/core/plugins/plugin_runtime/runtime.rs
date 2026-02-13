@@ -33,6 +33,7 @@ use crate::core::plugins::edgion_plugins::ctx_set::CtxSet;
 use crate::core::plugins::edgion_plugins::direct_endpoint::DirectEndpoint;
 use crate::core::plugins::edgion_plugins::forward_auth::ForwardAuth;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
+use crate::core::plugins::edgion_plugins::jwe_decrypt::JweDecrypt;
 use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
 use crate::core::plugins::edgion_plugins::key_auth::KeyAuth;
 use crate::core::plugins::edgion_plugins::ldap_auth::LdapAuth;
@@ -328,6 +329,7 @@ impl PluginRuntime {
             EdgionPlugin::Csrf(config) => Some(Box::new(Csrf::new(config))),
             EdgionPlugin::IpRestriction(config) => Some(IpRestriction::create(config)),
             EdgionPlugin::JwtAuth(config) => Some(Box::new(JwtAuth::new(config, namespace.to_string()))),
+            EdgionPlugin::JweDecrypt(config) => Some(Box::new(JweDecrypt::new(config, namespace.to_string()))),
             EdgionPlugin::KeyAuth(config) => Some(KeyAuth::create(config)),
             EdgionPlugin::LdapAuth(config) => Some(LdapAuth::create(config)),
             EdgionPlugin::Mock(config) => Some(Box::new(Mock::new(config))),
@@ -407,6 +409,10 @@ impl PluginRuntime {
             EdgionPlugin::LdapAuth(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ForwardAuth(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::OpenidConnect(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::JweDecrypt(config) => config
+                .get_validation_error()
+                .map(|s| s.to_string())
+                .or_else(|| config.detect_validation_error()),
             EdgionPlugin::BandwidthLimit(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
             _ => None,
@@ -424,6 +430,7 @@ impl PluginRuntime {
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
+            EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
             EdgionPlugin::KeyAuth(_) => "KeyAuth",
             EdgionPlugin::LdapAuth(_) => "LdapAuth",
             EdgionPlugin::Mock(_) => "Mock",
