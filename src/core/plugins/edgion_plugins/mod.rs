@@ -7,6 +7,7 @@ mod conf_handler_impl;
 pub mod cors;
 pub mod csrf;
 pub mod ctx_set;
+pub mod direct_endpoint;
 pub mod forward_auth;
 pub mod ip_restriction;
 pub mod jwt_auth;

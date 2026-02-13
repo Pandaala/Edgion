@@ -116,6 +116,37 @@ pub async fn upstream_peer_http(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
+    // 0. Check for DirectEndpoint (bypass LB)
+    if let Some(direct) = &ctx.direct_endpoint {
+        let backend_ref_idx = direct.backend_ref_idx;
+        let addr = direct.addr;
+        let use_tls = direct.use_tls;
+        let sni = direct.sni.clone();
+
+        // If backend context not initialized, we need to set selected_backend for metadata
+        if ctx.selected_backend.is_none() {
+            if let Some(route_unit) = ctx.route_unit.as_ref() {
+                if let Some(refs) = &route_unit.rule.backend_refs {
+                    if let Some(br) = refs.get(backend_ref_idx) {
+                        ctx.selected_backend = Some(br.clone());
+                    }
+                }
+            }
+        }
+
+        // Initialize backend context (for logs/metrics)
+        init_backend_context_if_needed(ctx)?;
+
+        // Create peer directly
+        let mut peer = Box::new(HttpPeer::new(addr, use_tls, sni));
+
+        // Configure peer
+        configure_peer_timeouts(edgion_http, &mut peer, ctx);
+        update_peer_metrics(edgion_http, &peer, ctx);
+
+        return Ok(peer);
+    }
+
     // 1. Select HTTP backend if not already selected
     if ctx.selected_backend.is_none() && ctx.selected_grpc_backend.is_none() {
         select_http_backend(edgion_http, session, ctx).await?;

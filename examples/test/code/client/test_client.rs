@@ -167,6 +167,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
         "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
         "EdgionPlugins/ForwardAuth" => "EdgionPlugins",
+        "EdgionPlugins/DirectEndpoint" => "EdgionPlugins",
         "Gateway/StreamPlugins" => "Gateway/StreamPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
@@ -430,6 +431,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::ForwardAuthTestSuite));
+        }
+        "EdgionPlugins/DirectEndpoint" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/DirectEndpoint tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::DirectEndpointTestSuite));
         }
         "EdgionPlugins/BandwidthLimit" => {
             if !gateway {

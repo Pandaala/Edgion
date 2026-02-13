@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
     BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig,
-    ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig,
-    RateLimitConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    DirectEndpointConfig, ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig, MockConfig,
+    ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -67,6 +67,8 @@ pub enum EdgionPlugin {
     ForwardAuth(ForwardAuthConfig),
     /// BandwidthLimit filter (limit downstream response bandwidth per second)
     BandwidthLimit(BandwidthLimitConfig),
+    /// DirectEndpoint filter (route to specific endpoint, bypassing LB)
+    DirectEndpoint(DirectEndpointConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -101,6 +103,7 @@ impl EdgionPlugin {
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
             EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",
+            EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
         }
     }
 }

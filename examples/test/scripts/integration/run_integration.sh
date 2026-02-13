@@ -383,8 +383,10 @@ run_all_tests() {
                     run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
                     run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
                     run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
+                    run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
                 else
-                    run_test "EdgionPlugins_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "EdgionPlugins_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             EdgionTls)
@@ -466,6 +468,7 @@ run_all_tests() {
         run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
         run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
         run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
+        run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
         run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
         run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
         run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
@@ -574,7 +577,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/BandwidthLimit"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint"
             else
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi

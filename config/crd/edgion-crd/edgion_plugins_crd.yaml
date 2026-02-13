@@ -147,6 +147,7 @@ spec:
                           - ExtensionRef
                           - ForwardAuth
                           - DebugAccessLogToHeader
+                          - DirectEndpoint
                       config:
                         type: object
                         description: "Plugin-specific configuration"

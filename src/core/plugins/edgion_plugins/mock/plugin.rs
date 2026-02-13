@@ -55,10 +55,15 @@ impl RequestFilter for Mock {
 
         plugin_log.push("Mock returned; ");
 
-        // Return mock response (terminates request, no upstream call)
-        PluginRunningResult::ErrResponse {
-            status: self.config.status_code,
-            body: self.config.body.clone(),
+        if self.config.terminate {
+            // Return mock response (terminates request, no upstream call)
+            PluginRunningResult::ErrResponse {
+                status: self.config.status_code,
+                body: self.config.body.clone(),
+            }
+        } else {
+            // Non-terminating (e.g., for logging/headers only)
+            PluginRunningResult::GoodNext
         }
     }
 }

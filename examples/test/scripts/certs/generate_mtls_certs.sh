@@ -314,6 +314,25 @@ data:
 EOF
 log_success "创建 Secret_edge_mtls-server.yaml"
 
+# Backend mTLS Client Certificate Secret (for BackendTLSPolicy upstream mTLS)
+BACKEND_TLS_CONF_DIR="$PROJECT_ROOT/examples/test/conf/HTTPRoute/Backend/BackendTLS"
+mkdir -p "$BACKEND_TLS_CONF_DIR"
+
+CLIENTCERT_B64=$(base64 < "$TEMP_DIR/valid-client.crt" | tr -d '\n')
+CLIENTKEY_B64=$(base64 < "$TEMP_DIR/valid-client.key" | tr -d '\n')
+cat > "$BACKEND_TLS_CONF_DIR/ClientCert_edge_backend-client-cert.yaml" << EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backend-client-cert
+  namespace: edgion-test
+type: kubernetes.io/tls
+data:
+  tls.crt: $CLIENTCERT_B64
+  tls.key: $CLIENTKEY_B64
+EOF
+log_success "创建 ClientCert_edge_backend-client-cert.yaml (BackendTLS mTLS client cert)"
+
 # =============================================================================
 # Summary
 # =============================================================================

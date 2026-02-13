@@ -6,6 +6,7 @@
 mod bandwidth_limit;
 mod ctx_set;
 mod debug_access_log;
+mod direct_endpoint;
 mod forward_auth;
 mod jwt_auth;
 mod key_auth;
@@ -19,6 +20,7 @@ mod response_rewrite;
 pub use bandwidth_limit::BandwidthLimitTestSuite;
 pub use ctx_set::CtxSetTestSuite;
 pub use debug_access_log::PluginLogsTestSuite;
+pub use direct_endpoint::DirectEndpointTestSuite;
 pub use forward_auth::ForwardAuthTestSuite;
 pub use jwt_auth::JwtAuthTestSuite;
 pub use key_auth::KeyAuthTestSuite;

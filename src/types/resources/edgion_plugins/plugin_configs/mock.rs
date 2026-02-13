@@ -44,6 +44,13 @@ pub struct MockConfig {
     /// Useful for simulating slow network or rate limiting scenarios
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delay: Option<u64>,
+
+    /// Whether to terminate the request after execution
+    ///
+    /// - `true` (default): Return the mock response and stop processing
+    /// - `false`: Execute (e.g., set headers) and continue to next plugin/upstream
+    #[serde(default = "default_true")]
+    pub terminate: bool,
 }
 
 fn default_status_code() -> u16 {
@@ -54,6 +61,10 @@ fn default_content_type() -> String {
     "application/json".to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for MockConfig {
     fn default() -> Self {
         MockConfig {
@@ -62,6 +73,7 @@ impl Default for MockConfig {
             headers: None,
             content_type: default_content_type(),
             delay: None,
+            terminate: true,
         }
     }
 }
@@ -86,6 +98,7 @@ impl MockConfig {
             headers: None,
             content_type: default_content_type(),
             delay: None,
+            terminate: true,
         }
     }
 }
@@ -143,6 +156,7 @@ mod tests {
             headers: Some(headers),
             content_type: "application/json".to_string(),
             delay: Some(100),
+            terminate: true,
         };
 
         let json = serde_json::to_string(&config).unwrap();

@@ -9,7 +9,7 @@ use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 use crate::types::common::{KeyGet, KeySet};
 use crate::types::filters::PluginRunningResult;
-use crate::types::EdgionHttpContext;
+use crate::types::{DirectEndpointPreset, EdgionHttpContext};
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
@@ -119,12 +119,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .req_header()
             .headers
             .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|v| (name.as_str().to_string(), v.to_string()))
-            })
+            .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str().to_string(), v.to_string())))
             .collect()
     }
 
@@ -229,6 +224,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         if let Some(resp) = &mut self.response_header {
             resp.insert_header(name.to_string(), value.to_string())
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
+        } else {
+            // Queue for later application
+            self.ctx
+                .response_headers_to_add
+                .push((name.to_string(), value.to_string()));
         }
         Ok(())
     }
@@ -237,6 +237,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         if let Some(resp) = &mut self.response_header {
             resp.append_header(name.to_string(), value.to_string())
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
+        } else {
+            // Queue for later application
+            self.ctx
+                .response_headers_to_add
+                .push((name.to_string(), value.to_string()));
         }
         Ok(())
     }
@@ -428,6 +433,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             (KeySet::Ctx { name }, Some(v)) => self.set_ctx_var(name, &v),
             (KeySet::Ctx { name }, None) => self.remove_ctx_var(name),
         }
+    }
+
+    fn set_direct_endpoint(&mut self, info: DirectEndpointPreset) {
+        self.ctx.direct_endpoint = Some(info);
     }
 }
 

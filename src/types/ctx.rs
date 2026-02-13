@@ -184,8 +184,7 @@ impl UpstreamInfo {
     #[inline]
     pub fn set_response_body_size(&mut self, size: usize) {
         if self.response_body_size.is_some() {
-            self.err
-                .push("response_body_size already set".to_string());
+            self.err.push("response_body_size already set".to_string());
         }
         self.response_body_size = Some(size);
     }
@@ -203,6 +202,24 @@ pub struct BackendContext {
     /// Current upstream index (for status updates)
     #[serde(skip)]
     pub current_upstream_id: Option<usize>,
+}
+
+/// Stored direct endpoint info (lightweight, survives retries via Clone)
+///
+/// Unlike Box<HttpPeer> which would be consumed on first use,
+/// DirectEndpointPreset persists across retries so upstream_peer can
+/// rebuild the same HttpPeer on each attempt.
+#[derive(Debug, Clone)]
+pub struct DirectEndpointPreset {
+    /// Target socket address (ip:port)
+    pub addr: std::net::SocketAddr,
+    /// Whether to use TLS
+    pub use_tls: bool,
+    /// SNI for TLS connections
+    pub sni: String,
+    /// Index of the matched backend_ref in route_unit.rule.backend_refs
+    /// Used to pre-select the correct backend_ref for logging and metrics
+    pub backend_ref_idx: usize,
 }
 
 pub struct EdgionHttpContext {
@@ -267,6 +284,12 @@ pub struct EdgionHttpContext {
     /// - None: not yet extracted
     /// - Some(HashMap): already extracted (may be empty if no params or no match)
     pub path_params: Option<HashMap<String, String>>,
+
+    /// Direct endpoint set by DirectEndpoint plugin in request_filter stage.
+    pub direct_endpoint: Option<DirectEndpointPreset>,
+
+    /// Response headers to add (queued from request stage)
+    pub response_headers_to_add: Vec<(String, String)>,
 }
 
 impl Default for EdgionHttpContext {
@@ -297,6 +320,8 @@ impl EdgionHttpContext {
             hash_key: None,
             ctx_map: HashMap::new(),
             path_params: None,
+            direct_endpoint: None,
+            response_headers_to_add: Vec::new(),
         }
     }
 

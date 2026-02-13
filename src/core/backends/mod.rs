@@ -3,6 +3,7 @@ pub mod endpoint;
 pub mod endpoint_slice;
 pub mod preload;
 pub mod services;
+pub mod validation;
 
 pub use backend_tls::{create_backend_tls_policy_handler, get_global_backend_tls_policy_store, BackendTLSPolicyStore};
 pub use endpoint::{
@@ -15,6 +16,7 @@ pub use endpoint_slice::{
 };
 pub use preload::preload_load_balancers;
 pub use services::{create_service_handler, get_global_service_store, ServiceStore};
+pub use validation::validate_endpoint_in_route;
 
 use std::sync::OnceLock;
 

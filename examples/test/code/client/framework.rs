@@ -102,6 +102,10 @@ impl TestContext {
         format!("http://{}:{}", self.target_host, self.grpc_port)
     }
 
+    pub fn edgion_plugins_url(&self) -> String {
+        format!("http://{}:{}", self.target_host, self.http_port)
+    }
+
     pub fn websocket_url(&self) -> String {
         format!("ws://{}:{}/ws", self.target_host, self.websocket_port)
     }
