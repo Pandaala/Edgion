@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
-    DebugAccessLogToHeaderConfig, DirectEndpointConfig, DynamicInternalUpstreamConfig, ForwardAuthConfig,
-    IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig,
-    RateLimitConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    DebugAccessLogToHeaderConfig, DirectEndpointConfig, DynamicExternalUpstreamConfig,
+    DynamicInternalUpstreamConfig, ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig,
+    MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -76,6 +77,8 @@ pub enum EdgionPlugin {
     AllEndpointStatus(AllEndpointStatusConfig),
     /// DynamicInternalUpstream filter (route to specific BackendRef, bypass weighted selection)
     DynamicInternalUpstream(DynamicInternalUpstreamConfig),
+    /// DynamicExternalUpstream filter (route to external domain via domainMap)
+    DynamicExternalUpstream(DynamicExternalUpstreamConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -114,6 +117,7 @@ impl EdgionPlugin {
             EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
             EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
             EdgionPlugin::DynamicInternalUpstream(_) => "DynamicInternalUpstream",
+            EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
         }
     }
 }

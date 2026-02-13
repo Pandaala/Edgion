@@ -1,0 +1,2 @@
+mod dynamic_external_upstream;
+pub use dynamic_external_upstream::DynamicExternalUpstreamTestSuite;

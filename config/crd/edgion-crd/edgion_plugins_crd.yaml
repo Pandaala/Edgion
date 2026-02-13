@@ -150,6 +150,7 @@ spec:
                           - DebugAccessLogToHeader
                           - DirectEndpoint
                           - DynamicInternalUpstream
+                          - DynamicExternalUpstream
                           - AllEndpointStatus
                       config:
                         type: object

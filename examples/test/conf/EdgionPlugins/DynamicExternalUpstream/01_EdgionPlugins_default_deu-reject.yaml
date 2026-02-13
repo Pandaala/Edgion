@@ -1,0 +1,27 @@
+# DynamicExternalUpstream - Reject mode
+# onMissing: reject → no header = 400
+# onNoMatch: reject → unmatched key = 400
+apiVersion: edgion.io/v1alpha1
+kind: EdgionPlugins
+metadata:
+  name: deu-reject
+  namespace: default
+spec:
+  requestPlugins:
+    - type: DynamicExternalUpstream
+      config:
+        from:
+          type: header
+          name: X-Target-Region
+        domainMap:
+          "us":
+            domain: localhost
+            port: 30001
+            tls: false
+          "eu":
+            domain: localhost
+            port: 30002
+            tls: false
+        onMissing: reject
+        onNoMatch: reject
+        debugHeader: true

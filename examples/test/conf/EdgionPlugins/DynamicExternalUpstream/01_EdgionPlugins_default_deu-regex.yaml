@@ -1,0 +1,31 @@
+# DynamicExternalUpstream - Regex extraction mode
+# Header "X-Cluster-Target: cluster=us-west;priority=high" → extract "us-west"
+apiVersion: edgion.io/v1alpha1
+kind: EdgionPlugins
+metadata:
+  name: deu-regex
+  namespace: default
+spec:
+  requestPlugins:
+    - type: DynamicExternalUpstream
+      config:
+        from:
+          type: header
+          name: X-Cluster-Target
+        extract:
+          regex: 'cluster=([\w-]+)'
+          group: 1
+        domainMap:
+          "us-west":
+            domain: localhost
+            port: 30001
+            tls: false
+            overrideHost: us-west.internal
+          "eu-central":
+            domain: localhost
+            port: 30002
+            tls: false
+            overrideHost: eu-central.internal
+        onMissing: skip
+        onNoMatch: skip
+        debugHeader: true

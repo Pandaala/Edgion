@@ -2,7 +2,7 @@
 
 use crate::core::plugins::plugin_runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::types::common::{KeyGet, KeySet};
-use crate::types::{DirectEndpointPreset, EdgionHttpContext, InternalJumpPreset};
+use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
@@ -184,4 +184,9 @@ pub trait PluginSession: Send {
     /// Called by DynamicInternalUpstream plugin to target a specific BackendRef.
     /// The info persists in ctx and is consumed by select_http_backend().
     fn set_internal_jump(&mut self, info: InternalJumpPreset);
+
+    /// Set external jump target for domain-based routing.
+    /// Called by DynamicExternalUpstream plugin to route to an external domain.
+    /// DNS resolution happens later in upstream_peer phase.
+    fn set_external_jump(&mut self, info: ExternalJumpPreset);
 }

@@ -221,6 +221,27 @@ pub struct InternalJumpPreset {
     pub backend_ref_namespace: Option<String>,
 }
 
+/// Stored external jump target info (lightweight, survives retries via Clone)
+///
+/// Unlike DirectEndpointPreset (exact IP) or InternalJumpPreset (BackendRef name),
+/// ExternalJumpPreset stores a domain name that requires DNS resolution
+/// before creating the HttpPeer.
+///
+/// DNS resolution happens in upstream_peer_http() phase (async context).
+/// On retry, DNS resolution is redone — the domain may resolve to a different
+/// IP, providing natural DNS-level failover.
+#[derive(Debug, Clone)]
+pub struct ExternalJumpPreset {
+    /// Target domain name (e.g., "api-us.example.com")
+    pub domain: String,
+    /// Target port
+    pub port: u16,
+    /// Whether to use TLS
+    pub use_tls: bool,
+    /// TLS SNI (Server Name Indication)
+    pub sni: String,
+}
+
 /// Stored direct endpoint info (lightweight, survives retries via Clone)
 ///
 /// Unlike Box<HttpPeer> which would be consumed on first use,
@@ -311,6 +332,13 @@ pub struct EdgionHttpContext {
     /// Normal LB within the selected service's endpoints still applies.
     pub internal_jump: Option<InternalJumpPreset>,
 
+    /// External jump target set by DynamicExternalUpstream plugin in request_filter stage.
+    /// When present, upstream_peer_http() resolves the domain and builds
+    /// HttpPeer from this info, bypassing normal select_http_backend().
+    /// Host header override is applied separately via set_upstream_host()
+    /// during request_filter.
+    pub external_jump: Option<ExternalJumpPreset>,
+
     /// Response headers to add (queued from request stage)
     pub response_headers_to_add: Vec<(String, String)>,
 }
@@ -345,6 +373,7 @@ impl EdgionHttpContext {
             path_params: None,
             direct_endpoint: None,
             internal_jump: None,
+            external_jump: None,
             response_headers_to_add: Vec::new(),
         }
     }

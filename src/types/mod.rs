@@ -42,8 +42,8 @@ pub use self::resource::{
 // Re-export from other modules
 pub use self::constants::app::*;
 pub use self::ctx::{
-    BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, InternalJumpPreset, MatchInfo, RequestInfo,
-    TlsConnId, UpstreamInfo,
+    BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset,
+    MatchInfo, RequestInfo, TlsConnId, UpstreamInfo,
 };
 pub use self::edgion_status::EdgionStatus;
 pub use self::err::{

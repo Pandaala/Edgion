@@ -31,6 +31,7 @@ use crate::core::plugins::edgion_plugins::cors::Cors;
 use crate::core::plugins::edgion_plugins::csrf::Csrf;
 use crate::core::plugins::edgion_plugins::ctx_set::CtxSet;
 use crate::core::plugins::edgion_plugins::direct_endpoint::DirectEndpoint;
+use crate::core::plugins::edgion_plugins::dynamic_external_upstream::DynamicExternalUpstream;
 use crate::core::plugins::edgion_plugins::dynamic_internal_upstream::DynamicInternalUpstream;
 use crate::core::plugins::edgion_plugins::forward_auth::ForwardAuth;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
@@ -336,6 +337,7 @@ impl PluginRuntime {
             EdgionPlugin::CtxSet(config) => Some(CtxSet::create(config)),
             EdgionPlugin::DirectEndpoint(config) => Some(Box::new(DirectEndpoint::new(config))),
             EdgionPlugin::DynamicInternalUpstream(config) => Some(DynamicInternalUpstream::create(config)),
+            EdgionPlugin::DynamicExternalUpstream(config) => Some(DynamicExternalUpstream::create(config)),
             EdgionPlugin::RealIp(config) => Some(RealIp::create(config)),
             EdgionPlugin::ForwardAuth(config) => Some(Box::new(ForwardAuth::new(config))),
             EdgionPlugin::AllEndpointStatus(config) => Some(Box::new(AllEndpointStatus::new(config))),
@@ -409,6 +411,7 @@ impl PluginRuntime {
             EdgionPlugin::BandwidthLimit(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicInternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::DynamicExternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
             _ => None,
         }
     }
@@ -439,6 +442,7 @@ impl PluginRuntime {
             EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",
             EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
             EdgionPlugin::DynamicInternalUpstream(_) => "DynamicInternalUpstream",
+            EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
             EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",

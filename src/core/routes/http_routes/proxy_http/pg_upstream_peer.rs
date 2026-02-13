@@ -116,7 +116,7 @@ pub async fn upstream_peer_http(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    // 0. Check for DirectEndpoint (bypass LB)
+    // 0. Check for DirectEndpoint (highest priority, bypass LB)
     if let Some(direct) = &ctx.direct_endpoint {
         let backend_ref_idx = direct.backend_ref_idx;
         let addr = direct.addr;
@@ -147,18 +147,45 @@ pub async fn upstream_peer_http(
         return Ok(peer);
     }
 
-    // 1. Select HTTP backend if not already selected
+    // 1. Check for ExternalJump (external domain, second priority)
+    if let Some(ref external) = ctx.external_jump {
+        tracing::debug!(
+            domain = %external.domain,
+            port = %external.port,
+            use_tls = %external.use_tls,
+            try_cnt = ctx.try_cnt,
+            "Using external jump peer"
+        );
+
+        // Async DNS resolution (re-resolves on each attempt, including retries)
+        let addr = resolve_domain(&external.domain, external.port).await?;
+
+        // Build HttpPeer from resolved address
+        let mut peer = Box::new(HttpPeer::new(addr, external.use_tls, external.sni.clone()));
+
+        // Initialize backend context for logging/metrics
+        // Use domain as "name" and "_external_" as namespace marker
+        if ctx.backend_context.is_none() {
+            ctx.init_backend_context(external.domain.clone(), "_external_".to_string());
+        }
+
+        configure_peer_timeouts(edgion_http, &mut peer, ctx);
+        update_peer_metrics(edgion_http, &peer, ctx);
+        return Ok(peer);
+    }
+
+    // 2. Select HTTP backend if not already selected (may include InternalJump inside)
     if ctx.selected_backend.is_none() && ctx.selected_grpc_backend.is_none() {
         select_http_backend(edgion_http, session, ctx).await?;
     }
 
-    // 2. Initialize backend context (unified logic)
+    // 3. Initialize backend context (unified logic)
     init_backend_context_if_needed(ctx)?;
 
-    // 3. Get peer
+    // 4. Get peer
     let mut peer = get_peer(session, ctx, false).await?;
 
-    // 4. Configure peer (shared logic)
+    // 5. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     update_peer_metrics(edgion_http, &peer, ctx);
 
@@ -377,4 +404,46 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
 
     ctx.init_backend_context(name, namespace);
     Ok(())
+}
+
+/// Resolve domain to SocketAddr using async DNS resolution.
+///
+/// Uses tokio's async DNS resolver to avoid blocking the event loop.
+/// Returns the first resolved address.
+///
+/// Security: After resolution, validates the address is not localhost.
+async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<std::net::SocketAddr> {
+    let addr_str = format!("{}:{}", domain, port);
+
+    // Use tokio async DNS resolution
+    let mut addrs = tokio::net::lookup_host(&addr_str).await.map_err(|e| {
+        tracing::error!(domain = %domain, port = %port, error = %e, "DNS resolution failed");
+        PingoraError::explain(
+            ErrorType::ConnectError,
+            format!("DNS resolution failed for {}: {}", domain, e),
+        )
+    })?;
+
+    let addr = addrs.next().ok_or_else(|| {
+        tracing::error!(domain = %domain, port = %port, "DNS resolution returned no addresses");
+        PingoraError::explain(
+            ErrorType::ConnectError,
+            format!("No addresses found for {}", domain),
+        )
+    })?;
+
+    // Security: reject localhost connections
+    if addr.ip().is_loopback() {
+        tracing::error!(
+            domain = %domain,
+            resolved_ip = %addr.ip(),
+            "Rejected: external jump domain resolved to localhost"
+        );
+        return Err(PingoraError::explain(
+            ErrorType::ConnectError,
+            format!("Domain {} resolved to localhost (rejected)", domain),
+        ));
+    }
+
+    Ok(addr)
 }

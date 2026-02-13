@@ -29,13 +29,14 @@ pub use entry::{
 pub use plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CaseType, CorsConfig, CsrfConfig, CtxSetConfig,
     CtxVarRule, DebugAccessLogToHeaderConfig, DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid,
-    DirectEndpointOnMissing, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch,
-    DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract, ExtractConfig, ForwardAuthConfig, HeaderActions,
-    HeaderEntry, HeaderRename, HttpMethod, IpRestrictionConfig, IpSource, JwtAlgorithm, JwtAuthConfig, KeyAuthConfig,
-    KeyMetadata, LimitHeaderNames, MappingConfig, MockConfig, OnMissing, OnMissingKey, OpenidConnectConfig,
-    ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig,
-    ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource,
-    RuleMatchMode, TransformConfig, TransformType, UnauthAction, VerificationMode,
+    DirectEndpointOnMissing, DomainTarget, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch,
+    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract, ExtUpstreamExtract,
+    ExtUpstreamOnMissing, ExtUpstreamOnNoMatch, ExtractConfig, ForwardAuthConfig, HeaderActions, HeaderEntry,
+    HeaderRename, HttpMethod, IpRestrictionConfig, IpSource, JwtAlgorithm, JwtAuthConfig, KeyAuthConfig, KeyMetadata,
+    LimitHeaderNames, MappingConfig, MockConfig, OnMissing, OnMissingKey, OpenidConnectConfig, ProxyRewriteConfig,
+    RateLimitConfig, RealIpConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig, ResponseHeaderActions,
+    ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource, RuleMatchMode, TransformConfig,
+    TransformType, UnauthAction, VerificationMode,
 };
 
 /// API group for EdgionPlugins
