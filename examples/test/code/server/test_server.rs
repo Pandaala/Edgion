@@ -200,8 +200,14 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/health", get(health_handler))
         .route("/echo", get(echo_handler).post(echo_post_handler))
         .route("/headers", get(headers_handler))
-        .route("/webhook/resolve", get(webhook_resolve_handler).post(webhook_resolve_handler))
-        .route("/webhook/resolve-body", get(webhook_resolve_body_handler).post(webhook_resolve_body_handler))
+        .route(
+            "/webhook/resolve",
+            get(webhook_resolve_handler).post(webhook_resolve_handler),
+        )
+        .route(
+            "/webhook/resolve-body",
+            get(webhook_resolve_body_handler).post(webhook_resolve_body_handler),
+        )
         .route("/webhook/healthz", get(health_handler))
         .route("/status/{code}", get(status_handler))
         .route("/delay/{seconds}", get(delay_handler))

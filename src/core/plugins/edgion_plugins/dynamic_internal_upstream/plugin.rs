@@ -29,11 +29,7 @@ impl RequestFilter for DynamicInternalUpstream {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // 0. Only supported for HTTP routes, skip for gRPC routes
         if session.ctx().is_grpc_route_matched {
             log.push("Skip gRPC; ");

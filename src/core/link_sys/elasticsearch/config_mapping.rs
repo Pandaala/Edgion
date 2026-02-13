@@ -166,9 +166,7 @@ impl EsBulkConfig {
                 .and_then(|b| b.max_retries)
                 .map(|r| r.min(MAX_BULK_RETRIES))
                 .unwrap_or(DEFAULT_BULK_RETRIES),
-            backoff: Duration::from_millis(
-                bulk.and_then(|b| b.backoff_ms).unwrap_or(DEFAULT_BACKOFF_MS),
-            ),
+            backoff: Duration::from_millis(bulk.and_then(|b| b.backoff_ms).unwrap_or(DEFAULT_BACKOFF_MS)),
             max_body_bytes: bulk
                 .and_then(|b| b.max_body_bytes)
                 .map(|s| s.min(MAX_BULK_BODY_BYTES))

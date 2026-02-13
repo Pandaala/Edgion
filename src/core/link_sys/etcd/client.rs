@@ -86,12 +86,9 @@ impl EtcdLinkClient {
         let connect_options = options.unwrap_or_else(default_connect_options);
 
         // Connect to etcd
-        let client =
-            etcd_client::Client::connect(&self.endpoints, Some(connect_options))
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!("Etcd [{}] connect failed: {:?}", self.name, e)
-                })?;
+        let client = etcd_client::Client::connect(&self.endpoints, Some(connect_options))
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd [{}] connect failed: {:?}", self.name, e))?;
 
         {
             let mut guard = self.client.write().await;

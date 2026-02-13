@@ -434,10 +434,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
 }
 
 /// Dispatch incremental changes to sub-module managers.
-async fn dispatch_partial_update(
-    add_or_update: &HashMap<String, LinkSys>,
-    remove: &HashSet<String>,
-) {
+async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remove: &HashSet<String>) {
     let webhook_manager = get_webhook_manager();
 
     // Handle add/update
@@ -629,8 +626,7 @@ async fn dispatch_partial_update(
 // Global singleton
 // ============================================================
 
-static GLOBAL_LINK_SYS_STORE: LazyLock<Arc<LinkSysStore>> =
-    LazyLock::new(|| Arc::new(LinkSysStore::new()));
+static GLOBAL_LINK_SYS_STORE: LazyLock<Arc<LinkSysStore>> = LazyLock::new(|| Arc::new(LinkSysStore::new()));
 
 /// Get the global LinkSys store
 pub fn get_global_link_sys_store() -> Arc<LinkSysStore> {

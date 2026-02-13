@@ -10,8 +10,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use etcd_client::{
-    DeleteOptions, EventType, GetOptions, LockOptions as EtcdLockOptions, PutOptions,
-    WatchOptions, WatchStream,
+    DeleteOptions, EventType, GetOptions, LockOptions as EtcdLockOptions, PutOptions, WatchOptions, WatchStream,
 };
 
 use super::client::EtcdLinkClient;
@@ -35,10 +34,7 @@ impl EtcdLinkClient {
             .await
             .map_err(|e| anyhow::anyhow!("Etcd GET {}: {:?}", key, e))?;
 
-        Ok(resp
-            .kvs()
-            .first()
-            .map(|kv| (kv.value().to_vec(), kv.mod_revision())))
+        Ok(resp.kvs().first().map(|kv| (kv.value().to_vec(), kv.mod_revision())))
     }
 
     /// GET key → Option<String> (convenience for string values)
@@ -50,12 +46,7 @@ impl EtcdLinkClient {
     }
 
     /// PUT key value [with optional lease]
-    pub async fn put(
-        &self,
-        key: &str,
-        value: impl Into<Vec<u8>>,
-        lease_id: Option<i64>,
-    ) -> Result<()> {
+    pub async fn put(&self, key: &str, value: impl Into<Vec<u8>>, lease_id: Option<i64>) -> Result<()> {
         let mut client = self
             .get_client()
             .await
@@ -178,10 +169,7 @@ impl EtcdLinkClient {
     pub async fn lease_keep_alive(
         &self,
         lease_id: i64,
-    ) -> Result<(
-        etcd_client::LeaseKeeper,
-        etcd_client::LeaseKeepAliveStream,
-    )> {
+    ) -> Result<(etcd_client::LeaseKeeper, etcd_client::LeaseKeepAliveStream)> {
         let mut client = self
             .get_client()
             .await
@@ -264,10 +252,7 @@ impl EtcdLinkClient {
     }
 
     /// Parse watch events from a WatchResponse, stripping namespace prefix.
-    pub fn parse_watch_events(
-        &self,
-        resp: &etcd_client::WatchResponse,
-    ) -> Vec<WatchEvent> {
+    pub fn parse_watch_events(&self, resp: &etcd_client::WatchResponse) -> Vec<WatchEvent> {
         let ns_len = self.namespace().map(|n| n.len()).unwrap_or(0);
         resp.events()
             .iter()
@@ -375,12 +360,7 @@ impl EtcdLinkClient {
 
     /// Try to acquire lock with a timeout.
     /// Returns None if the lock could not be acquired within the timeout.
-    pub async fn try_lock(
-        &self,
-        lock_name: &str,
-        ttl_secs: i64,
-        timeout: Duration,
-    ) -> Result<Option<EtcdLockGuard>> {
+    pub async fn try_lock(&self, lock_name: &str, ttl_secs: i64, timeout: Duration) -> Result<Option<EtcdLockGuard>> {
         match tokio::time::timeout(timeout, self.lock(lock_name, ttl_secs)).await {
             Ok(Ok(guard)) => Ok(Some(guard)),
             Ok(Err(e)) => Err(e),

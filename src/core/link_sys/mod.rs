@@ -22,7 +22,5 @@ pub mod webhook;
 
 pub use conf_handler_impl::create_link_sys_handler;
 pub use data_sender_trait::DataSender;
-pub use link_sys_store::{
-    get_es_client, get_etcd_client, get_global_link_sys_store, get_redis_client, LinkSysStore,
-};
+pub use link_sys_store::{get_es_client, get_etcd_client, get_global_link_sys_store, get_redis_client, LinkSysStore};
 pub use local_file::{LocalFileWriter, LogType};

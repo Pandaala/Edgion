@@ -69,10 +69,7 @@ impl DynamicExternalUpstreamTestSuite {
                             if status == 200 {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200 (fallback), got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 200 (fallback), got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -104,10 +101,7 @@ impl DynamicExternalUpstreamTestSuite {
                             if status == 200 {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200 (fallback), got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 200 (fallback), got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -188,17 +182,13 @@ impl DynamicExternalUpstreamTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Access log does not contain 'OK localhost:30002': {}",
-                                                log_str
-                                            ),
+                                            format!("Access log does not contain 'OK localhost:30002': {}", log_str),
                                         )
                                     }
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Failed to get access log: {}", e),
-                                ),
+                                Err(e) => {
+                                    TestResult::failed(start.elapsed(), format!("Failed to get access log: {}", e))
+                                }
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -245,17 +235,13 @@ impl DynamicExternalUpstreamTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Access log does not contain 'NoMap': {}",
-                                                log_str
-                                            ),
+                                            format!("Access log does not contain 'NoMap': {}", log_str),
                                         )
                                     }
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Failed to get access log: {}", e),
-                                ),
+                                Err(e) => {
+                                    TestResult::failed(start.elapsed(), format!("Failed to get access log: {}", e))
+                                }
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -291,10 +277,7 @@ impl DynamicExternalUpstreamTestSuite {
                             if status == 400 {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 400 (reject), got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 400 (reject), got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -412,17 +395,13 @@ impl DynamicExternalUpstreamTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Access log does not contain 'OK localhost:30001': {}",
-                                                log_str
-                                            ),
+                                            format!("Access log does not contain 'OK localhost:30001': {}", log_str),
                                         )
                                     }
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Failed to get access log: {}", e),
-                                ),
+                                Err(e) => {
+                                    TestResult::failed(start.elapsed(), format!("Failed to get access log: {}", e))
+                                }
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -498,17 +477,13 @@ impl DynamicExternalUpstreamTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Access log does not contain 'OK localhost:30002': {}",
-                                                log_str
-                                            ),
+                                            format!("Access log does not contain 'OK localhost:30002': {}", log_str),
                                         )
                                     }
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Failed to get access log: {}", e),
-                                ),
+                                Err(e) => {
+                                    TestResult::failed(start.elapsed(), format!("Failed to get access log: {}", e))
+                                }
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -553,17 +528,13 @@ impl DynamicExternalUpstreamTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Access log does not contain 'OK localhost:30003': {}",
-                                                log_str
-                                            ),
+                                            format!("Access log does not contain 'OK localhost:30003': {}", log_str),
                                         )
                                     }
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Failed to get access log: {}", e),
-                                ),
+                                Err(e) => {
+                                    TestResult::failed(start.elapsed(), format!("Failed to get access log: {}", e))
+                                }
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),

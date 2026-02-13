@@ -17,12 +17,7 @@ impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
         (**self).full_set(data)
     }
 
-    fn partial_update(
-        &self,
-        add: HashMap<String, LinkSys>,
-        update: HashMap<String, LinkSys>,
-        remove: HashSet<String>,
-    ) {
+    fn partial_update(&self, add: HashMap<String, LinkSys>, update: HashMap<String, LinkSys>, remove: HashSet<String>) {
         (**self).partial_update(add, update, remove)
     }
 }
@@ -45,12 +40,7 @@ impl ConfHandler<LinkSys> for LinkSysStore {
         self.replace_all(prepared_data);
     }
 
-    fn partial_update(
-        &self,
-        add: HashMap<String, LinkSys>,
-        update: HashMap<String, LinkSys>,
-        remove: HashSet<String>,
-    ) {
+    fn partial_update(&self, add: HashMap<String, LinkSys>, update: HashMap<String, LinkSys>, remove: HashSet<String>) {
         tracing::info!(
             component = "link_sys_store",
             add = add.len(),

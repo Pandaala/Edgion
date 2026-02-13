@@ -323,18 +323,9 @@ fn create_testing_router() -> Router {
         )
         // LinkSys Redis testing endpoints
         .route("/api/v1/testing/link-sys/redis/health", get(redis_health_all))
-        .route(
-            "/api/v1/testing/link-sys/redis/{name}/health",
-            get(redis_health_one),
-        )
-        .route(
-            "/api/v1/testing/link-sys/redis/{name}/ping",
-            get(redis_ping),
-        )
-        .route(
-            "/api/v1/testing/link-sys/redis/{name}/get/{key}",
-            get(redis_get),
-        )
+        .route("/api/v1/testing/link-sys/redis/{name}/health", get(redis_health_one))
+        .route("/api/v1/testing/link-sys/redis/{name}/ping", get(redis_ping))
+        .route("/api/v1/testing/link-sys/redis/{name}/get/{key}", get(redis_get))
         .route(
             "/api/v1/testing/link-sys/redis/{name}/set",
             axum::routing::post(redis_set),
@@ -359,14 +350,8 @@ fn create_testing_router() -> Router {
             "/api/v1/testing/link-sys/redis/{name}/rpush",
             axum::routing::post(redis_rpush),
         )
-        .route(
-            "/api/v1/testing/link-sys/redis/{name}/lpop/{key}",
-            get(redis_lpop),
-        )
-        .route(
-            "/api/v1/testing/link-sys/redis/{name}/llen/{key}",
-            get(redis_llen),
-        )
+        .route("/api/v1/testing/link-sys/redis/{name}/lpop/{key}", get(redis_lpop))
+        .route("/api/v1/testing/link-sys/redis/{name}/llen/{key}", get(redis_llen))
         .route(
             "/api/v1/testing/link-sys/redis/{name}/incr/{key}",
             axum::routing::post(redis_incr),
@@ -375,24 +360,12 @@ fn create_testing_router() -> Router {
             "/api/v1/testing/link-sys/redis/{name}/lock",
             axum::routing::post(redis_lock),
         )
-        .route(
-            "/api/v1/testing/link-sys/redis/clients",
-            get(redis_list_clients),
-        )
+        .route("/api/v1/testing/link-sys/redis/clients", get(redis_list_clients))
         // LinkSys Etcd testing endpoints
         .route("/api/v1/testing/link-sys/etcd/health", get(etcd_health_all))
-        .route(
-            "/api/v1/testing/link-sys/etcd/{name}/health",
-            get(etcd_health_one),
-        )
-        .route(
-            "/api/v1/testing/link-sys/etcd/{name}/ping",
-            get(etcd_ping),
-        )
-        .route(
-            "/api/v1/testing/link-sys/etcd/{name}/get/{key}",
-            get(etcd_get),
-        )
+        .route("/api/v1/testing/link-sys/etcd/{name}/health", get(etcd_health_one))
+        .route("/api/v1/testing/link-sys/etcd/{name}/ping", get(etcd_ping))
+        .route("/api/v1/testing/link-sys/etcd/{name}/get/{key}", get(etcd_get))
         .route(
             "/api/v1/testing/link-sys/etcd/{name}/put",
             axum::routing::post(etcd_put),
@@ -425,35 +398,14 @@ fn create_testing_router() -> Router {
             "/api/v1/testing/link-sys/etcd/{name}/lock",
             axum::routing::post(etcd_lock),
         )
-        .route(
-            "/api/v1/testing/link-sys/etcd/clients",
-            get(etcd_list_clients),
-        )
-        .route(
-            "/api/v1/testing/link-sys/etcd/{name}/info",
-            get(etcd_info),
-        )
+        .route("/api/v1/testing/link-sys/etcd/clients", get(etcd_list_clients))
+        .route("/api/v1/testing/link-sys/etcd/{name}/info", get(etcd_info))
         // LinkSys Elasticsearch testing endpoints
-        .route(
-            "/api/v1/testing/link-sys/es/health",
-            get(es_health_all),
-        )
-        .route(
-            "/api/v1/testing/link-sys/es/{name}/health",
-            get(es_health_one),
-        )
-        .route(
-            "/api/v1/testing/link-sys/es/{name}/ping",
-            get(es_ping),
-        )
-        .route(
-            "/api/v1/testing/link-sys/es/{name}/info",
-            get(es_info),
-        )
-        .route(
-            "/api/v1/testing/link-sys/es/clients",
-            get(es_list_clients),
-        )
+        .route("/api/v1/testing/link-sys/es/health", get(es_health_all))
+        .route("/api/v1/testing/link-sys/es/{name}/health", get(es_health_one))
+        .route("/api/v1/testing/link-sys/es/{name}/ping", get(es_ping))
+        .route("/api/v1/testing/link-sys/es/{name}/info", get(es_info))
+        .route("/api/v1/testing/link-sys/es/clients", get(es_list_clients))
         .route(
             "/api/v1/testing/link-sys/es/{name}/index-doc/{index}",
             axum::routing::post(es_index_doc),
@@ -486,10 +438,7 @@ fn create_testing_router() -> Router {
             "/api/v1/testing/link-sys/es/{name}/refresh/{index}",
             axum::routing::post(es_refresh_index),
         )
-        .route(
-            "/api/v1/testing/link-sys/es/{name}/count/{index}",
-            get(es_count),
-        )
+        .route("/api/v1/testing/link-sys/es/{name}/count/{index}", get(es_count))
         .route(
             "/api/v1/testing/link-sys/es/{name}/bulk",
             axum::routing::post(es_bulk_send),
@@ -500,7 +449,9 @@ fn create_testing_router() -> Router {
 
 /// Helper to get a Redis client by name, returning error response if not found.
 /// Name format: "namespace/name" encoded as "namespace_name" in URL path.
-fn get_redis_client_by_name(name: &str) -> Result<std::sync::Arc<crate::core::link_sys::redis::RedisLinkClient>, Json<ApiResponse<serde_json::Value>>> {
+fn get_redis_client_by_name(
+    name: &str,
+) -> Result<std::sync::Arc<crate::core::link_sys::redis::RedisLinkClient>, Json<ApiResponse<serde_json::Value>>> {
     // URL path uses underscore as separator: "default_redis-main" → "default/redis-main"
     let key = name.replacen('_', "/", 1);
     crate::core::link_sys::get_redis_client(&key).ok_or_else(|| {
@@ -789,7 +740,9 @@ async fn redis_lock(
 // ==================== LinkSys Etcd Testing Endpoints ====================
 
 /// Helper to get an Etcd client by name, returning error response if not found.
-fn get_etcd_client_by_name(name: &str) -> Result<std::sync::Arc<crate::core::link_sys::etcd::EtcdLinkClient>, Json<ApiResponse<serde_json::Value>>> {
+fn get_etcd_client_by_name(
+    name: &str,
+) -> Result<std::sync::Arc<crate::core::link_sys::etcd::EtcdLinkClient>, Json<ApiResponse<serde_json::Value>>> {
     let key = name.replacen('_', "/", 1);
     crate::core::link_sys::get_etcd_client(&key).ok_or_else(|| {
         Json(ApiResponse::error(format!(
@@ -864,15 +817,15 @@ struct EtcdPutRequest {
 }
 
 /// PUT a key in Etcd
-async fn etcd_put(
-    Path(name): Path<String>,
-    Json(body): Json<EtcdPutRequest>,
-) -> Json<ApiResponse<serde_json::Value>> {
+async fn etcd_put(Path(name): Path<String>, Json(body): Json<EtcdPutRequest>) -> Json<ApiResponse<serde_json::Value>> {
     let client = match get_etcd_client_by_name(&name) {
         Ok(c) => c,
         Err(e) => return e,
     };
-    match client.put(&body.key, body.value.as_bytes().to_vec(), body.lease_id).await {
+    match client
+        .put(&body.key, body.value.as_bytes().to_vec(), body.lease_id)
+        .await
+    {
         Ok(()) => Json(ApiResponse::success(serde_json::json!({
             "key": body.key,
             "value": body.value,
@@ -906,11 +859,13 @@ async fn etcd_get_prefix(Path((name, prefix)): Path<(String, String)>) -> Json<A
         Ok(entries) => {
             let items: Vec<serde_json::Value> = entries
                 .iter()
-                .map(|(k, v, rev)| serde_json::json!({
-                    "key": k,
-                    "value": String::from_utf8_lossy(v),
-                    "mod_revision": rev,
-                }))
+                .map(|(k, v, rev)| {
+                    serde_json::json!({
+                        "key": k,
+                        "value": String::from_utf8_lossy(v),
+                        "mod_revision": rev,
+                    })
+                })
                 .collect();
             Json(ApiResponse::success(serde_json::json!({
                 "prefix": prefix,
@@ -1058,10 +1013,7 @@ async fn etcd_info(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Val
 /// Helper to get an ES client by name, returning error response if not found.
 fn get_es_client_by_name(
     name: &str,
-) -> Result<
-    std::sync::Arc<crate::core::link_sys::elasticsearch::EsLinkClient>,
-    Json<ApiResponse<serde_json::Value>>,
-> {
+) -> Result<std::sync::Arc<crate::core::link_sys::elasticsearch::EsLinkClient>, Json<ApiResponse<serde_json::Value>>> {
     let key = name.replacen('_', "/", 1);
     crate::core::link_sys::get_es_client(&key).ok_or_else(|| {
         Json(ApiResponse::error(format!(
@@ -1216,9 +1168,7 @@ async fn es_search(
 }
 
 /// Create an index (no settings body needed for basic creation)
-async fn es_create_index(
-    Path((client_name, index)): Path<(String, String)>,
-) -> Json<ApiResponse<serde_json::Value>> {
+async fn es_create_index(Path((client_name, index)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
     let client = match get_es_client_by_name(&client_name) {
         Ok(c) => c,
         Err(e) => return e,
@@ -1233,9 +1183,7 @@ async fn es_create_index(
 }
 
 /// Delete an index
-async fn es_delete_index(
-    Path((client_name, index)): Path<(String, String)>,
-) -> Json<ApiResponse<serde_json::Value>> {
+async fn es_delete_index(Path((client_name, index)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
     let client = match get_es_client_by_name(&client_name) {
         Ok(c) => c,
         Err(e) => return e,
@@ -1250,9 +1198,7 @@ async fn es_delete_index(
 }
 
 /// Check if an index exists
-async fn es_index_exists(
-    Path((client_name, index)): Path<(String, String)>,
-) -> Json<ApiResponse<serde_json::Value>> {
+async fn es_index_exists(Path((client_name, index)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
     let client = match get_es_client_by_name(&client_name) {
         Ok(c) => c,
         Err(e) => return e,
@@ -1267,9 +1213,7 @@ async fn es_index_exists(
 }
 
 /// Refresh an index (make recent writes visible to search)
-async fn es_refresh_index(
-    Path((client_name, index)): Path<(String, String)>,
-) -> Json<ApiResponse<serde_json::Value>> {
+async fn es_refresh_index(Path((client_name, index)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
     let client = match get_es_client_by_name(&client_name) {
         Ok(c) => c,
         Err(e) => return e,
@@ -1284,9 +1228,7 @@ async fn es_refresh_index(
 }
 
 /// Count documents in an index
-async fn es_count(
-    Path((client_name, index)): Path<(String, String)>,
-) -> Json<ApiResponse<serde_json::Value>> {
+async fn es_count(Path((client_name, index)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
     let client = match get_es_client_by_name(&client_name) {
         Ok(c) => c,
         Err(e) => return e,

@@ -29,14 +29,8 @@ pub struct EsDataSender {
 
 impl EsDataSender {
     /// Create a new EsDataSender.
-    pub fn new(
-        client: Arc<EsLinkClient>,
-        failed_cache: Option<Box<dyn DataSender<String>>>,
-    ) -> Self {
-        Self {
-            client,
-            failed_cache,
-        }
+    pub fn new(client: Arc<EsLinkClient>, failed_cache: Option<Box<dyn DataSender<String>>>) -> Self {
+        Self { client, failed_cache }
     }
 }
 
@@ -53,12 +47,7 @@ impl DataSender<String> for EsDataSender {
 
     fn healthy(&self) -> bool {
         // EsDataSender is healthy if either ES or FailedCache is available
-        self.client.healthy()
-            || self
-                .failed_cache
-                .as_ref()
-                .map(|c| c.healthy())
-                .unwrap_or(false)
+        self.client.healthy() || self.failed_cache.as_ref().map(|c| c.healthy()).unwrap_or(false)
     }
 
     async fn send(&self, data: String) -> Result<()> {

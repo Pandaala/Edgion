@@ -14,12 +14,7 @@ use super::runtime::{now_epoch_secs, WebhookRuntime};
 
 /// Spawn a background active health check task for a webhook service.
 pub async fn spawn_active_health_check(webhook_ref: String, runtime: Arc<WebhookRuntime>) {
-    let active = match runtime
-        .config
-        .health_check
-        .as_ref()
-        .and_then(|hc| hc.active.as_ref())
-    {
+    let active = match runtime.config.health_check.as_ref().and_then(|hc| hc.active.as_ref()) {
         Some(a) => a.clone(),
         None => return,
     };
@@ -80,12 +75,7 @@ pub async fn spawn_active_health_check(webhook_ref: String, runtime: Arc<Webhook
 
 /// Record a webhook call result for passive health monitoring.
 pub fn record_passive_result(runtime: &WebhookRuntime, success: bool) {
-    let passive = match runtime
-        .config
-        .health_check
-        .as_ref()
-        .and_then(|hc| hc.passive.as_ref())
-    {
+    let passive = match runtime.config.health_check.as_ref().and_then(|hc| hc.passive.as_ref()) {
         Some(p) => p,
         None => return,
     };
@@ -112,12 +102,8 @@ pub fn record_passive_result(runtime: &WebhookRuntime, success: bool) {
                     .is_some();
                 if !has_active {
                     if let Some(ref backoff) = passive.backoff {
-                        runtime
-                            .backoff_sec
-                            .store(backoff.initial_sec, Ordering::Relaxed);
-                        runtime
-                            .last_halfopen
-                            .store(now_epoch_secs(), Ordering::Relaxed);
+                        runtime.backoff_sec.store(backoff.initial_sec, Ordering::Relaxed);
+                        runtime.last_halfopen.store(now_epoch_secs(), Ordering::Relaxed);
                     }
                 }
             }
@@ -139,12 +125,7 @@ pub fn should_halfopen_probe(runtime: &WebhookRuntime) -> bool {
     if has_active {
         return false; // Active handles recovery
     }
-    let passive = match runtime
-        .config
-        .health_check
-        .as_ref()
-        .and_then(|hc| hc.passive.as_ref())
-    {
+    let passive = match runtime.config.health_check.as_ref().and_then(|hc| hc.passive.as_ref()) {
         Some(p) => p,
         None => return false,
     };
@@ -177,9 +158,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 
-    use crate::types::resources::link_sys::webhook::{
-        PassiveHealthCheck, WebhookHealthCheck, WebhookServiceConfig,
-    };
+    use crate::types::resources::link_sys::webhook::{PassiveHealthCheck, WebhookHealthCheck, WebhookServiceConfig};
 
     #[test]
     fn test_passive_health_check_marks_unhealthy() {

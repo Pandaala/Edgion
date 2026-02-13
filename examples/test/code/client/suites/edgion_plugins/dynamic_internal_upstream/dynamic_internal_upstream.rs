@@ -71,10 +71,7 @@ impl DynamicInternalUpstreamTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
                             let body = resp.text().await.unwrap_or_default();
                             match extract_server_port(&body) {
@@ -116,10 +113,7 @@ impl DynamicInternalUpstreamTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
                             let body = resp.text().await.unwrap_or_default();
                             match extract_server_port(&body) {
@@ -161,10 +155,7 @@ impl DynamicInternalUpstreamTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
                             let body = resp.text().await.unwrap_or_default();
                             match extract_server_port(&body) {
@@ -173,10 +164,7 @@ impl DynamicInternalUpstreamTestSuite {
                                     start.elapsed(),
                                     "Fallback selected debug backend (weight=0), should not happen".to_string(),
                                 ),
-                                Some(port) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Unexpected port: {}", port),
-                                ),
+                                Some(port) => TestResult::failed(start.elapsed(), format!("Unexpected port: {}", port)),
                                 None => TestResult::failed(
                                     start.elapsed(),
                                     format!("Cannot extract server port from body: {}", body),
@@ -311,10 +299,7 @@ impl DynamicInternalUpstreamTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
                             let body = resp.text().await.unwrap_or_default();
                             match extract_server_port(&body) {
@@ -356,10 +341,7 @@ impl DynamicInternalUpstreamTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
                             let body = resp.text().await.unwrap_or_default();
                             match extract_server_port(&body) {
@@ -403,10 +385,7 @@ impl DynamicInternalUpstreamTestSuite {
                             if status == 400 {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 400 (reject), got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 400 (reject), got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -471,10 +450,7 @@ impl DynamicInternalUpstreamTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
                             // The echo handler returns all headers — check if the debug header was forwarded
                             let body = resp.text().await.unwrap_or_default();
@@ -542,10 +518,7 @@ impl DynamicInternalUpstreamTestSuite {
                                 }
                             }
                             Err(e) => {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Request {} failed: {}", i, e),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Request {} failed: {}", i, e));
                             }
                         }
                     }

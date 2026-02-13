@@ -71,10 +71,7 @@ fn build_server_config(crd: &RedisClientConfig) -> Result<ServerConfig> {
     match crd.topology.as_ref().map(|t| &t.mode) {
         // Cluster mode
         Some(RedisTopologyMode::Cluster) => {
-            let hosts: Vec<(String, u16)> = endpoints
-                .iter()
-                .filter_map(|ep| parse_redis_url(ep).ok())
-                .collect();
+            let hosts: Vec<(String, u16)> = endpoints.iter().filter_map(|ep| parse_redis_url(ep).ok()).collect();
             if hosts.is_empty() {
                 anyhow::bail!("No valid cluster endpoints could be parsed");
             }
@@ -119,10 +116,7 @@ fn build_server_config(crd: &RedisClientConfig) -> Result<ServerConfig> {
 /// - Connection timeout + TCP settings
 /// - Command timeout (performance config)
 /// - TLS (if enabled)
-pub fn build_fred_pool(
-    crd: &RedisClientConfig,
-    config: Config,
-) -> Result<(Builder, usize)> {
+pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Builder, usize)> {
     let mut builder = Builder::from_config(config);
 
     // Reconnection policy: exponential backoff, retry forever (max_attempts = 0)
@@ -290,10 +284,7 @@ mod tests {
     #[test]
     fn test_build_server_config_cluster() {
         let crd = RedisClientConfig {
-            endpoints: vec![
-                "redis://10.0.0.1:7000".to_string(),
-                "redis://10.0.0.2:7001".to_string(),
-            ],
+            endpoints: vec!["redis://10.0.0.1:7000".to_string(), "redis://10.0.0.2:7001".to_string()],
             topology: Some(RedisTopology {
                 mode: RedisTopologyMode::Cluster,
                 sentinel: None,

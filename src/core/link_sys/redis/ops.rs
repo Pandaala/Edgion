@@ -39,12 +39,7 @@ impl RedisLinkClient {
     }
 
     /// SET key value [EX seconds]
-    pub async fn set(
-        &self,
-        key: &str,
-        value: &str,
-        ttl: Option<Duration>,
-    ) -> Result<()> {
+    pub async fn set(&self, key: &str, value: &str, ttl: Option<Duration>) -> Result<()> {
         use fred::types::Expiration;
         let expiration = ttl.map(|d| Expiration::EX(d.as_secs() as i64));
         self.pool()
@@ -272,10 +267,7 @@ end
 
 /// Release lock atomically via Lua EVAL script.
 async fn release_lock(pool: &Pool, key: &str, value: &str) -> Result<bool> {
-    let result: i64 = pool
-        .eval(UNLOCK_SCRIPT, vec![key], vec![value])
-        .await
-        .unwrap_or(0);
+    let result: i64 = pool.eval(UNLOCK_SCRIPT, vec![key], vec![value]).await.unwrap_or(0);
     Ok(result == 1)
 }
 
@@ -344,11 +336,7 @@ impl RedisLinkClient {
     }
 
     /// Try to acquire lock without waiting. Returns None if lock is held.
-    pub async fn try_lock(
-        &self,
-        key: &str,
-        ttl: Duration,
-    ) -> Result<Option<RedisLockGuard>> {
+    pub async fn try_lock(&self, key: &str, ttl: Duration) -> Result<Option<RedisLockGuard>> {
         use fred::types::{Expiration, SetOptions};
 
         let value = generate_lock_value();
@@ -382,9 +370,7 @@ impl RedisLinkClient {
 /// Format: "pid:timestamp_nanos" — unique across processes and time.
 fn generate_lock_value() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     format!("{}:{}", std::process::id(), ts.as_nanos())
 }
 

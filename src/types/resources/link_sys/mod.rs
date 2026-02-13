@@ -168,10 +168,7 @@ impl LinkSys {
             SystemConfig::Elasticsearch(es_config) => {
                 // Validate endpoints
                 if es_config.endpoints.is_empty() {
-                    tracing::warn!(
-                        "LinkSys {}: Elasticsearch configuration has no endpoints",
-                        key_name
-                    );
+                    tracing::warn!("LinkSys {}: Elasticsearch configuration has no endpoints", key_name);
                 }
             }
             SystemConfig::Webhook(webhook_config) => {

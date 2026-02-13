@@ -166,26 +166,12 @@ async fn flush_batch(
                                 let failed_count = bulk_resp
                                     .items
                                     .iter()
-                                    .filter(|item| {
-                                        item.index
-                                            .as_ref()
-                                            .map(|i| i.status >= 400)
-                                            .unwrap_or(false)
-                                    })
+                                    .filter(|item| item.index.as_ref().map(|i| i.status >= 400).unwrap_or(false))
                                     .count();
-                                tracing::warn!(
-                                    "ES [{}] bulk: {}/{} items failed",
-                                    name,
-                                    failed_count,
-                                    docs.len()
-                                );
+                                tracing::warn!("ES [{}] bulk: {}/{} items failed", name, failed_count, docs.len());
                                 // TODO: Collect failed items and send to FailedCache
                             } else {
-                                tracing::debug!(
-                                    "ES [{}] bulk: {} items indexed successfully",
-                                    name,
-                                    docs.len()
-                                );
+                                tracing::debug!("ES [{}] bulk: {} items indexed successfully", name, docs.len());
                             }
                             healthy.store(true, Ordering::Relaxed);
                             return;
@@ -236,9 +222,7 @@ async fn flush_batch(
             backoff
         );
         tokio::time::sleep(backoff).await;
-        backoff = backoff
-            .mul_f64(2.0)
-            .min(std::time::Duration::from_secs(30));
+        backoff = backoff.mul_f64(2.0).min(std::time::Duration::from_secs(30));
     }
 }
 
@@ -303,12 +287,7 @@ mod tests {
         let failed = resp
             .items
             .iter()
-            .filter(|item| {
-                item.index
-                    .as_ref()
-                    .map(|i| i.status >= 400)
-                    .unwrap_or(false)
-            })
+            .filter(|item| item.index.as_ref().map(|i| i.status >= 400).unwrap_or(false))
             .count();
         assert_eq!(failed, 1);
     }

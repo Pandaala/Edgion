@@ -45,17 +45,11 @@ impl WebhookKeyGetTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
                             let al_client = ctx.access_log_client();
-                            let entry = match al_client
-                                .get_access_log_with_retry(&trace_id, 10, 200)
-                                .await
-                            {
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(e) => e,
                                 Err(e) => {
                                     return TestResult::failed(
@@ -72,8 +66,7 @@ impl WebhookKeyGetTestSuite {
                             if access_log.contains(r#""webhook_user_id":"uid-acme-corp""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "ctx.webhook_user_id correctly resolved from webhook JSON body"
-                                        .to_string(),
+                                    "ctx.webhook_user_id correctly resolved from webhook JSON body".to_string(),
                                 )
                             } else {
                                 TestResult::failed(
@@ -118,17 +111,11 @@ impl WebhookKeyGetTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
                             let al_client = ctx.access_log_client();
-                            let entry = match al_client
-                                .get_access_log_with_retry(&trace_id, 10, 200)
-                                .await
-                            {
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(e) => e,
                                 Err(e) => {
                                     return TestResult::failed(
@@ -191,17 +178,11 @@ impl WebhookKeyGetTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
                             let al_client = ctx.access_log_client();
-                            let entry = match al_client
-                                .get_access_log_with_retry(&trace_id, 10, 200)
-                                .await
-                            {
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(e) => e,
                                 Err(e) => {
                                     return TestResult::failed(
@@ -218,8 +199,7 @@ impl WebhookKeyGetTestSuite {
                             if access_log.contains(r#""webhook_body_text":"body-key-gamma-llc""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "ctx.webhook_body_text correctly resolved from webhook body text"
-                                        .to_string(),
+                                    "ctx.webhook_body_text correctly resolved from webhook body text".to_string(),
                                 )
                             } else {
                                 TestResult::failed(
@@ -264,17 +244,11 @@ impl WebhookKeyGetTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
                             let al_client = ctx.access_log_client();
-                            let entry = match al_client
-                                .get_access_log_with_retry(&trace_id, 10, 200)
-                                .await
-                            {
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(e) => e,
                                 Err(e) => {
                                     return TestResult::failed(
@@ -290,16 +264,12 @@ impl WebhookKeyGetTestSuite {
                             if access_log.contains(r#""local_tenant":"delta-org""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "ctx.local_tenant correctly set from header alongside webhook vars"
-                                        .to_string(),
+                                    "ctx.local_tenant correctly set from header alongside webhook vars".to_string(),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!(
-                                        "Expected local_tenant=delta-org in ctx. Access-Log: {}",
-                                        access_log
-                                    ),
+                                    format!("Expected local_tenant=delta-org in ctx. Access-Log: {}", access_log),
                                 )
                             }
                         }
@@ -337,17 +307,11 @@ impl WebhookKeyGetTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
                             let al_client = ctx.access_log_client();
-                            let entry = match al_client
-                                .get_access_log_with_retry(&trace_id, 10, 200)
-                                .await
-                            {
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(e) => e,
                                 Err(e) => {
                                     return TestResult::failed(
@@ -364,8 +328,7 @@ impl WebhookKeyGetTestSuite {
                             if access_log.contains(r#""webhook_user_id":"uid-unknown""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "ctx.webhook_user_id correctly resolved with default tenant"
-                                        .to_string(),
+                                    "ctx.webhook_user_id correctly resolved with default tenant".to_string(),
                                 )
                             } else if access_log.contains(r#""webhook_user_id":"fallback-user""#) {
                                 // If webhook call failed, default value should be used
@@ -416,17 +379,11 @@ impl WebhookKeyGetTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
                             let al_client = ctx.access_log_client();
-                            let entry = match al_client
-                                .get_access_log_with_retry(&trace_id, 10, 200)
-                                .await
-                            {
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(e) => e,
                                 Err(e) => {
                                     return TestResult::failed(
@@ -446,10 +403,7 @@ impl WebhookKeyGetTestSuite {
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!(
-                                        "Expected local_tenant=no-tenant in ctx. Access-Log: {}",
-                                        access_log
-                                    ),
+                                    format!("Expected local_tenant=no-tenant in ctx. Access-Log: {}", access_log),
                                 )
                             }
                         }

@@ -520,10 +520,7 @@ mod tests {
         let mut config = WebhookServiceConfig::default();
         config.uri = "http://example.com".to_string();
         config.timeout_ms = 0;
-        assert_eq!(
-            config.get_validation_error(),
-            Some("timeoutMs must be greater than 0")
-        );
+        assert_eq!(config.get_validation_error(), Some("timeoutMs must be greater than 0"));
     }
 
     #[test]

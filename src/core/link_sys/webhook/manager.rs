@@ -19,8 +19,7 @@ use super::runtime::{SlidingWindowCounter, WebhookRuntime};
 // Global Manager
 // ============================================================
 
-static WEBHOOK_MANAGER: std::sync::LazyLock<WebhookManager> =
-    std::sync::LazyLock::new(WebhookManager::new);
+static WEBHOOK_MANAGER: std::sync::LazyLock<WebhookManager> = std::sync::LazyLock::new(WebhookManager::new);
 
 /// Get the global webhook manager
 pub fn get_webhook_manager() -> &'static WebhookManager {
@@ -47,9 +46,10 @@ impl WebhookManager {
 
     /// Register or update a webhook from a LinkSys resource change
     pub async fn upsert(&self, webhook_ref: &str, config: WebhookServiceConfig) {
-        let rate_counter = config.rate_limit.as_ref().map(|rl| {
-            SlidingWindowCounter::new(rl.rate, Duration::from_secs(rl.window_sec.max(1)))
-        });
+        let rate_counter = config
+            .rate_limit
+            .as_ref()
+            .map(|rl| SlidingWindowCounter::new(rl.rate, Duration::from_secs(rl.window_sec.max(1))));
 
         let runtime = Arc::new(WebhookRuntime {
             config,
@@ -75,10 +75,7 @@ impl WebhookManager {
             });
         }
 
-        self.services
-            .write()
-            .await
-            .insert(webhook_ref.to_string(), runtime);
+        self.services.write().await.insert(webhook_ref.to_string(), runtime);
         tracing::info!(webhook = %webhook_ref, "Webhook registered/updated in manager");
     }
 

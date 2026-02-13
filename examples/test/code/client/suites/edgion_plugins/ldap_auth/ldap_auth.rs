@@ -338,10 +338,7 @@ impl LdapAuthTestSuite {
                                     "Basic scheme parsed and authenticated successfully".to_string(),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),

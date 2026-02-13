@@ -72,11 +72,7 @@ pub async fn resolve_webhook_key(
 
     // 5. Send request with retry
     let client = get_http_client();
-    let method: reqwest::Method = runtime
-        .config
-        .request_method
-        .parse()
-        .unwrap_or(reqwest::Method::GET);
+    let method: reqwest::Method = runtime.config.request_method.parse().unwrap_or(reqwest::Method::GET);
     let timeout = Duration::from_millis(runtime.config.timeout_ms);
     let max_attempts = 1 + runtime.config.retry.as_ref().map_or(0, |r| r.max_retries);
 
@@ -112,8 +108,7 @@ pub async fn resolve_webhook_key(
             }
             Err(e) => {
                 let should_retry = runtime.config.retry.as_ref().map_or(false, |retry| {
-                    (retry.retry_on_timeout && e.is_timeout())
-                        || (retry.retry_on_connect_error && e.is_connect())
+                    (retry.retry_on_timeout && e.is_timeout()) || (retry.retry_on_connect_error && e.is_connect())
                 });
                 last_error = Some(e.to_string());
                 if !should_retry || attempt + 1 >= max_attempts {
@@ -161,10 +156,7 @@ pub async fn resolve_webhook_key(
     }
 
     // 8. Extract value from response (with body size limit)
-    let max_bytes = runtime
-        .config
-        .max_response_bytes
-        .min(WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES);
+    let max_bytes = runtime.config.max_response_bytes.min(WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES);
     extract_value_from_response(resp, extract, max_bytes).await
 }
 
@@ -256,9 +248,7 @@ async fn extract_value_from_response(
 
         WebhookExtract::BodyText => {
             let body_bytes = read_body_limited(resp, max_bytes).await?;
-            String::from_utf8(body_bytes)
-                .ok()
-                .map(|s| s.trim().to_string())
+            String::from_utf8(body_bytes).ok().map(|s| s.trim().to_string())
         }
     }
 }

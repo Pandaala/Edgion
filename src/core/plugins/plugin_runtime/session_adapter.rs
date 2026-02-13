@@ -51,11 +51,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// checks, sends the HTTP request with retry, and extracts the value from the response.
     ///
     /// TODO: Full implementation in Phase 3 (WebhookRegistry + runtime)
-    async fn resolve_webhook(
-        &self,
-        webhook_ref: &str,
-        extract: &WebhookExtract,
-    ) -> Option<String> {
+    async fn resolve_webhook(&self, webhook_ref: &str, extract: &WebhookExtract) -> Option<String> {
         use crate::core::link_sys::webhook::resolve_webhook_key;
         resolve_webhook_key(self, webhook_ref, extract).await
     }
@@ -431,9 +427,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             }
 
             // ---- Async variant: calls external webhook service ----
-            KeyGet::Webhook { webhook_ref, extract } => {
-                self.resolve_webhook(webhook_ref, extract).await
-            }
+            KeyGet::Webhook { webhook_ref, extract } => self.resolve_webhook(webhook_ref, extract).await,
         }
     }
 
@@ -462,7 +456,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 }
             }
             KeyGet::Webhook { .. } => {
-                tracing::warn!("key_get_local called with Webhook variant; returning None (use key_get for async resolution)");
+                tracing::warn!(
+                    "key_get_local called with Webhook variant; returning None (use key_get for async resolution)"
+                );
                 None
             }
         }

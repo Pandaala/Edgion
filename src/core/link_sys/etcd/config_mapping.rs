@@ -66,10 +66,7 @@ pub fn build_connect_options(crd: &EtcdClientConfig) -> Result<Option<ConnectOpt
     // HTTP/2 keep-alive
     if let Some(ka) = &crd.keep_alive {
         if let (Some(time), Some(timeout)) = (ka.time, ka.timeout) {
-            options = options.with_keep_alive(
-                Duration::from_secs(time),
-                Duration::from_secs(timeout),
-            );
+            options = options.with_keep_alive(Duration::from_secs(time), Duration::from_secs(timeout));
             has_options = true;
 
             if ka.permit_without_stream == Some(true) {
@@ -120,8 +117,7 @@ fn build_tls_options(tls: &EtcdTls) -> Result<TlsOptions> {
 /// Get default connect options with a reasonable dial timeout.
 /// Used when no specific options are configured but we still want a timeout.
 pub fn default_connect_options() -> ConnectOptions {
-    ConnectOptions::new()
-        .with_connect_timeout(Duration::from_millis(DEFAULT_DIAL_TIMEOUT_MS))
+    ConnectOptions::new().with_connect_timeout(Duration::from_millis(DEFAULT_DIAL_TIMEOUT_MS))
 }
 
 // ============================================================================

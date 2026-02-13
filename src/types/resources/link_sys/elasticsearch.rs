@@ -326,17 +326,11 @@ compatibility:
 "#;
         let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.endpoints.len(), 2);
-        assert_eq!(
-            config.auth.as_ref().unwrap().username.as_deref(),
-            Some("elastic")
-        );
+        assert_eq!(config.auth.as_ref().unwrap().username.as_deref(), Some("elastic"));
         assert!(config.tls.as_ref().unwrap().enabled);
         assert_eq!(config.timeout.as_ref().unwrap().connect, Some(5000));
         assert_eq!(config.bulk.as_ref().unwrap().batch_size, Some(500));
-        assert_eq!(
-            config.index.as_ref().unwrap().prefix.as_deref(),
-            Some("edgion-logs")
-        );
+        assert_eq!(config.index.as_ref().unwrap().prefix.as_deref(), Some("edgion-logs"));
     }
 
     #[test]

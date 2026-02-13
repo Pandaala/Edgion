@@ -238,7 +238,11 @@ pub async fn select_http_backend(
                         ctx.add_error(match &e {
                             EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
                             EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-                            EdError::RefDenied { target_namespace, target_name, reason } => {
+                            EdError::RefDenied {
+                                target_namespace,
+                                target_name,
+                                reason,
+                            } => {
                                 tracing::warn!(
                                     target_namespace = %target_namespace,
                                     target_name = %target_name,
@@ -426,10 +430,7 @@ async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<std::ne
 
     let addr = addrs.next().ok_or_else(|| {
         tracing::error!(domain = %domain, port = %port, "DNS resolution returned no addresses");
-        PingoraError::explain(
-            ErrorType::ConnectError,
-            format!("No addresses found for {}", domain),
-        )
+        PingoraError::explain(ErrorType::ConnectError, format!("No addresses found for {}", domain))
     })?;
 
     // Security: reject localhost connections
