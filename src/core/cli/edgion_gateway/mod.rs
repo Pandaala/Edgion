@@ -150,6 +150,11 @@ impl EdgionGatewayCli {
         // 5. Initialize RateLimit global configuration
         config::init_rate_limit_global_config(&config.rate_limit);
 
+        // 5.1 Initialize AllEndpointStatus global configuration
+        crate::core::plugins::edgion_plugins::all_endpoint_status::plugin::init_all_endpoint_status_global_config(
+            &config.all_endpoint_status,
+        );
+
         tracing::info!(
             component = "startup",
             allocator = crate::allocator_name(),

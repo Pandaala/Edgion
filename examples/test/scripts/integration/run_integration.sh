@@ -60,6 +60,7 @@ log_section() {
 # Slow tests list (skipped by default, run with --full-test)
 SLOW_TESTS=(
     "HTTPRoute_Backend_Timeout"
+    "EdgionPlugins_AllEndpointStatus"
 )
 
 is_slow_test() {
@@ -384,6 +385,11 @@ run_all_tests() {
                     run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
                     run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
                     run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
+                    if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
+                        run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
+                    else
+                        log_info "Skipping slow test: EdgionPlugins_AllEndpointStatus (use --full-test to run)"
+                    fi
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "EdgionPlugins_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
@@ -469,6 +475,11 @@ run_all_tests() {
         run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
         run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
         run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
+        if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
+            run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
+        else
+            log_info "Skipping slow test: EdgionPlugins_AllEndpointStatus (use --full-test to run)"
+        fi
         run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
         run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
         run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
@@ -577,7 +588,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/AllEndpointStatus"
             else
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi

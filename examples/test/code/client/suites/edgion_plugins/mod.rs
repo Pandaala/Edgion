@@ -3,6 +3,7 @@
 // Tests for EdgionPlugins functionality (independent from Gateway tests)
 // Corresponds to conf/EdgionPlugins/ directory structure
 
+mod all_endpoint_status;
 mod bandwidth_limit;
 mod ctx_set;
 mod debug_access_log;
@@ -17,6 +18,7 @@ mod real_ip;
 mod request_restriction;
 mod response_rewrite;
 
+pub use all_endpoint_status::AllEndpointStatusTestSuite;
 pub use bandwidth_limit::BandwidthLimitTestSuite;
 pub use ctx_set::CtxSetTestSuite;
 pub use debug_access_log::PluginLogsTestSuite;

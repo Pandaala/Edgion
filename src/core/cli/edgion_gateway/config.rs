@@ -66,6 +66,11 @@ pub struct EdgionGatewayConfig {
     #[serde(default, alias = "rate_limiter")]
     pub rate_limit: RateLimitGlobalConfig,
 
+    /// AllEndpointStatus plugin global configuration
+    #[arg(skip)]
+    #[serde(default)]
+    pub all_endpoint_status: crate::core::plugins::edgion_plugins::all_endpoint_status::plugin::AllEndpointStatusGlobalConfig,
+
     /// Enable integration testing mode.
     /// When enabled, the gateway activates test subsystems:
     /// - Access Log Store: stores complete access logs in DashMap, queryable via Admin API

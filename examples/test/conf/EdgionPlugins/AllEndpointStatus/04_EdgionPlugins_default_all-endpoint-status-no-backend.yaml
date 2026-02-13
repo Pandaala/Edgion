@@ -1,0 +1,14 @@
+# AllEndpointStatus plugin - for testing with non-existent backend
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: all-endpoint-status-no-backend
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: AllEndpointStatus
+      config:
+        timeoutMs: 2000
+        wallTimeoutMs: 5000
+        maxEndpoints: 5

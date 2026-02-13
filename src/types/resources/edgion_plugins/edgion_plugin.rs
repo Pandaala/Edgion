@@ -4,9 +4,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
-    BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig,
-    DirectEndpointConfig, ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig, MockConfig,
-    ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
+    DebugAccessLogToHeaderConfig, DirectEndpointConfig, ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig,
+    KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig,
+    ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -69,6 +70,8 @@ pub enum EdgionPlugin {
     BandwidthLimit(BandwidthLimitConfig),
     /// DirectEndpoint filter (route to specific endpoint, bypassing LB)
     DirectEndpoint(DirectEndpointConfig),
+    /// AllEndpointStatus filter (query all backend endpoints and return aggregated status)
+    AllEndpointStatus(AllEndpointStatusConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -104,6 +107,7 @@ impl EdgionPlugin {
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
             EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",
             EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
+            EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
         }
     }
 }

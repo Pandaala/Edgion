@@ -24,6 +24,7 @@ use super::session_adapter::PingoraSessionAdapter;
 use super::traits::{
     PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
+use crate::core::plugins::edgion_plugins::all_endpoint_status::AllEndpointStatus;
 use crate::core::plugins::edgion_plugins::bandwidth_limit::BandwidthLimit;
 use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
 use crate::core::plugins::edgion_plugins::cors::Cors;
@@ -334,6 +335,7 @@ impl PluginRuntime {
             EdgionPlugin::DirectEndpoint(config) => Some(Box::new(DirectEndpoint::new(config))),
             EdgionPlugin::RealIp(config) => Some(RealIp::create(config)),
             EdgionPlugin::ForwardAuth(config) => Some(Box::new(ForwardAuth::new(config))),
+            EdgionPlugin::AllEndpointStatus(config) => Some(Box::new(AllEndpointStatus::new(config))),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
@@ -400,6 +402,7 @@ impl PluginRuntime {
             EdgionPlugin::KeyAuth(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ForwardAuth(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::BandwidthLimit(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
             _ => None,
         }
     }
@@ -427,6 +430,7 @@ impl PluginRuntime {
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",
+            EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
             EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",

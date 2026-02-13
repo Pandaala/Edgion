@@ -160,7 +160,7 @@ percent-encoding = "2.3"
 mockall = "0.14.0"
 
 # Test client dependencies
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
 console = "0.16"
 colored = "2.2"
 

@@ -35,9 +35,10 @@ pub use gateway::{
 
 // EdgionPlugins tests
 pub use edgion_plugins::{
-    AllConditionsTestSuite, BandwidthLimitTestSuite, CtxSetTestSuite, DirectEndpointTestSuite, ForwardAuthTestSuite,
-    JwtAuthTestSuite, KeyAuthTestSuite, PluginConditionTestSuite, PluginLogsTestSuite, ProxyRewriteTestSuite,
-    RateLimitTestSuite, RealIpPluginTestSuite, RequestRestrictionTestSuite, ResponseRewriteTestSuite,
+    AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite, CtxSetTestSuite,
+    DirectEndpointTestSuite, ForwardAuthTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, PluginConditionTestSuite,
+    PluginLogsTestSuite, ProxyRewriteTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
+    RequestRestrictionTestSuite, ResponseRewriteTestSuite,
 };
 
 // ReferenceGrant Status tests

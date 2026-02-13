@@ -1,5 +1,6 @@
 //! Plugin store module for EdgionPlugins resources
 
+pub mod all_endpoint_status;
 pub mod bandwidth_limit;
 pub mod basic_auth;
 pub mod common;
@@ -20,6 +21,7 @@ pub mod real_ip;
 pub mod request_restriction;
 pub mod response_rewrite;
 
+pub use all_endpoint_status::AllEndpointStatus;
 pub use bandwidth_limit::BandwidthLimit;
 pub use basic_auth::BasicAuth;
 pub use conf_handler_impl::create_plugin_handler;
@@ -40,7 +42,7 @@ pub use response_rewrite::ResponseRewrite;
 
 // Re-export plugin configs from types
 pub use crate::types::resources::edgion_plugins::{
-    BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, ForwardAuthConfig,
-    IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig,
+    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
+    ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig,
+    RateLimitConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig,
 };

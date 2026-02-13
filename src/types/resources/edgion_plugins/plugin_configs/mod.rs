@@ -1,3 +1,4 @@
+pub mod all_endpoint_status;
 mod bandwidth_limit;
 mod basic_auth;
 mod cors;
@@ -16,6 +17,7 @@ mod real_ip;
 mod request_restriction;
 mod response_rewrite;
 
+pub use all_endpoint_status::AllEndpointStatusConfig;
 pub use bandwidth_limit::BandwidthLimitConfig;
 pub use basic_auth::BasicAuthConfig;
 pub use cors::CorsConfig;

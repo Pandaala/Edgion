@@ -148,6 +148,7 @@ spec:
                           - ForwardAuth
                           - DebugAccessLogToHeader
                           - DirectEndpoint
+                          - AllEndpointStatus
                       config:
                         type: object
                         description: "Plugin-specific configuration"
