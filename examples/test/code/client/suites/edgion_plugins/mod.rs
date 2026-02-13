@@ -20,6 +20,7 @@ mod rate_limit;
 mod real_ip;
 mod request_restriction;
 mod response_rewrite;
+mod webhook_key_get;
 
 pub use all_endpoint_status::AllEndpointStatusTestSuite;
 pub use bandwidth_limit::BandwidthLimitTestSuite;
@@ -38,3 +39,4 @@ pub use rate_limit::RateLimitTestSuite;
 pub use real_ip::RealIpPluginTestSuite;
 pub use request_restriction::RequestRestrictionTestSuite;
 pub use response_rewrite::ResponseRewriteTestSuite;
+pub use webhook_key_get::WebhookKeyGetTestSuite;

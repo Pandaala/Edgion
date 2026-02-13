@@ -36,10 +36,27 @@ spec:
                       type:
                         type: string
                         description: "Key source type"
-                        enum: [clientIp, header, cookie, query, path, method, ctx, clientIpAndPath]
+                        enum: [clientIp, header, cookie, query, path, method, ctx, clientIpAndPath, webhook]
                       name:
                         type: string
                         description: "Key name (required for header, cookie, query, ctx)"
+                      webhookRef:
+                        type: string
+                        description: "Reference to LinkSys Webhook resource: 'namespace/name' (required for webhook type)"
+                      extract:
+                        type: object
+                        description: "How to extract key value from webhook response (required for webhook type)"
+                        properties:
+                          source:
+                            type: string
+                            description: "Extraction source"
+                            enum: [header, cookie, body, bodyText]
+                          name:
+                            type: string
+                            description: "Header or cookie name (required for header/cookie source)"
+                          path:
+                            type: string
+                            description: "JSON dot-path (required for body source)"
 
                   # KeyGet array schema - for multiple keys (e.g., RateLimit composite key)
                   keyGetArray: &keyGetArraySchema

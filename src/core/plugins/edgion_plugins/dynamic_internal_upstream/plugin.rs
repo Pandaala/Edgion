@@ -47,7 +47,7 @@ impl RequestFilter for DynamicInternalUpstream {
         }
 
         // 2. Extract raw routing key via KeyGet
-        let raw_value = match session.key_get(&self.config.from) {
+        let raw_value = match session.key_get(&self.config.from).await {
             Some(v) if !v.is_empty() => v,
             _ => {
                 return match self.config.on_missing {

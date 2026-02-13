@@ -200,6 +200,9 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/health", get(health_handler))
         .route("/echo", get(echo_handler).post(echo_post_handler))
         .route("/headers", get(headers_handler))
+        .route("/webhook/resolve", get(webhook_resolve_handler).post(webhook_resolve_handler))
+        .route("/webhook/resolve-body", get(webhook_resolve_body_handler).post(webhook_resolve_body_handler))
+        .route("/webhook/healthz", get(health_handler))
         .route("/status/{code}", get(status_handler))
         .route("/delay/{seconds}", get(delay_handler))
         .route("/{*path}", get(catch_all_handler))
@@ -253,6 +256,62 @@ async fn headers_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     });
 
     (StatusCode::OK, Json(response))
+}
+
+/// Webhook resolve handler — returns resolved key value via response header and JSON body.
+///
+/// Simulates an external key-resolution service. Reads the `X-Tenant-Id` header
+/// from the forwarded request and returns:
+/// - Response header `X-Resolved-Key` with the resolved value
+/// - Response header `X-Webhook-Status` = "resolved"
+/// - Set-Cookie `webhook_session=wh-sess-<tenant>`
+/// - JSON body: `{"data":{"user_id":"uid-<tenant>","tenant":"<tenant>"}}`
+///
+/// If `X-Tenant-Id` is missing, returns a default resolution.
+async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    let headers = req.headers();
+    let tenant = headers
+        .get("x-tenant-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+
+    let resolved_key = format!("resolved-{}", tenant);
+    let user_id = format!("uid-{}", tenant);
+    let cookie_val = format!("webhook_session=wh-sess-{}", tenant);
+
+    let body = json!({
+        "data": {
+            "user_id": user_id,
+            "tenant": tenant,
+        }
+    });
+
+    (
+        StatusCode::OK,
+        [
+            ("X-Resolved-Key", resolved_key.as_str()),
+            ("X-Webhook-Status", "resolved"),
+            ("Set-Cookie", cookie_val.as_str()),
+        ],
+        Json(body),
+    )
+        .into_response()
+}
+
+/// Webhook resolve handler for body-text extraction testing.
+/// Returns plain text body with the resolved key value.
+async fn webhook_resolve_body_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    let headers = req.headers();
+    let tenant = headers
+        .get("x-tenant-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+
+    format!("  body-key-{}  ", tenant)
 }
 
 async fn status_handler(Path(code): Path<u16>) -> impl IntoResponse {

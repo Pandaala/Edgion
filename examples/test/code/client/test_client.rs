@@ -116,6 +116,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "key-auth" | "keyauth" => "EdgionPlugins/KeyAuth".to_string(),
             "forward-auth" | "forwardauth" => "EdgionPlugins/ForwardAuth".to_string(),
             "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
+            "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -173,6 +174,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/AllEndpointStatus" => "EdgionPlugins",
         "EdgionPlugins/OpenidConnect" => "EdgionPlugins",
+        "EdgionPlugins/WebhookKeyGet" => "EdgionPlugins",
         "Gateway/StreamPlugins" => "Gateway/StreamPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
@@ -485,6 +487,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::CtxSetTestSuite));
+        }
+        "EdgionPlugins/WebhookKeyGet" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/WebhookKeyGet tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::WebhookKeyGetTestSuite));
         }
         "Gateway/ListenerHostname" => {
             if !gateway {

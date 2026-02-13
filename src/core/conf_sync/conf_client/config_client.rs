@@ -135,7 +135,12 @@ impl ConfigClient {
             tcp_routes: tcp_routes_cache,
             udp_routes: udp_routes_cache,
             tls_routes: tls_routes_cache,
-            link_sys: ClientCache::new(client_id.clone(), client_name.clone()),
+            link_sys: {
+                let link_sys_cache = ClientCache::new(client_id.clone(), client_name.clone());
+                let link_sys_handler = crate::core::link_sys::create_link_sys_handler();
+                link_sys_cache.set_conf_processor(link_sys_handler);
+                link_sys_cache
+            },
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,
             endpoints: endpoints_cache,

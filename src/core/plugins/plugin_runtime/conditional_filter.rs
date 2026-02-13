@@ -56,7 +56,7 @@ impl RequestFilter for ConditionalRequestFilter {
         // Check conditions before running
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail(session);
+                let eval = conditions.evaluate_detail(session).await;
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -102,10 +102,10 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        // Check conditions before running
+        // Check conditions before running (sync version for sync filter context)
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail(session);
+                let eval = conditions.evaluate_detail_sync(session);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -158,10 +158,10 @@ impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> Option<Duration> {
-        // Check conditions before running
+        // Check conditions before running (sync version for sync filter context)
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail(session);
+                let eval = conditions.evaluate_detail_sync(session);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -208,7 +208,7 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
         // Check conditions before running
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail(session);
+                let eval = conditions.evaluate_detail(session).await;
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));

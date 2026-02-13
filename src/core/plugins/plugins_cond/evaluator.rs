@@ -32,16 +32,16 @@ pub struct ConditionEvalResult<'a> {
 
 impl PluginConditions {
     /// Evaluate whether the plugin should run based on conditions
-    pub fn evaluate(&self, session: &dyn PluginSession) -> EvaluationResult {
-        self.evaluate_detail(session).result
+    pub async fn evaluate(&self, session: &dyn PluginSession) -> EvaluationResult {
+        self.evaluate_detail(session).await.result
     }
 
     /// Evaluate conditions and return matched condition for logging
-    pub fn evaluate_detail(&self, session: &dyn PluginSession) -> ConditionEvalResult<'_> {
+    pub async fn evaluate_detail(&self, session: &dyn PluginSession) -> ConditionEvalResult<'_> {
         // Check skip conditions (OR logic) - any match causes skip
         if let Some(skip_conditions) = &self.skip {
             for condition in skip_conditions {
-                if condition.evaluate(session) {
+                if condition.evaluate(session).await {
                     return ConditionEvalResult {
                         result: EvaluationResult::Skip,
                         action: "skip",
@@ -54,7 +54,46 @@ impl PluginConditions {
         // Check run conditions (AND logic) - all must match to run
         if let Some(run_conditions) = &self.run {
             for condition in run_conditions {
-                if !condition.evaluate(session) {
+                if !condition.evaluate(session).await {
+                    return ConditionEvalResult {
+                        result: EvaluationResult::Skip,
+                        action: "!run",
+                        matched: Some(condition),
+                    };
+                }
+            }
+        }
+
+        ConditionEvalResult {
+            result: EvaluationResult::Run,
+            action: "",
+            matched: None,
+        }
+    }
+
+    /// Synchronous version of evaluate_detail for use in sync filter contexts
+    /// (UpstreamResponseFilter, UpstreamResponseBodyFilter).
+    ///
+    /// This uses key_get_local() which only supports local key sources.
+    /// Conditions should never use Webhook as a key source, so this is always safe.
+    pub fn evaluate_detail_sync(&self, session: &dyn PluginSession) -> ConditionEvalResult<'_> {
+        // Check skip conditions (OR logic) - any match causes skip
+        if let Some(skip_conditions) = &self.skip {
+            for condition in skip_conditions {
+                if condition.evaluate_sync(session) {
+                    return ConditionEvalResult {
+                        result: EvaluationResult::Skip,
+                        action: "skip",
+                        matched: Some(condition),
+                    };
+                }
+            }
+        }
+
+        // Check run conditions (AND logic) - all must match to run
+        if let Some(run_conditions) = &self.run {
+            for condition in run_conditions {
+                if !condition.evaluate_sync(session) {
                     return ConditionEvalResult {
                         result: EvaluationResult::Skip,
                         action: "!run",
@@ -79,14 +118,27 @@ impl PluginConditions {
 
 impl Condition {
     /// Evaluate a single condition
-    pub fn evaluate(&self, session: &dyn PluginSession) -> bool {
+    pub async fn evaluate(&self, session: &dyn PluginSession) -> bool {
         match self {
-            Condition::KeyExist(c) => c.evaluate(session),
-            Condition::KeyMatch(c) => c.evaluate(session),
+            Condition::KeyExist(c) => c.evaluate(session).await,
+            Condition::KeyMatch(c) => c.evaluate(session).await,
             Condition::TimeRange(c) => c.evaluate(),
-            Condition::Probability(c) => c.evaluate(session),
-            Condition::Include(c) => c.evaluate(session),
-            Condition::Exclude(c) => c.evaluate(session),
+            Condition::Probability(c) => c.evaluate(session).await,
+            Condition::Include(c) => c.evaluate(session).await,
+            Condition::Exclude(c) => c.evaluate(session).await,
+        }
+    }
+
+    /// Synchronous version of evaluate for use in sync filter contexts.
+    /// Uses key_get_local() which only supports local key sources.
+    pub fn evaluate_sync(&self, session: &dyn PluginSession) -> bool {
+        match self {
+            Condition::KeyExist(c) => c.evaluate_sync(session),
+            Condition::KeyMatch(c) => c.evaluate_sync(session),
+            Condition::TimeRange(c) => c.evaluate(),
+            Condition::Probability(c) => c.evaluate_sync(session),
+            Condition::Include(c) => c.evaluate_sync(session),
+            Condition::Exclude(c) => c.evaluate_sync(session),
         }
     }
 
@@ -117,35 +169,53 @@ impl Condition {
 
 impl KeyExistCondition {
     /// Evaluate key existence condition
-    pub fn evaluate(&self, session: &dyn PluginSession) -> bool {
-        session.key_get(&self.key).is_some()
+    pub async fn evaluate(&self, session: &dyn PluginSession) -> bool {
+        session.key_get(&self.key).await.is_some()
+    }
+
+    /// Sync version using key_get_local
+    pub fn evaluate_sync(&self, session: &dyn PluginSession) -> bool {
+        session.key_get_local(&self.key).is_some()
     }
 }
 
 impl KeyMatchCondition {
     /// Evaluate key match condition
-    pub fn evaluate(&self, session: &dyn PluginSession) -> bool {
-        let value = match session.key_get(&self.key) {
+    pub async fn evaluate(&self, session: &dyn PluginSession) -> bool {
+        let value = match session.key_get(&self.key).await {
             Some(v) => v,
             None => return false,
         };
+        self.match_value(&value)
+    }
 
+    /// Sync version using key_get_local
+    pub fn evaluate_sync(&self, session: &dyn PluginSession) -> bool {
+        let value = match session.key_get_local(&self.key) {
+            Some(v) => v,
+            None => return false,
+        };
+        self.match_value(&value)
+    }
+
+    /// Check if a value matches any of the configured patterns
+    fn match_value(&self, value: &str) -> bool {
         // 1. Check single value (backward compatible)
         if let Some(expected) = &self.value {
-            if &value == expected {
+            if value == expected {
                 return true;
             }
         }
 
         // 2. Check HashSet first for O(1) lookup (when values > 16)
         if let Some(set) = &self.values_set {
-            if set.contains(&value) {
+            if set.contains(value) {
                 return true;
             }
         } else if let Some(values) = &self.values {
             // 3. Iterate Vec for small lists (O(n))
             for expected in values {
-                if &value == expected {
+                if value == expected {
                     return true;
                 }
             }
@@ -153,7 +223,7 @@ impl KeyMatchCondition {
 
         // 4. Check compiled regex (merged from all patterns)
         if let Some(compiled) = &self.compiled_regex {
-            if compiled.is_match(&value) {
+            if compiled.is_match(value) {
                 return true;
             }
         }
@@ -163,7 +233,7 @@ impl KeyMatchCondition {
             if self.compiled_regex.is_none() && !patterns.is_empty() {
                 let combined = patterns.join("|");
                 if let Ok(re) = regex::Regex::new(&combined) {
-                    return re.is_match(&value);
+                    return re.is_match(value);
                 }
             }
         }
@@ -201,7 +271,7 @@ impl TimeRangeCondition {
 
 impl ProbabilityCondition {
     /// Evaluate probability condition
-    pub fn evaluate(&self, session: &dyn PluginSession) -> bool {
+    pub async fn evaluate(&self, session: &dyn PluginSession) -> bool {
         // Clamp ratio to valid range
         let ratio = self.ratio.clamp(0.0, 1.0);
 
@@ -215,7 +285,7 @@ impl ProbabilityCondition {
 
         // Deterministic sampling if key is specified
         if let Some(key) = &self.key {
-            if let Some(key_value) = session.key_get(key) {
+            if let Some(key_value) = session.key_get(key).await {
                 // Use hash for deterministic sampling
                 let mut hasher = DefaultHasher::new();
                 key_value.hash(&mut hasher);
@@ -228,17 +298,48 @@ impl ProbabilityCondition {
         // Random sampling
         rand::random::<f64>() < ratio
     }
+
+    /// Sync version using key_get_local
+    pub fn evaluate_sync(&self, session: &dyn PluginSession) -> bool {
+        let ratio = self.ratio.clamp(0.0, 1.0);
+        if ratio <= 0.0 {
+            return false;
+        }
+        if ratio >= 1.0 {
+            return true;
+        }
+        if let Some(key) = &self.key {
+            if let Some(key_value) = session.key_get_local(key) {
+                let mut hasher = DefaultHasher::new();
+                key_value.hash(&mut hasher);
+                let hash = hasher.finish();
+                let normalized = (hash as f64) / (u64::MAX as f64);
+                return normalized < ratio;
+            }
+        }
+        rand::random::<f64>() < ratio
+    }
 }
 
 impl IncludeCondition {
     /// Evaluate include condition
     /// Returns true if value matches ANY item in the list or any regex pattern
-    pub fn evaluate(&self, session: &dyn PluginSession) -> bool {
-        let value = session.key_get(&self.key).unwrap_or_default();
+    pub async fn evaluate(&self, session: &dyn PluginSession) -> bool {
+        let value = session.key_get(&self.key).await.unwrap_or_default();
+        self.matches_value(&value)
+    }
 
+    /// Sync version using key_get_local
+    pub fn evaluate_sync(&self, session: &dyn PluginSession) -> bool {
+        let value = session.key_get_local(&self.key).unwrap_or_default();
+        self.matches_value(&value)
+    }
+
+    /// Check if a value matches any of the configured patterns
+    fn matches_value(&self, value: &str) -> bool {
         // 1. Check HashSet first for O(1) exact match lookup
         if let Some(set) = &self.values_set {
-            if set.contains(&value) {
+            if set.contains(value) {
                 return true;
             }
         }
@@ -246,7 +347,7 @@ impl IncludeCondition {
         // 2. Check wildcard patterns
         if let Some(patterns) = &self.values {
             for pattern in patterns {
-                if matches_pattern(&value, pattern) {
+                if matches_pattern(value, pattern) {
                     return true;
                 }
             }
@@ -254,7 +355,7 @@ impl IncludeCondition {
 
         // 3. Check compiled regex (merged from all patterns)
         if let Some(compiled) = &self.compiled_regex {
-            if compiled.is_match(&value) {
+            if compiled.is_match(value) {
                 return true;
             }
         }
@@ -264,7 +365,7 @@ impl IncludeCondition {
             if self.compiled_regex.is_none() && !patterns.is_empty() {
                 let combined = patterns.join("|");
                 if let Ok(re) = regex::Regex::new(&combined) {
-                    return re.is_match(&value);
+                    return re.is_match(value);
                 }
             }
         }
@@ -276,29 +377,39 @@ impl IncludeCondition {
 impl ExcludeCondition {
     /// Evaluate exclude condition
     /// Returns true if value does NOT match ANY item in the list or any regex pattern
-    pub fn evaluate(&self, session: &dyn PluginSession) -> bool {
-        let value = session.key_get(&self.key).unwrap_or_default();
+    pub async fn evaluate(&self, session: &dyn PluginSession) -> bool {
+        let value = session.key_get(&self.key).await.unwrap_or_default();
+        !self.matches_value(&value)
+    }
 
+    /// Sync version using key_get_local
+    pub fn evaluate_sync(&self, session: &dyn PluginSession) -> bool {
+        let value = session.key_get_local(&self.key).unwrap_or_default();
+        !self.matches_value(&value)
+    }
+
+    /// Check if a value matches any of the configured patterns (excluded)
+    fn matches_value(&self, value: &str) -> bool {
         // 1. Check HashSet first for O(1) exact match lookup
         if let Some(set) = &self.values_set {
-            if set.contains(&value) {
-                return false; // Excluded
+            if set.contains(value) {
+                return true;
             }
         }
 
         // 2. Check wildcard patterns
         if let Some(patterns) = &self.values {
             for pattern in patterns {
-                if matches_pattern(&value, pattern) {
-                    return false; // Excluded
+                if matches_pattern(value, pattern) {
+                    return true;
                 }
             }
         }
 
         // 3. Check compiled regex (merged from all patterns)
         if let Some(compiled) = &self.compiled_regex {
-            if compiled.is_match(&value) {
-                return false; // Excluded
+            if compiled.is_match(value) {
+                return true;
             }
         }
 
@@ -307,14 +418,14 @@ impl ExcludeCondition {
             if self.compiled_regex.is_none() && !patterns.is_empty() {
                 let combined = patterns.join("|");
                 if let Ok(re) = regex::Regex::new(&combined) {
-                    if re.is_match(&value) {
-                        return false; // Excluded
+                    if re.is_match(value) {
+                        return true;
                     }
                 }
             }
         }
 
-        true // Not excluded
+        false
     }
 }
 
@@ -377,16 +488,16 @@ mod tests {
         mock
     }
 
-    #[test]
-    fn test_empty_conditions_run() {
+    #[tokio::test]
+    async fn test_empty_conditions_run() {
         let conditions = PluginConditions::default();
         let mut mock = MockPluginSession::new();
         mock.expect_key_get().returning(|_| None);
-        assert_eq!(conditions.evaluate(&mock), EvaluationResult::Run);
+        assert_eq!(conditions.evaluate(&mock).await, EvaluationResult::Run);
     }
 
-    #[test]
-    fn test_skip_condition_matched() {
+    #[tokio::test]
+    async fn test_skip_condition_matched() {
         let conditions = PluginConditions {
             skip: Some(vec![Condition::KeyExist(KeyExistCondition {
                 key: KeyGet::Header {
@@ -402,11 +513,11 @@ mod tests {
             },
             Some("true".to_string()),
         )]);
-        assert_eq!(conditions.evaluate(&session), EvaluationResult::Skip);
+        assert_eq!(conditions.evaluate(&session).await, EvaluationResult::Skip);
     }
 
-    #[test]
-    fn test_skip_condition_not_matched() {
+    #[tokio::test]
+    async fn test_skip_condition_not_matched() {
         let conditions = PluginConditions {
             skip: Some(vec![Condition::KeyExist(KeyExistCondition {
                 key: KeyGet::Header {
@@ -418,11 +529,11 @@ mod tests {
 
         let mut mock = MockPluginSession::new();
         mock.expect_key_get().returning(|_| None);
-        assert_eq!(conditions.evaluate(&mock), EvaluationResult::Run);
+        assert_eq!(conditions.evaluate(&mock).await, EvaluationResult::Run);
     }
 
-    #[test]
-    fn test_run_condition_all_satisfied() {
+    #[tokio::test]
+    async fn test_run_condition_all_satisfied() {
         let conditions = PluginConditions {
             skip: None,
             run: Some(vec![
@@ -450,11 +561,11 @@ mod tests {
             ),
             (KeyGet::Method, Some("GET".to_string())),
         ]);
-        assert_eq!(conditions.evaluate(&session), EvaluationResult::Run);
+        assert_eq!(conditions.evaluate(&session).await, EvaluationResult::Run);
     }
 
-    #[test]
-    fn test_run_condition_not_all_satisfied() {
+    #[tokio::test]
+    async fn test_run_condition_not_all_satisfied() {
         let conditions = PluginConditions {
             skip: None,
             run: Some(vec![
@@ -483,11 +594,11 @@ mod tests {
             ),
             (KeyGet::Method, Some("GET".to_string())),
         ]);
-        assert_eq!(conditions.evaluate(&session), EvaluationResult::Skip);
+        assert_eq!(conditions.evaluate(&session).await, EvaluationResult::Skip);
     }
 
-    #[test]
-    fn test_key_match_exact() {
+    #[tokio::test]
+    async fn test_key_match_exact() {
         let condition = KeyMatchCondition {
             key: KeyGet::Header {
                 name: "X-Environment".to_string(),
@@ -505,7 +616,7 @@ mod tests {
             },
             Some("production".to_string()),
         )]);
-        assert!(condition.evaluate(&session));
+        assert!(condition.evaluate(&session).await);
 
         let session2 = create_mock_session_with_key_get(vec![(
             KeyGet::Header {
@@ -513,7 +624,7 @@ mod tests {
             },
             Some("staging".to_string()),
         )]);
-        assert!(!condition.evaluate(&session2));
+        assert!(!condition.evaluate(&session2).await);
     }
 
     #[test]
@@ -536,26 +647,26 @@ mod tests {
         assert!(!condition.evaluate());
     }
 
-    #[test]
-    fn test_probability_always() {
+    #[tokio::test]
+    async fn test_probability_always() {
         let condition = ProbabilityCondition { ratio: 1.0, key: None };
 
         let mut mock = MockPluginSession::new();
         mock.expect_key_get().returning(|_| None);
-        assert!(condition.evaluate(&mock));
+        assert!(condition.evaluate(&mock).await);
     }
 
-    #[test]
-    fn test_probability_never() {
+    #[tokio::test]
+    async fn test_probability_never() {
         let condition = ProbabilityCondition { ratio: 0.0, key: None };
 
         let mut mock = MockPluginSession::new();
         mock.expect_key_get().returning(|_| None);
-        assert!(!condition.evaluate(&mock));
+        assert!(!condition.evaluate(&mock).await);
     }
 
-    #[test]
-    fn test_include_path() {
+    #[tokio::test]
+    async fn test_include_path() {
         let condition = IncludeCondition {
             key: KeyGet::Path,
             values: Some(vec!["/api/*".to_string(), "/admin/*".to_string()]),
@@ -565,17 +676,17 @@ mod tests {
         };
 
         let session1 = create_mock_session_with_key_get(vec![(KeyGet::Path, Some("/api/users".to_string()))]);
-        assert!(condition.evaluate(&session1));
+        assert!(condition.evaluate(&session1).await);
 
         let session2 = create_mock_session_with_key_get(vec![(KeyGet::Path, Some("/admin/settings".to_string()))]);
-        assert!(condition.evaluate(&session2));
+        assert!(condition.evaluate(&session2).await);
 
         let session3 = create_mock_session_with_key_get(vec![(KeyGet::Path, Some("/public/index.html".to_string()))]);
-        assert!(!condition.evaluate(&session3));
+        assert!(!condition.evaluate(&session3).await);
     }
 
-    #[test]
-    fn test_exclude_path() {
+    #[tokio::test]
+    async fn test_exclude_path() {
         let condition = ExcludeCondition {
             key: KeyGet::Path,
             values: Some(vec![
@@ -589,13 +700,13 @@ mod tests {
         };
 
         let session1 = create_mock_session_with_key_get(vec![(KeyGet::Path, Some("/api/users".to_string()))]);
-        assert!(condition.evaluate(&session1)); // Not excluded
+        assert!(condition.evaluate(&session1).await); // Not excluded
 
         let session2 = create_mock_session_with_key_get(vec![(KeyGet::Path, Some("/health".to_string()))]);
-        assert!(!condition.evaluate(&session2)); // Excluded
+        assert!(!condition.evaluate(&session2).await); // Excluded
 
         let session3 = create_mock_session_with_key_get(vec![(KeyGet::Path, Some("/ready".to_string()))]);
-        assert!(!condition.evaluate(&session3)); // Excluded
+        assert!(!condition.evaluate(&session3).await); // Excluded
     }
 
     #[test]

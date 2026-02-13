@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
-use crate::types::common::{KeyGet, KeySet};
+use crate::types::common::{KeyGet, KeySet, WebhookExtract};
 use crate::types::filters::PluginRunningResult;
 use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset};
 
@@ -43,6 +43,21 @@ impl<'a> PingoraSessionAdapter<'a> {
     #[inline]
     pub fn set_terminate(&mut self) {
         self.ctx.plugin_running_result = PluginRunningResult::ErrTerminateRequest;
+    }
+
+    /// Resolve a key value by calling an external webhook service.
+    ///
+    /// Looks up the WebhookRuntime from the global registry, performs health/rate-limit
+    /// checks, sends the HTTP request with retry, and extracts the value from the response.
+    ///
+    /// TODO: Full implementation in Phase 3 (WebhookRegistry + runtime)
+    async fn resolve_webhook(
+        &self,
+        webhook_ref: &str,
+        extract: &WebhookExtract,
+    ) -> Option<String> {
+        use crate::core::link_sys::webhook::resolve_webhook_key;
+        resolve_webhook_key(self, webhook_ref, extract).await
     }
 
     /// Extract path parameters from route pattern (lazy extraction).
@@ -389,7 +404,40 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         }
     }
 
-    fn key_get(&self, key: &KeyGet) -> Option<String> {
+    async fn key_get(&self, key: &KeyGet) -> Option<String> {
+        match key {
+            // ---- Sync variants: zero-cost, no actual await ----
+            KeyGet::ClientIp => {
+                let ip = self.remote_addr();
+                if ip.is_empty() {
+                    None
+                } else {
+                    Some(ip.to_string())
+                }
+            }
+            KeyGet::Header { name } => self.header_value(name),
+            KeyGet::Cookie { name } => self.get_cookie(name),
+            KeyGet::Query { name } => self.get_query_param(name),
+            KeyGet::Path => Some(self.get_path().to_string()),
+            KeyGet::Method => Some(self.get_method().to_string()),
+            KeyGet::Ctx { name } => self.get_ctx_var(name),
+            KeyGet::ClientIpAndPath => {
+                let ip = self.remote_addr();
+                if ip.is_empty() {
+                    None
+                } else {
+                    Some(format!("{}:{}", ip, self.get_path()))
+                }
+            }
+
+            // ---- Async variant: calls external webhook service ----
+            KeyGet::Webhook { webhook_ref, extract } => {
+                self.resolve_webhook(webhook_ref, extract).await
+            }
+        }
+    }
+
+    fn key_get_local(&self, key: &KeyGet) -> Option<String> {
         match key {
             KeyGet::ClientIp => {
                 let ip = self.remote_addr();
@@ -412,6 +460,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 } else {
                     Some(format!("{}:{}", ip, self.get_path()))
                 }
+            }
+            KeyGet::Webhook { .. } => {
+                tracing::warn!("key_get_local called with Webhook variant; returning None (use key_get for async resolution)");
+                None
             }
         }
     }

@@ -137,7 +137,7 @@ impl CtxSet {
     /// Process a single variable rule
     ///
     /// Returns the final value to set, or None if the value should not be set
-    fn process_rule(&self, rule: &CtxVarRule, rule_idx: usize, session: &dyn PluginSession) -> Option<String> {
+    async fn process_rule(&self, rule: &CtxVarRule, rule_idx: usize, session: &dyn PluginSession) -> Option<String> {
         // Priority: value > template > from
         let mut value = if let Some(ref static_value) = rule.value {
             // Static value has highest priority
@@ -147,7 +147,7 @@ impl CtxSet {
             self.resolve_template(template, session)
         } else if let Some(ref from) = rule.from {
             // Get from KeyGet source
-            session.key_get(from).or(rule.default.clone())?
+            session.key_get(from).await.or(rule.default.clone())?
         } else {
             // No source specified (should be caught by validation)
             return rule.default.clone();
@@ -253,7 +253,7 @@ impl RequestFilter for CtxSet {
 
         for (idx, rule) in self.config.vars.iter().enumerate() {
             // Process the rule to get the final value
-            let value = self.process_rule(rule, idx, session);
+            let value = self.process_rule(rule, idx, session).await;
 
             match value {
                 Some(v) => {

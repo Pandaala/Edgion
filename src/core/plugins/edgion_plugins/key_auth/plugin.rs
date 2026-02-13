@@ -67,12 +67,17 @@ impl KeyAuth {
     /// Extract API key from request using configured key sources (tried in order)
     ///
     /// Returns the first non-empty value found from the configured sources.
-    fn extract_key(&self, session: &dyn PluginSession) -> Option<(String, &KeyGet)> {
+    /// Supports all KeyGet variants including Webhook for remote key resolution.
+    async fn extract_key(&self, session: &dyn PluginSession) -> Option<(String, &KeyGet)> {
         for source in &self.config.key_sources {
-            // Only allow supported key sources for API key extraction
+            // Allow supported key sources for API key extraction
             match source {
-                KeyGet::Header { .. } | KeyGet::Query { .. } | KeyGet::Cookie { .. } | KeyGet::Ctx { .. } => {
-                    if let Some(value) = session.key_get(source) {
+                KeyGet::Header { .. }
+                | KeyGet::Query { .. }
+                | KeyGet::Cookie { .. }
+                | KeyGet::Ctx { .. }
+                | KeyGet::Webhook { .. } => {
+                    if let Some(value) = session.key_get(source).await {
                         if !value.is_empty() {
                             return Some((value, source));
                         }
@@ -146,7 +151,7 @@ impl RequestFilter for KeyAuth {
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // 1. Extract key from request using configured sources
-        let (key, used_source) = match self.extract_key(session) {
+        let (key, used_source) = match self.extract_key(session).await {
             Some((k, s)) => (k, s.clone()),
             None => {
                 // No key provided - check anonymous access
@@ -242,8 +247,8 @@ mod tests {
         auth
     }
 
-    #[test]
-    fn test_extract_key_from_header() {
+    #[tokio::test]
+    async fn test_extract_key_from_header() {
         let auth = create_key_auth_with_keys();
         let mut mock_session = MockPluginSession::new();
 
@@ -257,15 +262,15 @@ mod tests {
             None
         });
 
-        let result = auth.extract_key(&mock_session);
+        let result = auth.extract_key(&mock_session).await;
         assert!(result.is_some());
         let (key, source) = result.unwrap();
         assert_eq!(key, "jack-key-12345");
         assert!(matches!(source, KeyGet::Header { name } if name == "X-API-Key"));
     }
 
-    #[test]
-    fn test_extract_key_from_query() {
+    #[tokio::test]
+    async fn test_extract_key_from_query() {
         let auth = create_key_auth_with_keys();
         let mut mock_session = MockPluginSession::new();
 
@@ -276,15 +281,15 @@ mod tests {
             _ => None,
         });
 
-        let result = auth.extract_key(&mock_session);
+        let result = auth.extract_key(&mock_session).await;
         assert!(result.is_some());
         let (key, source) = result.unwrap();
         assert_eq!(key, "alice-key-67890");
         assert!(matches!(source, KeyGet::Query { name } if name == "api_key"));
     }
 
-    #[test]
-    fn test_header_priority_over_query() {
+    #[tokio::test]
+    async fn test_header_priority_over_query() {
         let auth = create_key_auth_with_keys();
         let mut mock_session = MockPluginSession::new();
 
@@ -295,26 +300,26 @@ mod tests {
             _ => None,
         });
 
-        let result = auth.extract_key(&mock_session);
+        let result = auth.extract_key(&mock_session).await;
         assert!(result.is_some());
         let (key, source) = result.unwrap();
         assert_eq!(key, "header-key");
         assert!(matches!(source, KeyGet::Header { .. }));
     }
 
-    #[test]
-    fn test_extract_key_none() {
+    #[tokio::test]
+    async fn test_extract_key_none() {
         let auth = create_key_auth_with_keys();
         let mut mock_session = MockPluginSession::new();
 
         mock_session.expect_key_get().returning(|_| None);
 
-        let result = auth.extract_key(&mock_session);
+        let result = auth.extract_key(&mock_session).await;
         assert!(result.is_none());
     }
 
-    #[test]
-    fn test_extract_key_from_cookie() {
+    #[tokio::test]
+    async fn test_extract_key_from_cookie() {
         let config = KeyAuthConfig {
             key_sources: vec![
                 KeyGet::Header {
@@ -335,7 +340,7 @@ mod tests {
             _ => None,
         });
 
-        let result = auth.extract_key(&mock_session);
+        let result = auth.extract_key(&mock_session).await;
         assert!(result.is_some());
         let (key, source) = result.unwrap();
         assert_eq!(key, "cookie-key-123");
@@ -496,8 +501,8 @@ mod tests {
         assert!(metadata.headers.contains_key("X-Customer-ID"));
     }
 
-    #[test]
-    fn test_empty_value_fallback_to_next_source() {
+    #[tokio::test]
+    async fn test_empty_value_fallback_to_next_source() {
         let auth = create_key_auth_with_keys();
         let mut mock_session = MockPluginSession::new();
 
@@ -508,15 +513,15 @@ mod tests {
             _ => None,
         });
 
-        let result = auth.extract_key(&mock_session);
+        let result = auth.extract_key(&mock_session).await;
         assert!(result.is_some());
         let (key, source) = result.unwrap();
         assert_eq!(key, "alice-key-67890");
         assert!(matches!(source, KeyGet::Query { .. }));
     }
 
-    #[test]
-    fn test_unsupported_source_skipped() {
+    #[tokio::test]
+    async fn test_unsupported_source_skipped() {
         // Create config with unsupported source (ClientIp)
         let config = KeyAuthConfig {
             key_sources: vec![
@@ -539,7 +544,7 @@ mod tests {
             None
         });
 
-        let result = auth.extract_key(&mock_session);
+        let result = auth.extract_key(&mock_session).await;
         assert!(result.is_some());
         let (key, _) = result.unwrap();
         assert_eq!(key, "valid-key");

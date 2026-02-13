@@ -231,7 +231,12 @@ impl RequestFilter for RateLimit {
         // Get the rate limiting key using session.key_get()
         // Multiple keys are combined with "_" separator
         let limit_key = {
-            let parts: Vec<String> = self.config.key.iter().filter_map(|k| session.key_get(k)).collect();
+            let mut parts: Vec<String> = Vec::new();
+            for k in &self.config.key {
+                if let Some(v) = session.key_get(k).await {
+                    parts.push(v);
+                }
+            }
 
             if parts.is_empty() {
                 // No keys resolved - check if we have a default key configured
@@ -309,8 +314,8 @@ mod tests {
         config
     }
 
-    #[test]
-    fn test_key_get_client_ip() {
+    #[tokio::test]
+    async fn test_key_get_client_ip() {
         let mut mock_session = MockPluginSession::new();
         mock_session
             .expect_key_get()
@@ -318,11 +323,11 @@ mod tests {
             .return_const(Some("192.168.1.1".to_string()));
 
         let key = KeyGet::ClientIp;
-        assert_eq!(mock_session.key_get(&key), Some("192.168.1.1".to_string()));
+        assert_eq!(mock_session.key_get(&key).await, Some("192.168.1.1".to_string()));
     }
 
-    #[test]
-    fn test_key_get_empty_client_ip() {
+    #[tokio::test]
+    async fn test_key_get_empty_client_ip() {
         let mut mock_session = MockPluginSession::new();
         mock_session
             .expect_key_get()
@@ -330,11 +335,11 @@ mod tests {
             .return_const(None);
 
         let key = KeyGet::ClientIp;
-        assert_eq!(mock_session.key_get(&key), None);
+        assert_eq!(mock_session.key_get(&key).await, None);
     }
 
-    #[test]
-    fn test_key_get_header() {
+    #[tokio::test]
+    async fn test_key_get_header() {
         let mut mock_session = MockPluginSession::new();
         mock_session
             .expect_key_get()
@@ -344,11 +349,11 @@ mod tests {
         let key = KeyGet::Header {
             name: "X-API-Key".to_string(),
         };
-        assert_eq!(mock_session.key_get(&key), Some("api-key-123".to_string()));
+        assert_eq!(mock_session.key_get(&key).await, Some("api-key-123".to_string()));
     }
 
-    #[test]
-    fn test_key_get_path() {
+    #[tokio::test]
+    async fn test_key_get_path() {
         let mut mock_session = MockPluginSession::new();
         mock_session
             .expect_key_get()
@@ -356,11 +361,11 @@ mod tests {
             .return_const(Some("/api/users".to_string()));
 
         let key = KeyGet::Path;
-        assert_eq!(mock_session.key_get(&key), Some("/api/users".to_string()));
+        assert_eq!(mock_session.key_get(&key).await, Some("/api/users".to_string()));
     }
 
-    #[test]
-    fn test_key_get_client_ip_and_path() {
+    #[tokio::test]
+    async fn test_key_get_client_ip_and_path() {
         let mut mock_session = MockPluginSession::new();
         mock_session
             .expect_key_get()
@@ -368,7 +373,7 @@ mod tests {
             .return_const(Some("10.0.0.1:/api/data".to_string()));
 
         let key = KeyGet::ClientIpAndPath;
-        assert_eq!(mock_session.key_get(&key), Some("10.0.0.1:/api/data".to_string()));
+        assert_eq!(mock_session.key_get(&key).await, Some("10.0.0.1:/api/data".to_string()));
     }
 
     #[tokio::test]

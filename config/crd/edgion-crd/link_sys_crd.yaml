@@ -22,7 +22,7 @@ spec:
                 type:
                   type: string
                   description: "System type"
-                  enum: ["redis", "etcd", "elasticsearch", "kafka"]
+                  enum: ["redis", "etcd", "elasticsearch", "kafka", "webhook"]
                 config:
                   type: object
                   description: "System-specific configuration"

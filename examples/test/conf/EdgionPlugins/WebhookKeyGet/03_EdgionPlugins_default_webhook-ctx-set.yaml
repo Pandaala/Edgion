@@ -1,0 +1,47 @@
+# EdgionPlugins config for WebhookKeyGet integration test
+# Uses CtxSet plugin with webhook KeyGet to resolve values from external service
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: webhook-ctx-set-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    # CtxSet plugin — uses webhook to resolve user_id from external service
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          # 1. Resolve user_id via webhook (JSON body extraction)
+          - name: webhook_user_id
+            from:
+              type: webhook
+              webhookRef: "edgion-default/webhook-resolver"
+              extract:
+                source: body
+                path: "data.user_id"
+            default: "fallback-user"
+
+          # 2. Resolve key via webhook response header
+          - name: webhook_resolved_key
+            from:
+              type: webhook
+              webhookRef: "edgion-default/webhook-resolver"
+              extract:
+                source: header
+                name: "X-Resolved-Key"
+
+          # 3. Resolve via webhook body text (plain text extraction)
+          - name: webhook_body_text
+            from:
+              type: webhook
+              webhookRef: "edgion-default/webhook-body-resolver"
+              extract:
+                source: bodyText
+
+          # 4. Local fallback — from header (non-webhook, verifies sync path still works)
+          - name: local_tenant
+            from:
+              type: header
+              name: X-Tenant-Id
+            default: "no-tenant"

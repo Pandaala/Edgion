@@ -39,7 +39,7 @@ pub use edgion_plugins::{
     DirectEndpointTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite,
     ForwardAuthTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, OpenidConnectTestSuite, PluginConditionTestSuite,
     PluginLogsTestSuite, ProxyRewriteTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
-    RequestRestrictionTestSuite, ResponseRewriteTestSuite,
+    RequestRestrictionTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
 };
 
 // ReferenceGrant Status tests
