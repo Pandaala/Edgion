@@ -3,6 +3,9 @@
 //! Manages all LinkSys resources (Webhook, Redis, Etcd, etc.) and dispatches
 //! configuration changes to the appropriate sub-module managers.
 //! Follows the same ArcSwap pattern as PluginStore.
+//!
+//! Redis runtime clients are stored in a separate ArcSwap store for typed access:
+//! callers use `get_redis_client("namespace/name")` to obtain a ready-to-use client.
 
 use arc_swap::ArcSwap;
 use std::collections::{HashMap, HashSet};
@@ -11,6 +14,7 @@ use std::sync::LazyLock;
 
 use crate::types::resources::link_sys::LinkSys;
 
+use super::redis::RedisLinkClient;
 use super::webhook::get_webhook_manager;
 
 // ============================================================
@@ -105,6 +109,65 @@ impl LinkSysStore {
 }
 
 // ============================================================
+// Redis runtime store (ArcSwap for lock-free reads)
+// ============================================================
+
+/// Global runtime store for Redis clients.
+/// Keyed by "namespace/name", same as LinkSys CRD key.
+/// ArcSwap provides lock-free concurrent reads, consistent with PluginStore pattern.
+static REDIS_RUNTIME: LazyLock<ArcSwap<HashMap<String, Arc<RedisLinkClient>>>> =
+    LazyLock::new(|| ArcSwap::from_pointee(HashMap::new()));
+
+/// Get a Redis client by LinkSys name ("namespace/name").
+///
+/// This is the primary API for plugins and other callers.
+/// Returns None if the LinkSys resource doesn't exist or isn't a Redis type.
+pub fn get_redis_client(name: &str) -> Option<Arc<RedisLinkClient>> {
+    REDIS_RUNTIME.load().get(name).cloned()
+}
+
+/// List all registered Redis client names.
+pub fn list_redis_clients() -> Vec<String> {
+    REDIS_RUNTIME.load().keys().cloned().collect()
+}
+
+/// Health check all registered Redis clients.
+pub async fn health_check_all_redis() -> Vec<super::redis::LinkSysHealth> {
+    let clients: Vec<Arc<RedisLinkClient>> = REDIS_RUNTIME.load().values().cloned().collect();
+    let mut results = Vec::with_capacity(clients.len());
+    for client in clients {
+        results.push(client.health_status().await);
+    }
+    results
+}
+
+/// Insert a Redis client into the runtime store.
+fn redis_runtime_insert(key: String, client: Arc<RedisLinkClient>) {
+    let current = REDIS_RUNTIME.load();
+    let mut new_map = (**current).clone();
+    new_map.insert(key, client);
+    REDIS_RUNTIME.store(Arc::new(new_map));
+}
+
+/// Remove a Redis client from the runtime store, returning the old client (if any).
+fn redis_runtime_remove(key: &str) -> Option<Arc<RedisLinkClient>> {
+    let current = REDIS_RUNTIME.load();
+    if !current.contains_key(key) {
+        return None;
+    }
+    let mut new_map = (**current).clone();
+    let old = new_map.remove(key);
+    REDIS_RUNTIME.store(Arc::new(new_map));
+    old
+}
+
+/// Replace all Redis clients in the runtime store atomically.
+fn redis_runtime_replace_all(new_map: HashMap<String, Arc<RedisLinkClient>>) -> HashMap<String, Arc<RedisLinkClient>> {
+    let old = REDIS_RUNTIME.swap(Arc::new(new_map));
+    (*old).clone()
+}
+
+// ============================================================
 // Dispatch to sub-module managers
 // ============================================================
 
@@ -112,8 +175,64 @@ impl LinkSysStore {
 async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     let webhook_manager = get_webhook_manager();
 
+    // Build new Redis clients map
+    let mut new_redis_map: HashMap<String, Arc<RedisLinkClient>> = HashMap::new();
+
     for (key, ls) in data {
-        dispatch_single_upsert(webhook_manager, key, ls).await;
+        match &ls.spec.config {
+            crate::types::resources::link_sys::SystemConfig::Webhook(config) => {
+                webhook_manager.upsert(key, config.clone()).await;
+            }
+            crate::types::resources::link_sys::SystemConfig::Redis(redis_config) => {
+                match RedisLinkClient::from_config(key, redis_config) {
+                    Ok(client) => {
+                        let client = Arc::new(client);
+                        let client_ref = client.clone();
+                        let key_owned = key.clone();
+                        // Init in background — don't block full_set for slow connections
+                        tokio::spawn(async move {
+                            if let Err(e) = client_ref.init().await {
+                                tracing::error!(
+                                    redis = %key_owned,
+                                    error = %e,
+                                    "Failed to initialize Redis client"
+                                );
+                            }
+                        });
+                        new_redis_map.insert(key.clone(), client);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            key,
+                            error = %e,
+                            "Failed to build Redis client from config"
+                        );
+                    }
+                }
+            }
+            crate::types::resources::link_sys::SystemConfig::Etcd(_) => {
+                tracing::debug!(key, "LinkSys Etcd resource registered (runtime not yet implemented)");
+            }
+            _ => {
+                tracing::debug!(
+                    key,
+                    system_type = ?ls.spec.config.system_type(),
+                    "LinkSys resource registered (runtime not yet implemented)"
+                );
+            }
+        }
+    }
+
+    // Atomically swap Redis runtime store; shutdown old clients in background
+    let old_redis = redis_runtime_replace_all(new_redis_map);
+    if !old_redis.is_empty() {
+        tokio::spawn(async move {
+            for (key, client) in old_redis {
+                if let Err(e) = client.shutdown().await {
+                    tracing::warn!(redis = %key, error = %e, "Error shutting down old Redis client");
+                }
+            }
+        });
     }
 }
 
@@ -126,40 +245,80 @@ async fn dispatch_partial_update(
 
     // Handle add/update
     for (key, ls) in add_or_update {
-        dispatch_single_upsert(webhook_manager, key, ls).await;
+        match &ls.spec.config {
+            crate::types::resources::link_sys::SystemConfig::Webhook(config) => {
+                webhook_manager.upsert(key, config.clone()).await;
+            }
+            crate::types::resources::link_sys::SystemConfig::Redis(redis_config) => {
+                match RedisLinkClient::from_config(key, redis_config) {
+                    Ok(client) => {
+                        let client = Arc::new(client);
+                        let client_ref = client.clone();
+                        let key_owned = key.clone();
+
+                        // Swap into store first (so get_redis_client returns new client immediately)
+                        let old = {
+                            let current = REDIS_RUNTIME.load();
+                            let old = current.get(key).cloned();
+                            redis_runtime_insert(key.clone(), client);
+                            old
+                        };
+
+                        // Init new client in background
+                        tokio::spawn(async move {
+                            if let Err(e) = client_ref.init().await {
+                                tracing::error!(
+                                    redis = %key_owned,
+                                    error = %e,
+                                    "Failed to initialize Redis client"
+                                );
+                            }
+                        });
+
+                        // Shutdown old client in background
+                        if let Some(old_client) = old {
+                            tokio::spawn(async move {
+                                if let Err(e) = old_client.shutdown().await {
+                                    tracing::warn!(error = %e, "Error shutting down old Redis client");
+                                }
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            key,
+                            error = %e,
+                            "Failed to build Redis client from config"
+                        );
+                    }
+                }
+            }
+            crate::types::resources::link_sys::SystemConfig::Etcd(_) => {
+                tracing::debug!(key, "LinkSys Etcd resource registered (runtime not yet implemented)");
+            }
+            _ => {
+                tracing::debug!(
+                    key,
+                    system_type = ?ls.spec.config.system_type(),
+                    "LinkSys resource registered (runtime not yet implemented)"
+                );
+            }
+        }
     }
 
     // Handle remove — we don't know the type of removed resources,
     // so we try to remove from all managers (no-op if not found).
     for key in remove {
         webhook_manager.remove(key).await;
-        // Future: redis_manager.remove(key).await;
-        // Future: etcd_manager.remove(key).await;
-    }
-}
 
-/// Dispatch a single LinkSys resource upsert to the appropriate manager.
-async fn dispatch_single_upsert(
-    webhook_manager: &super::webhook::WebhookManager,
-    key: &str,
-    ls: &LinkSys,
-) {
-    match &ls.spec.config {
-        crate::types::resources::link_sys::SystemConfig::Webhook(config) => {
-            webhook_manager.upsert(key, config.clone()).await;
-        }
-        crate::types::resources::link_sys::SystemConfig::Redis(_) => {
-            tracing::debug!(key, "LinkSys Redis resource registered (runtime not yet implemented)");
-        }
-        crate::types::resources::link_sys::SystemConfig::Etcd(_) => {
-            tracing::debug!(key, "LinkSys Etcd resource registered (runtime not yet implemented)");
-        }
-        _ => {
-            tracing::debug!(
-                key,
-                system_type = ?ls.spec.config.system_type(),
-                "LinkSys resource registered (runtime not yet implemented)"
-            );
+        // Remove Redis client and shutdown in background
+        if let Some(old_client) = redis_runtime_remove(key) {
+            let key_owned = key.clone();
+            tokio::spawn(async move {
+                if let Err(e) = old_client.shutdown().await {
+                    tracing::warn!(redis = %key_owned, error = %e, "Error shutting down removed Redis client");
+                }
+            });
         }
     }
 }

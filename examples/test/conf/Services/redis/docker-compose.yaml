@@ -1,0 +1,19 @@
+# Redis standalone instance for LinkSys integration testing.
+# Started/stopped by run_redis_test.sh.
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: edgion-test-redis
+    ports:
+      - "16379:6379"
+    command: >
+      redis-server
+      --requirepass edgion-test-pwd
+      --maxmemory 64mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "edgion-test-pwd", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+    restart: "no"

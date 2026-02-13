@@ -321,6 +321,354 @@ fn create_testing_router() -> Router {
             "/api/v1/testing/access-logs",
             get(list_access_logs).delete(clear_access_logs),
         )
+        // LinkSys Redis testing endpoints
+        .route("/api/v1/testing/link-sys/redis/health", get(redis_health_all))
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/health",
+            get(redis_health_one),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/ping",
+            get(redis_ping),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/get/{key}",
+            get(redis_get),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/set",
+            axum::routing::post(redis_set),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/del",
+            axum::routing::post(redis_del),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/hset",
+            axum::routing::post(redis_hset),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/hget/{key}/{field}",
+            get(redis_hget),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/hgetall/{key}",
+            get(redis_hgetall),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/rpush",
+            axum::routing::post(redis_rpush),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/lpop/{key}",
+            get(redis_lpop),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/llen/{key}",
+            get(redis_llen),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/incr/{key}",
+            axum::routing::post(redis_incr),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/{name}/lock",
+            axum::routing::post(redis_lock),
+        )
+        .route(
+            "/api/v1/testing/link-sys/redis/clients",
+            get(redis_list_clients),
+        )
+}
+
+// ==================== LinkSys Redis Testing Endpoints ====================
+
+/// Helper to get a Redis client by name, returning error response if not found.
+/// Name format: "namespace/name" encoded as "namespace_name" in URL path.
+fn get_redis_client_by_name(name: &str) -> Result<std::sync::Arc<crate::core::link_sys::redis::RedisLinkClient>, Json<ApiResponse<serde_json::Value>>> {
+    // URL path uses underscore as separator: "default_redis-main" → "default/redis-main"
+    let key = name.replacen('_', "/", 1);
+    crate::core::link_sys::get_redis_client(&key).ok_or_else(|| {
+        Json(ApiResponse::error(format!(
+            "Redis client '{}' not found. Available: {:?}",
+            key,
+            crate::core::link_sys::link_sys_store::list_redis_clients()
+        )))
+    })
+}
+
+/// List all registered Redis clients
+async fn redis_list_clients() -> Json<ApiResponse<Vec<String>>> {
+    let clients = crate::core::link_sys::link_sys_store::list_redis_clients();
+    Json(ApiResponse::success(clients))
+}
+
+/// Health check all Redis clients
+async fn redis_health_all() -> Json<ApiResponse<Vec<crate::core::link_sys::redis::LinkSysHealth>>> {
+    let health = crate::core::link_sys::link_sys_store::health_check_all_redis().await;
+    Json(ApiResponse::success(health))
+}
+
+/// Health check a single Redis client
+async fn redis_health_one(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let health = client.health_status().await;
+    match serde_json::to_value(health) {
+        Ok(v) => Json(ApiResponse::success(v)),
+        Err(e) => Json(ApiResponse::error(format!("Serialize error: {}", e))),
+    }
+}
+
+/// PING a Redis client, returns latency in ms
+async fn redis_ping(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.ping().await {
+        Ok(latency_ms) => Json(ApiResponse::success(serde_json::json!({
+            "latency_ms": latency_ms,
+            "healthy": client.healthy(),
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("PING failed: {}", e))),
+    }
+}
+
+/// GET a key from Redis
+async fn redis_get(Path((name, key)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.get(&key).await {
+        Ok(val) => Json(ApiResponse::success(serde_json::json!({
+            "key": key,
+            "value": val,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("GET failed: {}", e))),
+    }
+}
+
+/// SET request body
+#[derive(Deserialize)]
+struct RedisSetRequest {
+    key: String,
+    value: String,
+    ttl_seconds: Option<u64>,
+}
+
+/// SET a key in Redis
+async fn redis_set(
+    Path(name): Path<String>,
+    Json(body): Json<RedisSetRequest>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let ttl = body.ttl_seconds.map(std::time::Duration::from_secs);
+    match client.set(&body.key, &body.value, ttl).await {
+        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+            "key": body.key,
+            "value": body.value,
+            "ttl_seconds": body.ttl_seconds,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("SET failed: {}", e))),
+    }
+}
+
+/// DEL request body
+#[derive(Deserialize)]
+struct RedisDelRequest {
+    keys: Vec<String>,
+}
+
+/// DEL key(s) from Redis
+async fn redis_del(
+    Path(name): Path<String>,
+    Json(body): Json<RedisDelRequest>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let keys_ref: Vec<&str> = body.keys.iter().map(|s| s.as_str()).collect();
+    match client.del(&keys_ref).await {
+        Ok(count) => Json(ApiResponse::success(serde_json::json!({
+            "deleted": count,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("DEL failed: {}", e))),
+    }
+}
+
+/// HSET request body
+#[derive(Deserialize)]
+struct RedisHSetRequest {
+    key: String,
+    field: String,
+    value: String,
+}
+
+/// HSET in Redis
+async fn redis_hset(
+    Path(name): Path<String>,
+    Json(body): Json<RedisHSetRequest>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.hset(&body.key, &body.field, &body.value).await {
+        Ok(count) => Json(ApiResponse::success(serde_json::json!({
+            "key": body.key,
+            "field": body.field,
+            "added": count,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("HSET failed: {}", e))),
+    }
+}
+
+/// HGET from Redis
+async fn redis_hget(Path((name, key, field)): Path<(String, String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.hget(&key, &field).await {
+        Ok(val) => Json(ApiResponse::success(serde_json::json!({
+            "key": key,
+            "field": field,
+            "value": val,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("HGET failed: {}", e))),
+    }
+}
+
+/// HGETALL from Redis
+async fn redis_hgetall(Path((name, key)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.hgetall(&key).await {
+        Ok(map) => Json(ApiResponse::success(serde_json::json!({
+            "key": key,
+            "fields": map,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("HGETALL failed: {}", e))),
+    }
+}
+
+/// RPUSH request body
+#[derive(Deserialize)]
+struct RedisRpushRequest {
+    key: String,
+    values: Vec<String>,
+}
+
+/// RPUSH to a Redis list
+async fn redis_rpush(
+    Path(name): Path<String>,
+    Json(body): Json<RedisRpushRequest>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.rpush(&body.key, body.values).await {
+        Ok(len) => Json(ApiResponse::success(serde_json::json!({
+            "key": body.key,
+            "length": len,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("RPUSH failed: {}", e))),
+    }
+}
+
+/// LPOP from a Redis list
+async fn redis_lpop(Path((name, key)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.lpop(&key, Some(1)).await {
+        Ok(vals) => Json(ApiResponse::success(serde_json::json!({
+            "key": key,
+            "values": vals,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("LPOP failed: {}", e))),
+    }
+}
+
+/// LLEN of a Redis list
+async fn redis_llen(Path((name, key)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.llen(&key).await {
+        Ok(len) => Json(ApiResponse::success(serde_json::json!({
+            "key": key,
+            "length": len,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("LLEN failed: {}", e))),
+    }
+}
+
+/// INCR a Redis key
+async fn redis_incr(Path((name, key)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.incr(&key).await {
+        Ok(val) => Json(ApiResponse::success(serde_json::json!({
+            "key": key,
+            "value": val,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("INCR failed: {}", e))),
+    }
+}
+
+/// Lock request body
+#[derive(Deserialize)]
+struct RedisLockRequest {
+    key: String,
+    ttl_seconds: Option<u64>,
+    max_wait_seconds: Option<u64>,
+}
+
+/// Acquire and immediately release a distributed lock (tests the lock mechanism)
+async fn redis_lock(
+    Path(name): Path<String>,
+    Json(body): Json<RedisLockRequest>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_redis_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let opts = crate::core::link_sys::redis::LockOptions {
+        ttl: std::time::Duration::from_secs(body.ttl_seconds.unwrap_or(5)),
+        max_wait: std::time::Duration::from_secs(body.max_wait_seconds.unwrap_or(3)),
+        retry_interval: std::time::Duration::from_millis(50),
+    };
+    let start = std::time::Instant::now();
+    match client.lock(&body.key, opts).await {
+        Ok(guard) => {
+            let acquire_ms = start.elapsed().as_millis() as u64;
+            // Explicitly release
+            let released = guard.unlock().await.unwrap_or(false);
+            Json(ApiResponse::success(serde_json::json!({
+                "key": body.key,
+                "acquired": true,
+                "acquire_ms": acquire_ms,
+                "released": released,
+            })))
+        }
+        Err(e) => Json(ApiResponse::error(format!("LOCK failed: {}", e))),
+    }
 }
 
 /// Serve the admin API on the specified port
