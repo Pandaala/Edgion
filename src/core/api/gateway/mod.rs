@@ -433,6 +433,67 @@ fn create_testing_router() -> Router {
             "/api/v1/testing/link-sys/etcd/{name}/info",
             get(etcd_info),
         )
+        // LinkSys Elasticsearch testing endpoints
+        .route(
+            "/api/v1/testing/link-sys/es/health",
+            get(es_health_all),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/health",
+            get(es_health_one),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/ping",
+            get(es_ping),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/info",
+            get(es_info),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/clients",
+            get(es_list_clients),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/index-doc/{index}",
+            axum::routing::post(es_index_doc),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/get-doc/{index}/{doc_id}",
+            get(es_get_doc),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/delete-doc/{index}/{doc_id}",
+            axum::routing::post(es_delete_doc),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/search/{index}",
+            axum::routing::post(es_search),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/create-index/{index}",
+            axum::routing::post(es_create_index),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/delete-index/{index}",
+            axum::routing::post(es_delete_index),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/index-exists/{index}",
+            get(es_index_exists),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/refresh/{index}",
+            axum::routing::post(es_refresh_index),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/count/{index}",
+            get(es_count),
+        )
+        .route(
+            "/api/v1/testing/link-sys/es/{name}/bulk",
+            axum::routing::post(es_bulk_send),
+        )
 }
 
 // ==================== LinkSys Redis Testing Endpoints ====================
@@ -989,6 +1050,283 @@ async fn etcd_info(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Val
         "name": client.name(),
         "namespace": client.namespace(),
         "healthy": client.healthy(),
+    })))
+}
+
+// ==================== LinkSys Elasticsearch Testing Endpoints ====================
+
+/// Helper to get an ES client by name, returning error response if not found.
+fn get_es_client_by_name(
+    name: &str,
+) -> Result<
+    std::sync::Arc<crate::core::link_sys::elasticsearch::EsLinkClient>,
+    Json<ApiResponse<serde_json::Value>>,
+> {
+    let key = name.replacen('_', "/", 1);
+    crate::core::link_sys::get_es_client(&key).ok_or_else(|| {
+        Json(ApiResponse::error(format!(
+            "ES client '{}' not found. Available: {:?}",
+            key,
+            crate::core::link_sys::link_sys_store::list_es_clients()
+        )))
+    })
+}
+
+/// List all ES clients
+async fn es_list_clients() -> Json<ApiResponse<serde_json::Value>> {
+    let clients = crate::core::link_sys::link_sys_store::list_es_clients();
+    Json(ApiResponse::success(serde_json::json!(clients)))
+}
+
+/// Health check all ES clients
+async fn es_health_all() -> Json<ApiResponse<serde_json::Value>> {
+    let results = crate::core::link_sys::link_sys_store::health_check_all_es().await;
+    Json(ApiResponse::success(serde_json::json!(results)))
+}
+
+/// Health check a single ES client
+async fn es_health_one(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let health = client.health_status().await;
+    Json(ApiResponse::success(serde_json::json!({
+        "name": health.name,
+        "connected": health.connected,
+        "latency_ms": health.latency_ms,
+        "error": health.error,
+    })))
+}
+
+/// Ping ES client (cluster health + latency)
+async fn es_ping(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.ping().await {
+        Ok(latency_ms) => Json(ApiResponse::success(serde_json::json!({
+            "latency_ms": latency_ms,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("PING failed: {}", e))),
+    }
+}
+
+/// Get ES client info (name, endpoints, healthy)
+async fn es_info(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    Json(ApiResponse::success(serde_json::json!({
+        "name": client.name(),
+        "endpoints": client.endpoints(),
+        "healthy": client.healthy(),
+    })))
+}
+
+/// Index a single document
+async fn es_index_doc(
+    Path((client_name, index)): Path<(String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&client_name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.index_doc(&index, &body).await {
+        Ok(doc_id) => Json(ApiResponse::success(serde_json::json!({
+            "index": index,
+            "doc_id": doc_id,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("INDEX DOC failed: {}", e))),
+    }
+}
+
+/// Get a document by ID
+async fn es_get_doc(
+    Path((client_name, index, doc_id)): Path<(String, String, String)>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&client_name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.get_doc(&index, &doc_id).await {
+        Ok(Some(source)) => Json(ApiResponse::success(serde_json::json!({
+            "index": index,
+            "doc_id": doc_id,
+            "source": source,
+        }))),
+        Ok(None) => Json(ApiResponse::success(serde_json::json!({
+            "index": index,
+            "doc_id": doc_id,
+            "source": null,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("GET DOC failed: {}", e))),
+    }
+}
+
+/// Delete a document by ID
+async fn es_delete_doc(
+    Path((client_name, index, doc_id)): Path<(String, String, String)>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&client_name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.delete_doc(&index, &doc_id).await {
+        Ok(deleted) => Json(ApiResponse::success(serde_json::json!({
+            "index": index,
+            "doc_id": doc_id,
+            "deleted": deleted,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("DELETE DOC failed: {}", e))),
+    }
+}
+
+/// Search request body
+#[derive(Deserialize)]
+struct EsSearchRequest {
+    query: serde_json::Value,
+}
+
+/// Search documents
+async fn es_search(
+    Path((client_name, index)): Path<(String, String)>,
+    Json(body): Json<EsSearchRequest>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&client_name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.search(&index, &body.query).await {
+        Ok(result) => Json(ApiResponse::success(serde_json::json!({
+            "took": result.took,
+            "timed_out": result.timed_out,
+            "total": result.hits.total.value,
+            "hits": result.hits.hits.iter().map(|h| serde_json::json!({
+                "id": h.id,
+                "score": h.score,
+                "source": h.source,
+            })).collect::<Vec<_>>(),
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("SEARCH failed: {}", e))),
+    }
+}
+
+/// Create an index (no settings body needed for basic creation)
+async fn es_create_index(
+    Path((client_name, index)): Path<(String, String)>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&client_name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.create_index(&index, None).await {
+        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+            "index": index,
+            "created": true,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("CREATE INDEX failed: {}", e))),
+    }
+}
+
+/// Delete an index
+async fn es_delete_index(
+    Path((client_name, index)): Path<(String, String)>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&client_name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.delete_index(&index).await {
+        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+            "index": index,
+            "deleted": true,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("DELETE INDEX failed: {}", e))),
+    }
+}
+
+/// Check if an index exists
+async fn es_index_exists(
+    Path((client_name, index)): Path<(String, String)>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&client_name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.index_exists(&index).await {
+        Ok(exists) => Json(ApiResponse::success(serde_json::json!({
+            "index": index,
+            "exists": exists,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("INDEX EXISTS failed: {}", e))),
+    }
+}
+
+/// Refresh an index (make recent writes visible to search)
+async fn es_refresh_index(
+    Path((client_name, index)): Path<(String, String)>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&client_name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.refresh_index(&index).await {
+        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+            "index": index,
+            "refreshed": true,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("REFRESH failed: {}", e))),
+    }
+}
+
+/// Count documents in an index
+async fn es_count(
+    Path((client_name, index)): Path<(String, String)>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&client_name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.count(&index, None).await {
+        Ok(count) => Json(ApiResponse::success(serde_json::json!({
+            "index": index,
+            "count": count,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("COUNT failed: {}", e))),
+    }
+}
+
+/// Bulk send request body
+#[derive(Deserialize)]
+struct EsBulkSendRequest {
+    docs: Vec<serde_json::Value>,
+}
+
+/// Send documents to bulk ingest buffer
+async fn es_bulk_send(
+    Path(client_name): Path<String>,
+    Json(body): Json<EsBulkSendRequest>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_es_client_by_name(&client_name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let count = body.docs.len();
+    let mut errors = 0;
+    for doc in body.docs {
+        let doc_str = serde_json::to_string(&doc).unwrap_or_default();
+        if let Err(e) = client.send_bulk(doc_str).await {
+            tracing::warn!("ES bulk send error: {}", e);
+            errors += 1;
+        }
+    }
+    Json(ApiResponse::success(serde_json::json!({
+        "sent": count - errors,
+        "errors": errors,
     })))
 }
 

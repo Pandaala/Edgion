@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 
 use crate::types::resources::link_sys::LinkSys;
 
+use super::elasticsearch::EsLinkClient;
 use super::etcd::EtcdLinkClient;
 use super::redis::RedisLinkClient;
 use super::webhook::get_webhook_manager;
@@ -228,6 +229,65 @@ fn etcd_runtime_replace_all(new_map: HashMap<String, Arc<EtcdLinkClient>>) -> Ha
 }
 
 // ============================================================
+// Elasticsearch runtime store (ArcSwap for lock-free reads)
+// ============================================================
+
+/// Global runtime store for Elasticsearch clients.
+/// Keyed by "namespace/name", same as LinkSys CRD key.
+/// ArcSwap provides lock-free concurrent reads, consistent with Redis/Etcd pattern.
+static ES_RUNTIME: LazyLock<ArcSwap<HashMap<String, Arc<EsLinkClient>>>> =
+    LazyLock::new(|| ArcSwap::from_pointee(HashMap::new()));
+
+/// Get an Elasticsearch client by LinkSys name ("namespace/name").
+///
+/// This is the primary API for DataSender and other callers.
+/// Returns None if the LinkSys resource doesn't exist or isn't an Elasticsearch type.
+pub fn get_es_client(name: &str) -> Option<Arc<EsLinkClient>> {
+    ES_RUNTIME.load().get(name).cloned()
+}
+
+/// List all registered Elasticsearch client names.
+pub fn list_es_clients() -> Vec<String> {
+    ES_RUNTIME.load().keys().cloned().collect()
+}
+
+/// Health check all registered Elasticsearch clients.
+pub async fn health_check_all_es() -> Vec<super::elasticsearch::LinkSysHealth> {
+    let clients: Vec<Arc<EsLinkClient>> = ES_RUNTIME.load().values().cloned().collect();
+    let mut results = Vec::with_capacity(clients.len());
+    for client in clients {
+        results.push(client.health_status().await);
+    }
+    results
+}
+
+/// Insert an ES client into the runtime store.
+fn es_runtime_insert(key: String, client: Arc<EsLinkClient>) {
+    let current = ES_RUNTIME.load();
+    let mut new_map = (**current).clone();
+    new_map.insert(key, client);
+    ES_RUNTIME.store(Arc::new(new_map));
+}
+
+/// Remove an ES client from the runtime store, returning the old client (if any).
+fn es_runtime_remove(key: &str) -> Option<Arc<EsLinkClient>> {
+    let current = ES_RUNTIME.load();
+    if !current.contains_key(key) {
+        return None;
+    }
+    let mut new_map = (**current).clone();
+    let old = new_map.remove(key);
+    ES_RUNTIME.store(Arc::new(new_map));
+    old
+}
+
+/// Replace all ES clients in the runtime store atomically.
+fn es_runtime_replace_all(new_map: HashMap<String, Arc<EsLinkClient>>) -> HashMap<String, Arc<EsLinkClient>> {
+    let old = ES_RUNTIME.swap(Arc::new(new_map));
+    (*old).clone()
+}
+
+// ============================================================
 // Dispatch to sub-module managers
 // ============================================================
 
@@ -238,6 +298,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     // Build new clients maps
     let mut new_redis_map: HashMap<String, Arc<RedisLinkClient>> = HashMap::new();
     let mut new_etcd_map: HashMap<String, Arc<EtcdLinkClient>> = HashMap::new();
+    let mut new_es_map: HashMap<String, Arc<EsLinkClient>> = HashMap::new();
 
     for (key, ls) in data {
         match &ls.spec.config {
@@ -298,6 +359,33 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                     }
                 }
             }
+            crate::types::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
+                match EsLinkClient::from_config(key, es_config) {
+                    Ok(client) => {
+                        let client = Arc::new(client);
+                        let client_ref = client.clone();
+                        let key_owned = key.clone();
+                        // Init in background — don't block full_set for slow connections
+                        tokio::spawn(async move {
+                            if let Err(e) = client_ref.init().await {
+                                tracing::error!(
+                                    es = %key_owned,
+                                    error = %e,
+                                    "Failed to initialize Elasticsearch client"
+                                );
+                            }
+                        });
+                        new_es_map.insert(key.clone(), client);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            key,
+                            error = %e,
+                            "Failed to build Elasticsearch client from config"
+                        );
+                    }
+                }
+            }
             _ => {
                 tracing::debug!(
                     key,
@@ -327,6 +415,18 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
             for (key, client) in old_etcd {
                 if let Err(e) = client.shutdown().await {
                     tracing::warn!(etcd = %key, error = %e, "Error shutting down old Etcd client");
+                }
+            }
+        });
+    }
+
+    // Atomically swap ES runtime store; shutdown old clients in background
+    let old_es = es_runtime_replace_all(new_es_map);
+    if !old_es.is_empty() {
+        tokio::spawn(async move {
+            for (key, client) in old_es {
+                if let Err(e) = client.shutdown().await {
+                    tracing::warn!(es = %key, error = %e, "Error shutting down old ES client");
                 }
             }
         });
@@ -434,6 +534,50 @@ async fn dispatch_partial_update(
                     }
                 }
             }
+            crate::types::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
+                match EsLinkClient::from_config(key, es_config) {
+                    Ok(client) => {
+                        let client = Arc::new(client);
+                        let client_ref = client.clone();
+                        let key_owned = key.clone();
+
+                        // Swap into store first (so get_es_client returns new client immediately)
+                        let old = {
+                            let current = ES_RUNTIME.load();
+                            let old = current.get(key).cloned();
+                            es_runtime_insert(key.clone(), client);
+                            old
+                        };
+
+                        // Init new client in background
+                        tokio::spawn(async move {
+                            if let Err(e) = client_ref.init().await {
+                                tracing::error!(
+                                    es = %key_owned,
+                                    error = %e,
+                                    "Failed to initialize Elasticsearch client"
+                                );
+                            }
+                        });
+
+                        // Shutdown old client in background
+                        if let Some(old_client) = old {
+                            tokio::spawn(async move {
+                                if let Err(e) = old_client.shutdown().await {
+                                    tracing::warn!(error = %e, "Error shutting down old ES client");
+                                }
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            key,
+                            error = %e,
+                            "Failed to build Elasticsearch client from config"
+                        );
+                    }
+                }
+            }
             _ => {
                 tracing::debug!(
                     key,
@@ -465,6 +609,16 @@ async fn dispatch_partial_update(
             tokio::spawn(async move {
                 if let Err(e) = old_client.shutdown().await {
                     tracing::warn!(etcd = %key_owned, error = %e, "Error shutting down removed Etcd client");
+                }
+            });
+        }
+
+        // Remove ES client and shutdown in background
+        if let Some(old_client) = es_runtime_remove(key) {
+            let key_owned = key.clone();
+            tokio::spawn(async move {
+                if let Err(e) = old_client.shutdown().await {
+                    tracing::warn!(es = %key_owned, error = %e, "Error shutting down removed ES client");
                 }
             });
         }
