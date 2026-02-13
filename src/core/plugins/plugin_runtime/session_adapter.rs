@@ -119,12 +119,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .req_header()
             .headers
             .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|v| (name.as_str().to_string(), v.to_string()))
-            })
+            .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str().to_string(), v.to_string())))
             .collect()
     }
 

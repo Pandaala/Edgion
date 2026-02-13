@@ -294,8 +294,7 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
     };
 
     // Create TCP service
-    let mut tcp_service =
-        Service::with_listeners(format!("TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tcp);
+    let mut tcp_service = Service::with_listeners(format!("TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tcp);
 
     // Apply connection filter if configured via annotation
     apply_connection_filter(&mut tcp_service, context);

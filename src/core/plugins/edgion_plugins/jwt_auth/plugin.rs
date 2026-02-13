@@ -5,20 +5,20 @@
 //! All credentials come from K8s Secret (secret_ref or secret_refs).
 
 use base64::Engine;
-use bytes::Bytes;
-use pingora_http::ResponseHeader;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::core::conf_mgr::sync_runtime::resource_processor::get_secret;
+use crate::core::plugins::edgion_plugins::common::auth_common::{
+    send_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
+};
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{JwtAlgorithm, JwtAuthConfig};
 
 use async_trait::async_trait;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
-use serde::{Deserialize, Serialize};
 
 type JwtAuthError = Box<dyn std::error::Error + Send + Sync>;
 type JwtAuthResult<T> = Result<T, JwtAuthError>;
@@ -49,13 +49,6 @@ enum Credentials {
     Multi(HashMap<String, Credential>),
     /// No credentials configured
     None,
-}
-
-/// JWT claims for decoding (generic)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Claims {
-    #[serde(flatten)]
-    extra: serde_json::Value,
 }
 
 /// Verification result containing username and claims
@@ -372,10 +365,9 @@ impl JwtAuth {
 
                 let token_data = decode::<Claims>(token, &DecodingKey::from_secret(&[]), &no_verify)
                     .map_err(|e| format!("Failed to decode JWT payload: {}", e))?;
+                let claims_value = token_data.claims.to_value();
 
-                let key_value = token_data
-                    .claims
-                    .extra
+                let key_value = claims_value
                     .get(&self.config.key_claim_name)
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
@@ -399,10 +391,11 @@ impl JwtAuth {
         // Verify signature and claims
         let token_data = decode::<Claims>(token, &decoding_key, &validation)
             .map_err(|e| format!("JWT verification failed: {}", e))?;
+        let claims_value = token_data.claims.to_value();
 
         // Validate maximum_expiration if configured
         if self.config.maximum_expiration > 0 {
-            if let Some(exp) = token_data.claims.extra.get("exp").and_then(|v| v.as_u64()) {
+            if let Some(exp) = claims_value.get("exp").and_then(|v| v.as_u64()) {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
@@ -419,18 +412,16 @@ impl JwtAuth {
         }
 
         // Extract username: try key_claim_name first, then "sub" claim, then empty string
-        let username = token_data
-            .claims
-            .extra
+        let username = claims_value
             .get(&self.config.key_claim_name)
             .and_then(|v| v.as_str())
-            .or_else(|| token_data.claims.extra.get("sub").and_then(|v| v.as_str()))
+            .or_else(|| claims_value.get("sub").and_then(|v| v.as_str()))
             .unwrap_or("")
             .to_string();
 
         // Serialize claims to JSON if store_claims_in_ctx is enabled
         let claims_json = if self.config.store_claims_in_ctx {
-            serde_json::to_string(&token_data.claims.extra).ok()
+            serde_json::to_string(&claims_value).ok()
         } else {
             None
         };
@@ -438,34 +429,15 @@ impl JwtAuth {
         Ok(VerifyResult {
             username,
             claims_json,
-            claims: token_data.claims.extra,
+            claims: claims_value,
         })
     }
 
     /// Set headers from JWT claims based on claims_to_headers configuration
     fn set_claims_headers(&self, session: &mut dyn PluginSession, claims: &serde_json::Value) {
         if let Some(ref mapping) = self.config.claims_to_headers {
-            for (claim_name, header_name) in mapping {
-                if let Some(value) = claims.get(claim_name) {
-                    // Convert claim value to string
-                    let header_value = match value {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        serde_json::Value::Array(arr) => {
-                            // Join array values with comma
-                            arr.iter()
-                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        }
-                        _ => continue, // Skip null and objects
-                    };
-                    if !header_value.is_empty() {
-                        let _ = session.set_request_header(header_name, &header_value);
-                    }
-                }
-            }
+            // Keep existing jwt_auth behavior by not enforcing header size limits here.
+            set_common_claims_headers(session, claims, mapping, usize::MAX, usize::MAX);
         }
     }
 
@@ -482,22 +454,14 @@ impl JwtAuth {
 
     /// Return 401 Unauthorized response with WWW-Authenticate header
     async fn auth_failed_return(&self, session: &mut dyn PluginSession) -> JwtAuthResult<()> {
-        let mut resp = ResponseHeader::build(401, None)?;
-        resp.insert_header("Content-Type", "text/plain")?;
-        resp.insert_header("Connection", "close")?;
-        // Add WWW-Authenticate header per RFC 6750
-        let www_auth = format!("Bearer realm=\"{}\"", self.config.realm);
-        resp.insert_header("WWW-Authenticate", &www_auth)?;
-
-        session.write_response_header(Box::new(resp), false).await?;
-        session
-            .write_response_body(
-                Some(Bytes::from_static(b"401 Unauthorized - Invalid or missing JWT")),
-                true,
-            )
-            .await?;
-        session.shutdown().await;
-        Ok(())
+        send_auth_error_response(
+            session,
+            401,
+            "Bearer",
+            &self.config.realm,
+            "Unauthorized - Invalid or missing JWT",
+        )
+        .await
     }
 
     /// Delay before returning auth failure (timing attack protection)

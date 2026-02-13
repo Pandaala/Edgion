@@ -274,10 +274,7 @@ impl AcmeTestSuite {
                         let _ = dns_provider.remove_txt_record(&ch.domain, &ch.digest).await;
                     }
 
-                    TestResult::passed_with_message(
-                        start.elapsed(),
-                        "3-domain SAN certificate issued".to_string(),
-                    )
+                    TestResult::passed_with_message(start.elapsed(), "3-domain SAN certificate issued".to_string())
                 })
             },
         )

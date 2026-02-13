@@ -103,10 +103,7 @@ impl CloudflareDnsProvider {
         let body: serde_json::Value = resp.json().await?;
 
         if !body["success"].as_bool().unwrap_or(false) {
-            return Err(anyhow::anyhow!(
-                "Cloudflare API error: {}",
-                body["errors"]
-            ));
+            return Err(anyhow::anyhow!("Cloudflare API error: {}", body["errors"]));
         }
 
         body["result"]
@@ -180,10 +177,7 @@ impl DnsProvider for CloudflareDnsProvider {
         let body: serde_json::Value = resp.json().await?;
 
         if !body["success"].as_bool().unwrap_or(false) {
-            return Err(anyhow::anyhow!(
-                "Failed to create TXT record: {}",
-                body["errors"]
-            ));
+            return Err(anyhow::anyhow!("Failed to create TXT record: {}", body["errors"]));
         }
 
         tracing::info!(
@@ -267,10 +261,7 @@ impl AlidnsDnsProvider {
         params.push(("AccessKeyId".to_string(), self.access_key_id.clone()));
         params.push(("SignatureMethod".to_string(), "HMAC-SHA1".to_string()));
         params.push(("SignatureVersion".to_string(), "1.0".to_string()));
-        params.push((
-            "SignatureNonce".to_string(),
-            uuid::Uuid::new_v4().to_string(),
-        ));
+        params.push(("SignatureNonce".to_string(), uuid::Uuid::new_v4().to_string()));
         params.push((
             "Timestamp".to_string(),
             chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
@@ -287,16 +278,11 @@ impl AlidnsDnsProvider {
             .join("&");
 
         // Build string to sign
-        let string_to_sign = format!(
-            "GET&{}&{}",
-            percent_encode("/"),
-            percent_encode(&canonical_query)
-        );
+        let string_to_sign = format!("GET&{}&{}", percent_encode("/"), percent_encode(&canonical_query));
 
         // Calculate HMAC-SHA1
         let signing_key = format!("{}&", self.access_key_secret);
-        let mut mac =
-            Hmac::<Sha1>::new_from_slice(signing_key.as_bytes()).expect("HMAC can take key of any size");
+        let mut mac = Hmac::<Sha1>::new_from_slice(signing_key.as_bytes()).expect("HMAC can take key of any size");
         mac.update(string_to_sign.as_bytes());
         let signature = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, mac.finalize().into_bytes());
 
@@ -508,11 +494,7 @@ impl DnsProvider for PebbleChalltestDnsProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!(
-                "challtestsrv /set-txt failed: {} - {}",
-                status,
-                body
-            ));
+            return Err(anyhow::anyhow!("challtestsrv /set-txt failed: {} - {}", status, body));
         }
 
         tracing::debug!(
@@ -539,11 +521,7 @@ impl DnsProvider for PebbleChalltestDnsProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!(
-                "challtestsrv /clear-txt failed: {} - {}",
-                status,
-                body
-            ));
+            return Err(anyhow::anyhow!("challtestsrv /clear-txt failed: {} - {}", status, body));
         }
 
         tracing::debug!(
@@ -570,17 +548,8 @@ mod tests {
     #[test]
     fn test_build_acme_rr() {
         assert_eq!(build_acme_rr("example.com", "example.com"), "_acme-challenge");
-        assert_eq!(
-            build_acme_rr("sub.example.com", "example.com"),
-            "_acme-challenge.sub"
-        );
-        assert_eq!(
-            build_acme_rr("*.example.com", "example.com"),
-            "_acme-challenge"
-        );
-        assert_eq!(
-            build_acme_rr("a.b.example.com", "example.com"),
-            "_acme-challenge.a.b"
-        );
+        assert_eq!(build_acme_rr("sub.example.com", "example.com"), "_acme-challenge.sub");
+        assert_eq!(build_acme_rr("*.example.com", "example.com"), "_acme-challenge");
+        assert_eq!(build_acme_rr("a.b.example.com", "example.com"), "_acme-challenge.a.b");
     }
 }

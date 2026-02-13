@@ -1,11 +1,10 @@
 //! Basic Authentication plugin implementation
 
-use bytes::Bytes;
-use pingora_http::ResponseHeader;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::core::plugins::edgion_plugins::common::auth_common::send_auth_error_response;
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::BasicAuthConfig;
@@ -209,23 +208,14 @@ impl BasicAuth {
     }
 
     async fn auth_failed_return(&self, session: &mut dyn PluginSession) -> BasicAuthResult<()> {
-        let mut resp = ResponseHeader::build(401, None)?;
-
-        // WWW-Authenticate header with configured realm
-        let auth_header_value = format!("Basic realm=\"{}\"", self.config.realm);
-        resp.insert_header("WWW-Authenticate", auth_header_value)?;
-        resp.insert_header("Content-Type", "text/plain")?;
-        resp.insert_header("Connection", "close")?;
-
-        session.write_response_header(Box::new(resp), false).await?;
-        session
-            .write_response_body(
-                Some(Bytes::from_static(b"401 Unauthorized - Authentication required")),
-                true,
-            )
-            .await?;
-        session.shutdown().await;
-        Ok(())
+        send_auth_error_response(
+            session,
+            401,
+            "Basic",
+            &self.config.realm,
+            "Unauthorized - Authentication required",
+        )
+        .await
     }
 }
 

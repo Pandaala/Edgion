@@ -351,8 +351,7 @@ impl Default for RateLimitConfig {
 
 // Re-export from cli config for convenience
 pub use crate::core::cli::edgion_gateway::config::{
-    get_default_estimator_slots, get_gateway_instance_count, get_max_estimator_slots,
-    get_min_estimator_slots, SLOTS_K,
+    get_default_estimator_slots, get_gateway_instance_count, get_max_estimator_slots, get_min_estimator_slots, SLOTS_K,
 };
 
 impl RateLimitConfig {
@@ -852,10 +851,7 @@ rate: 50
         };
         config.validate();
         assert!(!config.is_valid());
-        assert!(config
-            .get_validation_error()
-            .unwrap()
-            .contains("Cluster scope"));
+        assert!(config.get_validation_error().unwrap().contains("Cluster scope"));
     }
 
     #[test]

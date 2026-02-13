@@ -280,6 +280,113 @@ impl EdgionPluginsHandler {
             }
         }
     }
+
+    fn read_secret_utf8(secret: &k8s_openapi::api::core::v1::Secret, keys: &[&str]) -> Option<String> {
+        if let Some(data) = &secret.data {
+            for key in keys {
+                if let Some(bytes) = data.get(*key) {
+                    if let Ok(value) = String::from_utf8(bytes.0.clone()) {
+                        if !value.trim().is_empty() {
+                            return Some(value);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(string_data) = &secret.string_data {
+            for key in keys {
+                if let Some(value) = string_data.get(*key) {
+                    if !value.trim().is_empty() {
+                        return Some(value.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Resolve OpenID Connect secrets and register references to SecretRefManager.
+    fn resolve_openid_connect_secrets(ep: &mut EdgionPlugins, resource_ref: &ResourceRef, ctx: &HandlerContext) {
+        let ep_ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+
+        if let Some(ref mut plugins) = ep.spec.request_plugins {
+            for entry in plugins.iter_mut() {
+                if let EdgionPlugin::OpenidConnect(ref mut config) = entry.plugin {
+                    // Reset runtime-resolved fields first to avoid stale values on update.
+                    config.resolved_client_secret = None;
+                    config.resolved_session_secret = None;
+
+                    if let Some(secret_ref) = config.client_secret_ref.clone() {
+                        let ns = secret_ref.namespace.as_ref().or(ep.metadata.namespace.as_ref());
+                        let secret_key = format_secret_key(ns, &secret_ref.name);
+                        let ns_str = ns.map(|s| s.as_str()).unwrap_or(ep_ns);
+
+                        ctx.secret_ref_manager()
+                            .add_ref(secret_key.clone(), resource_ref.clone());
+
+                        if let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) {
+                            let resolved =
+                                Self::read_secret_utf8(&secret, &["clientSecret", "client_secret", "secret"]);
+                            if let Some(value) = resolved {
+                                config.resolved_client_secret = Some(value);
+                                tracing::debug!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    "OpenidConnect: client secret resolved"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    "OpenidConnect: Secret missing client secret key (clientSecret/client_secret/secret)"
+                                );
+                            }
+                        } else {
+                            tracing::info!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "OpenidConnect: client secret not found yet, will be reprocessed when Secret arrives"
+                            );
+                        }
+                    }
+
+                    if let Some(secret_ref) = config.session_secret_ref.clone() {
+                        let ns = secret_ref.namespace.as_ref().or(ep.metadata.namespace.as_ref());
+                        let secret_key = format_secret_key(ns, &secret_ref.name);
+                        let ns_str = ns.map(|s| s.as_str()).unwrap_or(ep_ns);
+
+                        ctx.secret_ref_manager()
+                            .add_ref(secret_key.clone(), resource_ref.clone());
+
+                        if let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) {
+                            let resolved =
+                                Self::read_secret_utf8(&secret, &["sessionSecret", "session_secret", "secret"]);
+                            if let Some(value) = resolved {
+                                config.resolved_session_secret = Some(value);
+                                tracing::debug!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    "OpenidConnect: session secret resolved"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    "OpenidConnect: Secret missing session secret key (sessionSecret/session_secret/secret)"
+                                );
+                            }
+                        } else {
+                            tracing::info!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "OpenidConnect: session secret not found yet, will be reprocessed when Secret arrives"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Default for EdgionPluginsHandler {
@@ -310,6 +417,9 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
 
         // Resolve KeyAuth keys from Secrets and register references
         Self::resolve_key_auth_keys(&mut ep, &resource_ref, ctx);
+
+        // Resolve OpenID Connect secrets and register references
+        Self::resolve_openid_connect_secrets(&mut ep, &resource_ref, ctx);
 
         // Note: preparse() is called by processor before parse(), so we don't call it here
 
@@ -404,5 +514,96 @@ fn update_k8s_condition(conditions: &mut Vec<Condition>, new_condition: Conditio
         }
     } else {
         conditions.push(new_condition);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EdgionPluginsHandler;
+    use crate::core::conf_mgr::sync_runtime::resource_processor::{
+        replace_all_secrets, HandlerContext, ProcessResult, ProcessorHandler, SecretRefManager,
+    };
+    use crate::types::resources::edgion_plugins::{
+        EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, OpenidConnectConfig, RequestFilterEntry,
+    };
+    use crate::types::resources::gateway::SecretObjectReference;
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::ByteString;
+    use kube::api::ObjectMeta;
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::Arc;
+
+    fn build_secret(namespace: &str, name: &str, key: &str, value: &str) -> Secret {
+        let mut data = BTreeMap::new();
+        data.insert(key.to_string(), ByteString(value.as_bytes().to_vec()));
+        Secret {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                ..Default::default()
+            },
+            data: Some(data),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_parse_resolves_openid_connect_secrets_and_registers_refs() {
+        replace_all_secrets(HashMap::new());
+
+        let client_secret = build_secret("default", "oidc-client", "clientSecret", "client-secret-value");
+        let session_secret = build_secret("default", "oidc-session", "sessionSecret", "session-secret-value");
+        let mut secrets = HashMap::new();
+        secrets.insert("default/oidc-client".to_string(), client_secret);
+        secrets.insert("default/oidc-session".to_string(), session_secret);
+        replace_all_secrets(secrets);
+
+        let mut ep = EdgionPlugins::new("oidc-plugins", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::OpenidConnect(
+            OpenidConnectConfig {
+                discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+                client_id: "my-client".to_string(),
+                client_secret_ref: Some(SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "oidc-client".to_string(),
+                    namespace: None,
+                }),
+                session_secret_ref: Some(SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "oidc-session".to_string(),
+                    namespace: None,
+                }),
+                ..Default::default()
+            },
+        ))]);
+
+        let secret_ref_manager = Arc::new(SecretRefManager::new());
+        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None);
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx) {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let entry = parsed
+            .spec
+            .request_plugins
+            .as_ref()
+            .and_then(|v| v.first())
+            .expect("missing request plugin");
+        let config = match &entry.plugin {
+            EdgionPlugin::OpenidConnect(c) => c,
+            _ => panic!("unexpected plugin type"),
+        };
+
+        assert_eq!(config.resolved_client_secret.as_deref(), Some("client-secret-value"));
+        assert_eq!(config.resolved_session_secret.as_deref(), Some("session-secret-value"));
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/oidc-client").len(), 1);
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/oidc-session").len(), 1);
+
+        replace_all_secrets(HashMap::new());
     }
 }

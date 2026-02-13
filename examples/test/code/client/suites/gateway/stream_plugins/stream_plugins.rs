@@ -52,10 +52,7 @@ impl StreamPluginsTestSuite {
                                     "HTTP request accepted (no ConnectionFilter)".to_string(),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 2xx, got {}", response.status()),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 2xx, got {}", response.status()))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -139,10 +136,7 @@ impl StreamPluginsTestSuite {
                         Ok(Ok(mut stream)) => {
                             // Send data
                             if let Err(e) = stream.write_all(test_data).await {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Write failed: {}", e),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
                             }
 
                             // Read echo response
@@ -157,10 +151,7 @@ impl StreamPluginsTestSuite {
                                     } else {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
-                                            format!(
-                                                "TCP connection passed through filter (received {} bytes)",
-                                                n
-                                            ),
+                                            format!("TCP connection passed through filter (received {} bytes)", n),
                                         )
                                     }
                                 }
@@ -168,24 +159,17 @@ impl StreamPluginsTestSuite {
                                     start.elapsed(),
                                     "Connection closed immediately (0 bytes read)".to_string(),
                                 ),
-                                Ok(Err(e)) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Read failed: {}", e),
-                                ),
-                                Err(_) => TestResult::failed(
-                                    start.elapsed(),
-                                    "Read timed out".to_string(),
-                                ),
+                                Ok(Err(e)) => TestResult::failed(start.elapsed(), format!("Read failed: {}", e)),
+                                Err(_) => TestResult::failed(start.elapsed(), "Read timed out".to_string()),
                             }
                         }
                         Ok(Err(e)) => TestResult::failed(
                             start.elapsed(),
                             format!("Connection refused (should be allowed): {}", e),
                         ),
-                        Err(_) => TestResult::failed(
-                            start.elapsed(),
-                            "Connection timed out (should be allowed)".to_string(),
-                        ),
+                        Err(_) => {
+                            TestResult::failed(start.elapsed(), "Connection timed out (should be allowed)".to_string())
+                        }
                     }
                 })
             },
@@ -209,12 +193,7 @@ impl StreamPluginsTestSuite {
                             Ok(Ok(mut stream)) => {
                                 // If connected, check it gets closed
                                 let mut buf = vec![0u8; 16];
-                                match tokio::time::timeout(
-                                    Duration::from_secs(1),
-                                    stream.read(&mut buf),
-                                )
-                                .await
-                                {
+                                match tokio::time::timeout(Duration::from_secs(1), stream.read(&mut buf)).await {
                                     Ok(Ok(0)) | Ok(Err(_)) => denied_count += 1,
                                     Err(_) => {} // timeout, not clearly denied
                                     _ => {}
@@ -235,10 +214,7 @@ impl StreamPluginsTestSuite {
                     } else {
                         TestResult::failed(
                             start.elapsed(),
-                            format!(
-                                "Only {}/{} connections denied (expected all)",
-                                denied_count, total
-                            ),
+                            format!("Only {}/{} connections denied (expected all)", denied_count, total),
                         )
                     }
                 })

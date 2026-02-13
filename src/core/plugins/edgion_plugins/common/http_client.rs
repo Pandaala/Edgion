@@ -34,6 +34,7 @@ use std::time::Duration;
 /// Uses OnceLock for lazy initialization (consistent with RateLimit plugin pattern).
 /// reqwest::Client is designed to be shared — it maintains an internal connection pool.
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+static INSECURE_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
 /// Get the global HTTP client instance.
 ///
@@ -52,6 +53,27 @@ pub fn get_http_client() -> &'static Client {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("Failed to build HTTP client")
+    })
+}
+
+/// Get HTTP client by TLS verification mode.
+///
+/// - `ssl_verify=true`: return default secure client.
+/// - `ssl_verify=false`: return client with certificate verification disabled.
+pub fn get_http_client_with_ssl_verify(ssl_verify: bool) -> &'static Client {
+    if ssl_verify {
+        return get_http_client();
+    }
+
+    INSECURE_HTTP_CLIENT.get_or_init(|| {
+        Client::builder()
+            .pool_max_idle_per_host(32)
+            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .danger_accept_invalid_certs(true)
+            .build()
+            .expect("Failed to build insecure HTTP client")
     })
 }
 
@@ -113,5 +135,17 @@ mod tests {
         let client2 = get_http_client();
         // Both should point to the same instance
         assert!(std::ptr::eq(client1, client2));
+    }
+
+    #[test]
+    fn test_get_http_client_with_ssl_verify_returns_expected_instances() {
+        let secure1 = get_http_client_with_ssl_verify(true);
+        let secure2 = get_http_client();
+        assert!(std::ptr::eq(secure1, secure2));
+
+        let insecure1 = get_http_client_with_ssl_verify(false);
+        let insecure2 = get_http_client_with_ssl_verify(false);
+        assert!(std::ptr::eq(insecure1, insecure2));
+        assert!(!std::ptr::eq(secure1, insecure1));
     }
 }

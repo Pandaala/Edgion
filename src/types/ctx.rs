@@ -177,8 +177,7 @@ impl UpstreamInfo {
     #[inline]
     pub fn set_response_body_size(&mut self, size: usize) {
         if self.response_body_size.is_some() {
-            self.err
-                .push("response_body_size already set".to_string());
+            self.err.push("response_body_size already set".to_string());
         }
         self.response_body_size = Some(size);
     }
