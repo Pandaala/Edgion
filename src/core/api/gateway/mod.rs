@@ -379,6 +379,60 @@ fn create_testing_router() -> Router {
             "/api/v1/testing/link-sys/redis/clients",
             get(redis_list_clients),
         )
+        // LinkSys Etcd testing endpoints
+        .route("/api/v1/testing/link-sys/etcd/health", get(etcd_health_all))
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/health",
+            get(etcd_health_one),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/ping",
+            get(etcd_ping),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/get/{key}",
+            get(etcd_get),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/put",
+            axum::routing::post(etcd_put),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/delete/{key}",
+            axum::routing::post(etcd_delete),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/get-prefix/{prefix}",
+            get(etcd_get_prefix),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/delete-prefix/{prefix}",
+            axum::routing::post(etcd_delete_prefix),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/lease-grant",
+            axum::routing::post(etcd_lease_grant),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/lease-revoke/{lease_id}",
+            axum::routing::post(etcd_lease_revoke),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/lease-ttl/{lease_id}",
+            get(etcd_lease_ttl),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/lock",
+            axum::routing::post(etcd_lock),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/clients",
+            get(etcd_list_clients),
+        )
+        .route(
+            "/api/v1/testing/link-sys/etcd/{name}/info",
+            get(etcd_info),
+        )
 }
 
 // ==================== LinkSys Redis Testing Endpoints ====================
@@ -669,6 +723,273 @@ async fn redis_lock(
         }
         Err(e) => Json(ApiResponse::error(format!("LOCK failed: {}", e))),
     }
+}
+
+// ==================== LinkSys Etcd Testing Endpoints ====================
+
+/// Helper to get an Etcd client by name, returning error response if not found.
+fn get_etcd_client_by_name(name: &str) -> Result<std::sync::Arc<crate::core::link_sys::etcd::EtcdLinkClient>, Json<ApiResponse<serde_json::Value>>> {
+    let key = name.replacen('_', "/", 1);
+    crate::core::link_sys::get_etcd_client(&key).ok_or_else(|| {
+        Json(ApiResponse::error(format!(
+            "Etcd client '{}' not found. Available: {:?}",
+            key,
+            crate::core::link_sys::link_sys_store::list_etcd_clients()
+        )))
+    })
+}
+
+/// List all registered Etcd clients
+async fn etcd_list_clients() -> Json<ApiResponse<Vec<String>>> {
+    let clients = crate::core::link_sys::link_sys_store::list_etcd_clients();
+    Json(ApiResponse::success(clients))
+}
+
+/// Health check all Etcd clients
+async fn etcd_health_all() -> Json<ApiResponse<Vec<crate::core::link_sys::redis::LinkSysHealth>>> {
+    let health = crate::core::link_sys::link_sys_store::health_check_all_etcd().await;
+    Json(ApiResponse::success(health))
+}
+
+/// Health check a single Etcd client
+async fn etcd_health_one(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let health = client.health_status().await;
+    match serde_json::to_value(health) {
+        Ok(v) => Json(ApiResponse::success(v)),
+        Err(e) => Json(ApiResponse::error(format!("Serialize error: {}", e))),
+    }
+}
+
+/// PING an Etcd client (status check), returns latency in ms
+async fn etcd_ping(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.ping().await {
+        Ok(latency_ms) => Json(ApiResponse::success(serde_json::json!({
+            "latency_ms": latency_ms,
+            "healthy": client.healthy(),
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("PING (status) failed: {}", e))),
+    }
+}
+
+/// GET a key from Etcd
+async fn etcd_get(Path((name, key)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.get_string(&key).await {
+        Ok(val) => Json(ApiResponse::success(serde_json::json!({
+            "key": key,
+            "value": val,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("GET failed: {}", e))),
+    }
+}
+
+/// PUT request body
+#[derive(Deserialize)]
+struct EtcdPutRequest {
+    key: String,
+    value: String,
+    lease_id: Option<i64>,
+}
+
+/// PUT a key in Etcd
+async fn etcd_put(
+    Path(name): Path<String>,
+    Json(body): Json<EtcdPutRequest>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.put(&body.key, body.value.as_bytes().to_vec(), body.lease_id).await {
+        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+            "key": body.key,
+            "value": body.value,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("PUT failed: {}", e))),
+    }
+}
+
+/// DELETE a key from Etcd
+async fn etcd_delete(Path((name, key)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.delete(&key).await {
+        Ok(deleted) => Json(ApiResponse::success(serde_json::json!({
+            "key": key,
+            "deleted": deleted,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("DELETE failed: {}", e))),
+    }
+}
+
+/// GET with prefix from Etcd
+async fn etcd_get_prefix(Path((name, prefix)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.get_prefix(&prefix).await {
+        Ok(entries) => {
+            let items: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|(k, v, rev)| serde_json::json!({
+                    "key": k,
+                    "value": String::from_utf8_lossy(v),
+                    "mod_revision": rev,
+                }))
+                .collect();
+            Json(ApiResponse::success(serde_json::json!({
+                "prefix": prefix,
+                "count": items.len(),
+                "entries": items,
+            })))
+        }
+        Err(e) => Json(ApiResponse::error(format!("GET prefix failed: {}", e))),
+    }
+}
+
+/// DELETE with prefix from Etcd
+async fn etcd_delete_prefix(Path((name, prefix)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.delete_prefix(&prefix).await {
+        Ok(deleted) => Json(ApiResponse::success(serde_json::json!({
+            "prefix": prefix,
+            "deleted": deleted,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("DELETE prefix failed: {}", e))),
+    }
+}
+
+/// Lease grant request body
+#[derive(Deserialize)]
+struct EtcdLeaseGrantRequest {
+    ttl_seconds: i64,
+}
+
+/// Grant a lease
+async fn etcd_lease_grant(
+    Path(name): Path<String>,
+    Json(body): Json<EtcdLeaseGrantRequest>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match client.lease_grant(body.ttl_seconds).await {
+        Ok(lease_id) => Json(ApiResponse::success(serde_json::json!({
+            "lease_id": lease_id,
+            "ttl_seconds": body.ttl_seconds,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("LEASE GRANT failed: {}", e))),
+    }
+}
+
+/// Revoke a lease
+async fn etcd_lease_revoke(Path((name, lease_id)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let lease_id: i64 = match lease_id.parse() {
+        Ok(id) => id,
+        Err(_) => return Json(ApiResponse::error(format!("Invalid lease_id: {}", lease_id))),
+    };
+    match client.lease_revoke(lease_id).await {
+        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+            "lease_id": lease_id,
+            "revoked": true,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("LEASE REVOKE failed: {}", e))),
+    }
+}
+
+/// Get lease TTL
+async fn etcd_lease_ttl(Path((name, lease_id)): Path<(String, String)>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let lease_id: i64 = match lease_id.parse() {
+        Ok(id) => id,
+        Err(_) => return Json(ApiResponse::error(format!("Invalid lease_id: {}", lease_id))),
+    };
+    match client.lease_time_to_live(lease_id).await {
+        Ok(ttl) => Json(ApiResponse::success(serde_json::json!({
+            "lease_id": lease_id,
+            "ttl": ttl,
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("LEASE TTL failed: {}", e))),
+    }
+}
+
+/// Lock request body
+#[derive(Deserialize)]
+struct EtcdLockRequest {
+    name: String,
+    ttl_seconds: Option<i64>,
+    timeout_seconds: Option<u64>,
+}
+
+/// Acquire and immediately release an Etcd distributed lock (tests the lock mechanism)
+async fn etcd_lock(
+    Path(client_name): Path<String>,
+    Json(body): Json<EtcdLockRequest>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&client_name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let ttl = body.ttl_seconds.unwrap_or(10);
+    let timeout = std::time::Duration::from_secs(body.timeout_seconds.unwrap_or(5));
+    let start = std::time::Instant::now();
+
+    match client.try_lock(&body.name, ttl, timeout).await {
+        Ok(Some(guard)) => {
+            let acquire_ms = start.elapsed().as_millis() as u64;
+            let released = guard.unlock().await.is_ok();
+            Json(ApiResponse::success(serde_json::json!({
+                "name": body.name,
+                "acquired": true,
+                "acquire_ms": acquire_ms,
+                "released": released,
+            })))
+        }
+        Ok(None) => Json(ApiResponse::success(serde_json::json!({
+            "name": body.name,
+            "acquired": false,
+            "reason": "timeout",
+        }))),
+        Err(e) => Json(ApiResponse::error(format!("LOCK failed: {}", e))),
+    }
+}
+
+/// Get Etcd client info (name, namespace, health)
+async fn etcd_info(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Value>> {
+    let client = match get_etcd_client_by_name(&name) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    Json(ApiResponse::success(serde_json::json!({
+        "name": client.name(),
+        "namespace": client.namespace(),
+        "healthy": client.healthy(),
+    })))
 }
 
 /// Serve the admin API on the specified port

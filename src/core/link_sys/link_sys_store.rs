@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 
 use crate::types::resources::link_sys::LinkSys;
 
+use super::etcd::EtcdLinkClient;
 use super::redis::RedisLinkClient;
 use super::webhook::get_webhook_manager;
 
@@ -168,6 +169,65 @@ fn redis_runtime_replace_all(new_map: HashMap<String, Arc<RedisLinkClient>>) -> 
 }
 
 // ============================================================
+// Etcd runtime store (ArcSwap for lock-free reads)
+// ============================================================
+
+/// Global runtime store for Etcd clients.
+/// Keyed by "namespace/name", same as LinkSys CRD key.
+/// ArcSwap provides lock-free concurrent reads, consistent with Redis pattern.
+static ETCD_RUNTIME: LazyLock<ArcSwap<HashMap<String, Arc<EtcdLinkClient>>>> =
+    LazyLock::new(|| ArcSwap::from_pointee(HashMap::new()));
+
+/// Get an Etcd client by LinkSys name ("namespace/name").
+///
+/// This is the primary API for plugins and other callers.
+/// Returns None if the LinkSys resource doesn't exist or isn't an Etcd type.
+pub fn get_etcd_client(name: &str) -> Option<Arc<EtcdLinkClient>> {
+    ETCD_RUNTIME.load().get(name).cloned()
+}
+
+/// List all registered Etcd client names.
+pub fn list_etcd_clients() -> Vec<String> {
+    ETCD_RUNTIME.load().keys().cloned().collect()
+}
+
+/// Health check all registered Etcd clients.
+pub async fn health_check_all_etcd() -> Vec<super::redis::LinkSysHealth> {
+    let clients: Vec<Arc<EtcdLinkClient>> = ETCD_RUNTIME.load().values().cloned().collect();
+    let mut results = Vec::with_capacity(clients.len());
+    for client in clients {
+        results.push(client.health_status().await);
+    }
+    results
+}
+
+/// Insert an Etcd client into the runtime store.
+fn etcd_runtime_insert(key: String, client: Arc<EtcdLinkClient>) {
+    let current = ETCD_RUNTIME.load();
+    let mut new_map = (**current).clone();
+    new_map.insert(key, client);
+    ETCD_RUNTIME.store(Arc::new(new_map));
+}
+
+/// Remove an Etcd client from the runtime store, returning the old client (if any).
+fn etcd_runtime_remove(key: &str) -> Option<Arc<EtcdLinkClient>> {
+    let current = ETCD_RUNTIME.load();
+    if !current.contains_key(key) {
+        return None;
+    }
+    let mut new_map = (**current).clone();
+    let old = new_map.remove(key);
+    ETCD_RUNTIME.store(Arc::new(new_map));
+    old
+}
+
+/// Replace all Etcd clients in the runtime store atomically.
+fn etcd_runtime_replace_all(new_map: HashMap<String, Arc<EtcdLinkClient>>) -> HashMap<String, Arc<EtcdLinkClient>> {
+    let old = ETCD_RUNTIME.swap(Arc::new(new_map));
+    (*old).clone()
+}
+
+// ============================================================
 // Dispatch to sub-module managers
 // ============================================================
 
@@ -175,8 +235,9 @@ fn redis_runtime_replace_all(new_map: HashMap<String, Arc<RedisLinkClient>>) -> 
 async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     let webhook_manager = get_webhook_manager();
 
-    // Build new Redis clients map
+    // Build new clients maps
     let mut new_redis_map: HashMap<String, Arc<RedisLinkClient>> = HashMap::new();
+    let mut new_etcd_map: HashMap<String, Arc<EtcdLinkClient>> = HashMap::new();
 
     for (key, ls) in data {
         match &ls.spec.config {
@@ -210,8 +271,32 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                     }
                 }
             }
-            crate::types::resources::link_sys::SystemConfig::Etcd(_) => {
-                tracing::debug!(key, "LinkSys Etcd resource registered (runtime not yet implemented)");
+            crate::types::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
+                match EtcdLinkClient::from_config(key, etcd_config) {
+                    Ok(client) => {
+                        let client = Arc::new(client);
+                        let client_ref = client.clone();
+                        let key_owned = key.clone();
+                        // Init in background — don't block full_set for slow connections
+                        tokio::spawn(async move {
+                            if let Err(e) = client_ref.init().await {
+                                tracing::error!(
+                                    etcd = %key_owned,
+                                    error = %e,
+                                    "Failed to initialize Etcd client"
+                                );
+                            }
+                        });
+                        new_etcd_map.insert(key.clone(), client);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            key,
+                            error = %e,
+                            "Failed to build Etcd client from config"
+                        );
+                    }
+                }
             }
             _ => {
                 tracing::debug!(
@@ -230,6 +315,18 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
             for (key, client) in old_redis {
                 if let Err(e) = client.shutdown().await {
                     tracing::warn!(redis = %key, error = %e, "Error shutting down old Redis client");
+                }
+            }
+        });
+    }
+
+    // Atomically swap Etcd runtime store; shutdown old clients in background
+    let old_etcd = etcd_runtime_replace_all(new_etcd_map);
+    if !old_etcd.is_empty() {
+        tokio::spawn(async move {
+            for (key, client) in old_etcd {
+                if let Err(e) = client.shutdown().await {
+                    tracing::warn!(etcd = %key, error = %e, "Error shutting down old Etcd client");
                 }
             }
         });
@@ -293,8 +390,49 @@ async fn dispatch_partial_update(
                     }
                 }
             }
-            crate::types::resources::link_sys::SystemConfig::Etcd(_) => {
-                tracing::debug!(key, "LinkSys Etcd resource registered (runtime not yet implemented)");
+            crate::types::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
+                match EtcdLinkClient::from_config(key, etcd_config) {
+                    Ok(client) => {
+                        let client = Arc::new(client);
+                        let client_ref = client.clone();
+                        let key_owned = key.clone();
+
+                        // Swap into store first (so get_etcd_client returns new client immediately)
+                        let old = {
+                            let current = ETCD_RUNTIME.load();
+                            let old = current.get(key).cloned();
+                            etcd_runtime_insert(key.clone(), client);
+                            old
+                        };
+
+                        // Init new client in background
+                        tokio::spawn(async move {
+                            if let Err(e) = client_ref.init().await {
+                                tracing::error!(
+                                    etcd = %key_owned,
+                                    error = %e,
+                                    "Failed to initialize Etcd client"
+                                );
+                            }
+                        });
+
+                        // Shutdown old client in background
+                        if let Some(old_client) = old {
+                            tokio::spawn(async move {
+                                if let Err(e) = old_client.shutdown().await {
+                                    tracing::warn!(error = %e, "Error shutting down old Etcd client");
+                                }
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            key,
+                            error = %e,
+                            "Failed to build Etcd client from config"
+                        );
+                    }
+                }
             }
             _ => {
                 tracing::debug!(
@@ -317,6 +455,16 @@ async fn dispatch_partial_update(
             tokio::spawn(async move {
                 if let Err(e) = old_client.shutdown().await {
                     tracing::warn!(redis = %key_owned, error = %e, "Error shutting down removed Redis client");
+                }
+            });
+        }
+
+        // Remove Etcd client and shutdown in background
+        if let Some(old_client) = etcd_runtime_remove(key) {
+            let key_owned = key.clone();
+            tokio::spawn(async move {
+                if let Err(e) = old_client.shutdown().await {
+                    tracing::warn!(etcd = %key_owned, error = %e, "Error shutting down removed Etcd client");
                 }
             });
         }

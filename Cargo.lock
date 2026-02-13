@@ -5414,6 +5414,7 @@ dependencies = [
  "socket2 0.6.1",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower 0.5.3",
  "tower-layer",

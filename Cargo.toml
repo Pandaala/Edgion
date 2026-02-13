@@ -142,7 +142,7 @@ pingora-http = "0.7.0"
 pingora-limits = "0.7.0"
 pingora-load-balancing = "0.7.0"
 pingora-proxy = { version = "0.7.0" }
-etcd-client = "0.18"
+etcd-client = { version = "0.18", features = ["tls"] }
 fred = { version = "10", default-features = false, features = [
     "enable-rustls",       # TLS via rustls (consistent with Edgion)
     "i-std",               # Standard data structures (GET, SET, lists, etc.)

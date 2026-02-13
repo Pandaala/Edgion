@@ -1,0 +1,16 @@
+# LinkSys Etcd resource with namespace prefix for integration testing.
+# Tests that key operations automatically add/strip the "/edgion-test/" prefix.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: etcd-ns-test
+  namespace: default
+spec:
+  type: etcd
+  config:
+    endpoints:
+      - "http://127.0.0.1:12379"
+    namespace: "/edgion-test/"
+    timeout:
+      dial: 5000
+      request: 10000
