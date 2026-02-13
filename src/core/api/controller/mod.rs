@@ -131,9 +131,7 @@ async fn reload_all_resources(
 /// POST /api/v1/services/acme/{namespace}/{name}/trigger
 ///
 /// This resets the retry counter and re-evaluates the resource, same as modifying the CRD.
-async fn trigger_acme(
-    Path((namespace, name)): Path<(String, String)>,
-) -> Json<ApiResponse<String>> {
+async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> Json<ApiResponse<String>> {
     let key = format!("{}/{}", namespace, name);
     tracing::info!(
         component = "admin_api",
@@ -144,10 +142,7 @@ async fn trigger_acme(
 
     crate::core::services::acme::notify_resource_changed(key.clone());
 
-    Json(ApiResponse::success(format!(
-        "ACME check triggered for {}",
-        key
-    )))
+    Json(ApiResponse::success(format!("ACME check triggered for {}", key)))
 }
 
 // ============= Router Setup =============
@@ -203,10 +198,7 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))
         // Services: ACME manual trigger
-        .route(
-            "/api/v1/services/acme/{namespace}/{name}/trigger",
-            post(trigger_acme),
-        )
+        .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
         // ConfigServer endpoints (for edgion-ctl --target server)
         .route("/configserver/{kind}/list", get(configserver_handlers::list_resources))
         .route("/configserver/{kind}", get(configserver_handlers::get_resource))

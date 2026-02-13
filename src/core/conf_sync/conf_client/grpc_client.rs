@@ -131,8 +131,7 @@ impl ConfigSyncClient {
 
                                 // Also track server_id for consistency
                                 if !event.server_id.is_empty() {
-                                    self.config_client
-                                        .set_current_server_id(event.server_id);
+                                    self.config_client.set_current_server_id(event.server_id);
                                 }
                             }
                             Ok(None) => {
@@ -190,16 +189,14 @@ impl ConfigSyncClient {
 
             // Dispatch via get_dyn_cache (exhaustive ResourceKind match)
             match self.config_client.get_dyn_cache(kind) {
-                Some(cache) => {
-                    match cache.start_watch_dyn().await {
-                        Ok(_) => {
-                            tracing::info!(kind = %kind_name, "Watch started successfully");
-                        }
-                        Err(e) => {
-                            tracing::error!(kind = %kind_name, error = %e, "Failed to start watch");
-                        }
+                Some(cache) => match cache.start_watch_dyn().await {
+                    Ok(_) => {
+                        tracing::info!(kind = %kind_name, "Watch started successfully");
                     }
-                }
+                    Err(e) => {
+                        tracing::error!(kind = %kind_name, error = %e, "Failed to start watch");
+                    }
+                },
                 None => {
                     // Known kind but intentionally not cached on Gateway (Secret, ReferenceGrant)
                     tracing::debug!(kind = %kind_name, "Resource not cached on Gateway, skipping watch");

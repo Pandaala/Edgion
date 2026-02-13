@@ -136,10 +136,7 @@ impl ForwardAuth {
     fn forward_all_headers(&self, session: &dyn PluginSession, headers: &mut HeaderMap) {
         for (name, value) in session.request_headers() {
             if !is_hop_by_hop(&name) {
-                if let (Ok(hn), Ok(hv)) = (
-                    HeaderName::from_bytes(name.as_bytes()),
-                    HeaderValue::from_str(&value),
-                ) {
+                if let (Ok(hn), Ok(hv)) = (HeaderName::from_bytes(name.as_bytes()), HeaderValue::from_str(&value)) {
                     headers.insert(hn, hv);
                 }
             }
@@ -173,9 +170,7 @@ impl ForwardAuth {
             }
         }
 
-        let _ = session
-            .write_response_header(Box::new(resp), false)
-            .await;
+        let _ = session.write_response_header(Box::new(resp), false).await;
         let _ = session
             .write_response_body(Some(Bytes::from(body.to_string())), true)
             .await;
@@ -199,21 +194,12 @@ impl RequestFilter for ForwardAuth {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        plugin_log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Validate configuration
         if let Some(error) = self.config.get_validation_error() {
             plugin_log.push(&format!("Config error: {}; ", error));
             return self
-                .send_error_response(
-                    session,
-                    500,
-                    r#"{"message":"ForwardAuth configuration error"}"#,
-                    None,
-                )
+                .send_error_response(session, 500, r#"{"message":"ForwardAuth configuration error"}"#, None)
                 .await;
         }
 
@@ -221,11 +207,7 @@ impl RequestFilter for ForwardAuth {
 
         // Build auth request
         let auth_headers = self.build_auth_headers(session);
-        let method: reqwest::Method = self
-            .config
-            .request_method
-            .parse()
-            .unwrap_or(reqwest::Method::GET);
+        let method: reqwest::Method = self.config.request_method.parse().unwrap_or(reqwest::Method::GET);
         let timeout = Duration::from_millis(self.config.timeout_ms);
 
         // Send auth request (no body)
@@ -386,22 +368,13 @@ mod tests {
             headers.get("Authorization").unwrap().to_str().unwrap(),
             "Bearer token123"
         );
-        assert_eq!(
-            headers.get("Cookie").unwrap().to_str().unwrap(),
-            "session=abc"
-        );
+        assert_eq!(headers.get("Cookie").unwrap().to_str().unwrap(), "session=abc");
         assert_eq!(
             headers.get("X-Forwarded-Host").unwrap().to_str().unwrap(),
             "example.com"
         );
-        assert_eq!(
-            headers.get("X-Forwarded-Uri").unwrap().to_str().unwrap(),
-            "/api/data"
-        );
-        assert_eq!(
-            headers.get("X-Forwarded-Method").unwrap().to_str().unwrap(),
-            "GET"
-        );
+        assert_eq!(headers.get("X-Forwarded-Uri").unwrap().to_str().unwrap(), "/api/data");
+        assert_eq!(headers.get("X-Forwarded-Method").unwrap().to_str().unwrap(), "GET");
     }
 
     #[test]
@@ -451,18 +424,9 @@ mod tests {
             headers.get("X-Forwarded-Host").unwrap().to_str().unwrap(),
             "example.com"
         );
-        assert_eq!(
-            headers.get("X-Forwarded-Uri").unwrap().to_str().unwrap(),
-            "/test"
-        );
-        assert_eq!(
-            headers.get("X-Forwarded-Method").unwrap().to_str().unwrap(),
-            "POST"
-        );
-        assert_eq!(
-            headers.get("X-Forwarded-Query").unwrap().to_str().unwrap(),
-            "key=value"
-        );
+        assert_eq!(headers.get("X-Forwarded-Uri").unwrap().to_str().unwrap(), "/test");
+        assert_eq!(headers.get("X-Forwarded-Method").unwrap().to_str().unwrap(), "POST");
+        assert_eq!(headers.get("X-Forwarded-Query").unwrap().to_str().unwrap(), "key=value");
     }
 
     #[tokio::test]
@@ -475,12 +439,8 @@ mod tests {
 
         let mut mock_session = MockPluginSession::new();
         // Mock write_response_header/body/shutdown for error response path
-        mock_session
-            .expect_write_response_header()
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_write_response_body()
-            .returning(|_, _| Ok(()));
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
         mock_session.expect_shutdown().returning(|| {});
 
         let mut plugin_log = PluginLog::new("ForwardAuth");

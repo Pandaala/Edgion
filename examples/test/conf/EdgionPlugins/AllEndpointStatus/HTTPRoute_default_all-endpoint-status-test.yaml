@@ -1,0 +1,28 @@
+# HTTPRoute for AllEndpointStatus basic test
+# Routes to test-http backend (test_server on port 30001)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: all-endpoint-status-test-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "all-endpoint-status-test.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: all-endpoint-status-test
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

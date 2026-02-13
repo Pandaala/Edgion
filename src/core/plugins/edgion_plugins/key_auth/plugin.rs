@@ -4,11 +4,10 @@
 //! Keys and metadata are loaded from Kubernetes Secrets.
 
 use async_trait::async_trait;
-use bytes::Bytes;
-use pingora_http::ResponseHeader;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::core::plugins::edgion_plugins::common::auth_common::send_auth_error_response;
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::common::KeyGet;
 use crate::types::filters::PluginRunningResult;
@@ -133,23 +132,8 @@ impl KeyAuth {
 
     /// Return 401 Unauthorized response
     async fn unauthorized(&self, session: &mut dyn PluginSession, message: &str) -> PluginRunningResult {
-        let mut resp = match ResponseHeader::build(401, None) {
-            Ok(r) => r,
-            Err(_) => return PluginRunningResult::ErrTerminateRequest,
-        };
-
-        // WWW-Authenticate header with configured realm
-        let auth_header_value = format!("ApiKey realm=\"{}\"", self.config.realm);
-        let _ = resp.insert_header("WWW-Authenticate", auth_header_value);
-        let _ = resp.insert_header("Content-Type", "text/plain");
-        let _ = resp.insert_header("Connection", "close");
-
-        let _ = session.write_response_header(Box::new(resp), false).await;
-        let _ = session
-            .write_response_body(Some(Bytes::from(format!("401 Unauthorized - {}", message))), true)
-            .await;
-        session.shutdown().await;
-
+        let body = format!("Unauthorized - {}", message);
+        let _ = send_auth_error_response(session, 401, "ApiKey", &self.config.realm, &body).await;
         PluginRunningResult::ErrTerminateRequest
     }
 }

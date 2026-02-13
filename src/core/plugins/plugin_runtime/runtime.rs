@@ -5,6 +5,7 @@ use std::time::Duration;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
+use crate::types::filters::PluginRunningResult;
 use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
 use crate::types::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
@@ -20,17 +21,22 @@ use super::conditional_filter::{
 };
 use super::log::{PluginLog, StageLogs};
 use super::session_adapter::PingoraSessionAdapter;
-use super::traits::{RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter};
+use super::traits::{
+    PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
+};
+use crate::core::plugins::edgion_plugins::all_endpoint_status::AllEndpointStatus;
 use crate::core::plugins::edgion_plugins::bandwidth_limit::BandwidthLimit;
 use crate::core::plugins::edgion_plugins::basic_auth::BasicAuth;
 use crate::core::plugins::edgion_plugins::cors::Cors;
 use crate::core::plugins::edgion_plugins::csrf::Csrf;
 use crate::core::plugins::edgion_plugins::ctx_set::CtxSet;
+use crate::core::plugins::edgion_plugins::direct_endpoint::DirectEndpoint;
 use crate::core::plugins::edgion_plugins::forward_auth::ForwardAuth;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
 use crate::core::plugins::edgion_plugins::key_auth::KeyAuth;
 use crate::core::plugins::edgion_plugins::mock::Mock;
+use crate::core::plugins::edgion_plugins::openid_connect::OpenidConnect;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
 use crate::core::plugins::edgion_plugins::rate_limit::RateLimit;
 use crate::core::plugins::edgion_plugins::real_ip::RealIp;
@@ -327,8 +333,11 @@ impl PluginRuntime {
             EdgionPlugin::RequestRestriction(config) => Some(RequestRestriction::create(config)),
             EdgionPlugin::RateLimit(config) => Some(RateLimit::create(config)),
             EdgionPlugin::CtxSet(config) => Some(CtxSet::create(config)),
+            EdgionPlugin::DirectEndpoint(config) => Some(Box::new(DirectEndpoint::new(config))),
             EdgionPlugin::RealIp(config) => Some(RealIp::create(config)),
             EdgionPlugin::ForwardAuth(config) => Some(Box::new(ForwardAuth::new(config))),
+            EdgionPlugin::AllEndpointStatus(config) => Some(Box::new(AllEndpointStatus::new(config))),
+            EdgionPlugin::OpenidConnect(config) => Some(Box::new(OpenidConnect::new(config, namespace.to_string()))),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
@@ -388,12 +397,15 @@ impl PluginRuntime {
         match plugin {
             EdgionPlugin::RateLimit(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::CtxSet(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::DirectEndpoint(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::RequestRestriction(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ProxyRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ResponseRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::KeyAuth(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ForwardAuth(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::OpenidConnect(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::BandwidthLimit(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
             _ => None,
         }
     }
@@ -415,11 +427,14 @@ impl PluginRuntime {
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::RateLimit(_) => "RateLimit",
             EdgionPlugin::CtxSet(_) => "CtxSet",
+            EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
+            EdgionPlugin::OpenidConnect(_) => "OpenidConnect",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",
+            EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
             EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
@@ -515,6 +530,24 @@ impl PluginRuntime {
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
                 break;
+            } else if let PluginRunningResult::ErrResponse { status, body } = result {
+                if let Ok(status_code) = http::StatusCode::from_u16(status) {
+                    if let Ok(mut resp) = ResponseHeader::build(status_code, Some(2)) {
+                        let _ = resp.insert_header("content-type", "text/plain");
+                        let body_bytes = body.map(bytes::Bytes::from);
+                        let len = body_bytes.as_ref().map(|b| b.len()).unwrap_or(0);
+                        let _ = resp.insert_header("content-length", len.to_string());
+
+                        let _ = session_adapter
+                            .write_response_header(Box::new(resp), body_bytes.is_none())
+                            .await;
+                        if let Some(b) = body_bytes {
+                            let _ = session_adapter.write_response_body(Some(b), true).await;
+                        }
+                    }
+                }
+                session_adapter.set_terminate();
+                break;
             }
         }
 
@@ -532,6 +565,17 @@ impl PluginRuntime {
         ctx: &mut EdgionHttpContext,
         response_header: &mut ResponseHeader,
     ) {
+        // Apply queued response headers from request stage
+        // Use a temporary vector to avoid borrowing issues if we iterate ctx directly while modifying response_header
+        // But ctx and response_header are separate arguments.
+        // wait, drain requires &mut ctx.
+        if !ctx.response_headers_to_add.is_empty() {
+            let headers = std::mem::take(&mut ctx.response_headers_to_add);
+            for (name, value) in headers {
+                let _ = response_header.insert_header(name, value);
+            }
+        }
+
         if self.upstream_response_plugins.is_empty() {
             return;
         }

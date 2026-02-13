@@ -129,7 +129,7 @@ impl ExtensionRefFilter {
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
 
-                    if result == PluginRunningResult::ErrTerminateRequest {
+                    if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return Self::finish(session, result);
                     }
                 }
@@ -164,7 +164,7 @@ impl ExtensionRefFilter {
                     let result = plugin.run_request(session, &mut inner_log).await;
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
 
-                    if result == PluginRunningResult::ErrTerminateRequest {
+                    if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return Self::finish(session, result);
                     }
                 }
@@ -176,7 +176,7 @@ impl ExtensionRefFilter {
                     let result = plugin.run_upstream_response(session, &mut inner_log).await;
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
 
-                    if result == PluginRunningResult::ErrTerminateRequest {
+                    if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return Self::finish(session, result);
                     }
                 }
@@ -188,7 +188,7 @@ impl ExtensionRefFilter {
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
 
-                    if result == PluginRunningResult::ErrTerminateRequest {
+                    if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return Self::finish(session, result);
                     }
                 }

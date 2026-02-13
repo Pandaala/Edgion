@@ -4,9 +4,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
-    BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig,
-    ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig, KeyAuthConfig, MockConfig, ProxyRewriteConfig,
-    RateLimitConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
+    DebugAccessLogToHeaderConfig, DirectEndpointConfig, ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig,
+    KeyAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -65,8 +66,14 @@ pub enum EdgionPlugin {
     RealIp(RealIpConfig),
     /// ForwardAuth filter (forward request to external auth service for authentication)
     ForwardAuth(ForwardAuthConfig),
+    /// OpenID Connect filter (OIDC / OAuth 2.0 authentication)
+    OpenidConnect(OpenidConnectConfig),
     /// BandwidthLimit filter (limit downstream response bandwidth per second)
     BandwidthLimit(BandwidthLimitConfig),
+    /// DirectEndpoint filter (route to specific endpoint, bypassing LB)
+    DirectEndpoint(DirectEndpointConfig),
+    /// AllEndpointStatus filter (query all backend endpoints and return aggregated status)
+    AllEndpointStatus(AllEndpointStatusConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -100,7 +107,10 @@ impl EdgionPlugin {
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
+            EdgionPlugin::OpenidConnect(_) => "OpenidConnect",
             EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",
+            EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
+            EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
         }
     }
 }

@@ -60,6 +60,7 @@ log_section() {
 # Slow tests list (skipped by default, run with --full-test)
 SLOW_TESTS=(
     "HTTPRoute_Backend_Timeout"
+    "EdgionPlugins_AllEndpointStatus"
 )
 
 is_slow_test() {
@@ -354,6 +355,7 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
                     run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
+                    run_test "Gateway_TLS_BackendTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/BackendTLS" || test_failed=true
                     run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
                     run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
                     run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
@@ -381,9 +383,17 @@ run_all_tests() {
                     run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
                     run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
                     run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
+                    run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
                     run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
+                    run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
+                    if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
+                        run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
+                    else
+                        log_info "Skipping slow test: EdgionPlugins_AllEndpointStatus (use --full-test to run)"
+                    fi
                 else
-                    run_test "EdgionPlugins_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "EdgionPlugins_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             EdgionTls)
@@ -450,6 +460,7 @@ run_all_tests() {
         # Gateway Tests
         run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
         run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
+        run_test "Gateway_TLS_BackendTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/BackendTLS" || test_failed=true
         # EdgionPlugins Tests
         run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
         run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
@@ -463,7 +474,14 @@ run_all_tests() {
         run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
         run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
         run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
+        run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
         run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
+        run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
+        if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
+            run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
+        else
+            log_info "Skipping slow test: EdgionPlugins_AllEndpointStatus (use --full-test to run)"
+        fi
         run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
         run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
         run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
@@ -572,12 +590,16 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/BandwidthLimit"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/AllEndpointStatus"
             else
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi
         elif [ -n "$G_ITEM" ]; then
-            suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
+            if [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLS" ]; then
+                suites="${base_suites},HTTPRoute/Backend/BackendTLS"
+            else
+                suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
+            fi
         fi
     fi
     

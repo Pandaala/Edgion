@@ -547,7 +547,62 @@ grep -i "YourPlugin" src/types/resources/edgion_plugins/edgion_plugin.rs
 
 Common issue: added a new field in Rust config but forgot to regenerate/update CRD. Controller will reject the YAML silently.
 
-### 2. Test YAML ↔ CRD Match
+### 2. Serde Serialization ↔ YAML Field Name Match
+
+**This is a common but hard-to-debug issue.** The Controller uses Rust serde to deserialize YAML → struct. If your config struct's serde field names don't match what's in the YAML, you get a **400 Bad Request** with no obvious error at first glance.
+
+**How it fails:** `edgion-ctl apply` returns 400, and the controller log shows:
+```
+WARN Failed to parse request body as JSON or YAML: unknown variant `YourPlugin`, expected one of ...
+```
+or:
+```
+WARN Failed to parse request body as JSON or YAML: missing field `someField` at line N column M
+```
+
+**What to check:**
+
+```bash
+# 1. Verify your plugin enum variant name matches YAML type exactly
+#    YAML type: "AllEndpointStatus" must match Rust enum: AllEndpointStatus(...)
+grep "AllEndpointStatus" src/types/resources/edgion_plugins/edgion_plugin.rs
+
+# 2. Verify serde rename strategy matches YAML field names
+#    If struct has #[serde(rename_all = "camelCase")], YAML must use camelCase
+#    e.g., Rust field `timeout_ms` → YAML key `timeoutMs`
+grep "rename_all" src/types/resources/edgion_plugins/plugin_configs/your_plugin.rs
+
+# 3. Look for the actual serde error in controller log (most informative)
+grep "Failed to parse request body" integration_testing/testing_*/logs/controller.log
+
+# 4. Quick roundtrip test in Rust unit tests:
+#    Add a test that serializes your config to JSON/YAML and deserializes it back.
+#    This catches field name mismatches, missing defaults, and type errors at compile time.
+```
+
+**Common issues:**
+- `#[serde(rename_all = "camelCase")]` on struct but YAML uses `snake_case` → silent 400
+- New enum variant added in Rust but **binary not rebuilt** → "unknown variant" error (need `cargo build`, not just `--no-prepare`)
+- `#[serde(default)]` missing on optional fields → "missing field" when YAML omits them
+- `skip_serializing_if` vs `skip` confusion → field ignored on round-trip
+
+**Prevention:** Add a serde roundtrip unit test for every new plugin config:
+
+```rust
+#[test]
+fn test_serde_roundtrip() {
+    let yaml = r#"
+timeoutMs: 3000
+maxEndpoints: 10
+"#;
+    let config: YourPluginConfig = serde_yaml::from_str(yaml).expect("deserialize failed");
+    assert_eq!(config.timeout_ms, 3000);
+    let json = serde_json::to_string(&config).expect("serialize failed");
+    let _: YourPluginConfig = serde_json::from_str(&json).expect("roundtrip failed");
+}
+```
+
+### 3. Test YAML ↔ CRD Match
 
 Is your test YAML valid against the CRD?
 
@@ -562,7 +617,7 @@ Look for validation errors in controller log. Common issues:
 - Wrong type (string vs integer)
 - Invalid enum value
 
-### 3. Test Triad: test_server ↔ test_client ↔ conf YAML
+### 4. Test Triad: test_server ↔ test_client ↔ conf YAML
 
 Check these align:
 
@@ -573,7 +628,7 @@ Check these align:
 | **Backend** | YAML `backendRefs.port` == test_server listening port (30001 for HTTP) |
 | **Path** | test code request path must match test_server endpoint (e.g., `/health`, `/headers`) |
 
-### 4. Resource Sync
+### 5. Resource Sync
 
 Check if resources reached the Gateway:
 
@@ -592,7 +647,7 @@ cat integration_testing/testing_*/logs/gateway.log | grep -i "error\|warn\|rejec
 ./target/debug/edgion-ctl --server http://127.0.0.1:5900 get EdgionPlugins -A
 ```
 
-### 5. Controller/Gateway Preparse
+### 6. Controller/Gateway Preparse
 
 Both controller and gateway run preparse on resources. Check for preparse errors:
 
@@ -604,7 +659,7 @@ grep -i "preparse\|validation\|invalid" integration_testing/testing_*/logs/contr
 grep -i "preparse\|validation\|invalid" integration_testing/testing_*/logs/gateway.log
 ```
 
-### 6. Live Debug with Logs
+### 7. Live Debug with Logs
 
 When all config looks correct but tests still fail:
 
@@ -647,6 +702,9 @@ The **access log** is especially valuable — it contains `plugin_log` entries s
 | Symptom | Likely Cause | Check |
 |---|---|---|
 | 404 Not Found | Hostname mismatch or route not loaded | YAML hostname, test HOST constant, Gateway listeners |
+| 400 Bad Request on `edgion-ctl apply` | Serde deserialization failed (field name / enum variant mismatch) | Controller log for "Failed to parse request body", check `#[serde(rename_all)]`, rebuild binary |
+| 400 + "unknown variant" | New plugin type not in compiled binary | Rebuild all (`cargo build`), don't use `--no-prepare` with old binaries |
+| 400 + "missing field" | `#[serde(default)]` missing on optional field, or YAML key typo | Check serde attributes on config struct, compare YAML keys vs Rust field names after rename |
 | 502 Bad Gateway | Backend unreachable | test_server running? Backend port correct? |
 | 503 Service Unavailable | No healthy upstream | EndpointSlice/Service config, resource sync |
 | Config load rejected | CRD mismatch | Controller log, CRD schema |

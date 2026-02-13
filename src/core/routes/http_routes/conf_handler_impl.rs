@@ -5,7 +5,7 @@ use crate::core::routes::http_routes::match_engine::radix_route_match::RadixRout
 use crate::core::routes::http_routes::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::core::routes::http_routes::routes_mgr::RouteRules;
 use crate::core::routes::http_routes::{get_global_route_manager, HttpRouteRuleUnit, RouteManager};
-use crate::types::{HTTPRoute, HTTPRouteMatch, HTTPRouteRule, MatchInfo, ResourceMeta};
+use crate::types::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, MatchInfo, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -259,39 +259,54 @@ impl RouteManager {
                 for (rule_id, rule) in rules.iter().enumerate() {
                     let rule_arc = Arc::new(rule.clone());
 
-                    if let Some(matches) = &rule.matches {
-                        for (match_id, match_item) in matches.iter().enumerate() {
-                            if Self::is_regex_path(match_item) {
-                                if let Ok(regex_unit) = Self::create_regex_route_unit(
-                                    route_namespace,
-                                    route_name,
+                    // Default match if none provided (prefix "/")
+                    let default_matches = vec![HTTPRouteMatch {
+                        path: Some(HTTPPathMatch {
+                            match_type: Some("PathPrefix".to_string()),
+                            value: Some("/".to_string()),
+                        }),
+                        headers: None,
+                        query_params: None,
+                        method: None,
+                    }];
+
+                    let matches = match &rule.matches {
+                        Some(m) if !m.is_empty() => m,
+                        _ => &default_matches,
+                    };
+
+                    for (match_id, match_item) in matches.iter().enumerate() {
+                        if Self::is_regex_path(match_item) {
+                            if let Ok(regex_unit) = Self::create_regex_route_unit(
+                                route_namespace,
+                                route_name,
+                                rule_id,
+                                match_id,
+                                resource_key,
+                                match_item,
+                                rule_arc.clone(),
+                                route.spec.parent_refs.clone(),
+                            ) {
+                                regex_routes_list.push(Arc::new(regex_unit));
+                            }
+                        } else {
+                            let rule_unit = HttpRouteRuleUnit {
+                                resource_key: resource_key.clone(),
+                                matched_info: MatchInfo::new(
+                                    route_namespace.to_string(),
+                                    route_name.to_string(),
                                     rule_id,
                                     match_id,
-                                    resource_key,
-                                    match_item,
-                                    rule_arc.clone(),
-                                    route.spec.parent_refs.clone(),
-                                ) {
-                                    regex_routes_list.push(Arc::new(regex_unit));
-                                }
-                            } else {
-                                let rule_unit = HttpRouteRuleUnit {
-                                    resource_key: resource_key.clone(),
-                                    matched_info: MatchInfo::new(
-                                        route_namespace.to_string(),
-                                        route_name.to_string(),
-                                        rule_id,
-                                        match_id,
-                                        match_item.clone(),
-                                    ),
-                                    rule: rule_arc.clone(),
-                                    path_regex: None,
-                                    parent_refs: route.spec.parent_refs.clone(),
-                                };
-                                route_rules_list.push(Arc::new(rule_unit));
-                            }
+                                    match_item.clone(),
+                                ),
+                                rule: rule_arc.clone(),
+                                path_regex: None,
+                                parent_refs: route.spec.parent_refs.clone(),
+                            };
+                            route_rules_list.push(Arc::new(rule_unit));
                         }
                     }
+                    // } Removed brace for if let Some(matches)
                 }
             }
 
@@ -426,37 +441,51 @@ impl RouteManager {
                     for (rule_id, rule) in rules.iter().enumerate() {
                         let rule_arc = Arc::new(rule.clone());
 
-                        if let Some(matches) = &rule.matches {
-                            for (match_id, match_item) in matches.iter().enumerate() {
-                                if Self::is_regex_path(match_item) {
-                                    if let Ok(regex_unit) = Self::create_regex_route_unit(
-                                        route_namespace,
-                                        route_name,
+                        // Default match if none provided (prefix "/")
+                        let default_matches = vec![HTTPRouteMatch {
+                            path: Some(HTTPPathMatch {
+                                match_type: Some("PathPrefix".to_string()),
+                                value: Some("/".to_string()),
+                            }),
+                            headers: None,
+                            query_params: None,
+                            method: None,
+                        }];
+
+                        let matches = match &rule.matches {
+                            Some(m) if !m.is_empty() => m,
+                            _ => &default_matches,
+                        };
+
+                        for (match_id, match_item) in matches.iter().enumerate() {
+                            if Self::is_regex_path(match_item) {
+                                if let Ok(regex_unit) = Self::create_regex_route_unit(
+                                    route_namespace,
+                                    route_name,
+                                    rule_id,
+                                    match_id,
+                                    resource_key,
+                                    match_item,
+                                    rule_arc.clone(),
+                                    route.spec.parent_refs.clone(),
+                                ) {
+                                    regex_routes_list.push(Arc::new(regex_unit));
+                                }
+                            } else {
+                                let rule_unit = HttpRouteRuleUnit {
+                                    resource_key: resource_key.clone(),
+                                    matched_info: MatchInfo::new(
+                                        route_namespace.to_string(),
+                                        route_name.to_string(),
                                         rule_id,
                                         match_id,
-                                        resource_key,
-                                        match_item,
-                                        rule_arc.clone(),
-                                        route.spec.parent_refs.clone(),
-                                    ) {
-                                        regex_routes_list.push(Arc::new(regex_unit));
-                                    }
-                                } else {
-                                    let rule_unit = HttpRouteRuleUnit {
-                                        resource_key: resource_key.clone(),
-                                        matched_info: MatchInfo::new(
-                                            route_namespace.to_string(),
-                                            route_name.to_string(),
-                                            rule_id,
-                                            match_id,
-                                            match_item.clone(),
-                                        ),
-                                        rule: rule_arc.clone(),
-                                        path_regex: None,
-                                        parent_refs: route.spec.parent_refs.clone(),
-                                    };
-                                    route_rules_list.push(Arc::new(rule_unit));
-                                }
+                                        match_item.clone(),
+                                    ),
+                                    rule: rule_arc.clone(),
+                                    path_regex: None,
+                                    parent_refs: route.spec.parent_refs.clone(),
+                                };
+                                route_rules_list.push(Arc::new(rule_unit));
                             }
                         }
                     }
@@ -545,52 +574,64 @@ fn parse_http_routes_to_gateway_domain_rules(data: &HashMap<String, HTTPRoute>) 
                     let rule_arc = Arc::new(rule.clone());
 
                     // Each rule may have multiple matches
-                    if let Some(matches) = &rule.matches {
-                        for (match_id, match_item) in matches.iter().enumerate() {
-                            let split = domain_map
-                                .entry(hostname.clone())
-                                .or_insert_with(|| (Vec::new(), Vec::new()));
+                    // Default match if none provided (prefix "/")
+                    let default_matches = vec![HTTPRouteMatch {
+                        path: Some(HTTPPathMatch {
+                            match_type: Some("PathPrefix".to_string()),
+                            value: Some("/".to_string()),
+                        }),
+                        headers: None,
+                        query_params: None,
+                        method: None,
+                    }];
 
-                            // Check if this is a regex path
-                            if RouteManager::is_regex_path(match_item) {
-                                // Create regex route
-                                match RouteManager::create_regex_route_unit(
-                                    &validated.namespace,
-                                    &validated.name,
+                    let matches = match &rule.matches {
+                        Some(m) if !m.is_empty() => m,
+                        _ => &default_matches,
+                    };
+
+                    for (match_id, match_item) in matches.iter().enumerate() {
+                        let split = domain_map
+                            .entry(hostname.clone())
+                            .or_insert_with(|| (Vec::new(), Vec::new()));
+
+                        // Check if this is a regex path
+                        if RouteManager::is_regex_path(match_item) {
+                            // Create regex route
+                            match RouteManager::create_regex_route_unit(
+                                &validated.namespace,
+                                &validated.name,
+                                rule_id,
+                                match_id,
+                                &route.key_name(),
+                                match_item,
+                                rule_arc.clone(),
+                                route.spec.parent_refs.clone(),
+                            ) {
+                                Ok(regex_unit) => {
+                                    split.1.push(Arc::new(regex_unit));
+                                }
+                                Err(e) => {
+                                    tracing::warn!(route=%route.key_name(),err=%e,"failed to create regex route");
+                                }
+                            }
+                        } else {
+                            // Create normal route
+                            let rule_unit = HttpRouteRuleUnit {
+                                resource_key: route.key_name(),
+                                matched_info: MatchInfo::new(
+                                    validated.namespace.clone(),
+                                    validated.name.clone(),
                                     rule_id,
                                     match_id,
-                                    &route.key_name(),
-                                    match_item,
-                                    rule_arc.clone(),
-                                    route.spec.parent_refs.clone(),
-                                ) {
-                                    Ok(regex_unit) => {
-                                        split.1.push(Arc::new(regex_unit));
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(route=%route.key_name(),err=%e,"failed to create regex route");
-                                    }
-                                }
-                            } else {
-                                // Create normal route
-                                let rule_unit = HttpRouteRuleUnit {
-                                    resource_key: route.key_name(),
-                                    matched_info: MatchInfo::new(
-                                        validated.namespace.clone(),
-                                        validated.name.clone(),
-                                        rule_id,
-                                        match_id,
-                                        match_item.clone(),
-                                    ),
-                                    rule: rule_arc.clone(),
-                                    path_regex: None,
-                                    parent_refs: route.spec.parent_refs.clone(),
-                                };
-                                split.0.push(Arc::new(rule_unit));
-                            }
+                                    match_item.clone(),
+                                ),
+                                rule: rule_arc.clone(),
+                                path_regex: None,
+                                parent_refs: route.spec.parent_refs.clone(),
+                            };
+                            split.0.push(Arc::new(rule_unit));
                         }
-                    } else {
-                        tracing::warn!(route_name=%validated.name, route_namespace=%validated.namespace, "route missing match");
                     }
                 }
             }

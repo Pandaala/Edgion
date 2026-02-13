@@ -136,6 +136,7 @@ spec:
                           - IpRestriction
                           - JwtAuth
                           - KeyAuth
+                          - OpenidConnect
                           - Mock
                           - ProxyRewrite
                           - RateLimit
@@ -147,6 +148,8 @@ spec:
                           - ExtensionRef
                           - ForwardAuth
                           - DebugAccessLogToHeader
+                          - DirectEndpoint
+                          - AllEndpointStatus
                       config:
                         type: object
                         description: "Plugin-specific configuration"

@@ -2,7 +2,7 @@
 
 use crate::core::plugins::plugin_runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::types::common::{KeyGet, KeySet};
-use crate::types::EdgionHttpContext;
+use crate::types::{DirectEndpointPreset, EdgionHttpContext};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
@@ -174,4 +174,9 @@ pub trait PluginSession: Send {
     /// * `key` - The KeySet specifying where to write
     /// * `value` - The value to set, or None to remove
     fn key_set(&mut self, key: &KeySet, value: Option<String>) -> PluginSessionResult<()>;
+
+    /// Set direct endpoint info for upstream routing.
+    /// Called by DirectEndpoint plugin to bypass normal LB.
+    /// The info persists across retries (Clone, not consumed).
+    fn set_direct_endpoint(&mut self, info: DirectEndpointPreset);
 }

@@ -218,10 +218,7 @@ mod tests {
             timeout_ms: 0,
             ..Default::default()
         };
-        assert_eq!(
-            config.get_validation_error(),
-            Some("timeoutMs must be greater than 0")
-        );
+        assert_eq!(config.get_validation_error(), Some("timeoutMs must be greater than 0"));
     }
 
     #[test]

@@ -1,0 +1,22 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: direct-endpoint-test
+  namespace: default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http # Port 31180
+  hostnames:
+    - "direct-endpoint-test.example.com"
+  rules:
+    - backendRefs:
+        - name: direct-endpoint-backend
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: direct-endpoint

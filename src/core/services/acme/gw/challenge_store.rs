@@ -113,10 +113,7 @@ impl AcmeChallengeStore {
         }
 
         if !tokens.is_empty() {
-            tracing::info!(
-                count = tokens.len(),
-                "ACME challenge store updated (full_set)"
-            );
+            tracing::info!(count = tokens.len(), "ACME challenge store updated (full_set)");
         }
     }
 
@@ -124,11 +121,7 @@ impl AcmeChallengeStore {
     ///
     /// - `upsert`: resources that were added or updated — replace their tokens
     /// - `remove_keys`: resource keys that were deleted — remove their tokens
-    pub fn partial_update(
-        &self,
-        upsert: &HashMap<String, EdgionAcme>,
-        remove_keys: &HashSet<String>,
-    ) {
+    pub fn partial_update(&self, upsert: &HashMap<String, EdgionAcme>, remove_keys: &HashSet<String>) {
         let mut tokens = self.tokens.write().unwrap();
         let mut resource_tokens = self.resource_tokens.write().unwrap();
 
@@ -228,11 +221,7 @@ mod tests {
     }
 
     fn future_time() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            + 300
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 300
     }
 
     #[test]
@@ -250,7 +239,12 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "ns/acme1".to_string(),
-            make_acme(vec![challenge("example.com", "test-token-123", "test-token-123.thumbprint", ft)]),
+            make_acme(vec![challenge(
+                "example.com",
+                "test-token-123",
+                "test-token-123.thumbprint",
+                ft,
+            )]),
         );
         store.full_set(&data);
 
@@ -274,7 +268,12 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "ns/acme1".to_string(),
-            make_acme(vec![challenge("example.com", "expired-token", "expired-token.thumbprint", 0)]),
+            make_acme(vec![challenge(
+                "example.com",
+                "expired-token",
+                "expired-token.thumbprint",
+                0,
+            )]),
         );
         store.full_set(&data);
 
@@ -288,13 +287,19 @@ mod tests {
         let ft = future_time();
 
         let mut data = HashMap::new();
-        data.insert("ns/a".to_string(), make_acme(vec![challenge("a.com", "token-a", "auth-a", ft)]));
+        data.insert(
+            "ns/a".to_string(),
+            make_acme(vec![challenge("a.com", "token-a", "auth-a", ft)]),
+        );
         store.full_set(&data);
         assert!(store.lookup("token-a", "a.com").is_some());
 
         // Replace with new set
         let mut data2 = HashMap::new();
-        data2.insert("ns/b".to_string(), make_acme(vec![challenge("b.com", "token-b", "auth-b", ft)]));
+        data2.insert(
+            "ns/b".to_string(),
+            make_acme(vec![challenge("b.com", "token-b", "auth-b", ft)]),
+        );
         store.full_set(&data2);
 
         // Old token gone
@@ -326,8 +331,14 @@ mod tests {
 
         // Start with two resources
         let mut data = HashMap::new();
-        data.insert("ns/a".to_string(), make_acme(vec![challenge("a.com", "token-a", "auth-a", ft)]));
-        data.insert("ns/b".to_string(), make_acme(vec![challenge("b.com", "token-b", "auth-b", ft)]));
+        data.insert(
+            "ns/a".to_string(),
+            make_acme(vec![challenge("a.com", "token-a", "auth-a", ft)]),
+        );
+        data.insert(
+            "ns/b".to_string(),
+            make_acme(vec![challenge("b.com", "token-b", "auth-b", ft)]),
+        );
         store.full_set(&data);
 
         assert!(store.lookup("token-a", "a.com").is_some());
@@ -335,7 +346,10 @@ mod tests {
 
         // Partial update: remove resource "ns/a", add resource "ns/c"
         let mut upsert = HashMap::new();
-        upsert.insert("ns/c".to_string(), make_acme(vec![challenge("c.com", "token-c", "auth-c", ft)]));
+        upsert.insert(
+            "ns/c".to_string(),
+            make_acme(vec![challenge("c.com", "token-c", "auth-c", ft)]),
+        );
         let mut remove = HashSet::new();
         remove.insert("ns/a".to_string());
         store.partial_update(&upsert, &remove);
@@ -352,14 +366,20 @@ mod tests {
         let ft = future_time();
 
         let mut data = HashMap::new();
-        data.insert("ns/a".to_string(), make_acme(vec![challenge("a.com", "token-old", "auth-old", ft)]));
+        data.insert(
+            "ns/a".to_string(),
+            make_acme(vec![challenge("a.com", "token-old", "auth-old", ft)]),
+        );
         store.full_set(&data);
 
         assert!(store.lookup("token-old", "a.com").is_some());
 
         // Update "ns/a" with new token
         let mut upsert = HashMap::new();
-        upsert.insert("ns/a".to_string(), make_acme(vec![challenge("a.com", "token-new", "auth-new", ft)]));
+        upsert.insert(
+            "ns/a".to_string(),
+            make_acme(vec![challenge("a.com", "token-new", "auth-new", ft)]),
+        );
         store.partial_update(&upsert, &HashSet::new());
 
         assert!(store.lookup("token-old", "a.com").is_none());

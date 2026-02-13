@@ -409,20 +409,12 @@ impl EdgionAcme {
             .auto_edgion_tls
             .name
             .clone()
-            .unwrap_or_else(|| {
-                format!(
-                    "acme-{}",
-                    self.metadata.name.as_deref().unwrap_or("unknown")
-                )
-            })
+            .unwrap_or_else(|| format!("acme-{}", self.metadata.name.as_deref().unwrap_or("unknown")))
     }
 
     /// Get active challenges (returns empty slice if none)
     pub fn active_challenges(&self) -> &[ActiveHttpChallenge] {
-        self.spec
-            .active_challenges
-            .as_deref()
-            .unwrap_or_default()
+        self.spec.active_challenges.as_deref().unwrap_or_default()
     }
 }
 
@@ -467,10 +459,7 @@ spec:
         assert_eq!(acme.spec.domains.len(), 2);
         assert!(acme.is_http01());
         assert!(!acme.has_wildcard_domains());
-        assert_eq!(
-            acme.spec.server,
-            "https://acme-v02.api.letsencrypt.org/directory"
-        );
+        assert_eq!(acme.spec.server, "https://acme-v02.api.letsencrypt.org/directory");
         assert_eq!(acme.spec.renewal.renew_before_days, 30);
     }
 
@@ -575,10 +564,7 @@ spec:
 "#;
 
         let acme: EdgionAcme = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            acme.spec.server,
-            "https://acme-v02.api.letsencrypt.org/directory"
-        );
+        assert_eq!(acme.spec.server, "https://acme-v02.api.letsencrypt.org/directory");
         assert_eq!(acme.spec.key_type, AcmeKeyType::EcdsaP256);
         assert_eq!(acme.spec.renewal.renew_before_days, 30);
         assert_eq!(acme.spec.renewal.check_interval, 86400);
