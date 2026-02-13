@@ -145,7 +145,10 @@ impl ForwardAuthTestSuite {
                     } else {
                         TestResult::failed(
                             start.elapsed(),
-                            format!("Expected X-User-ID: admin-001 in upstream headers. Body: {}", &body[..body.len().min(500)]),
+                            format!(
+                                "Expected X-User-ID: admin-001 in upstream headers. Body: {}",
+                                &body[..body.len().min(500)]
+                            ),
                         )
                     }
                 })
@@ -164,12 +167,7 @@ impl ForwardAuthTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/health", ctx.http_url());
 
-                    let response = match client
-                        .get(&url)
-                        .header("host", BASIC_HOST)
-                        .send()
-                        .await
-                    {
+                    let response = match client.get(&url).header("host", BASIC_HOST).send().await {
                         Ok(r) => r,
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     };
@@ -246,7 +244,10 @@ impl ForwardAuthTestSuite {
 
                     let status = response.status().as_u16();
                     if status == 401 {
-                        TestResult::passed_with_message(start.elapsed(), "Invalid token correctly returned 401".to_string())
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Invalid token correctly returned 401".to_string(),
+                        )
                     } else {
                         TestResult::failed(start.elapsed(), format!("Expected 401, got {}", status))
                     }
@@ -436,12 +437,7 @@ impl ForwardAuthTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/health", ctx.http_url());
 
-                    let response = match client
-                        .get(&url)
-                        .header("host", SELECTIVE_HOST)
-                        .send()
-                        .await
-                    {
+                    let response = match client.get(&url).header("host", SELECTIVE_HOST).send().await {
                         Ok(r) => r,
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     };
@@ -449,10 +445,7 @@ impl ForwardAuthTestSuite {
                     let status = response.status().as_u16();
                     if status == 401 {
                         // Check for WWW-Authenticate client header
-                        let has_www_auth = response
-                            .headers()
-                            .get("WWW-Authenticate")
-                            .is_some();
+                        let has_www_auth = response.headers().get("WWW-Authenticate").is_some();
 
                         if has_www_auth {
                             TestResult::passed_with_message(
@@ -460,10 +453,7 @@ impl ForwardAuthTestSuite {
                                 "Selective: no token → 401 + WWW-Authenticate".to_string(),
                             )
                         } else {
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                "Selective: no token → 401".to_string(),
-                            )
+                            TestResult::passed_with_message(start.elapsed(), "Selective: no token → 401".to_string())
                         }
                     } else {
                         TestResult::failed(start.elapsed(), format!("Expected 401, got {}", status))
@@ -521,12 +511,7 @@ impl ForwardAuthTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/health", ctx.http_url());
 
-                    let response = match client
-                        .get(&url)
-                        .header("host", BASIC_HOST)
-                        .send()
-                        .await
-                    {
+                    let response = match client.get(&url).header("host", BASIC_HOST).send().await {
                         Ok(r) => r,
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     };

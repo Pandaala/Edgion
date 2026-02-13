@@ -42,10 +42,7 @@ impl TcpStreamPluginsTestSuite {
                         Ok(Ok(mut stream)) => {
                             // Send data
                             if let Err(e) = stream.write_all(test_data).await {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Write failed: {}", e),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
                             }
 
                             // Read echo response
@@ -55,30 +52,26 @@ impl TcpStreamPluginsTestSuite {
                                     if &buf[..n] == test_data {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
-                                            "TCP echo succeeded — real IP (127.0.0.1) correctly matched allow-list".to_string(),
+                                            "TCP echo succeeded — real IP (127.0.0.1) correctly matched allow-list"
+                                                .to_string(),
                                         )
                                     } else {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
-                                            format!(
-                                                "TCP connection allowed by stream plugin (received {} bytes)",
-                                                n
-                                            ),
+                                            format!("TCP connection allowed by stream plugin (received {} bytes)", n),
                                         )
                                     }
                                 }
                                 Ok(Ok(_)) => TestResult::failed(
                                     start.elapsed(),
-                                    "Connection closed immediately (0 bytes) — stream plugin may be using wrong IP".to_string(),
+                                    "Connection closed immediately (0 bytes) — stream plugin may be using wrong IP"
+                                        .to_string(),
                                 ),
                                 Ok(Err(e)) => TestResult::failed(
                                     start.elapsed(),
                                     format!("Read failed: {} — stream plugin may have denied the connection", e),
                                 ),
-                                Err(_) => TestResult::failed(
-                                    start.elapsed(),
-                                    "Read timed out".to_string(),
-                                ),
+                                Err(_) => TestResult::failed(start.elapsed(), "Read timed out".to_string()),
                             }
                         }
                         Ok(Err(e)) => TestResult::failed(
@@ -173,12 +166,7 @@ impl TcpStreamPluginsTestSuite {
                         match tokio::time::timeout(Duration::from_secs(2), TcpStream::connect(&addr)).await {
                             Ok(Ok(mut stream)) => {
                                 let mut buf = vec![0u8; 16];
-                                match tokio::time::timeout(
-                                    Duration::from_secs(1),
-                                    stream.read(&mut buf),
-                                )
-                                .await
-                                {
+                                match tokio::time::timeout(Duration::from_secs(1), stream.read(&mut buf)).await {
                                     Ok(Ok(0)) | Ok(Err(_)) => denied_count += 1,
                                     Err(_) => {} // timeout, not clearly denied
                                     _ => {}
@@ -198,10 +186,7 @@ impl TcpStreamPluginsTestSuite {
                     } else {
                         TestResult::failed(
                             start.elapsed(),
-                            format!(
-                                "Only {}/{} connections denied (expected all)",
-                                denied_count, total
-                            ),
+                            format!("Only {}/{} connections denied (expected all)", denied_count, total),
                         )
                     }
                 })
@@ -241,12 +226,10 @@ impl TcpStreamPluginsTestSuite {
                                 ),
                             }
                         }
-                        Ok(Err(_)) | Err(_) => {
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                "Short name annotation resolved correctly — connection refused/dropped".to_string(),
-                            )
-                        }
+                        Ok(Err(_)) | Err(_) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Short name annotation resolved correctly — connection refused/dropped".to_string(),
+                        ),
                     }
                 })
             },

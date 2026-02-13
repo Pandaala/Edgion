@@ -11,7 +11,7 @@ use axum::{
 };
 use clap::Parser;
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{error, info};
@@ -492,6 +492,12 @@ async fn start_auth_server(port: u16) -> Result<()> {
 
     let app = Router::new()
         .route("/verify", get(auth_verify_handler).post(auth_verify_handler))
+        .route("/oidc/.well-known/openid-configuration", get(oidc_discovery_handler))
+        .route("/oidc/jwks", get(oidc_jwks_handler))
+        .route(
+            "/oidc/introspect",
+            get(oidc_introspect_handler).post(oidc_introspect_handler),
+        )
         .route("/health", get(health_handler));
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -500,6 +506,104 @@ async fn start_auth_server(port: u16) -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn oidc_discovery_handler() -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    let issuer = "http://127.0.0.1:30040/oidc";
+    let body = json!({
+        "issuer": issuer,
+        "jwks_uri": format!("{}/jwks", issuer),
+        "introspection_endpoint": format!("{}/introspect", issuer),
+    });
+
+    (StatusCode::OK, Json(body))
+}
+
+async fn oidc_jwks_handler() -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    // Public key of OIDC test RSA key pair (RS256), kid = oidc-rs256-test-key
+    let body = json!({
+        "keys": [{
+            "kty": "RSA",
+            "kid": "oidc-rs256-test-key",
+            "alg": "RS256",
+            "use": "sig",
+            "n": "0UmLCqLGqy-oTAMXpajmd411_JmJ7s5ObbwVbWN7uviddI96Yg5NtObwmXcTuDeI2cfyjRgDDLFAE7gO7BYbX3qCGw1fDPxU--Gp7FwdqrOFOcgRjqwkzC9Ynw_C9X_qe0pkkNrP5qGFyTazcUTfTbhtNACqCmIPI_kH2vvwpbOlJ1a04-OUoUvG_kKvyrFAP2RX5ow38DDxDgzX0xaxhr1gIupGrrg3_y4oCe8xvQ5kM3MRl_Xybywr_jjDigEy5jUIkGjabVo1VEBV5Q0UxZbaPZAT2_lgR5_zz9yrqnscIFosZ03EL0piOjTP2qroJrmv2J1gENfu5bz_8HyS9Q",
+            "e": "AQAB"
+        }]
+    });
+
+    (StatusCode::OK, Json(body))
+}
+
+fn extract_form_token(body: &str) -> Option<String> {
+    for pair in body.split('&') {
+        let (k, v) = pair.split_once('=')?;
+        if k == "token" {
+            return Some(v.to_string());
+        }
+    }
+    None
+}
+
+async fn oidc_introspect_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    let body_bytes = match to_bytes(req.into_body(), 8 * 1024).await {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"active": false}))),
+    };
+    let body = String::from_utf8_lossy(&body_bytes);
+    let token = extract_form_token(&body);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let issuer = "http://127.0.0.1:30040/oidc";
+    let response = match token.as_deref() {
+        Some("oidc-active-token") => json!({
+            "active": true,
+            "iss": issuer,
+            "sub": "oidc-user-123",
+            "scope": "api:read profile",
+            "exp": now + 3600
+        }),
+        Some("oidc-auto-fallback-token") | Some("oidc.auto.fallback") => json!({
+            "active": true,
+            "iss": issuer,
+            "sub": "oidc-user-auto",
+            "scope": "api:read",
+            "exp": now + 3600
+        }),
+        Some("oidc-insufficient-scope-token") => json!({
+            "active": true,
+            "iss": issuer,
+            "sub": "oidc-user-456",
+            "scope": "profile",
+            "exp": now + 3600
+        }),
+        Some("oidc-expired-token") => json!({
+            "active": true,
+            "iss": issuer,
+            "sub": "oidc-user-expired",
+            "scope": "api:read",
+            "exp": now.saturating_sub(3600)
+        }),
+        _ => json!({ "active": false }),
+    };
+
+    (StatusCode::OK, Json(response))
 }
 
 /// Auth verification handler.

@@ -8,8 +8,8 @@ use tonic::{Request, Response, Status};
 use crate::core::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
-    ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, ServerMetaEvent, WatchRequest,
-    WatchResponse, WatchServerMetaRequest,
+    ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, ServerMetaEvent, WatchRequest, WatchResponse,
+    WatchServerMetaRequest,
 };
 use crate::types::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 

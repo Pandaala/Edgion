@@ -115,6 +115,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "jwt-auth" | "jwtauth" => "EdgionPlugins/JwtAuth".to_string(),
             "key-auth" | "keyauth" => "EdgionPlugins/KeyAuth".to_string(),
             "forward-auth" | "forwardauth" => "EdgionPlugins/ForwardAuth".to_string(),
+            "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -169,6 +170,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/ForwardAuth" => "EdgionPlugins",
         "EdgionPlugins/DirectEndpoint" => "EdgionPlugins",
         "EdgionPlugins/AllEndpointStatus" => "EdgionPlugins",
+        "EdgionPlugins/OpenidConnect" => "EdgionPlugins",
         "Gateway/StreamPlugins" => "Gateway/StreamPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
@@ -446,6 +448,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::AllEndpointStatusTestSuite));
+        }
+        "EdgionPlugins/OpenidConnect" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/OpenidConnect tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::OpenidConnectTestSuite));
         }
         "EdgionPlugins/BandwidthLimit" => {
             if !gateway {

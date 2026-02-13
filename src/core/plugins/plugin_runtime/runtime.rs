@@ -36,6 +36,7 @@ use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
 use crate::core::plugins::edgion_plugins::key_auth::KeyAuth;
 use crate::core::plugins::edgion_plugins::mock::Mock;
+use crate::core::plugins::edgion_plugins::openid_connect::OpenidConnect;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
 use crate::core::plugins::edgion_plugins::rate_limit::RateLimit;
 use crate::core::plugins::edgion_plugins::real_ip::RealIp;
@@ -336,6 +337,7 @@ impl PluginRuntime {
             EdgionPlugin::RealIp(config) => Some(RealIp::create(config)),
             EdgionPlugin::ForwardAuth(config) => Some(Box::new(ForwardAuth::new(config))),
             EdgionPlugin::AllEndpointStatus(config) => Some(Box::new(AllEndpointStatus::new(config))),
+            EdgionPlugin::OpenidConnect(config) => Some(Box::new(OpenidConnect::new(config, namespace.to_string()))),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
@@ -401,6 +403,7 @@ impl PluginRuntime {
             EdgionPlugin::ResponseRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::KeyAuth(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::ForwardAuth(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::OpenidConnect(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::BandwidthLimit(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
             _ => None,
@@ -427,6 +430,7 @@ impl PluginRuntime {
             EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
+            EdgionPlugin::OpenidConnect(_) => "OpenidConnect",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",

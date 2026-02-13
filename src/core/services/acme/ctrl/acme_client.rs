@@ -73,14 +73,9 @@ impl AcmeClient {
         // Build external account key if provided
         let eab = match (eab_kid, eab_hmac_key) {
             (Some(kid), Some(hmac_b64)) => {
-                let hmac_bytes = base64::Engine::decode(
-                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-                    hmac_b64,
-                )
-                .or_else(|_| {
-                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, hmac_b64)
-                })
-                .context("Failed to decode EAB HMAC key from base64")?;
+                let hmac_bytes = base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, hmac_b64)
+                    .or_else(|_| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, hmac_b64))
+                    .context("Failed to decode EAB HMAC key from base64")?;
                 Some(ExternalAccountKey::new(kid.to_string(), &hmac_bytes))
             }
             _ => None,
@@ -117,8 +112,8 @@ impl AcmeClient {
             only_return_existing: false,
         };
 
-        let builder = Account::builder_with_root(ca_pem_path)
-            .context("Failed to create ACME account builder with custom CA")?;
+        let builder =
+            Account::builder_with_root(ca_pem_path).context("Failed to create ACME account builder with custom CA")?;
 
         let (account, credentials) = builder
             .create(&new_account, server_url.to_string(), None)
@@ -157,8 +152,8 @@ impl AcmeClient {
         credentials: AccountCredentials,
         ca_pem_path: impl AsRef<std::path::Path>,
     ) -> Result<Self> {
-        let builder = Account::builder_with_root(ca_pem_path)
-            .context("Failed to create ACME account builder with custom CA")?;
+        let builder =
+            Account::builder_with_root(ca_pem_path).context("Failed to create ACME account builder with custom CA")?;
 
         let account = builder
             .from_credentials(credentials)
@@ -235,10 +230,7 @@ impl AcmeClient {
     ///
     /// Call this AFTER the challenge tokens have been deployed to the Gateway.
     /// Re-fetches authorizations and calls `set_ready()` on each pending challenge.
-    pub async fn activate_http01_challenges(
-        &self,
-        ctx: &mut Http01OrderContext,
-    ) -> Result<()> {
+    pub async fn activate_http01_challenges(&self, ctx: &mut Http01OrderContext) -> Result<()> {
         let mut auths = ctx.order.authorizations();
 
         while let Some(auth_result) = auths.next().await {
@@ -340,10 +332,7 @@ impl AcmeClient {
     /// Phase 2: Notify the ACME server that DNS-01 challenges are ready for validation.
     ///
     /// Call this AFTER DNS TXT records have been created and propagated.
-    pub async fn activate_dns01_challenges(
-        &self,
-        ctx: &mut Dns01OrderContext,
-    ) -> Result<()> {
+    pub async fn activate_dns01_challenges(&self, ctx: &mut Dns01OrderContext) -> Result<()> {
         let mut auths = ctx.order.authorizations();
 
         while let Some(auth_result) = auths.next().await {
@@ -445,13 +434,10 @@ fn generate_csr(domains: &[String], key_type: &AcmeKeyType) -> Result<(String, V
     let key_pair = KeyPair::generate_for(alg).context("Failed to generate key pair")?;
     let private_key_pem = key_pair.serialize_pem();
 
-    let mut params =
-        CertificateParams::new(domains.to_vec()).context("Failed to create certificate params")?;
+    let mut params = CertificateParams::new(domains.to_vec()).context("Failed to create certificate params")?;
     params.distinguished_name = DistinguishedName::new();
 
-    let csr = params
-        .serialize_request(&key_pair)
-        .context("Failed to serialize CSR")?;
+    let csr = params.serialize_request(&key_pair).context("Failed to serialize CSR")?;
     let csr_der = csr.der().to_vec();
 
     Ok((private_key_pem, csr_der))

@@ -7,10 +7,10 @@
 //! - Status management
 //! - Notifying AcmeService for background certificate issuance/renewal
 
-use crate::core::services::acme::notify_resource_changed;
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, get_secret, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
+use crate::core::services::acme::notify_resource_changed;
 use crate::types::prelude_resources::EdgionAcme;
 use crate::types::resources::edgion_acme::{AcmeChallengeType, EdgionAcmeStatus};
 use crate::types::ResourceKind;
@@ -52,9 +52,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
 
         // Validate wildcard domains require DNS-01
         if acme.has_wildcard_domains() && acme.spec.challenge.challenge_type != AcmeChallengeType::Dns01 {
-            warnings.push(
-                "EdgionAcme: wildcard domains (*.example.com) require dns-01 challenge type".to_string(),
-            );
+            warnings.push("EdgionAcme: wildcard domains (*.example.com) require dns-01 challenge type".to_string());
         }
 
         // Validate challenge config completeness

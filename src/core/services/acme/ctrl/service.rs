@@ -26,7 +26,7 @@ use kube::api::{Api, Patch, PatchParams};
 use kube::Client;
 use tokio::sync::mpsc;
 
-use super::acme_client::{AcmeClient, AcmeCertificateResult};
+use super::acme_client::{AcmeCertificateResult, AcmeClient};
 use super::dns_provider::create_dns_provider;
 use crate::types::resources::edgion_acme::{
     AcmeCertPhase, AcmeChallengeType, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus,
@@ -284,7 +284,11 @@ impl AcmeServiceWorker {
         };
 
         // Check current phase
-        let phase = acme.status.as_ref().map(|s| &s.phase).unwrap_or(&AcmeCertPhase::Pending);
+        let phase = acme
+            .status
+            .as_ref()
+            .map(|s| &s.phase)
+            .unwrap_or(&AcmeCertPhase::Pending);
         match phase {
             AcmeCertPhase::Issuing | AcmeCertPhase::Renewing => {
                 return; // Already in progress
@@ -378,16 +382,10 @@ impl AcmeServiceWorker {
                     // Update status to Failed
                     if let Some((ns, name)) = parse_resource_key(&key_owned) {
                         let api: Api<EdgionAcme> = Api::namespaced(client, &ns);
-                        let _ = update_acme_status(
-                            &api,
-                            &name,
-                            AcmeCertPhase::Failed,
-                            |status| {
-                                status.last_failure_reason = Some(format!("{:#}", e));
-                                status.last_failure_time =
-                                    Some(chrono::Utc::now().to_rfc3339());
-                            },
-                        )
+                        let _ = update_acme_status(&api, &name, AcmeCertPhase::Failed, |status| {
+                            status.last_failure_reason = Some(format!("{:#}", e));
+                            status.last_failure_time = Some(chrono::Utc::now().to_rfc3339());
+                        })
                         .await;
                     }
 
@@ -447,11 +445,7 @@ impl AcmeServiceWorker {
 // ============================================================================
 
 /// Process a single EdgionAcme resource through the full ACME flow
-async fn process_acme_resource(
-    client: Client,
-    acme: &EdgionAcme,
-    is_renewal: bool,
-) -> Result<()> {
+async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bool) -> Result<()> {
     let namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
     let name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
     let key = format!("{}/{}", namespace, name);
@@ -471,24 +465,13 @@ async fn process_acme_resource(
 
     // 3. Execute challenge-specific flow and obtain certificate
     let cert_result = match acme.spec.challenge.challenge_type {
-        AcmeChallengeType::Http01 => {
-            execute_http01_flow(&client, &api, name, &acme_client, acme).await?
-        }
-        AcmeChallengeType::Dns01 => {
-            execute_dns01_flow(&client, &acme_client, acme).await?
-        }
+        AcmeChallengeType::Http01 => execute_http01_flow(&client, &api, name, &acme_client, acme).await?,
+        AcmeChallengeType::Dns01 => execute_dns01_flow(&client, &acme_client, acme).await?,
     };
 
     // 4. Store certificate in K8s Secret
     let secret_ns = acme.get_secret_namespace();
-    create_or_update_cert_secret(
-        &client,
-        &secret_ns,
-        &acme.spec.storage.secret_name,
-        &cert_result,
-        &key,
-    )
-    .await?;
+    create_or_update_cert_secret(&client, &secret_ns, &acme.spec.storage.secret_name, &cert_result, &key).await?;
 
     // 5. Create/update EdgionTls if enabled
     if acme.spec.auto_edgion_tls.enabled {
@@ -515,10 +498,7 @@ async fn process_acme_resource(
 
     // 8. Schedule renewal check
     let check_interval = acme.spec.renewal.check_interval;
-    schedule_renewal_check(
-        format!("{}/{}", namespace, name),
-        Duration::from_secs(check_interval),
-    );
+    schedule_renewal_check(format!("{}/{}", namespace, name), Duration::from_secs(check_interval));
 
     tracing::info!(
         component = "acme_service",
@@ -677,10 +657,7 @@ async fn execute_dns01_flow(
         dns_provider
             .create_txt_record(&challenge.domain, &challenge.digest)
             .await
-            .context(format!(
-                "Failed to create DNS TXT record for {}",
-                challenge.domain
-            ))?;
+            .context(format!("Failed to create DNS TXT record for {}", challenge.domain))?;
         created_records.push((challenge.domain.clone(), challenge.digest.clone()));
     }
 
@@ -762,10 +739,7 @@ fn account_secret_name(acme_name: &str) -> String {
 }
 
 /// Get or create an ACME account for the given resource
-async fn get_or_create_acme_account(
-    client: &Client,
-    acme: &EdgionAcme,
-) -> Result<AcmeClient> {
+async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Result<AcmeClient> {
     let namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
     let acme_name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
     let secret_name = account_secret_name(acme_name);
@@ -779,8 +753,7 @@ async fn get_or_create_acme_account(
                     let creds_json = String::from_utf8(creds_bytes.0.clone())
                         .context("Account credentials Secret contains invalid UTF-8")?;
                     let creds: instant_acme::AccountCredentials =
-                        serde_json::from_str(&creds_json)
-                            .context("Failed to deserialize account credentials")?;
+                        serde_json::from_str(&creds_json).context("Failed to deserialize account credentials")?;
 
                     tracing::info!(
                         component = "acme_service",
@@ -816,24 +789,14 @@ async fn get_or_create_acme_account(
 
     // Create new account
     let eab_kid = acme.spec.external_account_binding.as_ref().map(|e| e.key_id.as_str());
-    let eab_hmac = acme
-        .spec
-        .external_account_binding
-        .as_ref()
-        .map(|e| e.hmac_key.as_str());
+    let eab_hmac = acme.spec.external_account_binding.as_ref().map(|e| e.hmac_key.as_str());
 
-    let (acme_client, credentials) = AcmeClient::new(
-        &acme.spec.server,
-        &acme.spec.email,
-        eab_kid,
-        eab_hmac,
-    )
-    .await
-    .context("Failed to create ACME account")?;
+    let (acme_client, credentials) = AcmeClient::new(&acme.spec.server, &acme.spec.email, eab_kid, eab_hmac)
+        .await
+        .context("Failed to create ACME account")?;
 
     // Persist account credentials to K8s Secret
-    let creds_json =
-        serde_json::to_string(&credentials).context("Failed to serialize account credentials")?;
+    let creds_json = serde_json::to_string(&credentials).context("Failed to serialize account credentials")?;
 
     let account_secret = Secret {
         metadata: kube::api::ObjectMeta {
@@ -841,10 +804,7 @@ async fn get_or_create_acme_account(
             namespace: Some(namespace.to_string()),
             labels: Some(BTreeMap::from([
                 ("edgion.io/managed-by".to_string(), "acme".to_string()),
-                (
-                    "edgion.io/acme-resource".to_string(),
-                    acme_name.to_string(),
-                ),
+                ("edgion.io/acme-resource".to_string(), acme_name.to_string()),
             ])),
             ..Default::default()
         },
@@ -901,12 +861,7 @@ async fn patch_active_challenges(
 /// SSA avoids the read-modify-write race condition by letting the K8s API
 /// server atomically merge fields. Only the fields we explicitly set will
 /// be managed; other controllers' fields are preserved.
-async fn update_acme_status<F>(
-    api: &Api<EdgionAcme>,
-    name: &str,
-    phase: AcmeCertPhase,
-    modify: F,
-) -> Result<()>
+async fn update_acme_status<F>(api: &Api<EdgionAcme>, name: &str, phase: AcmeCertPhase, modify: F) -> Result<()>
 where
     F: FnOnce(&mut EdgionAcmeStatus),
 {
@@ -986,10 +941,7 @@ async fn create_or_update_cert_secret(
 }
 
 /// Create or update the EdgionTls resource for the issued certificate
-async fn create_or_update_edgion_tls(
-    client: &Client,
-    acme: &EdgionAcme,
-) -> Result<()> {
+async fn create_or_update_edgion_tls(client: &Client, acme: &EdgionAcme) -> Result<()> {
     let namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
     let tls_name = acme.get_edgion_tls_name();
     let secret_ns = acme.get_secret_namespace();
@@ -1022,8 +974,7 @@ async fn create_or_update_edgion_tls(
     // Use dynamic API for EdgionTls
     let gvk = kube::api::GroupVersionKind::gvk("edgion.io", "v1", "EdgionTls");
     let ar = kube::api::ApiResource::from_gvk(&gvk);
-    let api: Api<kube::api::DynamicObject> =
-        Api::namespaced_with(client.clone(), namespace, &ar);
+    let api: Api<kube::api::DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
 
     let pp = PatchParams::apply("edgion-acme-controller");
     api.patch(&tls_name, &pp, &Patch::Apply(edgion_tls))
@@ -1060,8 +1011,7 @@ fn parse_cert_info(pem: &str) -> CertInfo {
                 let not_after = {
                     let asn1_time = cert.validity().not_after;
                     // Convert ASN1 timestamp to chrono DateTime, then to RFC 3339
-                    chrono::DateTime::from_timestamp(asn1_time.timestamp(), 0)
-                        .map(|dt| dt.to_rfc3339())
+                    chrono::DateTime::from_timestamp(asn1_time.timestamp(), 0).map(|dt| dt.to_rfc3339())
                 };
                 CertInfo {
                     serial: Some(cert.serial.to_str_radix(16)),
@@ -1106,11 +1056,11 @@ mod tests {
     #[test]
     fn test_exponential_backoff_sequence() {
         // base=300s, multiplier=4^attempt
-        assert_eq!(exponential_backoff(300, 0), Duration::from_secs(300));      // 5min
-        assert_eq!(exponential_backoff(300, 1), Duration::from_secs(1200));     // 20min
-        assert_eq!(exponential_backoff(300, 2), Duration::from_secs(4800));     // 80min
-        assert_eq!(exponential_backoff(300, 3), Duration::from_secs(19200));    // 5.3h
-        assert_eq!(exponential_backoff(300, 4), Duration::from_secs(76800));    // 21.3h
+        assert_eq!(exponential_backoff(300, 0), Duration::from_secs(300)); // 5min
+        assert_eq!(exponential_backoff(300, 1), Duration::from_secs(1200)); // 20min
+        assert_eq!(exponential_backoff(300, 2), Duration::from_secs(4800)); // 80min
+        assert_eq!(exponential_backoff(300, 3), Duration::from_secs(19200)); // 5.3h
+        assert_eq!(exponential_backoff(300, 4), Duration::from_secs(76800)); // 21.3h
     }
 
     #[test]
@@ -1160,8 +1110,7 @@ mod tests {
     #[test]
     fn test_parse_cert_info_valid_self_signed() {
         // Generate a self-signed cert for testing
-        let key_pair =
-            rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let key_pair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
         let params = rcgen::CertificateParams::new(vec!["test.example.com".to_string()]).unwrap();
         let cert = params.self_signed(&key_pair).unwrap();
         let pem = cert.pem();

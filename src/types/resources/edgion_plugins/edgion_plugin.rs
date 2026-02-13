@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig,
-    KeyAuthConfig, MockConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig,
-    ResponseRewriteConfig,
+    KeyAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -66,6 +66,8 @@ pub enum EdgionPlugin {
     RealIp(RealIpConfig),
     /// ForwardAuth filter (forward request to external auth service for authentication)
     ForwardAuth(ForwardAuthConfig),
+    /// OpenID Connect filter (OIDC / OAuth 2.0 authentication)
+    OpenidConnect(OpenidConnectConfig),
     /// BandwidthLimit filter (limit downstream response bandwidth per second)
     BandwidthLimit(BandwidthLimitConfig),
     /// DirectEndpoint filter (route to specific endpoint, bypassing LB)
@@ -105,6 +107,7 @@ impl EdgionPlugin {
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
+            EdgionPlugin::OpenidConnect(_) => "OpenidConnect",
             EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",
             EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
             EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
