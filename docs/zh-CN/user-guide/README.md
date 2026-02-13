@@ -21,6 +21,7 @@
     - [URLRewrite](./http-route/filters/gateway-api/url-rewrite.md)
   - Edgion 扩展插件 🔌
     - [BasicAuth](./http-route/filters/edgion-plugins/basic-auth.md)
+    - [LDAP Auth](./edgion-plugins/ldap-auth.md)
     - [CORS](./http-route/filters/edgion-plugins/cors.md)
     - [CSRF](./http-route/filters/edgion-plugins/csrf.md)
     - [CtxSet](./edgion-plugins/ctx-setter.md)

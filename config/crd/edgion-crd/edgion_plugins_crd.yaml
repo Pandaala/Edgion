@@ -136,6 +136,7 @@ spec:
                           - IpRestriction
                           - JwtAuth
                           - KeyAuth
+                          - LdapAuth
                           - OpenidConnect
                           - Mock
                           - ProxyRewrite

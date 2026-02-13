@@ -31,10 +31,10 @@ pub use plugin_configs::{
     CtxVarRule, DebugAccessLogToHeaderConfig, DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid,
     DirectEndpointOnMissing, EndpointAuthMethod, EndpointExtract, ExtractConfig, ForwardAuthConfig, HeaderActions,
     HeaderEntry, HeaderRename, HttpMethod, IpRestrictionConfig, IpSource, JwtAlgorithm, JwtAuthConfig, KeyAuthConfig,
-    KeyMetadata, LimitHeaderNames, MappingConfig, MockConfig, OnMissing, OnMissingKey, OpenidConnectConfig,
-    ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig,
-    ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource,
-    RuleMatchMode, TransformConfig, TransformType, UnauthAction, VerificationMode,
+    KeyMetadata, LdapAuthConfig, LimitHeaderNames, MappingConfig, MockConfig, OnMissing, OnMissingKey,
+    OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RegexUri, ReplaceConfig,
+    RequestRestrictionConfig, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule,
+    RestrictionSource, RuleMatchMode, TransformConfig, TransformType, UnauthAction, VerificationMode,
 };
 
 /// API group for EdgionPlugins

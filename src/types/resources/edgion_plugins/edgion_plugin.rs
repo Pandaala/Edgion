@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, ForwardAuthConfig, IpRestrictionConfig, JwtAuthConfig,
-    KeyAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
+    KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
     RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
@@ -48,6 +48,8 @@ pub enum EdgionPlugin {
     JwtAuth(JwtAuthConfig),
     /// Key Authentication filter (API Key in header/query)
     KeyAuth(KeyAuthConfig),
+    /// LDAP Authentication filter (username/password bind to LDAP server)
+    LdapAuth(LdapAuthConfig),
     /// Mock filter (return predefined responses for testing/prototyping)
     Mock(MockConfig),
     /// Debug Access Log to Header filter (for debugging)
@@ -98,6 +100,7 @@ impl EdgionPlugin {
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::KeyAuth(_) => "KeyAuth",
+            EdgionPlugin::LdapAuth(_) => "LdapAuth",
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
