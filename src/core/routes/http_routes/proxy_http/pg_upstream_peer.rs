@@ -181,30 +181,80 @@ pub async fn select_http_backend(
         }
     };
 
-    let mut backend_ref = match RouteRules::select_backend(&route_unit.rule) {
-        Ok(backend) => backend,
-        Err(e) => {
-            tracing::error!("Failed to select backend: {:?}", e);
-            ctx.add_error(match &e {
-                EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
-                EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-                EdError::RefDenied {
-                    target_namespace,
-                    target_name,
-                    reason,
-                } => {
-                    tracing::warn!(
-                        target_namespace = %target_namespace,
-                        target_name = %target_name,
-                        reason = %reason,
-                        "Cross-namespace reference denied"
-                    );
-                    EdgionStatus::RefDenied
+    // ===== DynamicInternalUpstream: select specific backend_ref by name =====
+    let mut backend_ref = if let Some(ref jump) = ctx.internal_jump {
+        tracing::debug!(
+            target_name = %jump.backend_ref_name,
+            target_namespace = ?jump.backend_ref_namespace,
+            "DynamicInternalUpstream: selecting backend by name"
+        );
+        match RouteRules::find_backend_by_name(
+            &route_unit.rule,
+            &jump.backend_ref_name,
+            jump.backend_ref_namespace.as_deref(),
+            &route_unit.matched_info.rns,
+        ) {
+            Ok(backend) => backend,
+            Err(e) => {
+                // This shouldn't happen because plugin already pre-validated,
+                // but handle gracefully (e.g., race condition on route reload)
+                tracing::error!(
+                    target_name = %jump.backend_ref_name,
+                    error = ?e,
+                    "DynamicInternalUpstream: backend_ref not found (fallback to weighted selection)"
+                );
+                // Fall through to normal weighted selection
+                match RouteRules::select_backend(&route_unit.rule) {
+                    Ok(backend) => backend,
+                    Err(e) => {
+                        tracing::error!("Failed to select backend after internal jump fallback: {:?}", e);
+                        ctx.add_error(match &e {
+                            EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
+                            EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
+                            EdError::RefDenied { target_namespace, target_name, reason } => {
+                                tracing::warn!(
+                                    target_namespace = %target_namespace,
+                                    target_name = %target_name,
+                                    reason = %reason,
+                                    "Cross-namespace reference denied"
+                                );
+                                EdgionStatus::RefDenied
+                            }
+                            _ => EdgionStatus::Unknown,
+                        });
+                        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+                        return Err(PingoraError::new(ErrorType::InternalError));
+                    }
                 }
-                _ => EdgionStatus::Unknown,
-            });
-            end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-            return Err(PingoraError::new(ErrorType::InternalError));
+            }
+        }
+    } else {
+        // ===== Normal: weighted round-robin selection =====
+        match RouteRules::select_backend(&route_unit.rule) {
+            Ok(backend) => backend,
+            Err(e) => {
+                tracing::error!("Failed to select backend: {:?}", e);
+                ctx.add_error(match &e {
+                    EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
+                    EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
+                    EdError::RefDenied {
+                        target_namespace,
+                        target_name,
+                        reason,
+                    } => {
+                        tracing::warn!(
+                            target_namespace = %target_namespace,
+                            target_name = %target_name,
+                            reason = %reason,
+                            "Cross-namespace reference denied"
+                        );
+                        EdgionStatus::RefDenied
+                    }
+                    _ => EdgionStatus::Unknown,
+                });
+                end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+                return Err(PingoraError::new(ErrorType::InternalError));
+            }
         }
     };
 

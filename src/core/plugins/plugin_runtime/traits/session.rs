@@ -2,7 +2,7 @@
 
 use crate::core::plugins::plugin_runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::types::common::{KeyGet, KeySet};
-use crate::types::{DirectEndpointPreset, EdgionHttpContext};
+use crate::types::{DirectEndpointPreset, EdgionHttpContext, InternalJumpPreset};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
@@ -179,4 +179,9 @@ pub trait PluginSession: Send {
     /// Called by DirectEndpoint plugin to bypass normal LB.
     /// The info persists across retries (Clone, not consumed).
     fn set_direct_endpoint(&mut self, info: DirectEndpointPreset);
+
+    /// Set internal jump target for backend selection.
+    /// Called by DynamicInternalUpstream plugin to target a specific BackendRef.
+    /// The info persists in ctx and is consumed by select_http_backend().
+    fn set_internal_jump(&mut self, info: InternalJumpPreset);
 }

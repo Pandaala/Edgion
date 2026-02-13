@@ -9,7 +9,7 @@ use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 use crate::types::common::{KeyGet, KeySet};
 use crate::types::filters::PluginRunningResult;
-use crate::types::{DirectEndpointPreset, EdgionHttpContext};
+use crate::types::{DirectEndpointPreset, EdgionHttpContext, InternalJumpPreset};
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
@@ -437,6 +437,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn set_direct_endpoint(&mut self, info: DirectEndpointPreset) {
         self.ctx.direct_endpoint = Some(info);
+    }
+
+    fn set_internal_jump(&mut self, info: InternalJumpPreset) {
+        self.ctx.internal_jump = Some(info);
     }
 }
 

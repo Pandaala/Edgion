@@ -204,6 +204,23 @@ pub struct BackendContext {
     pub current_upstream_id: Option<usize>,
 }
 
+/// Stored internal jump target info (lightweight, survives retries via Clone)
+///
+/// Unlike DirectEndpointPreset which specifies an exact endpoint address,
+/// InternalJumpPreset specifies a BackendRef by name. The actual endpoint
+/// selection happens via normal LB in get_peer().
+///
+/// This preset is consumed by select_http_backend() to find the matching
+/// BackendRef instead of using weighted round-robin selection.
+#[derive(Debug, Clone)]
+pub struct InternalJumpPreset {
+    /// Name of the target backend_ref (must match a backend_ref in the route)
+    pub backend_ref_name: String,
+    /// Optional namespace of the target backend_ref
+    /// If None, matches by name only
+    pub backend_ref_namespace: Option<String>,
+}
+
 /// Stored direct endpoint info (lightweight, survives retries via Clone)
 ///
 /// Unlike Box<HttpPeer> which would be consumed on first use,
@@ -288,6 +305,12 @@ pub struct EdgionHttpContext {
     /// Direct endpoint set by DirectEndpoint plugin in request_filter stage.
     pub direct_endpoint: Option<DirectEndpointPreset>,
 
+    /// Internal jump target set by DynamicInternalUpstream plugin in request_filter stage.
+    /// When present, select_http_backend() finds the matching BackendRef by name
+    /// instead of using weighted round-robin selection.
+    /// Normal LB within the selected service's endpoints still applies.
+    pub internal_jump: Option<InternalJumpPreset>,
+
     /// Response headers to add (queued from request stage)
     pub response_headers_to_add: Vec<(String, String)>,
 }
@@ -321,6 +344,7 @@ impl EdgionHttpContext {
             ctx_map: HashMap::new(),
             path_params: None,
             direct_endpoint: None,
+            internal_jump: None,
             response_headers_to_add: Vec::new(),
         }
     }

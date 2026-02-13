@@ -149,6 +149,7 @@ spec:
                           - ForwardAuth
                           - DebugAccessLogToHeader
                           - DirectEndpoint
+                          - DynamicInternalUpstream
                           - AllEndpointStatus
                       config:
                         type: object

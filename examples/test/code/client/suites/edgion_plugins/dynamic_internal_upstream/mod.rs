@@ -1,0 +1,2 @@
+mod dynamic_internal_upstream;
+pub use dynamic_internal_upstream::DynamicInternalUpstreamTestSuite;

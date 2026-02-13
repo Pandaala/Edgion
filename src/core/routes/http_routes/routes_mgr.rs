@@ -90,6 +90,59 @@ impl RouteRules {
         Ok(backend_ref)
     }
 
+    /// Find a specific backend_ref by name from the route rule's backend_refs.
+    ///
+    /// Used by DynamicInternalUpstream plugin to bypass weighted selection and
+    /// target a specific backend.
+    ///
+    /// Security: The target backend_ref must exist in the route's backend_refs
+    /// list, which was already validated at route configuration time
+    /// (including ReferenceGrant for cross-namespace references).
+    ///
+    /// Note: This function intentionally does NOT filter by weight.
+    /// A backend_ref with weight=0 can still be targeted via DynamicInternalUpstream,
+    /// enabling "hidden backend" patterns for debugging/testing.
+    pub fn find_backend_by_name(
+        rule: &Arc<HTTPRouteRule>,
+        target_name: &str,
+        target_namespace: Option<&str>,
+        route_namespace: &str,
+    ) -> Result<HTTPBackendRef, EdError> {
+        let backend_refs = rule
+            .backend_refs
+            .as_ref()
+            .filter(|refs| !refs.is_empty())
+            .ok_or(EdError::BackendNotFound())?;
+
+        for br in backend_refs {
+            // Match by name
+            if br.name != target_name {
+                continue;
+            }
+
+            // If namespace is specified in jump target, verify it matches
+            if let Some(ns) = target_namespace {
+                let br_ns = br.namespace.as_deref().unwrap_or(route_namespace);
+                if br_ns != ns {
+                    continue;
+                }
+            }
+
+            // Check cross-namespace reference denial
+            if let Some(ref denied) = br.ref_denied {
+                return Err(EdError::RefDenied {
+                    target_namespace: denied.target_namespace.clone(),
+                    target_name: denied.target_name.clone(),
+                    reason: denied.reason.clone().unwrap_or_else(|| "NoMatchingReferenceGrant".to_string()),
+                });
+            }
+
+            return Ok(br.clone());
+        }
+
+        Err(EdError::BackendNotFound())
+    }
+
     /// Match a route using the match_engine engine
     /// Try match in order: regex → radix (exact + prefix)
     /// Returns Arc<HttpRouteRuleUnit> on success

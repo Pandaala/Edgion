@@ -386,6 +386,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
                     run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
                     run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
+                    run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
                         run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
                     else
@@ -590,7 +591,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/AllEndpointStatus"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/AllEndpointStatus"
             else
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi
