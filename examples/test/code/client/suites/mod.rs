@@ -39,7 +39,7 @@ pub use edgion_plugins::{
     DirectEndpointTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite, ForwardAuthTestSuite,
     HeaderCertAuthTestSuite, HmacAuthTestSuite, JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite,
     LdapAuthTestSuite, OpenidConnectTestSuite, PluginConditionTestSuite, PluginLogsTestSuite, ProxyRewriteTestSuite,
-    RateLimitTestSuite, RealIpPluginTestSuite, RequestRestrictionTestSuite, ResponseRewriteTestSuite,
+    RateLimitTestSuite, RealIpPluginTestSuite, RequestRestrictionTestSuite, ResponseRewriteTestSuite, DslTestSuite,
     WebhookKeyGetTestSuite,
 };
 

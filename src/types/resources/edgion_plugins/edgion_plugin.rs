@@ -7,8 +7,8 @@ use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig,
     ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig,
-    KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig,
+    KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig,
+    RateLimitRedisConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig, DslConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -69,6 +69,8 @@ pub enum EdgionPlugin {
     ResponseRewrite(ResponseRewriteConfig),
     /// RateLimit filter (CMS algorithm for high-performance rate limiting)
     RateLimit(RateLimitConfig),
+    /// RateLimitRedis filter (Redis-based precise cluster-wide rate limiting)
+    RateLimitRedis(RateLimitRedisConfig),
     /// CtxSet filter (set context variables from various sources with extraction, transformation, and mapping)
     CtxSet(CtxSetConfig),
     /// RealIp filter (extract real client IP from headers with trusted proxy support)
@@ -87,6 +89,8 @@ pub enum EdgionPlugin {
     DynamicInternalUpstream(DynamicInternalUpstreamConfig),
     /// DynamicExternalUpstream filter (route to external domain via domainMap)
     DynamicExternalUpstream(DynamicExternalUpstreamConfig),
+    /// DSL plugin — custom inline scripting with sandboxed VM execution
+    Dsl(DslConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -121,6 +125,7 @@ impl EdgionPlugin {
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::RateLimit(_) => "RateLimit",
+            EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
@@ -130,6 +135,7 @@ impl EdgionPlugin {
             EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
             EdgionPlugin::DynamicInternalUpstream(_) => "DynamicInternalUpstream",
             EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
+            EdgionPlugin::Dsl(_) => "Dsl",
         }
     }
 }

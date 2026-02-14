@@ -1342,6 +1342,7 @@ dependencies = [
  "mimalloc",
  "mime_guess",
  "mockall",
+ "nom",
  "notify",
  "parking_lot",
  "percent-encoding",

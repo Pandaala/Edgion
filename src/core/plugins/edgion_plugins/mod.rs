@@ -24,9 +24,11 @@ pub mod openid_connect;
 mod plugin_store;
 pub mod proxy_rewrite;
 pub mod rate_limit;
+pub mod rate_limit_redis;
 pub mod real_ip;
 pub mod request_restriction;
 pub mod response_rewrite;
+pub mod dsl;
 
 pub use all_endpoint_status::AllEndpointStatus;
 pub use bandwidth_limit::BandwidthLimit;
@@ -48,6 +50,7 @@ pub use openid_connect::OpenidConnect;
 pub use plugin_store::{get_global_plugin_store, PluginStore};
 pub use proxy_rewrite::ProxyRewrite;
 pub use rate_limit::RateLimit;
+pub use rate_limit_redis::RateLimitRedis;
 pub use real_ip::RealIp;
 pub use request_restriction::RequestRestriction;
 pub use response_rewrite::ResponseRewrite;
@@ -57,6 +60,6 @@ pub use crate::types::resources::edgion_plugins::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ForwardAuthConfig, HeaderCertAuthConfig,
     HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
-    OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig,
-    ResponseRewriteConfig,
+    OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig, DslConfig,
 };

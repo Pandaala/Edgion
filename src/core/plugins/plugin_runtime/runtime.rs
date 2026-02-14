@@ -45,9 +45,11 @@ use crate::core::plugins::edgion_plugins::mock::Mock;
 use crate::core::plugins::edgion_plugins::openid_connect::OpenidConnect;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
 use crate::core::plugins::edgion_plugins::rate_limit::RateLimit;
+use crate::core::plugins::edgion_plugins::rate_limit_redis::RateLimitRedis;
 use crate::core::plugins::edgion_plugins::real_ip::RealIp;
 use crate::core::plugins::edgion_plugins::request_restriction::RequestRestriction;
 use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
+use crate::core::plugins::edgion_plugins::dsl::plugin::DslPlugin;
 use crate::core::plugins::gapi_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
 use crate::core::plugins::gapi_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter,
@@ -342,6 +344,7 @@ impl PluginRuntime {
             EdgionPlugin::ProxyRewrite(config) => Some(Box::new(ProxyRewrite::new(config))),
             EdgionPlugin::RequestRestriction(config) => Some(RequestRestriction::create(config)),
             EdgionPlugin::RateLimit(config) => Some(RateLimit::create(config)),
+            EdgionPlugin::RateLimitRedis(config) => Some(RateLimitRedis::create(config)),
             EdgionPlugin::CtxSet(config) => Some(CtxSet::create(config)),
             EdgionPlugin::DirectEndpoint(config) => Some(Box::new(DirectEndpoint::new(config))),
             EdgionPlugin::DynamicInternalUpstream(config) => Some(DynamicInternalUpstream::create(config)),
@@ -355,6 +358,7 @@ impl PluginRuntime {
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
                 Some(Box::new(ext_filter))
             }
+            EdgionPlugin::Dsl(config) => DslPlugin::from_config(config),
             _ => None,
         }
     }
@@ -412,6 +416,7 @@ impl PluginRuntime {
                 .map(|s| s.to_string())
                 .or_else(|| config.detect_validation_error()),
             EdgionPlugin::RateLimit(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::RateLimitRedis(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::CtxSet(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DirectEndpoint(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::RequestRestriction(config) => config.get_validation_error().map(|s| s.to_string()),
@@ -437,6 +442,7 @@ impl PluginRuntime {
             EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicInternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicExternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::Dsl(config) => config.get_validation_error_owned(),
             _ => None,
         }
     }
@@ -461,6 +467,7 @@ impl PluginRuntime {
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::RateLimit(_) => "RateLimit",
+            EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
             EdgionPlugin::RealIp(_) => "RealIp",
@@ -475,6 +482,7 @@ impl PluginRuntime {
             EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
+            EdgionPlugin::Dsl(_) => "Dsl",
         }
     }
 

@@ -16,7 +16,8 @@
 #   6. List operations        — RPUSH / LPOP / LLEN
 #   7. Distributed lock       — acquire + release
 #   8. Error handling         — non-existent client
-#   9. Lifecycle              — delete CRD → client removed
+#   9. RateLimitRedis plugin  — allow/deny/headers/key isolation/failure policy
+#  10. Lifecycle              — delete CRD → client removed
 #
 # Usage:
 #   ./run_redis_test.sh                  # Full run (build + test + cleanup)
@@ -45,6 +46,7 @@ CONF_DIR="${PROJECT_ROOT}/examples/test/conf"
 EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
 CONTROLLER_BIN="${PROJECT_ROOT}/target/debug/edgion-controller"
 GATEWAY_BIN="${PROJECT_ROOT}/target/debug/edgion-gateway"
+TEST_SERVER_BIN="${PROJECT_ROOT}/target/debug/examples/test_server"
 CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.toml"
 GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.toml"
 
@@ -52,9 +54,12 @@ GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.toml"
 CONTROLLER_ADMIN_PORT=5800
 GATEWAY_ADMIN_PORT=5900
 REDIS_PORT=16379
+TEST_SERVER_HTTP_PORT=30001
+PLUGIN_GATEWAY_PORT=31180
 
 CONTROLLER_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}"
 GATEWAY_URL="http://127.0.0.1:${GATEWAY_ADMIN_PORT}"
+TEST_SERVER_URL="http://127.0.0.1:${TEST_SERVER_HTTP_PORT}"
 
 # ── Working directory (timestamped, same pattern as start_all_with_conf.sh) ─
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -71,6 +76,11 @@ DO_BUILD=true
 TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_TOTAL=0
+
+# HTTP response scratch vars (set by gateway_http_request)
+HTTP_STATUS=""
+HTTP_BODY=""
+HTTP_HEADERS=""
 
 # =============================================================================
 # Argument parsing
@@ -131,6 +141,18 @@ assert_contains() {
     fi
 }
 
+assert_non_empty() {
+    local test_name="$1" value="$2"
+    TESTS_TOTAL=$((TESTS_TOTAL + 1))
+    if [ -n "$value" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        log_success "$test_name"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        log_error "$test_name (value is empty)"
+    fi
+}
+
 assert_json_success() {
     local test_name="$1" json_resp="$2"
     TESTS_TOTAL=$((TESTS_TOTAL + 1))
@@ -179,6 +201,41 @@ gw_api() {
 
 # Redis client name in URL path: "namespace_name" (underscore-separated)
 REDIS_CLIENT="default_redis-test"
+RATE_LIMIT_REDIS_HOST="rate-limit-redis.example.com"
+
+# Helper: call plugin gateway listener and capture status/headers/body
+gateway_http_request() {
+    local path="$1"
+    shift
+
+    local header_tmp body_tmp
+    header_tmp="$(mktemp)"
+    body_tmp="$(mktemp)"
+
+    HTTP_STATUS=$(curl -sS -o "$body_tmp" -D "$header_tmp" -w "%{http_code}" \
+        "http://127.0.0.1:${PLUGIN_GATEWAY_PORT}${path}" \
+        -H "Host: ${RATE_LIMIT_REDIS_HOST}" \
+        -H "Connection: close" "$@" || echo "000")
+    HTTP_BODY="$(cat "$body_tmp")"
+    HTTP_HEADERS="$(cat "$header_tmp")"
+
+    rm -f "$header_tmp" "$body_tmp"
+}
+
+# Helper: get one response header value from the latest gateway_http_request
+get_resp_header() {
+    local header_name_lc
+    header_name_lc="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+    echo "$HTTP_HEADERS" | awk -F': ' -v h="$header_name_lc" '
+        {
+            key = tolower($1);
+            if (key == h) {
+                gsub("\r", "", $2);
+                print $2;
+                exit;
+            }
+        }'
+}
 
 # =============================================================================
 # Cleanup (trap on EXIT, same pattern as run_acme_test.sh / kill_all.sh)
@@ -188,13 +245,14 @@ cleanup() {
         log_section "Cleanup"
 
         # Kill Edgion processes by PID file
-        for svc in gateway controller; do
+        for svc in test_server gateway controller; do
             if [ -f "${PID_DIR}/${svc}.pid" ]; then
                 kill "$(cat "${PID_DIR}/${svc}.pid")" 2>/dev/null || true
             fi
         done
 
         # Fallback: kill by pattern (same as kill_all.sh)
+        pkill -f test_server 2>/dev/null || true
         pkill -f edgion-gateway 2>/dev/null || true
         pkill -f edgion-controller 2>/dev/null || true
 
@@ -215,6 +273,7 @@ trap cleanup EXIT
 # Step 0: Kill lingering processes (same as start_all_with_conf.sh Step 1)
 # =============================================================================
 log_section "Cleaning up old processes"
+pkill -9 -f test_server 2>/dev/null || true
 pkill -9 -f edgion-gateway 2>/dev/null || true
 pkill -9 -f edgion-controller 2>/dev/null || true
 sleep 2
@@ -226,13 +285,13 @@ log_success "Old processes cleaned up"
 if [ "$DO_BUILD" = true ]; then
     log_section "Building Edgion binaries"
     cd "$PROJECT_ROOT"
-    cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-ctl 2>&1 | tail -5
+    cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-ctl --example test_server 2>&1 | tail -5
     log_success "Build complete"
 else
     log_info "Skipping build (--no-build)"
 fi
 
-for bin in "$CONTROLLER_BIN" "$GATEWAY_BIN" "$EDGION_CTL"; do
+for bin in "$CONTROLLER_BIN" "$GATEWAY_BIN" "$EDGION_CTL" "$TEST_SERVER_BIN"; do
     if [ ! -f "$bin" ]; then
         log_error "Binary not found: $bin — run without --no-build first"
         exit 1
@@ -274,7 +333,37 @@ for i in $(seq 1 30); do
 done
 
 # =============================================================================
-# Step 4: Start Controller (same args as start_all_with_conf.sh)
+# Step 4: Start test_server backend
+# =============================================================================
+log_section "Starting test_server"
+cd "$PROJECT_ROOT"
+
+"$TEST_SERVER_BIN" \
+    --http-ports "${TEST_SERVER_HTTP_PORT}" \
+    --grpc-ports "30021" \
+    --websocket-port 30005 \
+    --tcp-port 30010 \
+    --udp-port 30011 \
+    --log-level info \
+    > "${LOG_DIR}/test_server.log" 2>&1 &
+echo $! > "${PID_DIR}/test_server.pid"
+log_info "test_server PID: $(cat "${PID_DIR}/test_server.pid")"
+
+for i in $(seq 1 30); do
+    if curl -sf "${TEST_SERVER_URL}/health" > /dev/null 2>&1; then
+        log_success "test_server ready (waited ${i}s)"
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        log_error "test_server failed to start"
+        tail -30 "${LOG_DIR}/test_server.log" 2>/dev/null || true
+        exit 1
+    fi
+    sleep 1
+done
+
+# =============================================================================
+# Step 5: Start Controller (same args as start_all_with_conf.sh)
 # =============================================================================
 log_section "Starting Controller"
 cd "$PROJECT_ROOT"
@@ -304,7 +393,7 @@ for i in $(seq 1 30); do
 done
 
 # =============================================================================
-# Step 5: Load base config + LinkSys/Redis config
+# Step 6: Load base config + LinkSys/Redis + RateLimitRedis config
 # =============================================================================
 log_section "Loading configuration"
 
@@ -320,10 +409,22 @@ for f in $(ls "${CONF_DIR}/LinkSys/Redis"/*.yaml | sort); do
 done
 log_success "LinkSys/Redis config loaded"
 
+# Shared plugin Gateway + backend Service/EndpointSlice
+"$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "${CONF_DIR}/EdgionPlugins/base/Gateway.yaml" > /dev/null 2>&1
+"$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "${CONF_DIR}/HTTPRoute/Basic/Service_test-http.yaml" > /dev/null 2>&1
+"$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "${CONF_DIR}/HTTPRoute/Basic/EndpointSlice_test-http.yaml" > /dev/null 2>&1
+log_success "Shared EdgionPlugins gateway/backend config loaded"
+
+# RateLimitRedis plugin resources
+for f in $(ls "${CONF_DIR}/EdgionPlugins/RateLimitRedis"/*.yaml | sort); do
+    "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$f" 2>&1
+done
+log_success "RateLimitRedis plugin config loaded"
+
 sleep 1
 
 # =============================================================================
-# Step 6: Start Gateway (same args as start_all_with_conf.sh)
+# Step 7: Start Gateway (same args as start_all_with_conf.sh)
 # =============================================================================
 log_section "Starting Gateway"
 
@@ -501,8 +602,60 @@ RESP=$(gw_api GET "/api/v1/testing/link-sys/redis/nons_noname/ping")
 assert_json_failure "PING non-existent client returns error" "$RESP"
 assert_contains "Error mentions 'not found'" "$RESP" "not found"
 
-# ── 9. Lifecycle: delete → client removed ─────────────────────────────────
-log_info "─── 9. Lifecycle: Delete LinkSys ───"
+# ── 9. RateLimitRedis plugin integration ───────────────────────────────────
+log_info "─── 9. RateLimitRedis Plugin ───"
+
+RESP=$(gw_api GET "/configclient/EdgionPlugins?namespace=edgion-default&name=rate-limit-redis-main")
+assert_json_success "RateLimitRedis main plugin synced" "$RESP"
+
+RATE_KEY_MAIN="rlr-main-$(date +%s%N)"
+for i in 1 2 3; do
+    gateway_http_request "/test/rate-limit-redis/allow/echo?req=${i}" \
+        -H "X-Rate-Key: ${RATE_KEY_MAIN}"
+    assert_eq "RateLimitRedis allow request ${i} status" "200" "$HTTP_STATUS"
+    assert_eq "RateLimitRedis allow request ${i} limit header" "3" "$(get_resp_header "X-RateLimit-Limit")"
+    assert_non_empty "RateLimitRedis allow request ${i} remaining header present" "$(get_resp_header "X-RateLimit-Remaining")"
+done
+
+gateway_http_request "/test/rate-limit-redis/allow/echo?req=4" \
+    -H "X-Rate-Key: ${RATE_KEY_MAIN}"
+assert_eq "RateLimitRedis over-limit request returns 429" "429" "$HTTP_STATUS"
+assert_contains "RateLimitRedis over-limit body message" "$HTTP_BODY" "Redis rate limit exceeded"
+assert_eq "RateLimitRedis over-limit remaining=0" "0" "$(get_resp_header "X-RateLimit-Remaining")"
+assert_non_empty "RateLimitRedis over-limit Retry-After present" "$(get_resp_header "Retry-After")"
+
+RATE_KEY_A="rlr-a-$(date +%s%N)"
+RATE_KEY_B="rlr-b-$(date +%s%N)"
+for i in 1 2 3; do
+    gateway_http_request "/test/rate-limit-redis/allow/isolation-a?req=${i}" \
+        -H "X-Rate-Key: ${RATE_KEY_A}"
+    assert_eq "RateLimitRedis key A request ${i} status" "200" "$HTTP_STATUS"
+done
+gateway_http_request "/test/rate-limit-redis/allow/isolation-a?req=4" \
+    -H "X-Rate-Key: ${RATE_KEY_A}"
+assert_eq "RateLimitRedis key A request 4 blocked" "429" "$HTTP_STATUS"
+gateway_http_request "/test/rate-limit-redis/allow/isolation-b?req=1" \
+    -H "X-Rate-Key: ${RATE_KEY_B}"
+assert_eq "RateLimitRedis key B still allowed after key A exhausted" "200" "$HTTP_STATUS"
+
+gateway_http_request "/test/rate-limit-redis/allow/no-key"
+assert_eq "RateLimitRedis missing key allow policy" "200" "$HTTP_STATUS"
+
+gateway_http_request "/test/rate-limit-redis/missing-deny/no-key"
+assert_eq "RateLimitRedis missing key deny policy" "429" "$HTTP_STATUS"
+assert_contains "RateLimitRedis missing key deny body message" "$HTTP_BODY" "Missing key denied"
+
+gateway_http_request "/test/rate-limit-redis/redis-fail-open/check" \
+    -H "X-Rate-Key: rlr-fail-open"
+assert_eq "RateLimitRedis onRedisFailure=Allow keeps request open" "200" "$HTTP_STATUS"
+
+gateway_http_request "/test/rate-limit-redis/redis-fail-close/check" \
+    -H "X-Rate-Key: rlr-fail-close"
+assert_eq "RateLimitRedis onRedisFailure=Deny rejects request" "429" "$HTTP_STATUS"
+assert_contains "RateLimitRedis fail-close body message" "$HTTP_BODY" "Redis unavailable (deny)"
+
+# ── 10. Lifecycle: delete → client removed ────────────────────────────────
+log_info "─── 10. Lifecycle: Delete LinkSys ───"
 
 "$EDGION_CTL" --server "$CONTROLLER_URL" delete LinkSys redis-test -n default 2>&1 || true
 # Wait for sync: Controller → Gateway → ConfHandler → remove client

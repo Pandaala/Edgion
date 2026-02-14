@@ -161,6 +161,7 @@ spec:
                           - Mock
                           - ProxyRewrite
                           - RateLimit
+                          - RateLimitRedis
                           - RealIp
                           - RequestRestriction
                           - RequestHeaderModifier
@@ -173,6 +174,7 @@ spec:
                           - DynamicInternalUpstream
                           - DynamicExternalUpstream
                           - AllEndpointStatus
+                          - Dsl
                       config:
                         type: object
                         description: "Plugin-specific configuration"
