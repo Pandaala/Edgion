@@ -34,8 +34,9 @@ pub use plugin_configs::{
     ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch, ExtractConfig, ForwardAuthConfig, HeaderActions,
     HeaderEntry, HeaderRename, HttpMethod, IpRestrictionConfig, IpSource, JweContentEncryption, JweDecryptConfig,
     JweKeyManagement, JwtAlgorithm, JwtAuthConfig, KeyAuthConfig, KeyMetadata, LdapAuthConfig, LimitHeaderNames,
-    MappingConfig, MockConfig, OnMissing, OnMissingKey, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig,
-    RealIpConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig, ResolvedJweCredential, ResponseHeaderActions,
+    MappingConfig, MockConfig, OnMissing, OnMissingKey, OnRedisFailure, OpenidConnectConfig, ProxyRewriteConfig,
+    RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy, RateLimitRedisConfig, RealIpConfig, RegexUri, ReplaceConfig,
+    RequestRestrictionConfig, ResolvedJweCredential, ResponseHeaderActions,
     ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource, RuleMatchMode, TransformConfig,
     TransformType, UnauthAction, VerificationMode,
 };

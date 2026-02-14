@@ -7,8 +7,8 @@ use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, DynamicExternalUpstreamConfig,
     DynamicInternalUpstreamConfig, ForwardAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig,
-    KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig,
+    KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig,
+    RateLimitRedisConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -65,6 +65,8 @@ pub enum EdgionPlugin {
     ResponseRewrite(ResponseRewriteConfig),
     /// RateLimit filter (CMS algorithm for high-performance rate limiting)
     RateLimit(RateLimitConfig),
+    /// RateLimitRedis filter (Redis-based precise cluster-wide rate limiting)
+    RateLimitRedis(RateLimitRedisConfig),
     /// CtxSet filter (set context variables from various sources with extraction, transformation, and mapping)
     CtxSet(CtxSetConfig),
     /// RealIp filter (extract real client IP from headers with trusted proxy support)
@@ -117,6 +119,7 @@ impl EdgionPlugin {
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::RateLimit(_) => "RateLimit",
+            EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
