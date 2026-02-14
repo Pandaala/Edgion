@@ -49,11 +49,21 @@ pub struct VmLimits {
     pub max_string_len: usize,
 }
 
-fn default_max_steps() -> u32 { 10_000 }
-fn default_max_loop_iterations() -> u32 { 100 }
-fn default_max_call_count() -> u32 { 500 }
-fn default_max_stack_depth() -> usize { 128 }
-fn default_max_string_len() -> usize { 8192 }
+fn default_max_steps() -> u32 {
+    10_000
+}
+fn default_max_loop_iterations() -> u32 {
+    100
+}
+fn default_max_call_count() -> u32 {
+    500
+}
+fn default_max_stack_depth() -> usize {
+    128
+}
+fn default_max_string_len() -> usize {
+    8192
+}
 
 impl Default for VmLimits {
     fn default() -> Self {
@@ -81,10 +91,7 @@ pub enum DslErrorPolicy {
     Deny,
     /// Return a specific status code + body
     #[serde(alias = "denyWith")]
-    DenyWith {
-        status: u16,
-        body: Option<String>,
-    },
+    DenyWith { status: u16, body: Option<String> },
 }
 
 impl Default for DslErrorPolicy {
@@ -145,9 +152,7 @@ impl VmState {
 
     fn tick_step(&mut self) -> Result<(), RuntimeError> {
         if self.step_budget == 0 {
-            return Err(RuntimeError::StepLimitExceeded {
-                limit: self.max_steps,
-            });
+            return Err(RuntimeError::StepLimitExceeded { limit: self.max_steps });
         }
         self.step_budget -= 1;
         Ok(())
@@ -218,9 +223,16 @@ impl Vm {
             match opcode {
                 // ===== Stack Operations =====
                 OpCode::LoadConst(idx) => {
-                    let constant = self.script.constants.get(idx as usize)
+                    let constant = self
+                        .script
+                        .constants
+                        .get(idx as usize)
                         .ok_or_else(|| RuntimeError::Internal {
-                            message: format!("constant index {} out of bounds (pool size: {})", idx, self.script.constants.len()),
+                            message: format!(
+                                "constant index {} out of bounds (pool size: {})",
+                                idx,
+                                self.script.constants.len()
+                            ),
                         })?;
                     let value = match constant {
                         Constant::Str(s) => Value::Str(s.clone()),
@@ -232,13 +244,13 @@ impl Vm {
                 OpCode::LoadNil => state.push(Value::Nil, self.limits.max_stack_depth)?,
                 OpCode::LoadTrue => state.push(Value::Bool(true), self.limits.max_stack_depth)?,
                 OpCode::LoadFalse => state.push(Value::Bool(false), self.limits.max_stack_depth)?,
-                OpCode::Pop => { state.pop()?; }
+                OpCode::Pop => {
+                    state.pop()?;
+                }
 
                 // ===== Local Variables =====
                 OpCode::GetLocal(slot) => {
-                    let val = state.locals.get(slot as usize)
-                        .cloned()
-                        .unwrap_or(Value::Nil);
+                    let val = state.locals.get(slot as usize).cloned().unwrap_or(Value::Nil);
                     state.push(val, self.limits.max_stack_depth)?;
                 }
                 OpCode::SetLocal(slot) => {
@@ -247,7 +259,11 @@ impl Vm {
                         state.locals[slot as usize] = val;
                     } else {
                         return Err(RuntimeError::Internal {
-                            message: format!("SetLocal slot {} out of bounds (locals size: {})", slot, state.locals.len()),
+                            message: format!(
+                                "SetLocal slot {} out of bounds (locals size: {})",
+                                slot,
+                                state.locals.len()
+                            ),
                         });
                     }
                 }
@@ -513,7 +529,11 @@ impl Vm {
                     let target = state.pc as i64 + offset as i64;
                     if target < 0 || target as usize > self.script.code.len() {
                         return Err(RuntimeError::Internal {
-                            message: format!("Jump target {} out of bounds (code length: {})", target, self.script.code.len()),
+                            message: format!(
+                                "Jump target {} out of bounds (code length: {})",
+                                target,
+                                self.script.code.len()
+                            ),
                         });
                     }
                     state.pc = target as usize;
@@ -524,7 +544,11 @@ impl Vm {
                         let target = state.pc as i64 + offset as i64;
                         if target < 0 || target as usize > self.script.code.len() {
                             return Err(RuntimeError::Internal {
-                                message: format!("JumpIfFalse target {} out of bounds (code length: {})", target, self.script.code.len()),
+                                message: format!(
+                                    "JumpIfFalse target {} out of bounds (code length: {})",
+                                    target,
+                                    self.script.code.len()
+                                ),
                             });
                         }
                         state.pc = target as usize;
@@ -549,7 +573,11 @@ impl Vm {
                     let target = state.pc as i64 + offset as i64;
                     if target < 0 || target as usize > self.script.code.len() {
                         return Err(RuntimeError::Internal {
-                            message: format!("LoopBack target {} out of bounds (code length: {})", target, self.script.code.len()),
+                            message: format!(
+                                "LoopBack target {} out of bounds (code length: {})",
+                                target,
+                                self.script.code.len()
+                            ),
                         });
                     }
                     state.pc = target as usize;
@@ -636,9 +664,7 @@ pub fn execute_safe(
     log: &mut PluginLog,
     error_policy: &DslErrorPolicy,
 ) -> PluginRunningResult {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        vm.execute(session, log)
-    }));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| vm.execute(session, log)));
 
     match result {
         Ok(Ok(running_result)) => running_result,

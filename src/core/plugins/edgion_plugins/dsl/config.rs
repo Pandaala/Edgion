@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::lang::validator::{ValidationLimits, compile_dsl_source};
+use super::lang::validator::{compile_dsl_source, ValidationLimits};
 use super::lang::vm::DslErrorPolicy;
 
 /// DSL plugin configuration — stored in EdgionPlugin enum

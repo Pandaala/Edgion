@@ -75,10 +75,7 @@ impl Compiler {
     }
 
     fn ends_with_return(&self) -> bool {
-        matches!(
-            self.code.last(),
-            Some(OpCode::ReturnNext) | Some(OpCode::ReturnDeny)
-        )
+        matches!(self.code.last(), Some(OpCode::ReturnNext) | Some(OpCode::ReturnDeny))
     }
 
     fn emit(&mut self, op: OpCode) -> usize {
@@ -153,8 +150,7 @@ impl Compiler {
             }
         }
         // Validate regex at compile time
-        regex::Regex::new(pattern)
-            .map_err(|e| CompileError::new(format!("invalid regex '{}': {}", pattern, e)))?;
+        regex::Regex::new(pattern).map_err(|e| CompileError::new(format!("invalid regex '{}': {}", pattern, e)))?;
         let idx = self.check_const_limit()?;
         self.constants.push(Constant::Regex(pattern.to_string()));
         Ok(idx)
@@ -201,11 +197,7 @@ impl Compiler {
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), CompileError> {
         match &stmt.kind {
-            StmtKind::Let {
-                name,
-                mutable,
-                value,
-            } => {
+            StmtKind::Let { name, mutable, value } => {
                 // Prevent shadowing built-in namespaces
                 if matches!(name.as_str(), "req" | "resp" | "ctx") {
                     return Err(CompileError::new(format!(
@@ -232,18 +224,12 @@ impl Compiler {
                         )));
                     }
                     None => {
-                        return Err(CompileError::new(format!(
-                            "undefined variable '{}'",
-                            name
-                        )));
+                        return Err(CompileError::new(format!("undefined variable '{}'", name)));
                     }
                 }
             }
 
-            StmtKind::If {
-                branches,
-                else_body,
-            } => {
+            StmtKind::If { branches, else_body } => {
                 self.compile_if(branches, else_body)?;
             }
 
@@ -392,12 +378,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_for_in(
-        &mut self,
-        var_name: &str,
-        iterable: &Expr,
-        body: &[Stmt],
-    ) -> Result<(), CompileError> {
+    fn compile_for_in(&mut self, var_name: &str, iterable: &Expr, body: &[Stmt]) -> Result<(), CompileError> {
         if matches!(var_name, "req" | "resp" | "ctx") {
             return Err(CompileError::new(format!(
                 "'{}' is a built-in namespace and cannot be used as a loop variable",
@@ -464,11 +445,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_while(
-        &mut self,
-        condition: &Expr,
-        body: &[Stmt],
-    ) -> Result<(), CompileError> {
+    fn compile_while(&mut self, condition: &Expr, body: &[Stmt]) -> Result<(), CompileError> {
         self.enter_scope();
         self.loop_depth += 1;
         if self.loop_depth > self.max_loop_depth {
@@ -531,10 +508,7 @@ impl Compiler {
                         self.emit(OpCode::GetLocal(local.slot));
                     }
                     None => {
-                        return Err(CompileError::new(format!(
-                            "undefined variable '{}'",
-                            name
-                        )));
+                        return Err(CompileError::new(format!("undefined variable '{}'", name)));
                     }
                 }
             }
@@ -579,9 +553,7 @@ impl Compiler {
                             BinOp::Ge => OpCode::GreaterEqual,
                             // And/Or are handled in dedicated arms above
                             BinOp::And | BinOp::Or => {
-                                return Err(CompileError::new(
-                                    "internal error: And/Or should be handled above",
-                                ));
+                                return Err(CompileError::new("internal error: And/Or should be handled above"));
                             }
                         };
                         self.emit(opcode);
@@ -601,11 +573,7 @@ impl Compiler {
                 }
             }
 
-            ExprKind::MethodCall {
-                object,
-                method,
-                args,
-            } => {
+            ExprKind::MethodCall { object, method, args } => {
                 self.compile_method_call(object, method, args)?;
             }
 
@@ -621,12 +589,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_method_call(
-        &mut self,
-        object: &Expr,
-        method: &str,
-        args: &[Expr],
-    ) -> Result<(), CompileError> {
+    fn compile_method_call(&mut self, object: &Expr, method: &str, args: &[Expr]) -> Result<(), CompileError> {
         // Check if object is a namespace (req, resp, ctx)
         if let ExprKind::Ident(namespace) = &object.kind {
             if let Some(builtin_id) = resolve_namespace_method(namespace, method) {
@@ -635,7 +598,10 @@ impl Compiler {
                 if args.len() != expected {
                     return Err(CompileError::new(format!(
                         "{}.{}() expects {} argument(s), got {}",
-                        namespace, method, expected, args.len()
+                        namespace,
+                        method,
+                        expected,
+                        args.len()
                     )));
                 }
                 // Compile arguments onto stack
@@ -681,9 +647,7 @@ impl Compiler {
                 let pattern = match &args[0].kind {
                     ExprKind::StringLit(s) => s.clone(),
                     _ => {
-                        return Err(CompileError::new(
-                            "matches() pattern must be a string literal",
-                        ));
+                        return Err(CompileError::new("matches() pattern must be a string literal"));
                     }
                 };
                 let regex_idx = self.add_regex_const(&pattern)?;
@@ -691,10 +655,7 @@ impl Compiler {
                 self.emit(OpCode::Matches(regex_idx));
             }
             _ => {
-                return Err(CompileError::new(format!(
-                    "unknown method: .{}()",
-                    method
-                )));
+                return Err(CompileError::new(format!("unknown method: .{}()", method)));
             }
         }
         Ok(())
@@ -720,10 +681,7 @@ impl Compiler {
             "regex_find" => (BuiltinId::RegexFind, Some(2)),
             "regex_replace" => (BuiltinId::RegexReplace, Some(3)),
             _ => {
-                return Err(CompileError::new(format!(
-                    "unknown function: {}()",
-                    name
-                )));
+                return Err(CompileError::new(format!("unknown function: {}()", name)));
             }
         };
 
@@ -732,7 +690,9 @@ impl Compiler {
             if args.len() != expected {
                 return Err(CompileError::new(format!(
                     "{}() expects {} argument(s), got {}",
-                    name, expected, args.len()
+                    name,
+                    expected,
+                    args.len()
                 )));
             }
         }
@@ -826,11 +786,18 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
         BuiltinId::CtxSet => 2,
 
         // Utilities
-        BuiltinId::Log | BuiltinId::Len | BuiltinId::ToStr | BuiltinId::ToInt
-        | BuiltinId::ToUpper | BuiltinId::ToLower
-        | BuiltinId::Base64Encode | BuiltinId::Base64Decode
-        | BuiltinId::UrlEncode | BuiltinId::UrlDecode
-        | BuiltinId::Sha256 | BuiltinId::Md5 => 1,
+        BuiltinId::Log
+        | BuiltinId::Len
+        | BuiltinId::ToStr
+        | BuiltinId::ToInt
+        | BuiltinId::ToUpper
+        | BuiltinId::ToLower
+        | BuiltinId::Base64Encode
+        | BuiltinId::Base64Decode
+        | BuiltinId::UrlEncode
+        | BuiltinId::UrlDecode
+        | BuiltinId::Sha256
+        | BuiltinId::Md5 => 1,
         BuiltinId::Substr | BuiltinId::RegexReplace => 3,
         BuiltinId::TimeNow => 0,
         BuiltinId::RegexFind => 2,
@@ -922,10 +889,7 @@ mod tests {
         "#;
         let prog = parse_program(source).unwrap();
         let compiled = Compiler::new().compile(&prog).unwrap();
-        assert!(compiled
-            .constants
-            .iter()
-            .any(|c| matches!(c, Constant::Regex(_))));
+        assert!(compiled.constants.iter().any(|c| matches!(c, Constant::Regex(_))));
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub mod cors;
 pub mod csrf;
 pub mod ctx_set;
 pub mod direct_endpoint;
+pub mod dsl;
 pub mod dynamic_external_upstream;
 pub mod dynamic_internal_upstream;
 pub mod forward_auth;
@@ -28,7 +29,6 @@ pub mod rate_limit_redis;
 pub mod real_ip;
 pub mod request_restriction;
 pub mod response_rewrite;
-pub mod dsl;
 
 pub use all_endpoint_status::AllEndpointStatus;
 pub use bandwidth_limit::BandwidthLimit;
@@ -57,9 +57,9 @@ pub use response_rewrite::ResponseRewrite;
 
 // Re-export plugin configs from types
 pub use crate::types::resources::edgion_plugins::{
-    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
+    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DslConfig,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ForwardAuthConfig, HeaderCertAuthConfig,
     HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
     OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig, DslConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig,
 };

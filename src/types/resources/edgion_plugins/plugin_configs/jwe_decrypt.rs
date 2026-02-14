@@ -287,14 +287,16 @@ mod tests {
 
     #[test]
     fn test_detect_validation_error_allowed_algorithms_empty() {
-        let mut cfg = JweDecryptConfig::default();
-        cfg.secret_ref = Some(SecretObjectReference {
-            group: None,
-            kind: None,
-            name: "jwe-secret".to_string(),
-            namespace: None,
-        });
-        cfg.allowed_algorithms = Some(vec![]);
+        let cfg = JweDecryptConfig {
+            secret_ref: Some(SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "jwe-secret".to_string(),
+                namespace: None,
+            }),
+            allowed_algorithms: Some(vec![]),
+            ..Default::default()
+        };
         let err = cfg.detect_validation_error();
         assert!(err.is_some());
         assert!(err.unwrap().contains("allowedAlgorithms cannot be empty"));
@@ -302,10 +304,12 @@ mod tests {
 
     #[test]
     fn test_detect_validation_error_key_len_mismatch() {
-        let mut cfg = JweDecryptConfig::default();
-        cfg.resolved_credential = Some(ResolvedJweCredential {
-            secret: Some(base64::engine::general_purpose::STANDARD.encode("short-key")),
-        });
+        let cfg = JweDecryptConfig {
+            resolved_credential: Some(ResolvedJweCredential {
+                secret: Some(base64::engine::general_purpose::STANDARD.encode("short-key")),
+            }),
+            ..Default::default()
+        };
         let err = cfg.detect_validation_error();
         assert!(err.is_some());
         assert!(err.unwrap().contains("decoded length must be 32 bytes"));
@@ -313,10 +317,12 @@ mod tests {
 
     #[test]
     fn test_detect_validation_error_valid_resolved_secret() {
-        let mut cfg = JweDecryptConfig::default();
-        cfg.resolved_credential = Some(ResolvedJweCredential {
-            secret: Some(base64::engine::general_purpose::STANDARD.encode("0123456789abcdef0123456789abcdef")),
-        });
+        let cfg = JweDecryptConfig {
+            resolved_credential: Some(ResolvedJweCredential {
+                secret: Some(base64::engine::general_purpose::STANDARD.encode("0123456789abcdef0123456789abcdef")),
+            }),
+            ..Default::default()
+        };
         let err = cfg.detect_validation_error();
         assert!(err.is_none());
     }

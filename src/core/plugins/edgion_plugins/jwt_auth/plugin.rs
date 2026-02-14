@@ -579,8 +579,10 @@ mod tests {
 
     /// Helper: create JwtAuth with default config
     fn jwt_auth_default(anonymous: Option<String>) -> JwtAuth {
-        let mut config = JwtAuthConfig::default();
-        config.anonymous = anonymous;
+        let config = JwtAuthConfig {
+            anonymous,
+            ..Default::default()
+        };
         JwtAuth::new(&config, "default".to_string())
     }
 
@@ -592,8 +594,10 @@ mod tests {
         config_fn: Option<fn(&mut JwtAuthConfig)>,
     ) -> JwtAuth {
         use base64::Engine;
-        let mut config = JwtAuthConfig::default();
-        config.algorithm = algorithm;
+        let mut config = JwtAuthConfig {
+            algorithm,
+            ..Default::default()
+        };
         // Controller base64-encodes the secret, so we do the same in tests
         let secret_b64 = base64::engine::general_purpose::STANDARD.encode(secret.as_bytes());
         config.resolved_credential = Some(ResolvedJwtCredential {

@@ -5,10 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
-    DebugAccessLogToHeaderConfig, DirectEndpointConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig,
-    ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig,
-    KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig,
-    RateLimitRedisConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig, DslConfig,
+    DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, DynamicExternalUpstreamConfig,
+    DynamicInternalUpstreamConfig, ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig,
+    JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig,
+    ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RequestRestrictionConfig,
+    ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,

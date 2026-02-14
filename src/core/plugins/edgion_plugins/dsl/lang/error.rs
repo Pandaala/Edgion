@@ -169,11 +169,7 @@ impl fmt::Display for RuntimeError {
                 expected,
                 got,
                 operation,
-            } => write!(
-                f,
-                "type error in {}: expected {}, got {}",
-                operation, expected, got
-            ),
+            } => write!(f, "type error in {}: expected {}, got {}", operation, expected, got),
             Self::DivisionByZero => write!(f, "division by zero"),
             Self::IntegerOverflow { operation } => {
                 write!(f, "integer overflow in {}", operation)

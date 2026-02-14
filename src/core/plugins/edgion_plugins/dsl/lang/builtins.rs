@@ -13,10 +13,7 @@ use super::vm::{Vm, VmState};
 /// Check that a string result doesn't exceed the VM's max_string_len limit.
 fn check_string_len(s: &str, limit: usize) -> Result<(), RuntimeError> {
     if s.len() > limit {
-        Err(RuntimeError::StringTooLong {
-            len: s.len(),
-            limit,
-        })
+        Err(RuntimeError::StringTooLong { len: s.len(), limit })
     } else {
         Ok(())
     }
@@ -57,29 +54,19 @@ impl Vm {
                 let name = state.pop()?.into_string();
                 checked_value_opt_str(session.header_value(&name), self.limits.max_string_len)
             }
-            BuiltinId::ReqMethod => {
-                checked_value_str(session.get_method().to_string(), self.limits.max_string_len)
-            }
-            BuiltinId::ReqPath => {
-                checked_value_str(session.get_path().to_string(), self.limits.max_string_len)
-            }
+            BuiltinId::ReqMethod => checked_value_str(session.get_method().to_string(), self.limits.max_string_len),
+            BuiltinId::ReqPath => checked_value_str(session.get_path().to_string(), self.limits.max_string_len),
             BuiltinId::ReqQuery => {
                 let name = state.pop()?.into_string();
                 checked_value_opt_str(session.get_query_param(&name), self.limits.max_string_len)
             }
-            BuiltinId::ReqQueryString => {
-                checked_value_opt_str(session.get_query(), self.limits.max_string_len)
-            }
+            BuiltinId::ReqQueryString => checked_value_opt_str(session.get_query(), self.limits.max_string_len),
             BuiltinId::ReqCookie => {
                 let name = state.pop()?.into_string();
                 checked_value_opt_str(session.get_cookie(&name), self.limits.max_string_len)
             }
-            BuiltinId::ReqClientIp => {
-                checked_value_str(session.client_addr().to_string(), self.limits.max_string_len)
-            }
-            BuiltinId::ReqRemoteIp => {
-                checked_value_str(session.remote_addr().to_string(), self.limits.max_string_len)
-            }
+            BuiltinId::ReqClientIp => checked_value_str(session.client_addr().to_string(), self.limits.max_string_len),
+            BuiltinId::ReqRemoteIp => checked_value_str(session.remote_addr().to_string(), self.limits.max_string_len),
             BuiltinId::ReqPathParam => {
                 let name = state.pop()?.into_string();
                 checked_value_opt_str(session.get_path_param(&name), self.limits.max_string_len)
@@ -102,9 +89,7 @@ impl Vm {
                     .unwrap_or_else(|| "http".to_string());
                 checked_value_str(scheme, self.limits.max_string_len)
             }
-            BuiltinId::ReqHost => {
-                checked_value_opt_str(session.header_value("Host"), self.limits.max_string_len)
-            }
+            BuiltinId::ReqHost => checked_value_opt_str(session.header_value("Host"), self.limits.max_string_len),
             BuiltinId::ReqUri => {
                 let path = session.get_path().to_string();
                 match session.get_query() {
@@ -203,16 +188,12 @@ impl Vm {
             BuiltinId::CtxSet => {
                 let value = state.pop()?.into_string();
                 let key = state.pop()?.into_string();
-                session
-                    .set_ctx_var(&key, &value)
-                    .map_err(|e| api_error("ctx.set", e))?;
+                session.set_ctx_var(&key, &value).map_err(|e| api_error("ctx.set", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::CtxRemove => {
                 let key = state.pop()?.into_string();
-                session
-                    .remove_ctx_var(&key)
-                    .map_err(|e| api_error("ctx.remove", e))?;
+                session.remove_ctx_var(&key).map_err(|e| api_error("ctx.remove", e))?;
                 Ok(Value::Nil)
             }
 
@@ -317,15 +298,18 @@ impl Vm {
             }
             BuiltinId::UrlEncode => {
                 let s = state.pop()?.into_string();
-                let encoded: String = s.chars().map(|c| {
-                    if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
-                        c.to_string()
-                    } else {
-                        let mut buf = [0u8; 4];
-                        let bytes = c.encode_utf8(&mut buf);
-                        bytes.as_bytes().iter().map(|b| format!("%{:02X}", b)).collect()
-                    }
-                }).collect();
+                let encoded: String = s
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
+                            c.to_string()
+                        } else {
+                            let mut buf = [0u8; 4];
+                            let bytes = c.encode_utf8(&mut buf);
+                            bytes.as_bytes().iter().map(|b| format!("%{:02X}", b)).collect()
+                        }
+                    })
+                    .collect();
                 check_string_len(&encoded, self.limits.max_string_len)?;
                 Ok(Value::Str(encoded))
             }
@@ -341,10 +325,9 @@ impl Vm {
                         let lo = bytes[i + 2];
                         if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() {
                             // Both bytes are ASCII, safe to use from_str_radix on the str slice
-                            if let Ok(byte) = u8::from_str_radix(
-                                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
-                                16,
-                            ) {
+                            if let Ok(byte) =
+                                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+                            {
                                 result.push(byte);
                                 i += 3;
                                 continue;
@@ -370,31 +353,22 @@ impl Vm {
                     message: "sha256() is not yet implemented".into(),
                 })
             }
-            BuiltinId::Md5 => {
-                Err(RuntimeError::ApiError {
-                    function: "md5".into(),
-                    message: "md5() is not yet implemented".into(),
-                })
-            }
-            BuiltinId::RegexFind => {
-                Err(RuntimeError::ApiError {
-                    function: "regex_find".into(),
-                    message: "regex_find() is not yet implemented".into(),
-                })
-            }
-            BuiltinId::RegexReplace => {
-                Err(RuntimeError::ApiError {
-                    function: "regex_replace".into(),
-                    message: "regex_replace() is not yet implemented".into(),
-                })
-            }
-            BuiltinId::Range => {
-                Err(RuntimeError::ApiError {
-                    function: "range".into(),
-                    message: "range() is not yet implemented".into(),
-                })
-            }
+            BuiltinId::Md5 => Err(RuntimeError::ApiError {
+                function: "md5".into(),
+                message: "md5() is not yet implemented".into(),
+            }),
+            BuiltinId::RegexFind => Err(RuntimeError::ApiError {
+                function: "regex_find".into(),
+                message: "regex_find() is not yet implemented".into(),
+            }),
+            BuiltinId::RegexReplace => Err(RuntimeError::ApiError {
+                function: "regex_replace".into(),
+                message: "regex_replace() is not yet implemented".into(),
+            }),
+            BuiltinId::Range => Err(RuntimeError::ApiError {
+                function: "range".into(),
+                message: "range() is not yet implemented".into(),
+            }),
         }
     }
 }
-

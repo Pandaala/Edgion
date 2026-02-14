@@ -89,8 +89,10 @@ mod tests {
 
     #[test]
     fn test_detect_validation_error_allows_resolved_users() {
-        let mut cfg = BasicAuthConfig::default();
-        cfg.resolved_users = Some(HashMap::from([("alice".to_string(), "pass".to_string())]));
+        let cfg = BasicAuthConfig {
+            resolved_users: Some(HashMap::from([("alice".to_string(), "pass".to_string())])),
+            ..Default::default()
+        };
         assert!(cfg.detect_validation_error().is_none());
     }
 }

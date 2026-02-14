@@ -137,10 +137,7 @@ impl DslTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
                             // Check response headers set by DSL via resp.set_header
@@ -206,10 +203,7 @@ impl DslTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
                             let has_processed_by = resp.headers().get("x-processed-by").is_some();
@@ -249,11 +243,7 @@ impl DslTestSuite {
                     let client = &ctx.http_client;
                     let url = "http://127.0.0.1:31180/test/dsl-deny-path/admin/secret";
 
-                    let response = client
-                        .get(url)
-                        .header("host", "dsl-deny-path.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(url).header("host", "dsl-deny-path.example.com").send().await;
 
                     match response {
                         Ok(resp) => {
@@ -296,11 +286,7 @@ impl DslTestSuite {
                     let client = &ctx.http_client;
                     let url = "http://127.0.0.1:31180/test/dsl-deny-path/api/users";
 
-                    let response = client
-                        .get(url)
-                        .header("host", "dsl-deny-path.example.com")
-                        .send()
-                        .await;
+                    let response = client.get(url).header("host", "dsl-deny-path.example.com").send().await;
 
                     match response {
                         Ok(resp) => {

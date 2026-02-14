@@ -605,13 +605,7 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
             None
         }
     });
-    session.expect_header_value().returning(|name| {
-        if name.eq_ignore_ascii_case("authorization") {
-            None
-        } else {
-            None
-        }
-    });
+    session.expect_header_value().returning(|_| None);
 
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
@@ -690,13 +684,7 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
             None
         }
     });
-    session.expect_header_value().returning(|name| {
-        if name.eq_ignore_ascii_case("authorization") {
-            None
-        } else {
-            None
-        }
-    });
+    session.expect_header_value().returning(|_| None);
     session
         .expect_set_response_header()
         .withf(|name, _| name.eq_ignore_ascii_case("Set-Cookie"))

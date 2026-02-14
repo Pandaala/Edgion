@@ -11,8 +11,8 @@ use crate::types::filters::PluginRunningResult;
 
 use super::config::DslConfig;
 use super::lang::bytecode::CompiledScript;
-use super::lang::validator::{ValidationLimits, Validator, compile_dsl_source};
-use super::lang::vm::{DslErrorPolicy, Vm, VmLimits, execute_safe};
+use super::lang::validator::{compile_dsl_source, ValidationLimits, Validator};
+use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 
 /// DslPlugin — runs a pre-compiled DSL script per request
 pub struct DslPlugin {
@@ -30,11 +30,7 @@ impl DslPlugin {
         error_policy: DslErrorPolicy,
     ) -> Result<Self, String> {
         let vm = Vm::new(script, limits).map_err(|e| format!("VM creation error: {}", e))?;
-        Ok(Self {
-            name,
-            vm,
-            error_policy,
-        })
+        Ok(Self { name, vm, error_policy })
     }
 
     /// Compile source code to CompiledScript, or deserialize from pre-compiled bytecode.
@@ -112,11 +108,7 @@ impl RequestFilter for DslPlugin {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         execute_safe(&self.vm, session, log, &self.error_policy)
     }
 }

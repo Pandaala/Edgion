@@ -13,6 +13,6 @@
 //!   Layer 2: Runtime fuel (step budget, loop budget, call budget)
 //!   Layer 3: Fault isolation (catch_unwind + error policy)
 
-pub mod lang;
 pub mod config;
+pub mod lang;
 pub mod plugin;

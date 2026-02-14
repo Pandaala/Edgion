@@ -256,17 +256,12 @@ impl Validator {
 /// Full pipeline: source → parse → compile → validate → serialize
 ///
 /// Returns Ok(bytecode_base64) or Err(error messages)
-pub fn compile_dsl_source(
-    source: &str,
-    validation_limits: &ValidationLimits,
-) -> Result<String, Vec<String>> {
+pub fn compile_dsl_source(source: &str, validation_limits: &ValidationLimits) -> Result<String, Vec<String>> {
     // Step 1: Parse
     let program = parse_program(source).map_err(|e| vec![e.to_string()])?;
 
     // Step 2: Compile
-    let script = Compiler::new()
-        .compile(&program)
-        .map_err(|e| vec![e.to_string()])?;
+    let script = Compiler::new().compile(&program).map_err(|e| vec![e.to_string()])?;
 
     // Step 3: Validate
     let errors = Validator::new(validation_limits.clone()).validate(&script);

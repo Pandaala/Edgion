@@ -31,6 +31,7 @@ use crate::core::plugins::edgion_plugins::cors::Cors;
 use crate::core::plugins::edgion_plugins::csrf::Csrf;
 use crate::core::plugins::edgion_plugins::ctx_set::CtxSet;
 use crate::core::plugins::edgion_plugins::direct_endpoint::DirectEndpoint;
+use crate::core::plugins::edgion_plugins::dsl::plugin::DslPlugin;
 use crate::core::plugins::edgion_plugins::dynamic_external_upstream::DynamicExternalUpstream;
 use crate::core::plugins::edgion_plugins::dynamic_internal_upstream::DynamicInternalUpstream;
 use crate::core::plugins::edgion_plugins::forward_auth::ForwardAuth;
@@ -49,7 +50,6 @@ use crate::core::plugins::edgion_plugins::rate_limit_redis::RateLimitRedis;
 use crate::core::plugins::edgion_plugins::real_ip::RealIp;
 use crate::core::plugins::edgion_plugins::request_restriction::RequestRestriction;
 use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
-use crate::core::plugins::edgion_plugins::dsl::plugin::DslPlugin;
 use crate::core::plugins::gapi_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
 use crate::core::plugins::gapi_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter,

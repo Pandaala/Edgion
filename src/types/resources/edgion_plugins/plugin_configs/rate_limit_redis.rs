@@ -299,10 +299,9 @@ impl RateLimitRedisConfig {
         if ref_parts.len() != 2
             || ref_parts[0].is_empty()
             || ref_parts[1].is_empty()
-            || !ref_parts.iter().all(|p| {
-                p.chars()
-                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-            })
+            || !ref_parts
+                .iter()
+                .all(|p| p.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'))
         {
             return Err(format!(
                 "Invalid redis_ref '{}': must be 'namespace/name' (alphanumeric, '-', '_' only)",
@@ -317,10 +316,7 @@ impl RateLimitRedisConfig {
 
         // Cap maximum policies to prevent combinatorial explosion
         if self.policies.len() > 10 {
-            return Err(format!(
-                "Too many policies ({}): max 10 allowed",
-                self.policies.len()
-            ));
+            return Err(format!("Too many policies ({}): max 10 allowed", self.policies.len()));
         }
 
         // Validate each policy
@@ -350,16 +346,9 @@ impl RateLimitRedisConfig {
             return Err("key_prefix cannot be empty".to_string());
         }
         if !self.key_prefix.ends_with(':') {
-            return Err(format!(
-                "key_prefix '{}' must end with ':'",
-                self.key_prefix
-            ));
+            return Err(format!("key_prefix '{}' must end with ':'", self.key_prefix));
         }
-        if !self
-            .key_prefix
-            .chars()
-            .all(|c| c.is_ascii() && !c.is_ascii_control())
-        {
+        if !self.key_prefix.chars().all(|c| c.is_ascii() && !c.is_ascii_control()) {
             return Err("key_prefix must contain only printable ASCII".to_string());
         }
 
@@ -383,16 +372,10 @@ impl RateLimitRedisConfig {
 
         // Validate max_key_len: reasonable bounds [64, 65536]
         if self.max_key_len < 64 {
-            return Err(format!(
-                "max_key_len {} too small (min 64)",
-                self.max_key_len
-            ));
+            return Err(format!("max_key_len {} too small (min 64)", self.max_key_len));
         }
         if self.max_key_len > 65536 {
-            return Err(format!(
-                "max_key_len {} too large (max 65536 = 64KB)",
-                self.max_key_len
-            ));
+            return Err(format!("max_key_len {} too large (max 65536 = 64KB)", self.max_key_len));
         }
 
         Ok(())
@@ -471,10 +454,7 @@ mod tests {
         };
         config.validate();
         assert!(!config.is_valid());
-        assert!(config
-            .get_validation_error()
-            .unwrap()
-            .contains("At least one"));
+        assert!(config.get_validation_error().unwrap().contains("At least one"));
     }
 
     #[test]
@@ -527,10 +507,7 @@ mod tests {
         };
         config.validate();
         assert!(!config.is_valid());
-        assert!(config
-            .get_validation_error()
-            .unwrap()
-            .contains("too small"));
+        assert!(config.get_validation_error().unwrap().contains("too small"));
     }
 
     #[test]
@@ -539,10 +516,7 @@ mod tests {
         config.key_prefix = "edgion_rl".to_string();
         config.validate();
         assert!(!config.is_valid());
-        assert!(config
-            .get_validation_error()
-            .unwrap()
-            .contains("must end with ':'"));
+        assert!(config.get_validation_error().unwrap().contains("must end with ':'"));
     }
 
     #[test]
@@ -568,10 +542,7 @@ mod tests {
         config.max_key_len = 32;
         config.validate();
         assert!(!config.is_valid());
-        assert!(config
-            .get_validation_error()
-            .unwrap()
-            .contains("max_key_len"));
+        assert!(config.get_validation_error().unwrap().contains("max_key_len"));
     }
 
     #[test]
@@ -604,14 +575,8 @@ mod tests {
         };
         config.validate();
         assert!(config.is_valid());
-        assert_eq!(
-            config.policies[0].interval_duration,
-            Some(Duration::from_secs(1))
-        );
-        assert_eq!(
-            config.policies[1].interval_duration,
-            Some(Duration::from_secs(3600))
-        );
+        assert_eq!(config.policies[0].interval_duration, Some(Duration::from_secs(1)));
+        assert_eq!(config.policies[1].interval_duration, Some(Duration::from_secs(3600)));
     }
 
     #[test]
@@ -676,24 +641,16 @@ keyPrefix: "myapp:rl:"
         config.reject_status = 600;
         config.validate();
         assert!(!config.is_valid());
-        assert!(config
-            .get_validation_error()
-            .unwrap()
-            .contains("reject_status"));
+        assert!(config.get_validation_error().unwrap().contains("reject_status"));
     }
 
     #[test]
     fn test_empty_key_name() {
         let mut config = create_valid_config();
-        config.key = vec![KeyGet::Header {
-            name: "".to_string(),
-        }];
+        config.key = vec![KeyGet::Header { name: "".to_string() }];
         config.validate();
         assert!(!config.is_valid());
-        assert!(config
-            .get_validation_error()
-            .unwrap()
-            .contains("key[0].name"));
+        assert!(config.get_validation_error().unwrap().contains("key[0].name"));
     }
 
     #[test]

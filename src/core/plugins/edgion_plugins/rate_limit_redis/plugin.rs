@@ -23,9 +23,7 @@ use crate::core::link_sys::get_redis_client;
 use crate::core::link_sys::redis::RedisLinkClient;
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{
-    OnMissingKey, OnRedisFailure, RateLimitAlgorithm, RateLimitRedisConfig,
-};
+use crate::types::resources::edgion_plugins::{OnMissingKey, OnRedisFailure, RateLimitAlgorithm, RateLimitRedisConfig};
 
 use super::scripts::{FIXED_WINDOW_SCRIPT, SLIDING_WINDOW_SCRIPT, TOKEN_BUCKET_SCRIPT};
 
@@ -241,22 +239,10 @@ impl RateLimitRedis {
     ) -> anyhow::Result<RateLimitResult> {
         // Fixed window includes window_id in the key for automatic rotation
         let window_id = now_ms / window_ms;
-        let redis_key = build_redis_key(
-            &self.config.key_prefix,
-            "fw",
-            idx,
-            limit_key,
-            &window_id.to_string(),
-        );
+        let redis_key = build_redis_key(&self.config.key_prefix, "fw", idx, limit_key, &window_id.to_string());
         let keys = vec![redis_key];
-        let args = vec![
-            rate.to_string(),
-            window_ms.to_string(),
-            self.config.cost.to_string(),
-        ];
-        let values = self
-            .eval_script(client, hash, FIXED_WINDOW_SCRIPT, keys, args)
-            .await?;
+        let args = vec![rate.to_string(), window_ms.to_string(), self.config.cost.to_string()];
+        let values = self.eval_script(client, hash, FIXED_WINDOW_SCRIPT, keys, args).await?;
         Ok(RateLimitResult::from_lua_result(&values, rate))
     }
 
@@ -274,15 +260,13 @@ impl RateLimitRedis {
         let redis_key = build_redis_key(&self.config.key_prefix, "tb", idx, limit_key, "");
         let keys = vec![redis_key];
         let args = vec![
-            rate.to_string(),       // max_tokens
-            rate.to_string(),       // refill_rate (same as max_tokens)
-            window_ms.to_string(),  // interval_ms
-            now_ms.to_string(),     // now
+            rate.to_string(),             // max_tokens
+            rate.to_string(),             // refill_rate (same as max_tokens)
+            window_ms.to_string(),        // interval_ms
+            now_ms.to_string(),           // now
             self.config.cost.to_string(), // cost
         ];
-        let values = self
-            .eval_script(client, hash, TOKEN_BUCKET_SCRIPT, keys, args)
-            .await?;
+        let values = self.eval_script(client, hash, TOKEN_BUCKET_SCRIPT, keys, args).await?;
         Ok(RateLimitResult::from_lua_result(&values, rate))
     }
 
@@ -322,11 +306,7 @@ impl RateLimitRedis {
     }
 
     /// Check all policies against Redis. Returns aggregate result.
-    async fn check_rate_limit(
-        &self,
-        client: &RedisLinkClient,
-        limit_key: &str,
-    ) -> anyhow::Result<RateLimitResult> {
+    async fn check_rate_limit(&self, client: &RedisLinkClient, limit_key: &str) -> anyhow::Result<RateLimitResult> {
         // Check Redis health before expensive operations.
         // healthy() is an AtomicBool — zero-cost check, NOT a PING.
         if !client.healthy() {
@@ -346,23 +326,44 @@ impl RateLimitRedis {
         let mut most_restrictive: Option<RateLimitResult> = None;
 
         for (idx, policy) in self.config.policies.iter().enumerate() {
-            let window_ms = policy
-                .interval_duration
-                .unwrap_or(Duration::from_secs(1))
-                .as_millis() as i64;
+            let window_ms = policy.interval_duration.unwrap_or(Duration::from_secs(1)).as_millis() as i64;
 
             let result = match policy.algorithm {
                 RateLimitAlgorithm::SlidingWindow => {
-                    self.eval_sliding_window(client, &hashes.sliding_window, idx, safe_key, policy.rate, window_ms, now_ms)
-                        .await?
+                    self.eval_sliding_window(
+                        client,
+                        &hashes.sliding_window,
+                        idx,
+                        safe_key,
+                        policy.rate,
+                        window_ms,
+                        now_ms,
+                    )
+                    .await?
                 }
                 RateLimitAlgorithm::FixedWindow => {
-                    self.eval_fixed_window(client, &hashes.fixed_window, idx, safe_key, policy.rate, window_ms, now_ms)
-                        .await?
+                    self.eval_fixed_window(
+                        client,
+                        &hashes.fixed_window,
+                        idx,
+                        safe_key,
+                        policy.rate,
+                        window_ms,
+                        now_ms,
+                    )
+                    .await?
                 }
                 RateLimitAlgorithm::TokenBucket => {
-                    self.eval_token_bucket(client, &hashes.token_bucket, idx, safe_key, policy.rate, window_ms, now_ms)
-                        .await?
+                    self.eval_token_bucket(
+                        client,
+                        &hashes.token_bucket,
+                        idx,
+                        safe_key,
+                        policy.rate,
+                        window_ms,
+                        now_ms,
+                    )
+                    .await?
                 }
             };
 
@@ -412,11 +413,7 @@ impl RateLimitRedis {
         retry_after: Duration,
         result: Option<&RateLimitResult>,
     ) -> PluginRunningResult {
-        let message = self
-            .config
-            .reject_message
-            .as_deref()
-            .unwrap_or("Rate limit exceeded");
+        let message = self.config.reject_message.as_deref().unwrap_or("Rate limit exceeded");
 
         let mut resp = Box::new(ResponseHeader::build(self.config.reject_status, None).unwrap());
         resp.insert_header("Content-Type", "application/json").ok();
@@ -433,8 +430,7 @@ impl RateLimitRedis {
 
                 if let Some(headers) = self.config.get_header_names() {
                     if let Some(limit_header) = headers.limit_header() {
-                        resp.insert_header(limit_header.to_string(), &r.limit.to_string())
-                            .ok();
+                        resp.insert_header(limit_header.to_string(), &r.limit.to_string()).ok();
                     }
                     if let Some(remaining_header) = headers.remaining_header() {
                         resp.insert_header(remaining_header.to_string(), "0").ok();
@@ -448,8 +444,7 @@ impl RateLimitRedis {
                             .ok();
                     }
                 } else {
-                    resp.insert_header("X-RateLimit-Limit", &r.limit.to_string())
-                        .ok();
+                    resp.insert_header("X-RateLimit-Limit", &r.limit.to_string()).ok();
                     resp.insert_header("X-RateLimit-Remaining", "0").ok();
                     resp.insert_header("X-RateLimit-Reset", &reset_timestamp.to_string())
                         .ok();
@@ -487,11 +482,7 @@ impl RequestFilter for RateLimitRedis {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        plugin_log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // 1. Validate config
         if !self.config.is_valid() {
             let err = self.config.get_validation_error().unwrap_or("Unknown error");

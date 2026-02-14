@@ -30,9 +30,10 @@ pub struct ResolvedJwtCredential {
 /// Asymmetric ECDSA: ES256, ES384 (ECDSA with P-256/P-384)
 ///
 /// Note: ES512 (P-521) is not supported by the underlying jsonwebtoken library.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 pub enum JwtAlgorithm {
     /// HMAC using SHA-256
+    #[default]
     HS256,
     /// HMAC using SHA-384
     HS384,
@@ -48,12 +49,6 @@ pub enum JwtAlgorithm {
     ES256,
     /// ECDSA using P-384 and SHA-384
     ES384,
-}
-
-impl Default for JwtAlgorithm {
-    fn default() -> Self {
-        JwtAlgorithm::HS256
-    }
 }
 
 /// JWT Auth plugin configuration (route/service level)

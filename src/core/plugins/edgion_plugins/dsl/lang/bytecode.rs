@@ -213,8 +213,7 @@ impl CompiledScript {
             ));
         }
 
-        let script: Self = serde_json::from_slice(&bytes)
-            .map_err(|e| format!("deserialize error: {}", e))?;
+        let script: Self = serde_json::from_slice(&bytes).map_err(|e| format!("deserialize error: {}", e))?;
         if script.version != LEGACY_BYTECODE_VERSION && script.version != BYTECODE_VERSION {
             return Err(format!(
                 "unsupported bytecode version: {} (supported: {} and legacy {})",

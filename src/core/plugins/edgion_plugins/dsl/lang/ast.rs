@@ -22,11 +22,7 @@ pub struct Stmt {
 #[derive(Debug, Clone)]
 pub enum StmtKind {
     /// `let x = expr` or `let mut x = expr`
-    Let {
-        name: String,
-        mutable: bool,
-        value: Expr,
-    },
+    Let { name: String, mutable: bool, value: Expr },
 
     /// `x = expr` (assignment to mutable variable)
     Assign { name: String, value: Expr },
@@ -53,10 +49,7 @@ pub enum StmtKind {
     },
 
     /// `while condition { body }`
-    While {
-        condition: Expr,
-        body: Vec<Stmt>,
-    },
+    While { condition: Expr, body: Vec<Stmt> },
 
     /// `return deny(status, body)`
     ReturnDeny { status: Expr, body: Expr },
@@ -105,10 +98,7 @@ pub enum ExprKind {
     /// Free function call: `log("msg")`, `len(s)`
     FnCall { name: String, args: Vec<Expr> },
     /// Field access: `req.path` (sugar for 0-arg method call)
-    FieldAccess {
-        object: Box<Expr>,
-        field: String,
-    },
+    FieldAccess { object: Box<Expr>, field: String },
 }
 
 // ==================== Operators ====================
@@ -159,10 +149,7 @@ impl Stmt {
         Self { kind, span: None }
     }
     pub fn with_span(kind: StmtKind, span: Span) -> Self {
-        Self {
-            kind,
-            span: Some(span),
-        }
+        Self { kind, span: Some(span) }
     }
 }
 
@@ -171,10 +158,7 @@ impl Expr {
         Self { kind, span: None }
     }
     pub fn with_span(kind: ExprKind, span: Span) -> Self {
-        Self {
-            kind,
-            span: Some(span),
-        }
+        Self { kind, span: Some(span) }
     }
     pub fn string(s: impl Into<String>) -> Self {
         Self::new(ExprKind::StringLit(s.into()))

@@ -174,8 +174,7 @@ fn ws(input: &str) -> &str {
 // ==================== Statement Parsing ====================
 
 fn parse_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.tick()
-        .map_err(|e| nom::Err::Failure(e))?;
+    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
 
     let input = ws(input);
 
@@ -196,8 +195,7 @@ fn parse_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, 
 }
 
 fn parse_let_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node()
-        .map_err(|e| nom::Err::Failure(e))?;
+    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
 
     let input = ws(&input[3..]); // skip "let" + whitespace
 
@@ -242,10 +240,8 @@ fn parse_let_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
 }
 
 fn parse_if_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node()
-        .map_err(|e| nom::Err::Failure(e))?;
-    ctx.enter_nesting()
-        .map_err(|e| nom::Err::Failure(e))?;
+    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
+    ctx.enter_nesting().map_err(|e| nom::Err::Failure(e))?;
 
     let mut branches = Vec::new();
     let mut current_input = input;
@@ -259,9 +255,7 @@ fn parse_if_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stm
 
     if !rest.starts_with('{') {
         ctx.leave_nesting();
-        return Err(nom::Err::Failure(ParseError::new(
-            "expected '{' after if condition",
-        )));
+        return Err(nom::Err::Failure(ParseError::new("expected '{' after if condition")));
     }
     let (rest, body) = parse_block(&rest[1..], ctx)?;
     branches.push((condition, body));
@@ -303,20 +297,12 @@ fn parse_if_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stm
     }
 
     ctx.leave_nesting();
-    Ok((
-        current_input,
-        Stmt::new(StmtKind::If {
-            branches,
-            else_body,
-        }),
-    ))
+    Ok((current_input, Stmt::new(StmtKind::If { branches, else_body })))
 }
 
 fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node()
-        .map_err(|e| nom::Err::Failure(e))?;
-    ctx.enter_nesting()
-        .map_err(|e| nom::Err::Failure(e))?;
+    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
+    ctx.enter_nesting().map_err(|e| nom::Err::Failure(e))?;
 
     let input = ws(&input[3..]); // skip "for" + whitespace
 
@@ -335,9 +321,7 @@ fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
     // Expect "in"
     if !starts_with_keyword(input, "in") {
         ctx.leave_nesting();
-        return Err(nom::Err::Failure(ParseError::new(
-            "expected 'in' after for variable",
-        )));
+        return Err(nom::Err::Failure(ParseError::new("expected 'in' after for variable")));
     }
     let input = ws(&input[2..]);
 
@@ -353,25 +337,19 @@ fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
         let input = ws(input);
         if !input.starts_with(',') {
             ctx.leave_nesting();
-            return Err(nom::Err::Failure(ParseError::new(
-                "expected ',' in range(start, end)",
-            )));
+            return Err(nom::Err::Failure(ParseError::new("expected ',' in range(start, end)")));
         }
         let input = ws(&input[1..]);
         let (input, end) = parse_expr(input, ctx)?;
         let input = ws(input);
         if !input.starts_with(')') {
             ctx.leave_nesting();
-            return Err(nom::Err::Failure(ParseError::new(
-                "expected ')' after range arguments",
-            )));
+            return Err(nom::Err::Failure(ParseError::new("expected ')' after range arguments")));
         }
         let input = ws(&input[1..]);
         if !input.starts_with('{') {
             ctx.leave_nesting();
-            return Err(nom::Err::Failure(ParseError::new(
-                "expected '{' after for range",
-            )));
+            return Err(nom::Err::Failure(ParseError::new("expected '{' after for range")));
         }
         let (input, body) = parse_block(&input[1..], ctx)?;
         ctx.leave_nesting();
@@ -391,9 +369,7 @@ fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
     let input = ws(input);
     if !input.starts_with('{') {
         ctx.leave_nesting();
-        return Err(nom::Err::Failure(ParseError::new(
-            "expected '{' after for-in iterable",
-        )));
+        return Err(nom::Err::Failure(ParseError::new("expected '{' after for-in iterable")));
     }
     let (input, body) = parse_block(&input[1..], ctx)?;
     ctx.leave_nesting();
@@ -407,14 +383,9 @@ fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
     ))
 }
 
-fn parse_while_stmt<'a>(
-    input: &'a str,
-    ctx: &mut ParseCtx,
-) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node()
-        .map_err(|e| nom::Err::Failure(e))?;
-    ctx.enter_nesting()
-        .map_err(|e| nom::Err::Failure(e))?;
+fn parse_while_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
+    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
+    ctx.enter_nesting().map_err(|e| nom::Err::Failure(e))?;
 
     let input = ws(&input[5..]); // skip "while" + whitespace
 
@@ -422,30 +393,20 @@ fn parse_while_stmt<'a>(
     let input = ws(input);
     if !input.starts_with('{') {
         ctx.leave_nesting();
-        return Err(nom::Err::Failure(ParseError::new(
-            "expected '{' after while condition",
-        )));
+        return Err(nom::Err::Failure(ParseError::new("expected '{' after while condition")));
     }
     let (input, body) = parse_block(&input[1..], ctx)?;
     ctx.leave_nesting();
     Ok((input, Stmt::new(StmtKind::While { condition, body })))
 }
 
-fn parse_return_stmt<'a>(
-    input: &'a str,
-    ctx: &mut ParseCtx,
-) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node()
-        .map_err(|e| nom::Err::Failure(e))?;
+fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
+    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
 
     let input = ws(&input[6..]); // skip "return" + whitespace
 
     if input.starts_with("next()") || input.starts_with("next ()") {
-        let skip = if input.starts_with("next()") {
-            6
-        } else {
-            7
-        };
+        let skip = if input.starts_with("next()") { 6 } else { 7 };
         return Ok((&input[skip..], Stmt::new(StmtKind::ReturnNext)));
     }
 
@@ -459,17 +420,13 @@ fn parse_return_stmt<'a>(
         let (input, status) = parse_expr(input, ctx)?;
         let input = ws(input);
         if !input.starts_with(',') {
-            return Err(nom::Err::Failure(ParseError::new(
-                "expected ',' in deny(status, body)",
-            )));
+            return Err(nom::Err::Failure(ParseError::new("expected ',' in deny(status, body)")));
         }
         let input = ws(&input[1..]);
         let (input, body) = parse_expr(input, ctx)?;
         let input = ws(input);
         if !input.starts_with(')') {
-            return Err(nom::Err::Failure(ParseError::new(
-                "expected ')' after deny arguments",
-            )));
+            return Err(nom::Err::Failure(ParseError::new("expected ')' after deny arguments")));
         }
         return Ok((&input[1..], Stmt::new(StmtKind::ReturnDeny { status, body })));
     }
@@ -479,12 +436,8 @@ fn parse_return_stmt<'a>(
     )))
 }
 
-fn parse_assign_or_expr_stmt<'a>(
-    input: &'a str,
-    ctx: &mut ParseCtx,
-) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node()
-        .map_err(|e| nom::Err::Failure(e))?;
+fn parse_assign_or_expr_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
+    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
 
     // Try to parse an expression first
     let (rest, expr) = parse_expr(input, ctx)?;
@@ -515,16 +468,12 @@ fn parse_assign_or_expr_stmt<'a>(
 // ==================== Block Parsing ====================
 
 /// Parse statements until '}'. Input should start AFTER the opening '{'
-fn parse_block<'a>(
-    input: &'a str,
-    ctx: &mut ParseCtx,
-) -> IResult<&'a str, Vec<Stmt>, ParseError> {
+fn parse_block<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Vec<Stmt>, ParseError> {
     let mut stmts = Vec::new();
     let mut input = ws(input);
 
     while !input.is_empty() && !input.starts_with('}') {
-        ctx.tick()
-            .map_err(|e| nom::Err::Failure(e))?;
+        ctx.tick().map_err(|e| nom::Err::Failure(e))?;
         let (rest, stmt) = parse_stmt(input, ctx)?;
         stmts.push(stmt);
         input = ws(rest);
@@ -540,19 +489,13 @@ fn parse_block<'a>(
 // ==================== Expression Parsing (Pratt / Precedence Climbing) ====================
 
 fn parse_expr<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
-    ctx.tick()
-        .map_err(|e| nom::Err::Failure(e))?;
+    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
     parse_expr_bp(input, ctx, 0)
 }
 
 /// Pratt parser: parse expression with minimum binding power
-fn parse_expr_bp<'a>(
-    input: &'a str,
-    ctx: &mut ParseCtx,
-    min_bp: u8,
-) -> IResult<&'a str, Expr, ParseError> {
-    ctx.tick()
-        .map_err(|e| nom::Err::Failure(e))?;
+fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx, min_bp: u8) -> IResult<&'a str, Expr, ParseError> {
+    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
 
     // Parse prefix / atom
     let (mut input, mut lhs) = parse_unary_or_atom(input, ctx)?;
@@ -580,8 +523,7 @@ fn parse_expr_bp<'a>(
             // Short-circuit for && and ||
             let (rest, rhs) = parse_expr_bp(input, ctx, bp)?;
 
-            ctx.add_node()
-                .map_err(|e| nom::Err::Failure(e))?;
+            ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
             lhs = Expr::new(ExprKind::BinaryOp {
                 op,
                 left: Box::new(lhs),
@@ -597,18 +539,13 @@ fn parse_expr_bp<'a>(
     Ok((input, lhs))
 }
 
-fn parse_unary_or_atom<'a>(
-    input: &'a str,
-    ctx: &mut ParseCtx,
-) -> IResult<&'a str, Expr, ParseError> {
-    ctx.tick()
-        .map_err(|e| nom::Err::Failure(e))?;
+fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
+    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
     let input = ws(input);
 
     // Unary !
     if input.starts_with('!') {
-        ctx.add_node()
-            .map_err(|e| nom::Err::Failure(e))?;
+        ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
         let (rest, operand) = parse_unary_or_atom(&input[1..], ctx)?;
         return Ok((
             rest,
@@ -620,14 +557,11 @@ fn parse_unary_or_atom<'a>(
     }
 
     // Unary - (negative): supports -42, -x, -(expr), -func()
-    if input.starts_with('-') && input.len() > 1
-        && !input[1..].starts_with(|c: char| c == '>' || c == '-')
-    {
+    if input.starts_with('-') && input.len() > 1 && !input[1..].starts_with(|c: char| c == '>' || c == '-') {
         let next = input.as_bytes()[1];
         // Accept digits, '(', identifiers (alpha/underscore)
         if next.is_ascii_digit() || next == b'(' || next.is_ascii_alphabetic() || next == b'_' {
-            ctx.add_node()
-                .map_err(|e| nom::Err::Failure(e))?;
+            ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
             let (rest, operand) = parse_unary_or_atom(&input[1..], ctx)?;
             return Ok((
                 rest,
@@ -641,8 +575,7 @@ fn parse_unary_or_atom<'a>(
 
     // Parenthesized expression
     if input.starts_with('(') {
-        ctx.enter_nesting()
-            .map_err(|e| nom::Err::Failure(e))?;
+        ctx.enter_nesting().map_err(|e| nom::Err::Failure(e))?;
         let (rest, expr) = parse_expr(&input[1..], ctx)?;
         let rest = ws(rest);
         if !rest.starts_with(')') {
@@ -657,10 +590,8 @@ fn parse_unary_or_atom<'a>(
 }
 
 fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
-    ctx.tick()
-        .map_err(|e| nom::Err::Failure(e))?;
-    ctx.add_node()
-        .map_err(|e| nom::Err::Failure(e))?;
+    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
+    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
     let input = ws(input);
 
     // String literal
@@ -675,8 +606,8 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
 
     // Keywords and identifiers
     if input.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
-        let (rest, ident) = parse_identifier(input)
-            .map_err(|_| nom::Err::Failure(ParseError::new("expected identifier")))?;
+        let (rest, ident) =
+            parse_identifier(input).map_err(|_| nom::Err::Failure(ParseError::new("expected identifier")))?;
 
         return match ident {
             "true" => Ok((rest, Expr::bool_val(true))),
@@ -709,15 +640,9 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
 
 // ==================== Dot Access (Method Call / Field Access) ====================
 
-fn parse_dot_access<'a>(
-    input: &'a str,
-    object: Expr,
-    ctx: &mut ParseCtx,
-) -> IResult<&'a str, Expr, ParseError> {
-    ctx.tick()
-        .map_err(|e| nom::Err::Failure(e))?;
-    ctx.add_node()
-        .map_err(|e| nom::Err::Failure(e))?;
+fn parse_dot_access<'a>(input: &'a str, object: Expr, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
+    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
+    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
 
     let input = &input[1..]; // skip '.'
     let (input, method) = parse_identifier(input)
@@ -748,10 +673,7 @@ fn parse_dot_access<'a>(
 }
 
 /// Parse comma-separated arguments inside parentheses. Input starts AFTER '('
-fn parse_call_args<'a>(
-    input: &'a str,
-    ctx: &mut ParseCtx,
-) -> IResult<&'a str, Vec<Expr>, ParseError> {
+fn parse_call_args<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Vec<Expr>, ParseError> {
     let mut args = Vec::new();
     let mut input = ws(input);
 
@@ -760,8 +682,7 @@ fn parse_call_args<'a>(
     }
 
     loop {
-        ctx.tick()
-            .map_err(|e| nom::Err::Failure(e))?;
+        ctx.tick().map_err(|e| nom::Err::Failure(e))?;
         let (rest, arg) = parse_expr(input, ctx)?;
         args.push(arg);
         let rest = ws(rest);
@@ -780,10 +701,7 @@ fn parse_call_args<'a>(
 
 // ==================== Literals ====================
 
-fn parse_string_literal<'a>(
-    input: &'a str,
-    _ctx: &mut ParseCtx,
-) -> IResult<&'a str, Expr, ParseError> {
+fn parse_string_literal<'a>(input: &'a str, _ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
     let input = &input[1..]; // skip opening "
     let mut result = String::new();
     let mut chars = input.chars();
@@ -820,9 +738,7 @@ fn parse_string_literal<'a>(
                         consumed += c.len_utf8();
                     }
                     None => {
-                        return Err(nom::Err::Failure(ParseError::new(
-                            "unterminated string literal",
-                        )));
+                        return Err(nom::Err::Failure(ParseError::new("unterminated string literal")));
                     }
                 }
             }
@@ -831,18 +747,14 @@ fn parse_string_literal<'a>(
                 consumed += c.len_utf8();
             }
             None => {
-                return Err(nom::Err::Failure(ParseError::new(
-                    "unterminated string literal",
-                )));
+                return Err(nom::Err::Failure(ParseError::new("unterminated string literal")));
             }
         }
     }
 }
 
 fn parse_int_literal<'a>(input: &'a str) -> IResult<&'a str, Expr, ParseError> {
-    let end = input
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(input.len());
+    let end = input.find(|c: char| !c.is_ascii_digit()).unwrap_or(input.len());
     if end == 0 {
         return Err(nom::Err::Failure(ParseError::new("expected integer")));
     }
@@ -913,11 +825,7 @@ mod tests {
         let prog = parse_program(r#"let x = 42"#).unwrap();
         assert_eq!(prog.stmts.len(), 1);
         match &prog.stmts[0].kind {
-            StmtKind::Let {
-                name,
-                mutable,
-                value,
-            } => {
+            StmtKind::Let { name, mutable, value } => {
                 assert_eq!(name, "x");
                 assert!(!mutable);
                 assert!(matches!(value.kind, ExprKind::IntLit(42)));
@@ -952,11 +860,7 @@ mod tests {
         let prog = parse_program(r#"let ip = req.header("X-Real-IP")"#).unwrap();
         match &prog.stmts[0].kind {
             StmtKind::Let { value, .. } => match &value.kind {
-                ExprKind::MethodCall {
-                    object,
-                    method,
-                    args,
-                } => {
+                ExprKind::MethodCall { object, method, args } => {
                     assert!(matches!(object.kind, ExprKind::Ident(ref s) if s == "req"));
                     assert_eq!(method, "header");
                     assert_eq!(args.len(), 1);
@@ -979,10 +883,7 @@ mod tests {
         .unwrap();
         assert_eq!(prog.stmts.len(), 1);
         match &prog.stmts[0].kind {
-            StmtKind::If {
-                branches,
-                else_body,
-            } => {
+            StmtKind::If { branches, else_body } => {
                 assert_eq!(branches.len(), 1);
                 assert!(else_body.is_none());
             }
@@ -1003,10 +904,7 @@ mod tests {
         )
         .unwrap();
         match &prog.stmts[0].kind {
-            StmtKind::If {
-                branches,
-                else_body,
-            } => {
+            StmtKind::If { branches, else_body } => {
                 assert_eq!(branches.len(), 1);
                 assert!(else_body.is_some());
             }
@@ -1175,13 +1073,7 @@ mod tests {
         let prog = parse_program("let x = !true").unwrap();
         match &prog.stmts[0].kind {
             StmtKind::Let { value, .. } => {
-                assert!(matches!(
-                    value.kind,
-                    ExprKind::UnaryOp {
-                        op: UnaryOp::Not,
-                        ..
-                    }
-                ));
+                assert!(matches!(value.kind, ExprKind::UnaryOp { op: UnaryOp::Not, .. }));
             }
             _ => panic!("expected Let"),
         }

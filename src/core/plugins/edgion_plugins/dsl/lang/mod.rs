@@ -1,11 +1,11 @@
 //! EdgionDSL language core — parser, compiler, VM
 
-pub mod value;
-pub mod error;
 pub mod ast;
-pub mod parser;
+pub mod builtins;
 pub mod bytecode;
 pub mod compiler;
+pub mod error;
+pub mod parser;
 pub mod validator;
+pub mod value;
 pub mod vm;
-pub mod builtins;

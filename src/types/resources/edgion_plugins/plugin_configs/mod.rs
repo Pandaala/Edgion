@@ -1,12 +1,12 @@
 pub mod all_endpoint_status;
 mod bandwidth_limit;
 mod basic_auth;
-mod dsl;
 mod cors;
 mod csrf;
 mod ctx_set;
 mod debug_access_log;
 mod direct_endpoint;
+mod dsl;
 mod dynamic_external_upstream;
 mod dynamic_internal_upstream;
 mod forward_auth;
@@ -28,7 +28,6 @@ mod response_rewrite;
 
 pub use all_endpoint_status::AllEndpointStatusConfig;
 pub use bandwidth_limit::BandwidthLimitConfig;
-pub use dsl::DslConfig;
 pub use basic_auth::BasicAuthConfig;
 pub use cors::CorsConfig;
 pub use csrf::CsrfConfig;
@@ -37,6 +36,7 @@ pub use ctx_set::{
 };
 pub use debug_access_log::DebugAccessLogToHeaderConfig;
 pub use direct_endpoint::{DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing, EndpointExtract};
+pub use dsl::DslConfig;
 pub use dynamic_external_upstream::{
     DomainTarget, DynamicExternalUpstreamConfig, ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch,
 };

@@ -477,9 +477,11 @@ mod tests {
     use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
 
     fn create_plugin() -> HmacAuth {
-        let mut config = HmacAuthConfig::default();
-        config.clock_skew = 600;
-        config.enforce_headers = Some(vec!["@request-target".to_string()]);
+        let mut config = HmacAuthConfig {
+            clock_skew: 600,
+            enforce_headers: Some(vec!["@request-target".to_string()]),
+            ..Default::default()
+        };
 
         let mut credentials = HashMap::new();
         credentials.insert(
@@ -541,8 +543,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_request_missing_auth_with_anonymous() {
-        let mut config = HmacAuthConfig::default();
-        config.anonymous = Some("guest".to_string());
+        let config = HmacAuthConfig {
+            anonymous: Some("guest".to_string()),
+            ..Default::default()
+        };
         let plugin = HmacAuth::new(&config);
 
         let mut session = MockPluginSession::new();
