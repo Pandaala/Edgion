@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig,
-    ForwardAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
-    OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig,
-    ResponseRewriteConfig,
+    ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig,
+    KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RealIpConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -49,6 +49,10 @@ pub enum EdgionPlugin {
     JwtAuth(JwtAuthConfig),
     /// JWE Decrypt filter (decrypt compact JWE from request header)
     JweDecrypt(JweDecryptConfig),
+    /// HMAC Authentication filter (HTTP Signature with HMAC-SHA2)
+    HmacAuth(HmacAuthConfig),
+    /// Header/Connection certificate authentication filter
+    HeaderCertAuth(HeaderCertAuthConfig),
     /// Key Authentication filter (API Key in header/query)
     KeyAuth(KeyAuthConfig),
     /// LDAP Authentication filter (username/password bind to LDAP server)
@@ -107,6 +111,8 @@ impl EdgionPlugin {
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
+            EdgionPlugin::HmacAuth(_) => "HmacAuth",
+            EdgionPlugin::HeaderCertAuth(_) => "HeaderCertAuth",
             EdgionPlugin::KeyAuth(_) => "KeyAuth",
             EdgionPlugin::LdapAuth(_) => "LdapAuth",
             EdgionPlugin::Mock(_) => "Mock",

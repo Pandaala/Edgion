@@ -34,6 +34,8 @@ use crate::core::plugins::edgion_plugins::direct_endpoint::DirectEndpoint;
 use crate::core::plugins::edgion_plugins::dynamic_external_upstream::DynamicExternalUpstream;
 use crate::core::plugins::edgion_plugins::dynamic_internal_upstream::DynamicInternalUpstream;
 use crate::core::plugins::edgion_plugins::forward_auth::ForwardAuth;
+use crate::core::plugins::edgion_plugins::header_cert_auth::HeaderCertAuth;
+use crate::core::plugins::edgion_plugins::hmac_auth::HmacAuth;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::jwe_decrypt::JweDecrypt;
 use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
@@ -332,6 +334,8 @@ impl PluginRuntime {
             EdgionPlugin::IpRestriction(config) => Some(IpRestriction::create(config)),
             EdgionPlugin::JwtAuth(config) => Some(Box::new(JwtAuth::new(config, namespace.to_string()))),
             EdgionPlugin::JweDecrypt(config) => Some(Box::new(JweDecrypt::new(config, namespace.to_string()))),
+            EdgionPlugin::HmacAuth(config) => Some(HmacAuth::create(config)),
+            EdgionPlugin::HeaderCertAuth(config) => Some(Box::new(HeaderCertAuth::new(config, namespace.to_string()))),
             EdgionPlugin::KeyAuth(config) => Some(KeyAuth::create(config)),
             EdgionPlugin::LdapAuth(config) => Some(LdapAuth::create(config)),
             EdgionPlugin::Mock(config) => Some(Box::new(Mock::new(config))),
@@ -417,6 +421,14 @@ impl PluginRuntime {
                 .get_validation_error()
                 .map(|s| s.to_string())
                 .or_else(|| config.detect_validation_error()),
+            EdgionPlugin::HmacAuth(config) => config
+                .get_validation_error()
+                .map(|s| s.to_string())
+                .or_else(|| config.detect_validation_error()),
+            EdgionPlugin::HeaderCertAuth(config) => config
+                .get_validation_error()
+                .map(|s| s.to_string())
+                .or_else(|| config.detect_validation_error()),
             EdgionPlugin::BandwidthLimit(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicInternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
@@ -437,6 +449,8 @@ impl PluginRuntime {
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
+            EdgionPlugin::HmacAuth(_) => "HmacAuth",
+            EdgionPlugin::HeaderCertAuth(_) => "HeaderCertAuth",
             EdgionPlugin::KeyAuth(_) => "KeyAuth",
             EdgionPlugin::LdapAuth(_) => "LdapAuth",
             EdgionPlugin::Mock(_) => "Mock",

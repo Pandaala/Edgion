@@ -154,6 +154,8 @@ spec:
                           - JwtAuth
                           - JweDecrypt
                           - KeyAuth
+                          - HmacAuth
+                          - HeaderCertAuth
                           - LdapAuth
                           - OpenidConnect
                           - Mock

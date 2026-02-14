@@ -115,6 +115,8 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "jwt-auth" | "jwtauth" => "EdgionPlugins/JwtAuth".to_string(),
             "jwe-decrypt" | "jwedecrypt" => "EdgionPlugins/JweDecrypt".to_string(),
             "key-auth" | "keyauth" => "EdgionPlugins/KeyAuth".to_string(),
+            "hmac-auth" | "hmacauth" => "EdgionPlugins/HmacAuth".to_string(),
+            "header-cert-auth" | "headercertauth" => "EdgionPlugins/HeaderCertAuth".to_string(),
             "ldap-auth" | "ldapauth" => "EdgionPlugins/LdapAuth".to_string(),
             "forward-auth" | "forwardauth" => "EdgionPlugins/ForwardAuth".to_string(),
             "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
@@ -165,6 +167,8 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
         "EdgionPlugins/JweDecrypt" => "EdgionPlugins",
         "EdgionPlugins/KeyAuth" => "EdgionPlugins",
+        "EdgionPlugins/HmacAuth" => "EdgionPlugins",
+        "EdgionPlugins/HeaderCertAuth" => "EdgionPlugins",
         "EdgionPlugins/LdapAuth" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
         "EdgionPlugins/RateLimit" => "EdgionPlugins",
@@ -407,6 +411,20 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::KeyAuthTestSuite));
+        }
+        "EdgionPlugins/HmacAuth" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/HmacAuth tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HmacAuthTestSuite));
+        }
+        "EdgionPlugins/HeaderCertAuth" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/HeaderCertAuth tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HeaderCertAuthTestSuite));
         }
         "EdgionPlugins/LdapAuth" => {
             if !gateway {

@@ -9,6 +9,8 @@ mod direct_endpoint;
 mod dynamic_external_upstream;
 mod dynamic_internal_upstream;
 mod forward_auth;
+mod header_cert_auth;
+mod hmac_auth;
 mod ip_restriction;
 mod jwe_decrypt;
 mod jwt_auth;
@@ -40,6 +42,8 @@ pub use dynamic_internal_upstream::{
     DynUpstreamTarget, DynamicInternalUpstreamConfig,
 };
 pub use forward_auth::ForwardAuthConfig;
+pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig, UpstreamHeaderConfig};
+pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacCredential};
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
 pub use jwe_decrypt::{JweContentEncryption, JweDecryptConfig, JweKeyManagement, ResolvedJweCredential};
 pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential};

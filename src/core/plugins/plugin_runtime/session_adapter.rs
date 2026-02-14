@@ -354,6 +354,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(())
     }
 
+    fn client_cert_info(&self) -> Option<crate::types::ctx::ClientCertInfo> {
+        self.ctx.request_info.client_cert_info.clone()
+    }
+
     fn ctx(&self) -> &EdgionHttpContext {
         self.ctx
     }

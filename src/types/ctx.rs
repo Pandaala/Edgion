@@ -69,6 +69,20 @@ pub struct ClientCertInfo {
 #[derive(Debug, Clone)]
 pub struct TlsConnId(pub u64);
 
+/// TLS handshake metadata stored in SslDigestExtension.
+///
+/// The value is created once per TLS connection and shared by requests on that
+/// connection through Pingora's digest extension.
+#[derive(Debug, Clone)]
+pub struct TlsConnMeta {
+    /// Connection id for tls.log <-> access.log correlation.
+    pub tls_id: u64,
+    /// SNI from handshake (if present).
+    pub sni: Option<String>,
+    /// mTLS client cert info (only when annotation gate is enabled).
+    pub client_cert_info: Option<ClientCertInfo>,
+}
+
 /// Request information extracted from the incoming request
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {

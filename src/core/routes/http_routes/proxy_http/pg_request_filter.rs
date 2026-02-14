@@ -4,7 +4,7 @@ use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 use crate::core::routes::grpc_routes::try_match_grpc_route;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::{CorsConfig, EdgionPlugin, HTTPRouteFilter, HTTPRouteFilterType};
-use crate::types::{EdgionHttpContext, EdgionStatus, TlsConnId};
+use crate::types::{EdgionHttpContext, EdgionStatus, TlsConnId, TlsConnMeta};
 use pingora_proxy::Session;
 use std::sync::Arc;
 
@@ -242,7 +242,12 @@ async fn build_request_metadata(
     // Extract TLS connection id (for correlating tls.log and access.log)
     if let Some(digest) = session.as_downstream().digest() {
         if let Some(ssl_digest) = digest.ssl_digest.as_ref() {
-            if let Some(tls_id) = ssl_digest.extension.get::<TlsConnId>() {
+            if let Some(meta) = ssl_digest.extension.get::<TlsConnMeta>() {
+                ctx.request_info.tls_id = Some(meta.tls_id);
+                ctx.request_info.sni = meta.sni.clone();
+                ctx.request_info.client_cert_info = meta.client_cert_info.clone();
+            } else if let Some(tls_id) = ssl_digest.extension.get::<TlsConnId>() {
+                // Backward compatibility for connections created before metadata upgrade.
                 ctx.request_info.tls_id = Some(tls_id.0);
             }
         }
