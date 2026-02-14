@@ -1,12 +1,14 @@
 use crate::core::conf_mgr::sync_runtime::resource_processor::get_secret_by_name;
 use crate::core::gateway::gateway::{match_gateway_tls, match_gateway_tls_with_port, GatewayTlsEntry};
 use crate::core::observe::ssl_log::{log_ssl, SslLogEntry};
+use crate::core::tls::backend_common::cert_extractor::extract_client_cert_info;
 use crate::core::tls::backend_common::set_mtls_verify_callback;
 use crate::core::tls::tls_cert_matcher::match_sni;
 use crate::types::constants::secret_keys::tls::{CERT, KEY};
+use crate::types::ctx::ClientCertInfo;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
-use crate::types::TlsConnId;
+use crate::types::TlsConnMeta;
 use anyhow::anyhow;
 use anyhow::Result;
 use pingora_core::listeners::tls::TlsSettings;
@@ -40,7 +42,14 @@ impl TlsAccept for TlsCallback {
         let tls_id = rand::random::<u64>();
         let entry = self.build_ssl_log_entry(ssl, tls_id);
         log_ssl(&entry);
-        Some(Arc::new(TlsConnId(tls_id)))
+        let sni = ssl.servername(NameType::HOST_NAME).map(|s| s.to_string());
+        let client_cert_info = self.extract_client_cert_meta(ssl, sni.as_deref());
+
+        Some(Arc::new(TlsConnMeta {
+            tls_id,
+            sni,
+            client_cert_info,
+        }))
     }
 }
 
@@ -55,6 +64,16 @@ impl TlsCallback {
             port,
             edgion_gateway_config,
         }
+    }
+
+    /// Extract mTLS client cert info when SNI-matched EdgionTls explicitly opts in.
+    fn extract_client_cert_meta(&self, ssl: &TlsRef, sni: Option<&str>) -> Option<ClientCertInfo> {
+        let sni = sni?;
+        let edgion_tls = match_sni(sni).ok()?;
+        if !edgion_tls.is_mtls_enabled() || !edgion_tls.should_expose_client_cert() {
+            return None;
+        }
+        extract_client_cert_info(ssl)
     }
 
     /// Create TLS settings with callback for the specified port

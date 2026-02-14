@@ -1,6 +1,7 @@
 use super::common::ParentReference;
 use super::gateway::SecretObjectReference;
 use super::http_route::RouteParentStatus;
+use crate::types::constants::annotations;
 use crate::types::constants::secret_keys::tls::{CERT, KEY};
 use k8s_openapi::api::core::v1::Secret;
 use kube::CustomResource;
@@ -335,6 +336,17 @@ impl EdgionTls {
             self.client_auth_mode(),
             ClientAuthMode::Mutual | ClientAuthMode::OptionalMutual
         )
+    }
+
+    /// Whether mTLS client certificate info should be exposed to plugins.
+    ///
+    /// Controlled by annotation `edgion.io/expose-client-cert: "true"`.
+    pub fn should_expose_client_cert(&self) -> bool {
+        self.metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(annotations::edgion::EXPOSE_CLIENT_CERT))
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"))
     }
 
     pub fn matches_hostname(&self, hostname: &str) -> bool {

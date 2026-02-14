@@ -9,9 +9,12 @@ pub mod cors;
 pub mod csrf;
 pub mod ctx_set;
 pub mod direct_endpoint;
+pub mod dsl;
 pub mod dynamic_external_upstream;
 pub mod dynamic_internal_upstream;
 pub mod forward_auth;
+pub mod header_cert_auth;
+pub mod hmac_auth;
 pub mod ip_restriction;
 pub mod jwe_decrypt;
 pub mod jwt_auth;
@@ -22,6 +25,7 @@ pub mod openid_connect;
 mod plugin_store;
 pub mod proxy_rewrite;
 pub mod rate_limit;
+pub mod rate_limit_redis;
 pub mod real_ip;
 pub mod request_restriction;
 pub mod response_rewrite;
@@ -34,6 +38,8 @@ pub use cors::Cors;
 pub use csrf::Csrf;
 pub use ctx_set::CtxSet;
 pub use forward_auth::ForwardAuth;
+pub use header_cert_auth::HeaderCertAuth;
+pub use hmac_auth::HmacAuth;
 pub use ip_restriction::IpRestriction;
 pub use jwe_decrypt::JweDecrypt;
 pub use jwt_auth::JwtAuth;
@@ -44,14 +50,16 @@ pub use openid_connect::OpenidConnect;
 pub use plugin_store::{get_global_plugin_store, PluginStore};
 pub use proxy_rewrite::ProxyRewrite;
 pub use rate_limit::RateLimit;
+pub use rate_limit_redis::RateLimitRedis;
 pub use real_ip::RealIp;
 pub use request_restriction::RequestRestriction;
 pub use response_rewrite::ResponseRewrite;
 
 // Re-export plugin configs from types
 pub use crate::types::resources::edgion_plugins::{
-    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
-    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ForwardAuthConfig, IpRestrictionConfig,
-    JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig,
-    ProxyRewriteConfig, RateLimitConfig, RealIpConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DslConfig,
+    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ForwardAuthConfig, HeaderCertAuthConfig,
+    HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
+    OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig,
 };

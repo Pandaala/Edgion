@@ -103,6 +103,14 @@ impl KeyAuth {
     /// Set upstream headers from key metadata (whitelist controlled)
     fn set_upstream_headers(&self, session: &mut dyn PluginSession, metadata: &KeyMetadata) {
         for (name, value) in &metadata.headers {
+            if name.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
+                tracing::warn!("KeyAuth: skip upstream header with invalid header name");
+                continue;
+            }
+            if value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
+                tracing::warn!(header = %name, "KeyAuth: skip upstream header with invalid header value");
+                continue;
+            }
             // Use set (not append) to prevent client header forgery
             let _ = session.set_request_header(name, value);
         }

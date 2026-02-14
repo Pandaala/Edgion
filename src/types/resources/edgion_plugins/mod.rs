@@ -27,17 +27,19 @@ pub use entry::{
     UpstreamResponseFilterEntry,
 };
 pub use plugin_configs::{
-    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CaseType, CorsConfig, CsrfConfig, CtxSetConfig,
-    CtxVarRule, DebugAccessLogToHeaderConfig, DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid,
-    DirectEndpointOnMissing, DomainTarget, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch,
-    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract,
-    ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch, ExtractConfig, ForwardAuthConfig, HeaderActions,
-    HeaderEntry, HeaderRename, HttpMethod, IpRestrictionConfig, IpSource, JweContentEncryption, JweDecryptConfig,
-    JweKeyManagement, JwtAlgorithm, JwtAuthConfig, KeyAuthConfig, KeyMetadata, LdapAuthConfig, LimitHeaderNames,
-    MappingConfig, MockConfig, OnMissing, OnMissingKey, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig,
-    RealIpConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig, ResolvedJweCredential, ResponseHeaderActions,
-    ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource, RuleMatchMode, TransformConfig,
-    TransformType, UnauthAction, VerificationMode,
+    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CaseType, CertHeaderFormat, CertSourceMode,
+    ConsumerBy, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule, DebugAccessLogToHeaderConfig, DefaultAction,
+    DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing, DomainTarget, DslConfig,
+    DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynamicExternalUpstreamConfig,
+    DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract, ExtUpstreamExtract, ExtUpstreamOnMissing,
+    ExtUpstreamOnNoMatch, ExtractConfig, ForwardAuthConfig, HeaderActions, HeaderCertAuthConfig, HeaderEntry,
+    HeaderRename, HmacAlgorithm, HmacAuthConfig, HmacCredential, HttpMethod, IpRestrictionConfig, IpSource,
+    JweContentEncryption, JweDecryptConfig, JweKeyManagement, JwtAlgorithm, JwtAuthConfig, KeyAuthConfig, KeyMetadata,
+    LdapAuthConfig, LimitHeaderNames, MappingConfig, MockConfig, OnMissing, OnMissingKey, OnRedisFailure,
+    OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy,
+    RateLimitRedisConfig, RealIpConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig, ResolvedJweCredential,
+    ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource,
+    RuleMatchMode, TransformConfig, TransformType, UnauthAction, UpstreamHeaderConfig, VerificationMode,
 };
 
 /// API group for EdgionPlugins

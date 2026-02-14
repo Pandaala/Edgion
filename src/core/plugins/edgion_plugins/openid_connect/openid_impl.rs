@@ -450,7 +450,7 @@ impl OpenidConnect {
     }
 
     pub(super) fn session_cipher(secret: &str) -> OidcResult<Aes256Gcm> {
-        if secret.as_bytes().len() < 32 {
+        if secret.len() < 32 {
             return Err("Session secret must be at least 32 bytes for AES-256-GCM".into());
         }
         let digest = Sha256::digest(secret.as_bytes());
@@ -1132,9 +1132,9 @@ impl OpenidConnect {
         let now = Self::now_unix_secs();
         let mut cache = self.access_token_cache.write().await;
         cache.retain(|_, entry| {
-            !entry
+            entry
                 .expires_at
-                .is_some_and(|exp| now > exp.saturating_add(self.config.clock_skew_seconds))
+                .is_none_or(|exp| now <= exp.saturating_add(self.config.clock_skew_seconds))
         });
         if cache.len() > 4096 {
             cache.clear();

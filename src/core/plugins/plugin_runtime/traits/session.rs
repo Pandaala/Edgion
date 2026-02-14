@@ -2,6 +2,7 @@
 
 use crate::core::plugins::plugin_runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::types::common::{KeyGet, KeySet};
+use crate::types::ctx::ClientCertInfo;
 use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -120,6 +121,16 @@ pub trait PluginSession: Send + Sync {
     ///
     /// Used by RealIp plugin to update the extracted real client IP.
     fn set_remote_addr(&mut self, addr: &str) -> PluginSessionResult<()>;
+
+    /// Get mTLS client certificate info extracted during handshake.
+    ///
+    /// Returns None when:
+    /// - request is plain HTTP (no TLS)
+    /// - connection is TLS without client cert
+    /// - EdgionTls did not enable `edgion.io/expose-client-cert`
+    fn client_cert_info(&self) -> Option<ClientCertInfo> {
+        None
+    }
 
     /// Get reference to EdgionHttpContext (for access log generation)
     fn ctx(&self) -> &EdgionHttpContext;

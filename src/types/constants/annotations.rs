@@ -10,6 +10,8 @@ pub mod edgion {
     pub const HTTP_TO_HTTPS_REDIRECT: &str = "edgion.io/http-to-https-redirect";
     /// Target port for HTTPS redirect
     pub const HTTPS_REDIRECT_PORT: &str = "edgion.io/https-redirect-port";
+    /// Expose mTLS client certificate info to plugin layer via TLS digest extension
+    pub const EXPOSE_CLIENT_CERT: &str = "edgion.io/expose-client-cert";
 
     // ========== Test metrics annotations ==========
     /// Test identifier for metrics filtering

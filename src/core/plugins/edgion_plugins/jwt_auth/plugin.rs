@@ -131,7 +131,10 @@ impl JwtAuth {
     fn load_credentials(&self) -> JwtAuthResult<Credentials> {
         // Check if already loaded
         {
-            let guard = self.credentials.read().unwrap();
+            let guard = self
+                .credentials
+                .read()
+                .map_err(|_| "JWT credential cache lock poisoned")?;
             if let Some(ref creds) = *guard {
                 return Ok(creds.clone());
             }
@@ -142,7 +145,10 @@ impl JwtAuth {
 
         // Cache
         {
-            let mut guard = self.credentials.write().unwrap();
+            let mut guard = self
+                .credentials
+                .write()
+                .map_err(|_| "JWT credential cache lock poisoned")?;
             *guard = Some(creds.clone());
         }
 
@@ -442,11 +448,12 @@ impl JwtAuth {
     }
 
     /// Handle anonymous access
-    /// Sets X-Anonymous-Consumer header to indicate anonymous request
+    /// Sets X-Anonymous-Consumer and X-Consumer-Username headers.
     fn handle_anonymous_access(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> bool {
         if let Some(ref anonymous) = self.config.anonymous {
             plugin_log.push(&format!("Anon={}; ", anonymous));
             let _ = session.set_request_header("X-Anonymous-Consumer", "true");
+            let _ = session.set_request_header("X-Consumer-Username", anonymous);
             return true;
         }
         false
@@ -572,8 +579,10 @@ mod tests {
 
     /// Helper: create JwtAuth with default config
     fn jwt_auth_default(anonymous: Option<String>) -> JwtAuth {
-        let mut config = JwtAuthConfig::default();
-        config.anonymous = anonymous;
+        let config = JwtAuthConfig {
+            anonymous,
+            ..Default::default()
+        };
         JwtAuth::new(&config, "default".to_string())
     }
 
@@ -585,8 +594,10 @@ mod tests {
         config_fn: Option<fn(&mut JwtAuthConfig)>,
     ) -> JwtAuth {
         use base64::Engine;
-        let mut config = JwtAuthConfig::default();
-        config.algorithm = algorithm;
+        let mut config = JwtAuthConfig {
+            algorithm,
+            ..Default::default()
+        };
         // Controller base64-encodes the secret, so we do the same in tests
         let secret_b64 = base64::engine::general_purpose::STANDARD.encode(secret.as_bytes());
         config.resolved_credential = Some(ResolvedJwtCredential {

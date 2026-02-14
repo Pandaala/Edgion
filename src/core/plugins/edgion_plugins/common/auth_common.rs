@@ -118,6 +118,21 @@ pub fn set_claims_headers(
     let mut total_bytes: usize = 0;
 
     for (claim_path, header_name) in mapping {
+        if header_name.is_empty() {
+            tracing::warn!(
+                claim = claim_path,
+                "Skipped claim header mapping due to empty header name"
+            );
+            continue;
+        }
+        if header_name.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
+            tracing::warn!(
+                claim = claim_path,
+                "Skipped claim header mapping due to invalid header name characters"
+            );
+            continue;
+        }
+
         let Some(value) = resolve_claim_path(claims, claim_path) else {
             continue;
         };

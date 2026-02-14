@@ -399,12 +399,14 @@ mod tests {
     }
 
     fn build_plugin(config_fn: Option<fn(&mut JweDecryptConfig)>) -> JweDecrypt {
-        let mut config = JweDecryptConfig::default();
-        config.strip_prefix = Some("Bearer ".to_string());
-        config.forward_header = "x-decrypted-auth".to_string();
-        config.resolved_credential = Some(ResolvedJweCredential {
-            secret: Some(STANDARD.encode(test_key())),
-        });
+        let mut config = JweDecryptConfig {
+            strip_prefix: Some("Bearer ".to_string()),
+            forward_header: "x-decrypted-auth".to_string(),
+            resolved_credential: Some(ResolvedJweCredential {
+                secret: Some(STANDARD.encode(test_key())),
+            }),
+            ..Default::default()
+        };
         if let Some(f) = config_fn {
             f(&mut config);
         }

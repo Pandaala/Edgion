@@ -12,7 +12,7 @@ use crate::core::conf_mgr::sync_runtime::resource_processor::{
 };
 use crate::types::prelude_resources::EdgionPlugins;
 use crate::types::resources::edgion_plugins::plugin_configs::{
-    KeyMetadata, ResolvedJweCredential, ResolvedJwtCredential,
+    CertSourceMode, HmacCredential, KeyMetadata, ResolvedJweCredential, ResolvedJwtCredential,
 };
 use crate::types::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsStatus};
 use crate::types::ResourceKind;
@@ -32,6 +32,87 @@ pub struct EdgionPluginsHandler;
 impl EdgionPluginsHandler {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Resolve BasicAuth users from Secrets and register references to SecretRefManager.
+    fn resolve_basic_auth_users(ep: &mut EdgionPlugins, resource_ref: &ResourceRef, ctx: &HandlerContext) {
+        let ep_ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+
+        if let Some(ref mut plugins) = ep.spec.request_plugins {
+            for entry in plugins.iter_mut() {
+                if let EdgionPlugin::BasicAuth(ref mut config) = entry.plugin {
+                    config.resolved_users = None;
+
+                    let Some(secret_refs) = config.secret_refs.clone() else {
+                        continue;
+                    };
+                    if secret_refs.is_empty() {
+                        continue;
+                    }
+
+                    let mut resolved = HashMap::new();
+                    for secret_ref in secret_refs {
+                        let ns = secret_ref.namespace.as_ref().or(ep.metadata.namespace.as_ref());
+                        let secret_key = format_secret_key(ns, &secret_ref.name);
+                        let ns_str = ns.map(|s| s.as_str()).unwrap_or(ep_ns);
+
+                        ctx.secret_ref_manager()
+                            .add_ref(secret_key.clone(), resource_ref.clone());
+
+                        let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) else {
+                            tracing::info!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "BasicAuth: Secret not found yet, will be reprocessed when Secret arrives"
+                            );
+                            continue;
+                        };
+
+                        let Some(username) = Self::read_secret_utf8(&secret, &["username"]) else {
+                            tracing::warn!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "BasicAuth: Secret missing username"
+                            );
+                            continue;
+                        };
+                        let Some(password) = Self::read_secret_utf8(&secret, &["password"]) else {
+                            tracing::warn!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "BasicAuth: Secret missing password"
+                            );
+                            continue;
+                        };
+
+                        if resolved.contains_key(&username) {
+                            tracing::warn!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                username = %username,
+                                "BasicAuth: duplicate username found, skipping"
+                            );
+                            continue;
+                        }
+                        resolved.insert(username, password);
+                    }
+
+                    if !resolved.is_empty() {
+                        tracing::info!(
+                            edgion_plugins = %resource_ref.key(),
+                            user_count = resolved.len(),
+                            "BasicAuth: Resolved users from Secrets"
+                        );
+                        config.resolved_users = Some(resolved);
+                    } else {
+                        tracing::warn!(
+                            edgion_plugins = %resource_ref.key(),
+                            "BasicAuth: No users resolved from Secrets"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Resolve KeyAuth keys from Secrets and register references to SecretRefManager
@@ -283,6 +364,160 @@ impl EdgionPluginsHandler {
         }
     }
 
+    /// Resolve HMAC credentials from Secrets and register references to SecretRefManager.
+    fn resolve_hmac_credentials(ep: &mut EdgionPlugins, resource_ref: &ResourceRef, ctx: &HandlerContext) {
+        let ep_ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+
+        if let Some(ref mut plugins) = ep.spec.request_plugins {
+            for entry in plugins.iter_mut() {
+                if let EdgionPlugin::HmacAuth(ref mut config) = entry.plugin {
+                    config.resolved_credentials = None;
+
+                    let Some(secret_refs) = config.secret_refs.clone() else {
+                        continue;
+                    };
+                    if secret_refs.is_empty() {
+                        continue;
+                    }
+
+                    let whitelist: HashSet<&str> = config.upstream_header_fields.iter().map(|v| v.as_str()).collect();
+                    let mut resolved: HashMap<String, HmacCredential> = HashMap::new();
+
+                    for secret_ref in secret_refs {
+                        let ns = secret_ref.namespace.as_ref().or(ep.metadata.namespace.as_ref());
+                        let secret_key = format_secret_key(ns, &secret_ref.name);
+                        let ns_str = ns.map(|s| s.as_str()).unwrap_or(ep_ns);
+
+                        // Register reference for cascading updates
+                        ctx.secret_ref_manager()
+                            .add_ref(secret_key.clone(), resource_ref.clone());
+
+                        let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) else {
+                            tracing::info!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "HmacAuth: Secret not found yet, will be reprocessed when Secret arrives"
+                            );
+                            continue;
+                        };
+
+                        let Some(credentials_yaml) = Self::read_secret_utf8(&secret, &["credentials.yaml"]) else {
+                            tracing::warn!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "HmacAuth: Secret missing credentials.yaml"
+                            );
+                            continue;
+                        };
+
+                        let entries: Vec<HashMap<String, serde_yaml::Value>> =
+                            match serde_yaml::from_str(&credentials_yaml) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        edgion_plugins = %resource_ref.key(),
+                                        secret_key = %secret_key,
+                                        error = %e,
+                                        "HmacAuth: Failed to parse credentials.yaml"
+                                    );
+                                    continue;
+                                }
+                            };
+
+                        for entry_map in entries {
+                            let username = entry_map
+                                .get(&config.username_field)
+                                .and_then(|v| v.as_str())
+                                .map(str::trim)
+                                .filter(|v| !v.is_empty());
+                            let secret_value = entry_map
+                                .get(&config.secret_field)
+                                .and_then(|v| v.as_str())
+                                .map(str::trim)
+                                .filter(|v| !v.is_empty());
+
+                            let (Some(username), Some(secret_value)) = (username, secret_value) else {
+                                tracing::warn!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    username_field = %config.username_field,
+                                    secret_field = %config.secret_field,
+                                    "HmacAuth: credential entry missing username/secret field"
+                                );
+                                continue;
+                            };
+
+                            if resolved.contains_key(username) {
+                                tracing::warn!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    username = %username,
+                                    "HmacAuth: duplicate username found in credentials, skipping"
+                                );
+                                continue;
+                            }
+
+                            if secret_value.as_bytes().len() < 32 {
+                                tracing::warn!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    username = %username,
+                                    secret_len = secret_value.as_bytes().len(),
+                                    "HmacAuth: secret length is below recommended minimum (32 bytes)"
+                                );
+                            }
+
+                            let mut headers = HashMap::new();
+                            if let Some(serde_yaml::Value::Mapping(map)) = entry_map.get("headers") {
+                                for (k, v) in map {
+                                    let Some(header_name) = k.as_str() else {
+                                        continue;
+                                    };
+                                    if !whitelist.contains(header_name) {
+                                        continue;
+                                    }
+
+                                    let header_value = if let Some(value) = v.as_str() {
+                                        value.to_string()
+                                    } else {
+                                        match v {
+                                            serde_yaml::Value::Bool(b) => b.to_string(),
+                                            serde_yaml::Value::Number(n) => n.to_string(),
+                                            _ => continue,
+                                        }
+                                    };
+                                    headers.insert(header_name.to_string(), header_value);
+                                }
+                            }
+
+                            resolved.insert(
+                                username.to_string(),
+                                HmacCredential {
+                                    secret: secret_value.as_bytes().to_vec(),
+                                    headers,
+                                },
+                            );
+                        }
+                    }
+
+                    if !resolved.is_empty() {
+                        tracing::info!(
+                            edgion_plugins = %resource_ref.key(),
+                            credential_count = resolved.len(),
+                            "HmacAuth: Resolved credentials from Secrets"
+                        );
+                        config.resolved_credentials = Some(resolved);
+                    } else {
+                        tracing::warn!(
+                            edgion_plugins = %resource_ref.key(),
+                            "HmacAuth: No credentials resolved from Secrets"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Resolve JWE decrypt credentials from Secrets and register references.
     fn resolve_jwe_credentials(ep: &mut EdgionPlugins, resource_ref: &ResourceRef, ctx: &HandlerContext) {
         let ep_ns = ep.metadata.namespace.as_deref().unwrap_or("default");
@@ -334,6 +569,70 @@ impl EdgionPluginsHandler {
                             secret_key = %secret_key,
                             "JweDecrypt: Secret not found yet, will be reprocessed when Secret arrives"
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Resolve HeaderCertAuth CA secrets and register secret references.
+    fn resolve_header_cert_auth_ca_secrets(ep: &mut EdgionPlugins, resource_ref: &ResourceRef, ctx: &HandlerContext) {
+        let ep_ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+
+        if let Some(ref mut plugins) = ep.spec.request_plugins {
+            for entry in plugins.iter_mut() {
+                if let EdgionPlugin::HeaderCertAuth(ref mut config) = entry.plugin {
+                    config.resolved_ca_secrets = None;
+
+                    if config.mode != CertSourceMode::Header {
+                        continue;
+                    }
+                    if config.ca_secret_refs.is_empty() {
+                        continue;
+                    }
+
+                    let mut resolved = Vec::new();
+                    for secret_ref in &config.ca_secret_refs {
+                        let ns = secret_ref.namespace.as_ref().or(ep.metadata.namespace.as_ref());
+                        let secret_key = format_secret_key(ns, &secret_ref.name);
+                        let ns_str = ns.map(|s| s.as_str()).unwrap_or(ep_ns);
+
+                        ctx.secret_ref_manager()
+                            .add_ref(secret_key.clone(), resource_ref.clone());
+
+                        let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) else {
+                            tracing::info!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "HeaderCertAuth: CA secret not found yet, will be reprocessed when Secret arrives"
+                            );
+                            continue;
+                        };
+
+                        let has_ca = secret.data.as_ref().is_some_and(|data| data.contains_key("ca.crt"))
+                            || secret
+                                .string_data
+                                .as_ref()
+                                .is_some_and(|data| data.contains_key("ca.crt"));
+                        if !has_ca {
+                            tracing::warn!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                "HeaderCertAuth: Secret missing ca.crt"
+                            );
+                            continue;
+                        }
+
+                        resolved.push(secret);
+                    }
+
+                    if !resolved.is_empty() {
+                        tracing::info!(
+                            edgion_plugins = %resource_ref.key(),
+                            ca_secret_count = resolved.len(),
+                            "HeaderCertAuth: Resolved CA secrets"
+                        );
+                        config.resolved_ca_secrets = Some(resolved);
                     }
                 }
             }
@@ -471,11 +770,20 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // Clear old references first (for update scenario)
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
+        // Resolve BasicAuth users from Secrets and register references
+        Self::resolve_basic_auth_users(&mut ep, &resource_ref, ctx);
+
         // Resolve JWT credentials from Secrets and register references
         Self::resolve_jwt_credentials(&mut ep, &resource_ref, ctx);
 
         // Resolve JWE decrypt credentials from Secrets and register references
         Self::resolve_jwe_credentials(&mut ep, &resource_ref, ctx);
+
+        // Resolve HeaderCertAuth CA secrets and register references
+        Self::resolve_header_cert_auth_ca_secrets(&mut ep, &resource_ref, ctx);
+
+        // Resolve HMAC credentials from Secrets and register references
+        Self::resolve_hmac_credentials(&mut ep, &resource_ref, ctx);
 
         // Resolve KeyAuth keys from Secrets and register references
         Self::resolve_key_auth_keys(&mut ep, &resource_ref, ctx);
@@ -586,7 +894,8 @@ mod tests {
         replace_all_secrets, HandlerContext, ProcessResult, ProcessorHandler, SecretRefManager,
     };
     use crate::types::resources::edgion_plugins::{
-        EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, JweDecryptConfig, OpenidConnectConfig, RequestFilterEntry,
+        BasicAuthConfig, CertSourceMode, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, HeaderCertAuthConfig,
+        HmacAuthConfig, JweDecryptConfig, OpenidConnectConfig, RequestFilterEntry,
     };
     use crate::types::resources::gateway::SecretObjectReference;
     use k8s_openapi::api::core::v1::Secret;
@@ -609,6 +918,86 @@ mod tests {
             data: Some(data),
             ..Default::default()
         }
+    }
+
+    fn build_basic_auth_secret(namespace: &str, name: &str, username: &str, password: &str) -> Secret {
+        let mut data = BTreeMap::new();
+        data.insert("username".to_string(), ByteString(username.as_bytes().to_vec()));
+        data.insert("password".to_string(), ByteString(password.as_bytes().to_vec()));
+        Secret {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                ..Default::default()
+            },
+            data: Some(data),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_parse_resolves_basic_auth_users_and_registers_refs() {
+        let _guard = SECRET_STORE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("secret store test lock poisoned");
+        replace_all_secrets(HashMap::new());
+
+        let alice = build_basic_auth_secret("default", "basic-auth-alice", "alice", "alice-password");
+        let bob = build_basic_auth_secret("default", "basic-auth-bob", "bob", "bob-password");
+        let mut secrets = HashMap::new();
+        secrets.insert("default/basic-auth-alice".to_string(), alice);
+        secrets.insert("default/basic-auth-bob".to_string(), bob);
+        replace_all_secrets(secrets);
+
+        let mut ep = EdgionPlugins::new("basic-auth-plugins", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::BasicAuth(
+            BasicAuthConfig {
+                secret_refs: Some(vec![
+                    SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "basic-auth-alice".to_string(),
+                        namespace: None,
+                    },
+                    SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "basic-auth-bob".to_string(),
+                        namespace: None,
+                    },
+                ]),
+                ..Default::default()
+            },
+        ))]);
+
+        let secret_ref_manager = Arc::new(SecretRefManager::new());
+        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None);
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx) {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let entry = parsed
+            .spec
+            .request_plugins
+            .as_ref()
+            .and_then(|v| v.first())
+            .expect("missing request plugin");
+        let config = match &entry.plugin {
+            EdgionPlugin::BasicAuth(c) => c,
+            _ => panic!("unexpected plugin type"),
+        };
+
+        let resolved_users = config.resolved_users.as_ref().expect("expected resolved users");
+        assert_eq!(resolved_users.get("alice").map(|v| v.as_str()), Some("alice-password"));
+        assert_eq!(resolved_users.get("bob").map(|v| v.as_str()), Some("bob-password"));
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/basic-auth-alice").len(), 1);
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/basic-auth-bob").len(), 1);
+
+        replace_all_secrets(HashMap::new());
     }
 
     #[test]
@@ -729,6 +1118,143 @@ mod tests {
             .expect("expected resolved secret");
         assert!(!resolved_secret.is_empty());
         assert_eq!(ctx.secret_ref_manager().get_refs("default/jwe-secret").len(), 1);
+
+        replace_all_secrets(HashMap::new());
+    }
+
+    #[test]
+    fn test_parse_resolves_hmac_credentials_and_registers_refs() {
+        let _guard = SECRET_STORE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("secret store test lock poisoned");
+        replace_all_secrets(HashMap::new());
+
+        let credentials_yaml = r#"
+- username: alice
+  secret: alice-secret-32-bytes-0123456789abcd
+  headers:
+    X-Consumer-Username: alice
+    X-Ignored: ignored
+- username: bob
+  secret: bob-secret-32-bytes-0123456789abcde
+  headers:
+    X-Consumer-Username: bob
+"#;
+        let hmac_secret = build_secret("default", "hmac-credentials", "credentials.yaml", credentials_yaml);
+        let mut secrets = HashMap::new();
+        secrets.insert("default/hmac-credentials".to_string(), hmac_secret);
+        replace_all_secrets(secrets);
+
+        let mut ep = EdgionPlugins::new("hmac-plugins", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::HmacAuth(HmacAuthConfig {
+            secret_refs: Some(vec![SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "hmac-credentials".to_string(),
+                namespace: None,
+            }]),
+            upstream_header_fields: vec!["X-Consumer-Username".to_string()],
+            ..Default::default()
+        }))]);
+
+        let secret_ref_manager = Arc::new(SecretRefManager::new());
+        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None);
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx) {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let entry = parsed
+            .spec
+            .request_plugins
+            .as_ref()
+            .and_then(|v| v.first())
+            .expect("missing request plugin");
+        let config = match &entry.plugin {
+            EdgionPlugin::HmacAuth(c) => c,
+            _ => panic!("unexpected plugin type"),
+        };
+
+        let resolved = config
+            .resolved_credentials
+            .as_ref()
+            .expect("expected resolved credentials");
+        assert_eq!(resolved.len(), 2);
+
+        let alice = resolved.get("alice").expect("missing alice credential");
+        assert_eq!(alice.secret, b"alice-secret-32-bytes-0123456789abcd".to_vec());
+        assert_eq!(
+            alice.headers.get("X-Consumer-Username").map(|v| v.as_str()),
+            Some("alice")
+        );
+        assert!(!alice.headers.contains_key("X-Ignored"));
+
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/hmac-credentials").len(), 1);
+
+        replace_all_secrets(HashMap::new());
+    }
+
+    #[test]
+    fn test_parse_resolves_header_cert_auth_ca_secrets_and_registers_refs() {
+        let _guard = SECRET_STORE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("secret store test lock poisoned");
+        replace_all_secrets(HashMap::new());
+
+        let ca_secret = build_secret(
+            "default",
+            "header-cert-ca",
+            "ca.crt",
+            "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+        );
+        let mut secrets = HashMap::new();
+        secrets.insert("default/header-cert-ca".to_string(), ca_secret);
+        replace_all_secrets(secrets);
+
+        let mut ep = EdgionPlugins::new("header-cert-auth-plugins", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::HeaderCertAuth(
+            HeaderCertAuthConfig {
+                mode: CertSourceMode::Header,
+                ca_secret_refs: vec![SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "header-cert-ca".to_string(),
+                    namespace: None,
+                }],
+                ..Default::default()
+            },
+        ))]);
+
+        let secret_ref_manager = Arc::new(SecretRefManager::new());
+        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None);
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx) {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let entry = parsed
+            .spec
+            .request_plugins
+            .as_ref()
+            .and_then(|v| v.first())
+            .expect("missing request plugin");
+        let config = match &entry.plugin {
+            EdgionPlugin::HeaderCertAuth(c) => c,
+            _ => panic!("unexpected plugin type"),
+        };
+
+        let resolved = config
+            .resolved_ca_secrets
+            .as_ref()
+            .expect("expected resolved ca secrets");
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/header-cert-ca").len(), 1);
 
         replace_all_secrets(HashMap::new());
     }

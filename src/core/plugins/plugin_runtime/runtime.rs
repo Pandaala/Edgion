@@ -31,9 +31,12 @@ use crate::core::plugins::edgion_plugins::cors::Cors;
 use crate::core::plugins::edgion_plugins::csrf::Csrf;
 use crate::core::plugins::edgion_plugins::ctx_set::CtxSet;
 use crate::core::plugins::edgion_plugins::direct_endpoint::DirectEndpoint;
+use crate::core::plugins::edgion_plugins::dsl::plugin::DslPlugin;
 use crate::core::plugins::edgion_plugins::dynamic_external_upstream::DynamicExternalUpstream;
 use crate::core::plugins::edgion_plugins::dynamic_internal_upstream::DynamicInternalUpstream;
 use crate::core::plugins::edgion_plugins::forward_auth::ForwardAuth;
+use crate::core::plugins::edgion_plugins::header_cert_auth::HeaderCertAuth;
+use crate::core::plugins::edgion_plugins::hmac_auth::HmacAuth;
 use crate::core::plugins::edgion_plugins::ip_restriction::IpRestriction;
 use crate::core::plugins::edgion_plugins::jwe_decrypt::JweDecrypt;
 use crate::core::plugins::edgion_plugins::jwt_auth::JwtAuth;
@@ -43,6 +46,7 @@ use crate::core::plugins::edgion_plugins::mock::Mock;
 use crate::core::plugins::edgion_plugins::openid_connect::OpenidConnect;
 use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
 use crate::core::plugins::edgion_plugins::rate_limit::RateLimit;
+use crate::core::plugins::edgion_plugins::rate_limit_redis::RateLimitRedis;
 use crate::core::plugins::edgion_plugins::real_ip::RealIp;
 use crate::core::plugins::edgion_plugins::request_restriction::RequestRestriction;
 use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
@@ -326,18 +330,21 @@ impl PluginRuntime {
                 Some(Box::new(RequestHeaderModifierFilter::new(config.clone())))
             }
             EdgionPlugin::RequestRedirect(config) => Some(Box::new(RequestRedirectFilter::new(config.clone()))),
-            EdgionPlugin::BasicAuth(config) => Some(Box::new(BasicAuth::new(config))),
+            EdgionPlugin::BasicAuth(config) => Some(Box::new(BasicAuth::new(config, namespace.to_string()))),
             EdgionPlugin::Cors(config) => Some(Box::new(Cors::new(config))),
             EdgionPlugin::Csrf(config) => Some(Box::new(Csrf::new(config))),
             EdgionPlugin::IpRestriction(config) => Some(IpRestriction::create(config)),
             EdgionPlugin::JwtAuth(config) => Some(Box::new(JwtAuth::new(config, namespace.to_string()))),
             EdgionPlugin::JweDecrypt(config) => Some(Box::new(JweDecrypt::new(config, namespace.to_string()))),
+            EdgionPlugin::HmacAuth(config) => Some(HmacAuth::create(config)),
+            EdgionPlugin::HeaderCertAuth(config) => Some(Box::new(HeaderCertAuth::new(config, namespace.to_string()))),
             EdgionPlugin::KeyAuth(config) => Some(KeyAuth::create(config)),
             EdgionPlugin::LdapAuth(config) => Some(LdapAuth::create(config)),
             EdgionPlugin::Mock(config) => Some(Box::new(Mock::new(config))),
             EdgionPlugin::ProxyRewrite(config) => Some(Box::new(ProxyRewrite::new(config))),
             EdgionPlugin::RequestRestriction(config) => Some(RequestRestriction::create(config)),
             EdgionPlugin::RateLimit(config) => Some(RateLimit::create(config)),
+            EdgionPlugin::RateLimitRedis(config) => Some(RateLimitRedis::create(config)),
             EdgionPlugin::CtxSet(config) => Some(CtxSet::create(config)),
             EdgionPlugin::DirectEndpoint(config) => Some(Box::new(DirectEndpoint::new(config))),
             EdgionPlugin::DynamicInternalUpstream(config) => Some(DynamicInternalUpstream::create(config)),
@@ -351,6 +358,7 @@ impl PluginRuntime {
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
                 Some(Box::new(ext_filter))
             }
+            EdgionPlugin::Dsl(config) => DslPlugin::from_config(config),
             _ => None,
         }
     }
@@ -403,7 +411,12 @@ impl PluginRuntime {
     /// Get validation error from a plugin config (if any)
     fn get_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
         match plugin {
+            EdgionPlugin::BasicAuth(config) => config
+                .get_validation_error()
+                .map(|s| s.to_string())
+                .or_else(|| config.detect_validation_error()),
             EdgionPlugin::RateLimit(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::RateLimitRedis(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::CtxSet(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DirectEndpoint(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::RequestRestriction(config) => config.get_validation_error().map(|s| s.to_string()),
@@ -417,10 +430,19 @@ impl PluginRuntime {
                 .get_validation_error()
                 .map(|s| s.to_string())
                 .or_else(|| config.detect_validation_error()),
+            EdgionPlugin::HmacAuth(config) => config
+                .get_validation_error()
+                .map(|s| s.to_string())
+                .or_else(|| config.detect_validation_error()),
+            EdgionPlugin::HeaderCertAuth(config) => config
+                .get_validation_error()
+                .map(|s| s.to_string())
+                .or_else(|| config.detect_validation_error()),
             EdgionPlugin::BandwidthLimit(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicInternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicExternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::Dsl(config) => config.get_validation_error_owned(),
             _ => None,
         }
     }
@@ -437,12 +459,15 @@ impl PluginRuntime {
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
+            EdgionPlugin::HmacAuth(_) => "HmacAuth",
+            EdgionPlugin::HeaderCertAuth(_) => "HeaderCertAuth",
             EdgionPlugin::KeyAuth(_) => "KeyAuth",
             EdgionPlugin::LdapAuth(_) => "LdapAuth",
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::RateLimit(_) => "RateLimit",
+            EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
             EdgionPlugin::RealIp(_) => "RealIp",
@@ -457,6 +482,7 @@ impl PluginRuntime {
             EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
+            EdgionPlugin::Dsl(_) => "Dsl",
         }
     }
 

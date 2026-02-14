@@ -1,0 +1,26 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: hmac-auth-anonymous
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: HmacAuth
+      config:
+        secretRefs:
+          - name: hmac-credentials
+            namespace: edgion-default
+        algorithms:
+          - hmac-sha256
+        clockSkew: 300
+        enforceHeaders:
+          - "@request-target"
+          - host
+          - date
+        anonymous: "anonymous-user"
+        hideCredentials: true
+        realm: "edgion"
+        upstreamHeaderFields:
+          - X-Consumer-Username
+          - X-Customer-ID
