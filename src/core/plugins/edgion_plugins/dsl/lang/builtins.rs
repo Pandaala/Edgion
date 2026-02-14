@@ -22,6 +22,26 @@ fn check_string_len(s: &str, limit: usize) -> Result<(), RuntimeError> {
     }
 }
 
+fn checked_value_str(s: String, limit: usize) -> Result<Value, RuntimeError> {
+    check_string_len(&s, limit)?;
+    Ok(Value::Str(s))
+}
+
+fn checked_value_opt_str(s: Option<String>, limit: usize) -> Result<Value, RuntimeError> {
+    match s {
+        Some(v) => checked_value_str(v, limit),
+        None => Ok(Value::Nil),
+    }
+}
+
+fn api_error(function: &'static str, err: impl std::fmt::Display) -> RuntimeError {
+    tracing::debug!("DSL builtin '{}' API detail: {}", function, err);
+    RuntimeError::ApiError {
+        function: function.into(),
+        message: "plugin session operation failed".into(),
+    }
+}
+
 impl Vm {
     pub(crate) fn call_builtin(
         &self,
@@ -35,28 +55,43 @@ impl Vm {
             // ===== req.* read =====
             BuiltinId::ReqHeader => {
                 let name = state.pop()?.into_string();
-                Ok(session.header_value(&name).into())
+                checked_value_opt_str(session.header_value(&name), self.limits.max_string_len)
             }
-            BuiltinId::ReqMethod => Ok(Value::Str(session.get_method().to_string())),
-            BuiltinId::ReqPath => Ok(Value::Str(session.get_path().to_string())),
+            BuiltinId::ReqMethod => {
+                checked_value_str(session.get_method().to_string(), self.limits.max_string_len)
+            }
+            BuiltinId::ReqPath => {
+                checked_value_str(session.get_path().to_string(), self.limits.max_string_len)
+            }
             BuiltinId::ReqQuery => {
                 let name = state.pop()?.into_string();
-                Ok(session.get_query_param(&name).into())
+                checked_value_opt_str(session.get_query_param(&name), self.limits.max_string_len)
             }
-            BuiltinId::ReqQueryString => Ok(session.get_query().into()),
+            BuiltinId::ReqQueryString => {
+                checked_value_opt_str(session.get_query(), self.limits.max_string_len)
+            }
             BuiltinId::ReqCookie => {
                 let name = state.pop()?.into_string();
-                Ok(session.get_cookie(&name).into())
+                checked_value_opt_str(session.get_cookie(&name), self.limits.max_string_len)
             }
-            BuiltinId::ReqClientIp => Ok(Value::Str(session.client_addr().to_string())),
-            BuiltinId::ReqRemoteIp => Ok(Value::Str(session.remote_addr().to_string())),
+            BuiltinId::ReqClientIp => {
+                checked_value_str(session.client_addr().to_string(), self.limits.max_string_len)
+            }
+            BuiltinId::ReqRemoteIp => {
+                checked_value_str(session.remote_addr().to_string(), self.limits.max_string_len)
+            }
             BuiltinId::ReqPathParam => {
                 let name = state.pop()?.into_string();
-                Ok(session.get_path_param(&name).into())
+                checked_value_opt_str(session.get_path_param(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqHeaderNames => {
                 let headers = session.request_headers();
-                let names: Vec<String> = headers.into_iter().map(|(k, _)| k).collect();
+                const MAX_HEADER_NAMES: usize = 256;
+                let mut names: Vec<String> = Vec::new();
+                for (k, _) in headers.into_iter().take(MAX_HEADER_NAMES) {
+                    check_string_len(&k, self.limits.max_string_len)?;
+                    names.push(k);
+                }
                 Ok(Value::List(names))
             }
             BuiltinId::ReqScheme => {
@@ -65,9 +100,11 @@ impl Vm {
                     .header_value("X-Forwarded-Proto")
                     .or_else(|| session.header_value("X-Scheme"))
                     .unwrap_or_else(|| "http".to_string());
-                Ok(Value::Str(scheme))
+                checked_value_str(scheme, self.limits.max_string_len)
             }
-            BuiltinId::ReqHost => Ok(session.header_value("Host").into()),
+            BuiltinId::ReqHost => {
+                checked_value_opt_str(session.header_value("Host"), self.limits.max_string_len)
+            }
             BuiltinId::ReqUri => {
                 let path = session.get_path().to_string();
                 match session.get_query() {
@@ -76,10 +113,12 @@ impl Vm {
                         check_string_len(&uri, self.limits.max_string_len)?;
                         Ok(Value::Str(uri))
                     }
-                    _ => Ok(Value::Str(path)),
+                    _ => checked_value_str(path, self.limits.max_string_len),
                 }
             }
-            BuiltinId::ReqContentType => Ok(session.header_value("Content-Type").into()),
+            BuiltinId::ReqContentType => {
+                checked_value_opt_str(session.header_value("Content-Type"), self.limits.max_string_len)
+            }
             BuiltinId::ReqHasHeader => {
                 let name = state.pop()?.into_string();
                 Ok(Value::Bool(session.header_value(&name).is_some()))
@@ -91,10 +130,7 @@ impl Vm {
                 let name = state.pop()?.into_string();
                 session
                     .set_request_header(&name, &value)
-                    .map_err(|e| RuntimeError::ApiError {
-                        function: "req.set_header".into(),
-                        message: e.to_string(),
-                    })?;
+                    .map_err(|e| api_error("req.set_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqAppendHeader => {
@@ -102,50 +138,35 @@ impl Vm {
                 let name = state.pop()?.into_string();
                 session
                     .append_request_header(&name, &value)
-                    .map_err(|e| RuntimeError::ApiError {
-                        function: "req.append_header".into(),
-                        message: e.to_string(),
-                    })?;
+                    .map_err(|e| api_error("req.append_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqRemoveHeader => {
                 let name = state.pop()?.into_string();
                 session
                     .remove_request_header(&name)
-                    .map_err(|e| RuntimeError::ApiError {
-                        function: "req.remove_header".into(),
-                        message: e.to_string(),
-                    })?;
+                    .map_err(|e| api_error("req.remove_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqSetUri => {
                 let uri = state.pop()?.into_string();
                 session
                     .set_upstream_uri(&uri)
-                    .map_err(|e| RuntimeError::ApiError {
-                        function: "req.set_uri".into(),
-                        message: e.to_string(),
-                    })?;
+                    .map_err(|e| api_error("req.set_uri", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqSetHost => {
                 let host = state.pop()?.into_string();
                 session
                     .set_upstream_host(&host)
-                    .map_err(|e| RuntimeError::ApiError {
-                        function: "req.set_host".into(),
-                        message: e.to_string(),
-                    })?;
+                    .map_err(|e| api_error("req.set_host", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqSetMethod => {
                 let method = state.pop()?.into_string();
                 session
                     .set_upstream_method(&method)
-                    .map_err(|e| RuntimeError::ApiError {
-                        function: "req.set_method".into(),
-                        message: e.to_string(),
-                    })?;
+                    .map_err(|e| api_error("req.set_method", e))?;
                 Ok(Value::Nil)
             }
 
@@ -155,10 +176,7 @@ impl Vm {
                 let name = state.pop()?.into_string();
                 session
                     .set_response_header(&name, &value)
-                    .map_err(|e| RuntimeError::ApiError {
-                        function: "resp.set_header".into(),
-                        message: e.to_string(),
-                    })?;
+                    .map_err(|e| api_error("resp.set_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::RespAppendHeader => {
@@ -166,47 +184,35 @@ impl Vm {
                 let name = state.pop()?.into_string();
                 session
                     .append_response_header(&name, &value)
-                    .map_err(|e| RuntimeError::ApiError {
-                        function: "resp.append_header".into(),
-                        message: e.to_string(),
-                    })?;
+                    .map_err(|e| api_error("resp.append_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::RespRemoveHeader => {
                 let name = state.pop()?.into_string();
                 session
                     .remove_response_header(&name)
-                    .map_err(|e| RuntimeError::ApiError {
-                        function: "resp.remove_header".into(),
-                        message: e.to_string(),
-                    })?;
+                    .map_err(|e| api_error("resp.remove_header", e))?;
                 Ok(Value::Nil)
             }
 
             // ===== ctx.* =====
             BuiltinId::CtxGet => {
                 let key = state.pop()?.into_string();
-                Ok(session.get_ctx_var(&key).into())
+                checked_value_opt_str(session.get_ctx_var(&key), self.limits.max_string_len)
             }
             BuiltinId::CtxSet => {
                 let value = state.pop()?.into_string();
                 let key = state.pop()?.into_string();
                 session
                     .set_ctx_var(&key, &value)
-                    .map_err(|e| RuntimeError::ApiError {
-                        function: "ctx.set".into(),
-                        message: e.to_string(),
-                    })?;
+                    .map_err(|e| api_error("ctx.set", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::CtxRemove => {
                 let key = state.pop()?.into_string();
                 session
                     .remove_ctx_var(&key)
-                    .map_err(|e| RuntimeError::ApiError {
-                        function: "ctx.remove".into(),
-                        message: e.to_string(),
-                    })?;
+                    .map_err(|e| api_error("ctx.remove", e))?;
                 Ok(Value::Nil)
             }
 
@@ -242,7 +248,9 @@ impl Vm {
                         if start <= end {
                             let byte_start = s.char_indices().nth(start).map(|(i, _)| i).unwrap_or(s.len());
                             let byte_end = s.char_indices().nth(end).map(|(i, _)| i).unwrap_or(s.len());
-                            Ok(Value::Str(s[byte_start..byte_end].to_string()))
+                            let out = s[byte_start..byte_end].to_string();
+                            check_string_len(&out, self.limits.max_string_len)?;
+                            Ok(Value::Str(out))
                         } else {
                             Ok(Value::Str(String::new()))
                         }
@@ -257,7 +265,9 @@ impl Vm {
             }
             BuiltinId::ToStr => {
                 let v = state.pop()?;
-                Ok(Value::Str(v.into_string()))
+                let s = v.into_string();
+                check_string_len(&s, self.limits.max_string_len)?;
+                Ok(Value::Str(s))
             }
             BuiltinId::ToInt => {
                 let v = state.pop()?;

@@ -60,7 +60,7 @@ impl DslPlugin {
         }
 
         // 2. Use cached bytecode from validation phase (avoids double compilation)
-        if let Some(cached_b64) = config.take_compiled_bytecode() {
+        if let Some(cached_b64) = config.get_compiled_bytecode() {
             return CompiledScript::deserialize_base64(&cached_b64)
                 .map_err(|e| format!("cached bytecode deserialization failed: {}", e));
         }

@@ -257,7 +257,10 @@ impl Vm {
                     let b = state.pop()?;
                     let a = state.pop()?;
                     let result = match (&a, &b) {
-                        (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_add(*b)),
+                        (Value::Int(a), Value::Int(b)) => Value::Int(
+                            a.checked_add(*b)
+                                .ok_or(RuntimeError::IntegerOverflow { operation: "+" })?,
+                        ),
                         (Value::Str(a), Value::Str(b)) => {
                             let new_len = a.len() + b.len();
                             if new_len > self.limits.max_string_len {
@@ -305,7 +308,10 @@ impl Vm {
                     let a = state.pop()?;
                     match (&a, &b) {
                         (Value::Int(a), Value::Int(b)) => {
-                            state.push(Value::Int(a.wrapping_sub(*b)), self.limits.max_stack_depth)?;
+                            let n = a
+                                .checked_sub(*b)
+                                .ok_or(RuntimeError::IntegerOverflow { operation: "-" })?;
+                            state.push(Value::Int(n), self.limits.max_stack_depth)?;
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
@@ -321,7 +327,10 @@ impl Vm {
                     let a = state.pop()?;
                     match (&a, &b) {
                         (Value::Int(a), Value::Int(b)) => {
-                            state.push(Value::Int(a.wrapping_mul(*b)), self.limits.max_stack_depth)?;
+                            let n = a
+                                .checked_mul(*b)
+                                .ok_or(RuntimeError::IntegerOverflow { operation: "*" })?;
+                            state.push(Value::Int(n), self.limits.max_stack_depth)?;
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
@@ -341,9 +350,9 @@ impl Vm {
                         }
                         (Value::Int(a), Value::Int(b)) => {
                             // Protect against i64::MIN / -1 overflow
-                            let result = a.checked_div(*b).ok_or(RuntimeError::Internal {
-                                message: "integer division overflow".into(),
-                            })?;
+                            let result = a
+                                .checked_div(*b)
+                                .ok_or(RuntimeError::IntegerOverflow { operation: "/" })?;
                             state.push(Value::Int(result), self.limits.max_stack_depth)?;
                         }
                         _ => {
@@ -359,8 +368,10 @@ impl Vm {
                     let v = state.pop()?;
                     match v {
                         Value::Int(n) => {
-                            // Protect against -i64::MIN overflow
-                            state.push(Value::Int(n.wrapping_neg()), self.limits.max_stack_depth)?;
+                            let neg = n
+                                .checked_neg()
+                                .ok_or(RuntimeError::IntegerOverflow { operation: "unary -" })?;
+                            state.push(Value::Int(neg), self.limits.max_stack_depth)?;
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
@@ -389,7 +400,13 @@ impl Vm {
                     let result = match (&a, &b) {
                         (Value::Int(a), Value::Int(b)) => a < b,
                         (Value::Str(a), Value::Str(b)) => a < b,
-                        _ => false,
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "matching comparable types (Int/Int or Str/Str)",
+                                got: a.type_name(),
+                                operation: "<",
+                            });
+                        }
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
                 }
@@ -399,7 +416,13 @@ impl Vm {
                     let result = match (&a, &b) {
                         (Value::Int(a), Value::Int(b)) => a > b,
                         (Value::Str(a), Value::Str(b)) => a > b,
-                        _ => false,
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "matching comparable types (Int/Int or Str/Str)",
+                                got: a.type_name(),
+                                operation: ">",
+                            });
+                        }
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
                 }
@@ -409,7 +432,13 @@ impl Vm {
                     let result = match (&a, &b) {
                         (Value::Int(a), Value::Int(b)) => a <= b,
                         (Value::Str(a), Value::Str(b)) => a <= b,
-                        _ => false,
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "matching comparable types (Int/Int or Str/Str)",
+                                got: a.type_name(),
+                                operation: "<=",
+                            });
+                        }
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
                 }
@@ -419,7 +448,13 @@ impl Vm {
                     let result = match (&a, &b) {
                         (Value::Int(a), Value::Int(b)) => a >= b,
                         (Value::Str(a), Value::Str(b)) => a >= b,
-                        _ => false,
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "matching comparable types (Int/Int or Str/Str)",
+                                got: a.type_name(),
+                                operation: ">=",
+                            });
+                        }
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
                 }

@@ -14,6 +14,8 @@ use super::ast::*;
 use super::bytecode::*;
 use super::error::CompileError;
 
+const MAX_REGEX_PATTERN_LEN: usize = 1024;
+
 /// Local variable entry
 #[derive(Debug, Clone)]
 struct Local {
@@ -63,6 +65,7 @@ impl Compiler {
             self.emit(OpCode::ReturnNext);
         }
         Ok(CompiledScript {
+            version: BYTECODE_VERSION,
             code: self.code,
             constants: self.constants,
             local_count: self.next_slot,
@@ -106,7 +109,9 @@ impl Compiler {
     fn check_const_limit(&self) -> Result<u16, CompileError> {
         let len = self.constants.len();
         if len >= u16::MAX as usize {
-            return Err(CompileError::new("constant pool overflow: too many constants (max 65534)"));
+            return Err(CompileError::new(
+                "constant pool overflow: too many constants (max 65535)",
+            ));
         }
         Ok(len as u16)
     }
@@ -132,6 +137,13 @@ impl Compiler {
     }
 
     fn add_regex_const(&mut self, pattern: &str) -> Result<u16, CompileError> {
+        if pattern.len() > MAX_REGEX_PATTERN_LEN {
+            return Err(CompileError::new(format!(
+                "regex pattern too long: {} (max {})",
+                pattern.len(),
+                MAX_REGEX_PATTERN_LEN
+            )));
+        }
         // Deduplicate: check if this regex pattern already exists
         for (i, c) in self.constants.iter().enumerate() {
             if let Constant::Regex(existing) = c {
@@ -174,7 +186,7 @@ impl Compiler {
     }
 
     fn leave_scope(&mut self) {
-        debug_assert!(self.scope_depth > 0, "leave_scope called at depth 0");
+        assert!(self.scope_depth > 0, "leave_scope called at depth 0");
         // Pop locals declared in the current scope
         while let Some(local) = self.locals.last() {
             if local.depth < self.scope_depth {

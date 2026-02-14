@@ -140,6 +140,8 @@ pub enum RuntimeError {
     },
     /// Division by zero
     DivisionByZero,
+    /// Integer arithmetic overflow
+    IntegerOverflow { operation: &'static str },
     /// step_budget exhausted — total instructions exceeded limit
     StepLimitExceeded { limit: u32 },
     /// loop_budget exhausted — single loop iterations exceeded limit
@@ -173,6 +175,9 @@ impl fmt::Display for RuntimeError {
                 operation, expected, got
             ),
             Self::DivisionByZero => write!(f, "division by zero"),
+            Self::IntegerOverflow { operation } => {
+                write!(f, "integer overflow in {}", operation)
+            }
             Self::StepLimitExceeded { limit } => write!(f, "step budget exceeded ({})", limit),
             Self::LoopLimitExceeded { limit } => write!(f, "loop budget exceeded ({})", limit),
             Self::CallLimitExceeded { limit } => write!(f, "call budget exceeded ({})", limit),

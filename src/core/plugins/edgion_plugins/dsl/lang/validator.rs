@@ -8,6 +8,8 @@ use super::compiler::Compiler;
 use super::error::ValidationError;
 use super::parser::parse_program;
 
+const MAX_REGEX_PATTERN_LEN: usize = 1024;
+
 /// Validation limits for compiled scripts
 #[derive(Debug, Clone)]
 pub struct ValidationLimits {
@@ -98,6 +100,14 @@ impl Validator {
                 }
                 Constant::Regex(pattern) => {
                     total_pool_bytes += pattern.len();
+                    if pattern.len() > MAX_REGEX_PATTERN_LEN {
+                        errors.push(ValidationError::new(format!(
+                            "regex constant[{}] too long: {} bytes (max {})",
+                            i,
+                            pattern.len(),
+                            MAX_REGEX_PATTERN_LEN
+                        )));
+                    }
                     // 5. Regex syntax validation
                     if let Err(e) = regex::Regex::new(pattern) {
                         errors.push(ValidationError::new(format!(

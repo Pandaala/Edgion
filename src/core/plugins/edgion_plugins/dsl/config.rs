@@ -199,9 +199,8 @@ impl DslConfig {
         None
     }
 
-    /// Take the cached compiled bytecode (if any).
-    /// Returns and clears the cache.
-    pub(crate) fn take_compiled_bytecode(&self) -> Option<String> {
-        self.compiled_bytecode_cache.lock().ok()?.take()
+    /// Read the cached compiled bytecode (if any) without consuming it.
+    pub(crate) fn get_compiled_bytecode(&self) -> Option<String> {
+        self.compiled_bytecode_cache.lock().ok()?.clone()
     }
 }

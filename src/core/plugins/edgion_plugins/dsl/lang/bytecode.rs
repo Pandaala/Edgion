@@ -5,6 +5,13 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Current serialized bytecode schema version.
+pub const BYTECODE_VERSION: u16 = 1;
+/// Legacy version for scripts produced before versioning was introduced.
+const LEGACY_BYTECODE_VERSION: u16 = 0;
+/// Hard limit for decoded bytecode payload to avoid unbounded allocation.
+const MAX_DECODED_BYTECODE_LEN: usize = 256 * 1024;
+
 /// Single VM instruction
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OpCode {
@@ -160,12 +167,18 @@ pub enum Constant {
 /// A compiled DSL script — ready for VM execution or serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompiledScript {
+    #[serde(default = "default_bytecode_version")]
+    pub version: u16,
     pub code: Vec<OpCode>,
     pub constants: Vec<Constant>,
     pub local_count: u16,
     pub max_loop_depth: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+}
+
+fn default_bytecode_version() -> u16 {
+    LEGACY_BYTECODE_VERSION
 }
 
 impl CompiledScript {
@@ -179,9 +192,85 @@ impl CompiledScript {
     /// Deserialize from base64-encoded JSON
     pub fn deserialize_base64(encoded: &str) -> Result<Self, String> {
         use base64::Engine;
+        // Base64 expands data to roughly 4/3. Reject obviously too-large payloads early.
+        let max_encoded_len = (MAX_DECODED_BYTECODE_LEN * 4 / 3) + 8;
+        if encoded.len() > max_encoded_len {
+            return Err(format!(
+                "bytecode payload too large: {} bytes encoded (max {})",
+                encoded.len(),
+                max_encoded_len
+            ));
+        }
+
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded)
             .map_err(|e| format!("base64 decode error: {}", e))?;
-        serde_json::from_slice(&bytes).map_err(|e| format!("deserialize error: {}", e))
+        if bytes.len() > MAX_DECODED_BYTECODE_LEN {
+            return Err(format!(
+                "bytecode payload too large: {} bytes decoded (max {})",
+                bytes.len(),
+                MAX_DECODED_BYTECODE_LEN
+            ));
+        }
+
+        let script: Self = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("deserialize error: {}", e))?;
+        if script.version != LEGACY_BYTECODE_VERSION && script.version != BYTECODE_VERSION {
+            return Err(format!(
+                "unsupported bytecode version: {} (supported: {} and legacy {})",
+                script.version, BYTECODE_VERSION, LEGACY_BYTECODE_VERSION
+            ));
+        }
+        Ok(script)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_script() -> CompiledScript {
+        CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![OpCode::ReturnNext],
+            constants: vec![],
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn test_bytecode_roundtrip_with_version() {
+        let script = minimal_script();
+        let b64 = script.serialize_base64().expect("serialize should succeed");
+        let decoded = CompiledScript::deserialize_base64(&b64).expect("deserialize should succeed");
+        assert_eq!(decoded.version, BYTECODE_VERSION);
+        assert_eq!(decoded.code, vec![OpCode::ReturnNext]);
+    }
+
+    #[test]
+    fn test_reject_oversized_decoded_payload() {
+        use base64::Engine;
+        let huge = vec![b'a'; MAX_DECODED_BYTECODE_LEN + 1];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(huge);
+        let err = CompiledScript::deserialize_base64(&encoded).expect_err("should reject oversized payload");
+        assert!(err.contains("payload too large"));
+    }
+
+    #[test]
+    fn test_reject_unknown_version() {
+        use base64::Engine;
+        let invalid = serde_json::json!({
+            "version": 999,
+            "code": ["ReturnNext"],
+            "constants": [],
+            "local_count": 0,
+            "max_loop_depth": 0
+        });
+        let bytes = serde_json::to_vec(&invalid).expect("json encode should succeed");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let err = CompiledScript::deserialize_base64(&encoded).expect_err("should reject unsupported version");
+        assert!(err.contains("unsupported bytecode version"));
     }
 }
