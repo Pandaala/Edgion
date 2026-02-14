@@ -131,7 +131,10 @@ impl JwtAuth {
     fn load_credentials(&self) -> JwtAuthResult<Credentials> {
         // Check if already loaded
         {
-            let guard = self.credentials.read().unwrap();
+            let guard = self
+                .credentials
+                .read()
+                .map_err(|_| "JWT credential cache lock poisoned")?;
             if let Some(ref creds) = *guard {
                 return Ok(creds.clone());
             }
@@ -142,7 +145,10 @@ impl JwtAuth {
 
         // Cache
         {
-            let mut guard = self.credentials.write().unwrap();
+            let mut guard = self
+                .credentials
+                .write()
+                .map_err(|_| "JWT credential cache lock poisoned")?;
             *guard = Some(creds.clone());
         }
 
@@ -442,11 +448,12 @@ impl JwtAuth {
     }
 
     /// Handle anonymous access
-    /// Sets X-Anonymous-Consumer header to indicate anonymous request
+    /// Sets X-Anonymous-Consumer and X-Consumer-Username headers.
     fn handle_anonymous_access(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> bool {
         if let Some(ref anonymous) = self.config.anonymous {
             plugin_log.push(&format!("Anon={}; ", anonymous));
             let _ = session.set_request_header("X-Anonymous-Consumer", "true");
+            let _ = session.set_request_header("X-Consumer-Username", anonymous);
             return true;
         }
         false

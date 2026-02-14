@@ -194,6 +194,10 @@ impl HeaderCertAuthConfig {
     }
 
     pub fn detect_validation_error(&self) -> Option<String> {
+        fn has_control_chars(s: &str) -> bool {
+            s.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
+        }
+
         if self.verify_depth == 0 {
             return Some("verifyDepth must be >= 1".to_string());
         }
@@ -206,12 +210,25 @@ impl HeaderCertAuthConfig {
         if self.certificate_header_name.trim().is_empty() {
             return Some("certificateHeaderName cannot be empty".to_string());
         }
+        if has_control_chars(&self.certificate_header_name) {
+            return Some("certificateHeaderName contains invalid control characters".to_string());
+        }
         if self.upstream_headers.consumer_header.trim().is_empty()
             || self.upstream_headers.dn_header.trim().is_empty()
             || self.upstream_headers.san_header.trim().is_empty()
             || self.upstream_headers.fingerprint_header.trim().is_empty()
         {
             return Some("upstreamHeaders entries cannot be empty".to_string());
+        }
+        for name in [
+            &self.upstream_headers.consumer_header,
+            &self.upstream_headers.dn_header,
+            &self.upstream_headers.san_header,
+            &self.upstream_headers.fingerprint_header,
+        ] {
+            if has_control_chars(name) {
+                return Some("upstreamHeaders entries contain invalid control characters".to_string());
+            }
         }
         if self.mode == CertSourceMode::Header {
             let has_ca_refs = !self.ca_secret_refs.is_empty();

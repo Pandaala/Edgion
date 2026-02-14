@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::core::conf_mgr::sync_runtime::resource_processor::get_secret;
 use crate::core::plugins::edgion_plugins::common::auth_common::send_auth_error_response;
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -26,18 +27,78 @@ pub struct BasicAuth {
     // Cache for successful authentications: AuthHeader -> (Username, Expiry)
     // We only cache VALID credentials to avoid memory DoS attacks with random invalid headers.
     auth_cache: Arc<DashMap<String, (String, Instant)>>,
+    plugin_namespace: String,
     config: BasicAuthConfig,
 }
 
 impl BasicAuth {
     /// Create a new BasicAuth plugin from configuration
-    pub fn new(config: &BasicAuthConfig) -> Self {
-        BasicAuth {
+    pub fn new(config: &BasicAuthConfig, plugin_namespace: String) -> Self {
+        let mut plugin = BasicAuth {
             name: "BasicAuth".to_string(),
             user_passwords: Arc::new(HashMap::new()),
             auth_cache: Arc::new(DashMap::new()),
+            plugin_namespace,
             config: config.clone(),
+        };
+
+        let users = config
+            .resolved_users
+            .clone()
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| plugin.load_users_from_secret_refs());
+        if !users.is_empty() {
+            if let Err(err) = plugin.load_users(users) {
+                tracing::warn!("BasicAuth: failed to load resolved users: {}", err);
+            }
         }
+        plugin
+    }
+
+    fn load_users_from_secret_refs(&self) -> HashMap<String, String> {
+        let mut users = HashMap::new();
+        let Some(secret_refs) = self.config.secret_refs.as_ref() else {
+            return users;
+        };
+        for secret_ref in secret_refs {
+            let ns = secret_ref.namespace.as_deref().unwrap_or(&self.plugin_namespace);
+            let Some(secret) = get_secret(Some(ns), &secret_ref.name) else {
+                continue;
+            };
+
+            let Some(username) = Self::read_secret_utf8(&secret, "username") else {
+                continue;
+            };
+            let Some(password) = Self::read_secret_utf8(&secret, "password") else {
+                continue;
+            };
+            if users.contains_key(&username) {
+                tracing::warn!("BasicAuth: duplicate username '{}', skipping", username);
+                continue;
+            }
+            users.insert(username, password);
+        }
+        users
+    }
+
+    fn read_secret_utf8(secret: &k8s_openapi::api::core::v1::Secret, key: &str) -> Option<String> {
+        if let Some(data) = &secret.data {
+            if let Some(bytes) = data.get(key) {
+                if let Ok(v) = String::from_utf8(bytes.0.clone()) {
+                    if !v.trim().is_empty() {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+        if let Some(string_data) = &secret.string_data {
+            if let Some(v) = string_data.get(key) {
+                if !v.trim().is_empty() {
+                    return Some(v.clone());
+                }
+            }
+        }
+        None
     }
 
     /// Load users from resolved Secret data
@@ -95,10 +156,6 @@ impl BasicAuth {
         let auth_header_value = session
             .header_value("authorization")
             .ok_or("Missing authorization header")?;
-
-        if !auth_header_value.starts_with("Basic ") {
-            return Err("Invalid authorization header format".into());
-        }
 
         // 1. Check Cache (Fast Path)
         // If we have verified this exact header recently, skip cost.
@@ -163,10 +220,16 @@ impl BasicAuth {
     }
 
     fn extract_credentials(&self, authorization: &str) -> BasicAuthResult<(String, String)> {
-        // Remove "Basic " prefix
-        let encoded = authorization
-            .strip_prefix("Basic ")
+        let (scheme, encoded) = authorization
+            .split_once(' ')
             .ok_or("Invalid authorization header format")?;
+        if !scheme.eq_ignore_ascii_case("basic") {
+            return Err("Invalid authorization header format".into());
+        }
+        let encoded = encoded.trim();
+        if encoded.is_empty() {
+            return Err("Invalid authorization header format".into());
+        }
 
         // Decode base64
         let decoded = general_purpose::STANDARD
@@ -181,8 +244,8 @@ impl BasicAuth {
             return Err("Invalid decoded data format".into());
         }
 
-        let username = parts[0].trim().to_string();
-        let password = parts[1].trim().to_string();
+        let username = parts[0].to_string();
+        let password = parts[1].to_string();
 
         if username.is_empty() || password.is_empty() {
             return Err("Empty username or password".into());
@@ -273,8 +336,10 @@ mod tests {
             realm: "Test Realm".to_string(),
             hide_credentials: false,
             anonymous: None,
+            resolved_users: None,
+            validation_error: None,
         };
-        let mut auth = BasicAuth::new(&config);
+        let mut auth = BasicAuth::new(&config, "default".to_string());
 
         let mut users = HashMap::new();
         users.insert("testuser".to_string(), "testpass".to_string());
@@ -344,8 +409,10 @@ mod tests {
             realm: "Test".to_string(),
             hide_credentials: false,
             anonymous: Some("anonymous-user".to_string()),
+            resolved_users: None,
+            validation_error: None,
         };
-        let auth = BasicAuth::new(&config);
+        let auth = BasicAuth::new(&config, "default".to_string());
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("BasicAuth");
 
@@ -366,8 +433,10 @@ mod tests {
             realm: "Test".to_string(),
             hide_credentials: true,
             anonymous: None,
+            resolved_users: None,
+            validation_error: None,
         };
-        let mut auth = BasicAuth::new(&config);
+        let mut auth = BasicAuth::new(&config, "default".to_string());
         let mut users = HashMap::new();
         users.insert("testuser".to_string(), "testpass".to_string());
         auth.load_users(users).unwrap();
@@ -390,5 +459,26 @@ mod tests {
         let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    #[test]
+    fn test_extract_credentials_case_insensitive_scheme() {
+        let auth = create_basic_auth_with_users();
+        let header = format!(
+            "basic {}",
+            general_purpose::STANDARD.encode("testuser:testpass".as_bytes())
+        );
+        let (username, password) = auth.extract_credentials(&header).expect("should parse");
+        assert_eq!(username, "testuser");
+        assert_eq!(password, "testpass");
+    }
+
+    #[test]
+    fn test_extract_credentials_preserves_spaces() {
+        let auth = create_basic_auth_with_users();
+        let header = format!("Basic {}", general_purpose::STANDARD.encode(" user : pass ".as_bytes()));
+        let (username, password) = auth.extract_credentials(&header).expect("should parse");
+        assert_eq!(username, " user ");
+        assert_eq!(password, " pass ");
     }
 }

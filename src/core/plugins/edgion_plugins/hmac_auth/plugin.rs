@@ -189,6 +189,12 @@ impl HmacAuth {
         if headers.is_empty() {
             return Err("Invalid HMAC authorization format");
         }
+        let mut seen = HashSet::new();
+        for h in &headers {
+            if !seen.insert(h.as_str()) {
+                return Err("Invalid HMAC authorization format");
+            }
+        }
 
         let signature = STANDARD
             .decode(signature_raw)
@@ -298,12 +304,20 @@ impl HmacAuth {
         }
     }
 
+    fn signed_date_header<'a>(&self, signed_headers: &'a [String]) -> Option<&'a str> {
+        if let Some(name) = signed_headers.iter().find(|h| h.as_str() == "x-date") {
+            return Some(name.as_str());
+        }
+        signed_headers.iter().find(|h| h.as_str() == "date").map(|h| h.as_str())
+    }
+
     /// Validate Date/X-Date clock skew.
-    fn validate_clock_skew(session: &dyn PluginSession, max_skew: u64) -> Result<(), &'static str> {
-        let date_str = session
-            .header_value("x-date")
-            .or_else(|| session.header_value("date"))
-            .ok_or("Missing Date header")?;
+    fn validate_clock_skew(
+        session: &dyn PluginSession,
+        max_skew: u64,
+        signed_date_header: &str,
+    ) -> Result<(), &'static str> {
+        let date_str = session.header_value(signed_date_header).ok_or("Missing Date header")?;
 
         let parsed = DateTime::parse_from_rfc2822(&date_str)
             .or_else(|_| DateTime::parse_from_rfc3339(&date_str))
@@ -410,7 +424,21 @@ impl RequestFilter for HmacAuth {
             }
         };
 
-        if let Err(message) = Self::validate_clock_skew(session, self.config.clock_skew) {
+        let signed_date = match self.signed_date_header(&params.headers) {
+            Some(name) => name,
+            None => {
+                return self
+                    .reject(
+                        session,
+                        plugin_log,
+                        401,
+                        "Missing required signed header: date or x-date",
+                        "hmac:missing-date-signed",
+                    )
+                    .await;
+            }
+        };
+        if let Err(message) = Self::validate_clock_skew(session, self.config.clock_skew, signed_date) {
             return self.reject(session, plugin_log, 401, message, "hmac:clock-skew").await;
         }
 
@@ -532,11 +560,11 @@ mod tests {
     async fn test_run_request_valid_signature() {
         let plugin = create_plugin();
         let date = rfc2822_now();
-        let signing = "@request-target: get /v1/ping";
-        let signature = HmacAuth::compute_hmac(HmacAlgorithm::HmacSha256, b"alice-super-secret-key", signing).unwrap();
+        let signing = format!("@request-target: get /v1/ping\ndate: {}", date);
+        let signature = HmacAuth::compute_hmac(HmacAlgorithm::HmacSha256, b"alice-super-secret-key", &signing).unwrap();
         let signature_b64 = STANDARD.encode(signature);
         let auth_header = format!(
-            r#"hmac username="alice", algorithm="hmac-sha256", headers="@request-target", signature="{}""#,
+            r#"hmac username="alice", algorithm="hmac-sha256", headers="@request-target date", signature="{}""#,
             signature_b64
         );
 
@@ -565,7 +593,7 @@ mod tests {
         let plugin = create_plugin();
         let date = rfc2822_now();
         let auth_header =
-            r#"hmac username="alice", algorithm="hmac-sha256", headers="@request-target", signature="YmFkLXNpZw==""#
+            r#"hmac username="alice", algorithm="hmac-sha256", headers="@request-target date", signature="YmFkLXNpZw==""#
                 .to_string();
 
         let mut session = MockPluginSession::new();
@@ -588,5 +616,31 @@ mod tests {
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(log.contains("hmac:bad-signature"));
+    }
+
+    #[tokio::test]
+    async fn test_run_request_rejects_when_date_not_signed() {
+        let plugin = create_plugin();
+        let date = rfc2822_now();
+        let auth_header =
+            r#"hmac username="alice", algorithm="hmac-sha256", headers="@request-target", signature="YmFkLXNpZw==""#
+                .to_string();
+
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new("HmacAuth");
+
+        session.expect_header_value().returning(move |name| match name {
+            "authorization" => Some(auth_header.clone()),
+            "proxy-authorization" => None,
+            "date" => Some(date.clone()),
+            _ => None,
+        });
+        session.expect_write_response_header().returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(log.contains("hmac:missing-date-signed"));
     }
 }

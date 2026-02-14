@@ -175,6 +175,10 @@ impl HmacAuthConfig {
     }
 
     pub fn detect_validation_error(&self) -> Option<String> {
+        fn has_control_chars(s: &str) -> bool {
+            s.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
+        }
+
         if self.algorithms.is_empty() {
             return Some("algorithms cannot be empty".to_string());
         }
@@ -202,6 +206,15 @@ impl HmacAuthConfig {
             if required.iter().any(|h| h.trim().is_empty()) {
                 return Some("enforceHeaders contains empty header name".to_string());
             }
+            if required.iter().any(|h| has_control_chars(h)) {
+                return Some("enforceHeaders contains invalid control characters".to_string());
+            }
+        }
+        if self.upstream_header_fields.iter().any(|h| h.trim().is_empty()) {
+            return Some("upstreamHeaderFields contains empty header name".to_string());
+        }
+        if self.upstream_header_fields.iter().any(|h| has_control_chars(h)) {
+            return Some("upstreamHeaderFields contains invalid control characters".to_string());
         }
         if self.validate_request_body {
             return Some("validateRequestBody is not supported yet (requires request body cache support)".to_string());

@@ -328,7 +328,7 @@ impl PluginRuntime {
                 Some(Box::new(RequestHeaderModifierFilter::new(config.clone())))
             }
             EdgionPlugin::RequestRedirect(config) => Some(Box::new(RequestRedirectFilter::new(config.clone()))),
-            EdgionPlugin::BasicAuth(config) => Some(Box::new(BasicAuth::new(config))),
+            EdgionPlugin::BasicAuth(config) => Some(Box::new(BasicAuth::new(config, namespace.to_string()))),
             EdgionPlugin::Cors(config) => Some(Box::new(Cors::new(config))),
             EdgionPlugin::Csrf(config) => Some(Box::new(Csrf::new(config))),
             EdgionPlugin::IpRestriction(config) => Some(IpRestriction::create(config)),
@@ -407,6 +407,10 @@ impl PluginRuntime {
     /// Get validation error from a plugin config (if any)
     fn get_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
         match plugin {
+            EdgionPlugin::BasicAuth(config) => config
+                .get_validation_error()
+                .map(|s| s.to_string())
+                .or_else(|| config.detect_validation_error()),
             EdgionPlugin::RateLimit(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::CtxSet(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DirectEndpoint(config) => config.get_validation_error().map(|s| s.to_string()),
