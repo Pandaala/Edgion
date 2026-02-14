@@ -117,13 +117,59 @@ impl Validator {
             )));
         }
 
+        // 6b. LoadConst / Matches index bounds check
+        let const_count = script.constants.len();
+        for (i, op) in script.code.iter().enumerate() {
+            match op {
+                OpCode::LoadConst(idx) => {
+                    if *idx as usize >= const_count {
+                        errors.push(ValidationError::new(format!(
+                            "LoadConst at instruction {} references constant {} but pool size is {}",
+                            i, idx, const_count
+                        )));
+                    }
+                }
+                OpCode::Matches(idx) => {
+                    // Matches(idx) indexes into the constants array; the entry must be a Regex
+                    if *idx as usize >= const_count {
+                        errors.push(ValidationError::new(format!(
+                            "Matches at instruction {} references constant {} but pool size is {}",
+                            i, idx, const_count
+                        )));
+                    } else if !matches!(script.constants[*idx as usize], Constant::Regex(_)) {
+                        errors.push(ValidationError::new(format!(
+                            "Matches at instruction {} references constant {} which is not a Regex",
+                            i, idx
+                        )));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // 6c. CallBuiltin argument count validation
+        {
+            use super::compiler::builtin_expected_argc;
+            for (i, op) in script.code.iter().enumerate() {
+                if let OpCode::CallBuiltin(builtin_id, argc) = op {
+                    let expected = builtin_expected_argc(builtin_id);
+                    if *argc as usize != expected {
+                        errors.push(ValidationError::new(format!(
+                            "CallBuiltin {:?} at instruction {} expects {} arg(s), bytecode says {}",
+                            builtin_id, i, expected, argc
+                        )));
+                    }
+                }
+            }
+        }
+
         // 7. Jump target validation
         let code_len = script.code.len();
         for (i, op) in script.code.iter().enumerate() {
             match op {
                 OpCode::Jump(offset) | OpCode::JumpIfFalse(offset) | OpCode::LoopBack(offset) => {
-                    let target = (i as i32 + 1 + offset) as usize;
-                    if target > code_len {
+                    let target = i as i64 + 1 + *offset as i64;
+                    if target < 0 || target as usize > code_len {
                         errors.push(ValidationError::new(format!(
                             "jump at instruction {} targets out of bounds: {} (code length: {})",
                             i, target, code_len
@@ -149,7 +195,43 @@ impl Validator {
             }
         }
 
-        // 9. Loop nesting depth
+        // 9. LoopInit / LoopEnd balance check
+        {
+            let mut loop_depth: i32 = 0;
+            for (i, op) in script.code.iter().enumerate() {
+                match op {
+                    OpCode::LoopInit => {
+                        loop_depth += 1;
+                    }
+                    OpCode::LoopEnd => {
+                        loop_depth -= 1;
+                        if loop_depth < 0 {
+                            errors.push(ValidationError::new(format!(
+                                "LoopEnd at instruction {} without matching LoopInit",
+                                i
+                            )));
+                        }
+                    }
+                    OpCode::LoopBack(_) => {
+                        if loop_depth <= 0 {
+                            errors.push(ValidationError::new(format!(
+                                "LoopBack at instruction {} without active LoopInit",
+                                i
+                            )));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if loop_depth != 0 {
+                errors.push(ValidationError::new(format!(
+                    "unbalanced LoopInit/LoopEnd: {} LoopInit(s) without matching LoopEnd",
+                    loop_depth
+                )));
+            }
+        }
+
+        // 10. Loop nesting depth
         if script.max_loop_depth as usize > self.limits.max_loop_depth {
             errors.push(ValidationError::new(format!(
                 "loop nesting too deep: {} (max {})",

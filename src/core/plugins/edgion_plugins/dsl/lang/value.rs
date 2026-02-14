@@ -146,6 +146,7 @@ impl PartialEq for Value {
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Nil, Value::Nil) => true,
+            (Value::List(a), Value::List(b)) => a == b,
             _ => false, // different types are never equal
         }
     }

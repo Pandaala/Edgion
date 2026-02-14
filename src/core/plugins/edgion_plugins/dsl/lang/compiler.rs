@@ -102,38 +102,58 @@ impl Compiler {
 
     // ==================== Constants ====================
 
-    fn add_str_const(&mut self, s: &str) -> u16 {
-        if let Some(&idx) = self.const_str_map.get(s) {
-            return idx;
+    /// Check that the constants pool won't overflow u16.
+    fn check_const_limit(&self) -> Result<u16, CompileError> {
+        let len = self.constants.len();
+        if len >= u16::MAX as usize {
+            return Err(CompileError::new("constant pool overflow: too many constants (max 65534)"));
         }
-        let idx = self.constants.len() as u16;
-        self.constants.push(Constant::Str(s.to_string()));
-        self.const_str_map.insert(s.to_string(), idx);
-        idx
+        Ok(len as u16)
     }
 
-    fn add_int_const(&mut self, n: i64) -> u16 {
-        if let Some(&idx) = self.const_int_map.get(&n) {
-            return idx;
+    fn add_str_const(&mut self, s: &str) -> Result<u16, CompileError> {
+        if let Some(&idx) = self.const_str_map.get(s) {
+            return Ok(idx);
         }
-        let idx = self.constants.len() as u16;
+        let idx = self.check_const_limit()?;
+        self.constants.push(Constant::Str(s.to_string()));
+        self.const_str_map.insert(s.to_string(), idx);
+        Ok(idx)
+    }
+
+    fn add_int_const(&mut self, n: i64) -> Result<u16, CompileError> {
+        if let Some(&idx) = self.const_int_map.get(&n) {
+            return Ok(idx);
+        }
+        let idx = self.check_const_limit()?;
         self.constants.push(Constant::Int(n));
         self.const_int_map.insert(n, idx);
-        idx
+        Ok(idx)
     }
 
     fn add_regex_const(&mut self, pattern: &str) -> Result<u16, CompileError> {
+        // Deduplicate: check if this regex pattern already exists
+        for (i, c) in self.constants.iter().enumerate() {
+            if let Constant::Regex(existing) = c {
+                if existing == pattern {
+                    return Ok(i as u16);
+                }
+            }
+        }
         // Validate regex at compile time
         regex::Regex::new(pattern)
             .map_err(|e| CompileError::new(format!("invalid regex '{}': {}", pattern, e)))?;
-        let idx = self.constants.len() as u16;
+        let idx = self.check_const_limit()?;
         self.constants.push(Constant::Regex(pattern.to_string()));
         Ok(idx)
     }
 
     // ==================== Locals ====================
 
-    fn declare_local(&mut self, name: &str, mutable: bool) -> u16 {
+    fn declare_local(&mut self, name: &str, mutable: bool) -> Result<u16, CompileError> {
+        if self.next_slot == u16::MAX {
+            return Err(CompileError::new("too many local variables (max 65534)"));
+        }
         let slot = self.next_slot;
         self.next_slot += 1;
         self.locals.push(Local {
@@ -142,11 +162,27 @@ impl Compiler {
             mutable,
             depth: self.scope_depth,
         });
-        slot
+        Ok(slot)
     }
 
     fn resolve_local(&self, name: &str) -> Option<&Local> {
         self.locals.iter().rev().find(|l| l.name == name)
+    }
+
+    fn enter_scope(&mut self) {
+        self.scope_depth += 1;
+    }
+
+    fn leave_scope(&mut self) {
+        debug_assert!(self.scope_depth > 0, "leave_scope called at depth 0");
+        // Pop locals declared in the current scope
+        while let Some(local) = self.locals.last() {
+            if local.depth < self.scope_depth {
+                break;
+            }
+            self.locals.pop();
+        }
+        self.scope_depth = self.scope_depth.saturating_sub(1);
     }
 
     // ==================== Statement Compilation ====================
@@ -158,8 +194,15 @@ impl Compiler {
                 mutable,
                 value,
             } => {
+                // Prevent shadowing built-in namespaces
+                if matches!(name.as_str(), "req" | "resp" | "ctx") {
+                    return Err(CompileError::new(format!(
+                        "'{}' is a built-in namespace and cannot be used as a variable name",
+                        name
+                    )));
+                }
                 self.compile_expr(value)?;
-                let slot = self.declare_local(name, *mutable);
+                let slot = self.declare_local(name, *mutable)?;
                 self.emit(OpCode::SetLocal(slot));
             }
 
@@ -242,9 +285,11 @@ impl Compiler {
             self.compile_expr(condition)?;
             let false_jump = self.emit(OpCode::JumpIfFalse(0)); // placeholder
 
+            self.enter_scope();
             for stmt in body {
                 self.compile_stmt(stmt)?;
             }
+            self.leave_scope();
 
             // Jump to end after body (skip remaining branches)
             if i < branches.len() - 1 || else_body.is_some() {
@@ -256,9 +301,11 @@ impl Compiler {
         }
 
         if let Some(else_stmts) = else_body {
+            self.enter_scope();
             for stmt in else_stmts {
                 self.compile_stmt(stmt)?;
             }
+            self.leave_scope();
         }
 
         // Patch all end jumps
@@ -276,33 +323,47 @@ impl Compiler {
         end: &Expr,
         body: &[Stmt],
     ) -> Result<(), CompileError> {
+        if matches!(var_name, "req" | "resp" | "ctx") {
+            return Err(CompileError::new(format!(
+                "'{}' is a built-in namespace and cannot be used as a loop variable",
+                var_name
+            )));
+        }
+        self.enter_scope();
         self.loop_depth += 1;
         if self.loop_depth > self.max_loop_depth {
             self.max_loop_depth = self.loop_depth;
         }
 
-        // Initialize: i = start
+        // Evaluate end expression ONCE before the loop and store in a local
+        self.compile_expr(end)?;
+        let end_slot = self.declare_local("__range_end__", false)?;
+        self.emit(OpCode::SetLocal(end_slot));
+
+        // Initialize: i = start (immutable to user, compiler manages increment)
         self.compile_expr(start)?;
-        let var_slot = self.declare_local(var_name, true);
+        let var_slot = self.declare_local(var_name, false)?;
         self.emit(OpCode::SetLocal(var_slot));
         self.emit(OpCode::LoopInit);
 
         let loop_start = self.current_offset();
 
-        // Condition: i < end
+        // Condition: i < end (using cached end value)
         self.emit(OpCode::GetLocal(var_slot));
-        self.compile_expr(end)?;
+        self.emit(OpCode::GetLocal(end_slot));
         self.emit(OpCode::Less);
         let exit_jump = self.emit(OpCode::JumpIfFalse(0));
 
         // Body
+        self.enter_scope();
         for stmt in body {
             self.compile_stmt(stmt)?;
         }
+        self.leave_scope();
 
         // Increment: i = i + 1
         self.emit(OpCode::GetLocal(var_slot));
-        let one = self.add_int_const(1);
+        let one = self.add_int_const(1)?;
         self.emit(OpCode::LoadConst(one));
         self.emit(OpCode::Add);
         self.emit(OpCode::SetLocal(var_slot));
@@ -312,7 +373,9 @@ impl Compiler {
         self.emit(OpCode::LoopBack(back_offset));
 
         self.patch_jump(exit_jump);
+        self.emit(OpCode::LoopEnd);
         self.loop_depth -= 1;
+        self.leave_scope();
 
         Ok(())
     }
@@ -323,6 +386,13 @@ impl Compiler {
         iterable: &Expr,
         body: &[Stmt],
     ) -> Result<(), CompileError> {
+        if matches!(var_name, "req" | "resp" | "ctx") {
+            return Err(CompileError::new(format!(
+                "'{}' is a built-in namespace and cannot be used as a loop variable",
+                var_name
+            )));
+        }
+        self.enter_scope();
         self.loop_depth += 1;
         if self.loop_depth > self.max_loop_depth {
             self.max_loop_depth = self.loop_depth;
@@ -330,13 +400,13 @@ impl Compiler {
 
         // Evaluate iterable → list
         self.compile_expr(iterable)?;
-        let list_slot = self.declare_local("__list__", false);
+        let list_slot = self.declare_local("__list__", false)?;
         self.emit(OpCode::SetLocal(list_slot));
 
         // index = 0
-        let zero = self.add_int_const(0);
+        let zero = self.add_int_const(0)?;
         self.emit(OpCode::LoadConst(zero));
-        let idx_slot = self.declare_local("__idx__", true);
+        let idx_slot = self.declare_local("__idx__", true)?;
         self.emit(OpCode::SetLocal(idx_slot));
         self.emit(OpCode::LoopInit);
 
@@ -353,17 +423,19 @@ impl Compiler {
         self.emit(OpCode::GetLocal(list_slot));
         self.emit(OpCode::GetLocal(idx_slot));
         self.emit(OpCode::ListGet);
-        let var_slot = self.declare_local(var_name, false);
+        let var_slot = self.declare_local(var_name, false)?;
         self.emit(OpCode::SetLocal(var_slot));
 
         // Body
+        self.enter_scope();
         for stmt in body {
             self.compile_stmt(stmt)?;
         }
+        self.leave_scope();
 
         // Increment: idx = idx + 1
         self.emit(OpCode::GetLocal(idx_slot));
-        let one = self.add_int_const(1);
+        let one = self.add_int_const(1)?;
         self.emit(OpCode::LoadConst(one));
         self.emit(OpCode::Add);
         self.emit(OpCode::SetLocal(idx_slot));
@@ -373,7 +445,9 @@ impl Compiler {
         self.emit(OpCode::LoopBack(back_offset));
 
         self.patch_jump(exit_jump);
+        self.emit(OpCode::LoopEnd);
         self.loop_depth -= 1;
+        self.leave_scope();
 
         Ok(())
     }
@@ -383,6 +457,7 @@ impl Compiler {
         condition: &Expr,
         body: &[Stmt],
     ) -> Result<(), CompileError> {
+        self.enter_scope();
         self.loop_depth += 1;
         if self.loop_depth > self.max_loop_depth {
             self.max_loop_depth = self.loop_depth;
@@ -394,15 +469,19 @@ impl Compiler {
         self.compile_expr(condition)?;
         let exit_jump = self.emit(OpCode::JumpIfFalse(0));
 
+        self.enter_scope();
         for stmt in body {
             self.compile_stmt(stmt)?;
         }
+        self.leave_scope();
 
         let back_offset = loop_start as i32 - (self.current_offset() as i32 + 1);
         self.emit(OpCode::LoopBack(back_offset));
 
         self.patch_jump(exit_jump);
+        self.emit(OpCode::LoopEnd);
         self.loop_depth -= 1;
+        self.leave_scope();
 
         Ok(())
     }
@@ -412,12 +491,12 @@ impl Compiler {
     fn compile_expr(&mut self, expr: &Expr) -> Result<(), CompileError> {
         match &expr.kind {
             ExprKind::StringLit(s) => {
-                let idx = self.add_str_const(s);
+                let idx = self.add_str_const(s)?;
                 self.emit(OpCode::LoadConst(idx));
             }
 
             ExprKind::IntLit(n) => {
-                let idx = self.add_int_const(*n);
+                let idx = self.add_int_const(*n)?;
                 self.emit(OpCode::LoadConst(idx));
             }
 
@@ -486,7 +565,12 @@ impl Compiler {
                             BinOp::Gt => OpCode::Greater,
                             BinOp::Le => OpCode::LessEqual,
                             BinOp::Ge => OpCode::GreaterEqual,
-                            _ => unreachable!(),
+                            // And/Or are handled in dedicated arms above
+                            BinOp::And | BinOp::Or => {
+                                return Err(CompileError::new(
+                                    "internal error: And/Or should be handled above",
+                                ));
+                            }
                         };
                         self.emit(opcode);
                     }
@@ -534,6 +618,14 @@ impl Compiler {
         // Check if object is a namespace (req, resp, ctx)
         if let ExprKind::Ident(namespace) = &object.kind {
             if let Some(builtin_id) = resolve_namespace_method(namespace, method) {
+                // Validate argument count at compile time
+                let expected = builtin_expected_argc(&builtin_id);
+                if args.len() != expected {
+                    return Err(CompileError::new(format!(
+                        "{}.{}() expects {} argument(s), got {}",
+                        namespace, method, expected, args.len()
+                    )));
+                }
                 // Compile arguments onto stack
                 for arg in args {
                     self.compile_expr(arg)?;
@@ -597,23 +689,24 @@ impl Compiler {
     }
 
     fn compile_fn_call(&mut self, name: &str, args: &[Expr]) -> Result<(), CompileError> {
-        let builtin_id = match name {
-            "log" => BuiltinId::Log,
-            "len" => BuiltinId::Len,
-            "substr" => BuiltinId::Substr,
-            "to_int" => BuiltinId::ToInt,
-            "to_str" => BuiltinId::ToStr,
-            "to_upper" => BuiltinId::ToUpper,
-            "to_lower" => BuiltinId::ToLower,
-            "base64_encode" => BuiltinId::Base64Encode,
-            "base64_decode" => BuiltinId::Base64Decode,
-            "url_encode" => BuiltinId::UrlEncode,
-            "url_decode" => BuiltinId::UrlDecode,
-            "sha256" => BuiltinId::Sha256,
-            "md5" => BuiltinId::Md5,
-            "time_now" => BuiltinId::TimeNow,
-            "regex_find" => BuiltinId::RegexFind,
-            "regex_replace" => BuiltinId::RegexReplace,
+        // (builtin_id, expected_argc) — None means variadic / no check
+        let (builtin_id, expected_argc): (BuiltinId, Option<usize>) = match name {
+            "log" => (BuiltinId::Log, Some(1)),
+            "len" => (BuiltinId::Len, Some(1)),
+            "substr" => (BuiltinId::Substr, Some(3)),
+            "to_int" => (BuiltinId::ToInt, Some(1)),
+            "to_str" => (BuiltinId::ToStr, Some(1)),
+            "to_upper" => (BuiltinId::ToUpper, Some(1)),
+            "to_lower" => (BuiltinId::ToLower, Some(1)),
+            "base64_encode" => (BuiltinId::Base64Encode, Some(1)),
+            "base64_decode" => (BuiltinId::Base64Decode, Some(1)),
+            "url_encode" => (BuiltinId::UrlEncode, Some(1)),
+            "url_decode" => (BuiltinId::UrlDecode, Some(1)),
+            "sha256" => (BuiltinId::Sha256, Some(1)),
+            "md5" => (BuiltinId::Md5, Some(1)),
+            "time_now" => (BuiltinId::TimeNow, Some(0)),
+            "regex_find" => (BuiltinId::RegexFind, Some(2)),
+            "regex_replace" => (BuiltinId::RegexReplace, Some(3)),
             _ => {
                 return Err(CompileError::new(format!(
                     "unknown function: {}()",
@@ -621,6 +714,16 @@ impl Compiler {
                 )));
             }
         };
+
+        // Validate argument count at compile time
+        if let Some(expected) = expected_argc {
+            if args.len() != expected {
+                return Err(CompileError::new(format!(
+                    "{}() expects {} argument(s), got {}",
+                    name, expected, args.len()
+                )));
+            }
+        }
 
         for arg in args {
             self.compile_expr(arg)?;
@@ -669,6 +772,57 @@ fn resolve_namespace_method(namespace: &str, method: &str) -> Option<BuiltinId> 
         ("ctx", "remove") => Some(BuiltinId::CtxRemove),
 
         _ => None,
+    }
+}
+
+/// Expected argument count for each builtin — used for compile-time validation.
+pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
+    match id {
+        // req.* read — 0-arg (field access)
+        BuiltinId::ReqMethod
+        | BuiltinId::ReqPath
+        | BuiltinId::ReqQueryString
+        | BuiltinId::ReqClientIp
+        | BuiltinId::ReqRemoteIp
+        | BuiltinId::ReqHeaderNames
+        | BuiltinId::ReqScheme
+        | BuiltinId::ReqHost
+        | BuiltinId::ReqUri
+        | BuiltinId::ReqContentType => 0,
+
+        // req.* read — 1-arg
+        BuiltinId::ReqHeader
+        | BuiltinId::ReqQuery
+        | BuiltinId::ReqCookie
+        | BuiltinId::ReqPathParam
+        | BuiltinId::ReqHasHeader
+        | BuiltinId::ReqRemoveHeader
+        | BuiltinId::ReqSetUri
+        | BuiltinId::ReqSetHost
+        | BuiltinId::ReqSetMethod => 1,
+
+        // req.* mutation — 2-arg
+        BuiltinId::ReqSetHeader | BuiltinId::ReqAppendHeader => 2,
+
+        // resp.* — 1-arg
+        BuiltinId::RespRemoveHeader => 1,
+        // resp.* — 2-arg
+        BuiltinId::RespSetHeader | BuiltinId::RespAppendHeader => 2,
+
+        // ctx.*
+        BuiltinId::CtxGet | BuiltinId::CtxRemove => 1,
+        BuiltinId::CtxSet => 2,
+
+        // Utilities
+        BuiltinId::Log | BuiltinId::Len | BuiltinId::ToStr | BuiltinId::ToInt
+        | BuiltinId::ToUpper | BuiltinId::ToLower
+        | BuiltinId::Base64Encode | BuiltinId::Base64Decode
+        | BuiltinId::UrlEncode | BuiltinId::UrlDecode
+        | BuiltinId::Sha256 | BuiltinId::Md5 => 1,
+        BuiltinId::Substr | BuiltinId::RegexReplace => 3,
+        BuiltinId::TimeNow => 0,
+        BuiltinId::RegexFind => 2,
+        BuiltinId::Range => 2,
     }
 }
 

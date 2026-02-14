@@ -423,7 +423,7 @@ impl PluginRuntime {
             EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicInternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicExternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::Dsl(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::Dsl(config) => config.get_validation_error_owned(),
             _ => None,
         }
     }

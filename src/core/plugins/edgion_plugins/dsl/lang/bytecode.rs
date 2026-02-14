@@ -69,6 +69,8 @@ pub enum OpCode {
     LoopBack(i32),
     /// Initialize loop counter for current nesting level
     LoopInit,
+    /// Clean up loop counter at end of loop
+    LoopEnd,
 
     // ===== List Operations (internal, for for-in) =====
     /// Pop (list, index), push list[index]

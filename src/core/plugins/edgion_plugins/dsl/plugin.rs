@@ -11,7 +11,7 @@ use crate::types::filters::PluginRunningResult;
 
 use super::config::DslConfig;
 use super::lang::bytecode::CompiledScript;
-use super::lang::validator::{ValidationLimits, compile_dsl_source};
+use super::lang::validator::{ValidationLimits, Validator, compile_dsl_source};
 use super::lang::vm::{DslErrorPolicy, Vm, VmLimits, execute_safe};
 
 /// DslPlugin — runs a pre-compiled DSL script per request
@@ -45,11 +45,27 @@ impl DslPlugin {
     fn resolve_script(config: &DslConfig) -> Result<CompiledScript, String> {
         // 1. Pre-compiled bytecode takes priority
         if let Some(bytecode_str) = &config.bytecode {
-            return CompiledScript::deserialize_base64(bytecode_str)
-                .map_err(|e| format!("bytecode deserialization failed: {}", e));
+            let script = CompiledScript::deserialize_base64(bytecode_str)
+                .map_err(|e| format!("bytecode deserialization failed: {}", e))?;
+
+            // Validate pre-compiled bytecode to prevent malicious payloads
+            let validator = Validator::new(ValidationLimits::default());
+            let errors = validator.validate(&script);
+            if !errors.is_empty() {
+                let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+                return Err(format!("bytecode validation failed: {}", msgs.join("; ")));
+            }
+
+            return Ok(script);
         }
 
-        // 2. Compile from source code
+        // 2. Use cached bytecode from validation phase (avoids double compilation)
+        if let Some(cached_b64) = config.take_compiled_bytecode() {
+            return CompiledScript::deserialize_base64(&cached_b64)
+                .map_err(|e| format!("cached bytecode deserialization failed: {}", e));
+        }
+
+        // 3. Compile from source code (fallback if cache was not populated)
         if let Some(source) = &config.source {
             let bytecode_b64 = compile_dsl_source(source, &ValidationLimits::default())
                 .map_err(|errs| format!("DSL compile errors: {}", errs.join("; ")))?;
@@ -74,11 +90,18 @@ impl DslPlugin {
             max_steps: config.max_steps.unwrap_or(10_000),
             max_loop_iterations: config.max_loop_iterations.unwrap_or(100),
             max_call_count: config.max_call_count.unwrap_or(500),
-            ..VmLimits::default()
+            max_stack_depth: config.max_stack_depth.unwrap_or(128),
+            max_string_len: config.max_string_len.unwrap_or(8192),
         };
 
         let policy = config.error_policy.clone().unwrap_or_default();
-        let plugin = DslPlugin::new(config.name.clone(), script, limits, policy).ok()?;
+        let plugin = match DslPlugin::new(config.name.clone(), script, limits, policy) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("DSL plugin '{}' VM init failed: {}", config.name, e);
+                return None;
+            }
+        };
         Some(Box::new(plugin))
     }
 }

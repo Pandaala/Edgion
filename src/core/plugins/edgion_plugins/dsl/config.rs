@@ -1,5 +1,7 @@
 //! Configuration for EdgionDSL plugin
 
+use std::sync::Mutex;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +27,7 @@ use super::lang::vm::DslErrorPolicy;
 ///   maxSteps: 10000
 ///   errorPolicy: deny
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DslConfig {
     /// Script name (for logging and identification)
@@ -53,6 +55,14 @@ pub struct DslConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_call_count: Option<u32>,
 
+    /// Max value stack depth (default: 128)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_stack_depth: Option<usize>,
+
+    /// Max string length from concatenation (default: 8192)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_string_len: Option<usize>,
+
     /// Error handling policy (default: ignore = fail-open)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_policy: Option<DslErrorPolicy>,
@@ -61,6 +71,13 @@ pub struct DslConfig {
     #[serde(skip)]
     #[schemars(skip)]
     pub validation_error: Option<String>,
+
+    /// Cached compiled bytecode (base64) from validation phase.
+    /// Avoids double compilation: validate_source_compilation() compiles once,
+    /// plugin.rs::resolve_script() reuses this cache.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) compiled_bytecode_cache: Mutex<Option<String>>,
 }
 
 impl Default for DslConfig {
@@ -72,24 +89,41 @@ impl Default for DslConfig {
             max_steps: None,
             max_loop_iterations: None,
             max_call_count: None,
+            max_stack_depth: None,
+            max_string_len: None,
             error_policy: None,
             validation_error: None,
+            compiled_bytecode_cache: Mutex::new(None),
+        }
+    }
+}
+
+impl Clone for DslConfig {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            source: self.source.clone(),
+            bytecode: self.bytecode.clone(),
+            max_steps: self.max_steps,
+            max_loop_iterations: self.max_loop_iterations,
+            max_call_count: self.max_call_count,
+            max_stack_depth: self.max_stack_depth,
+            max_string_len: self.max_string_len,
+            error_policy: self.error_policy.clone(),
+            validation_error: self.validation_error.clone(),
+            // Cache is not cloned — re-compilation will happen if needed
+            compiled_bytecode_cache: Mutex::new(None),
         }
     }
 }
 
 impl DslConfig {
-    /// Return validation error if config is invalid.
-    /// Called during preparse for status reporting.
-    ///
-    /// This performs both structural validation (required fields, limits)
-    /// and DSL compilation validation (parse + compile + bytecode checks).
+    /// Return validation error if config is invalid (structural checks only).
+    /// For other plugins that call this with `Option<&str>` convention.
     pub fn get_validation_error(&self) -> Option<&str> {
-        // Check cached validation error first
         if let Some(ref err) = self.validation_error {
             return Some(err.as_str());
         }
-
         if self.name.is_empty() {
             return Some("dsl plugin name is required");
         }
@@ -111,18 +145,63 @@ impl DslConfig {
                 return Some("maxCallCount must be between 1 and 100000");
             }
         }
+        if let Some(depth) = self.max_stack_depth {
+            if depth == 0 || depth > 1024 {
+                return Some("maxStackDepth must be between 1 and 1024");
+            }
+        }
+        if let Some(len) = self.max_string_len {
+            if len == 0 || len > 1_048_576 {
+                return Some("maxStringLen must be between 1 and 1048576");
+            }
+        }
+        // Validate DenyWith status range
+        if let Some(DslErrorPolicy::DenyWith { status, .. }) = &self.error_policy {
+            if *status < 100 || *status > 599 {
+                return Some("errorPolicy denyWith status must be between 100 and 599");
+            }
+        }
+        None
+    }
+
+    /// Return validation error as an owned String.
+    /// This performs structural validation AND source compilation validation.
+    /// Called from runtime.rs for DSL plugins specifically.
+    pub fn get_validation_error_owned(&self) -> Option<String> {
+        // Structural checks first (reuse the static method)
+        if let Some(err) = self.get_validation_error() {
+            return Some(err.to_string());
+        }
+        // Validate source compilation (dynamic error)
+        if let Some(err) = self.validate_source_compilation() {
+            return Some(err);
+        }
         None
     }
 
     /// Validate that the source code compiles successfully.
+    /// On success, caches compiled bytecode for later use.
     /// Returns error description or None if valid.
-    /// Used for deeper validation beyond structural checks.
     pub fn validate_source_compilation(&self) -> Option<String> {
         if let Some(source) = &self.source {
-            if let Err(errs) = compile_dsl_source(source, &ValidationLimits::default()) {
-                return Some(format!("DSL compile errors: {}", errs.join("; ")));
+            match compile_dsl_source(source, &ValidationLimits::default()) {
+                Err(errs) => {
+                    return Some(format!("DSL compile errors: {}", errs.join("; ")));
+                }
+                Ok(bytecode_b64) => {
+                    // Cache compiled bytecode to avoid double compilation
+                    if let Ok(mut cache) = self.compiled_bytecode_cache.lock() {
+                        *cache = Some(bytecode_b64);
+                    }
+                }
             }
         }
         None
+    }
+
+    /// Take the cached compiled bytecode (if any).
+    /// Returns and clears the cache.
+    pub(crate) fn take_compiled_bytecode(&self) -> Option<String> {
+        self.compiled_bytecode_cache.lock().ok()?.take()
     }
 }

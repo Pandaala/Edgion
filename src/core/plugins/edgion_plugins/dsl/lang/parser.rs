@@ -113,7 +113,7 @@ pub fn parse_program(source: &str) -> Result<Program, ParseError> {
     input = skip_ws_comments(input);
 
     while !input.is_empty() {
-        ctx.tick().map_err(|e| e)?;
+        ctx.tick()?;
         let (rest, stmt) = parse_stmt(input, &mut ctx).map_err(|e| match e {
             nom::Err::Error(e) | nom::Err::Failure(e) => e,
             nom::Err::Incomplete(_) => ParseError::new("unexpected end of input"),
@@ -123,6 +123,29 @@ pub fn parse_program(source: &str) -> Result<Program, ParseError> {
     }
 
     Ok(Program { stmts })
+}
+
+// ==================== Keyword Helpers ====================
+
+/// Reserved keywords that cannot be used as variable names
+const RESERVED_KEYWORDS: &[&str] = &[
+    "let", "mut", "if", "else", "for", "while", "in", "return", "true", "false", "nil",
+];
+
+/// Check if `name` is a reserved keyword
+fn is_reserved_keyword(name: &str) -> bool {
+    RESERVED_KEYWORDS.contains(&name)
+}
+
+/// Check if input starts with a keyword followed by whitespace (space, tab, newline)
+/// or a specific delimiter like '(' for if/while.
+fn starts_with_keyword(input: &str, keyword: &str) -> bool {
+    if !input.starts_with(keyword) {
+        return false;
+    }
+    let rest = &input[keyword.len()..];
+    // Must be followed by whitespace or end of input
+    rest.is_empty() || rest.starts_with(|c: char| c.is_ascii_whitespace())
 }
 
 // ==================== Whitespace & Comments ====================
@@ -156,15 +179,15 @@ fn parse_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, 
 
     let input = ws(input);
 
-    if input.starts_with("let ") {
+    if starts_with_keyword(input, "let") {
         parse_let_stmt(input, ctx)
-    } else if input.starts_with("if ") || input.starts_with("if(") {
+    } else if starts_with_keyword(input, "if") || input.starts_with("if(") {
         parse_if_stmt(input, ctx)
-    } else if input.starts_with("for ") {
+    } else if starts_with_keyword(input, "for") {
         parse_for_stmt(input, ctx)
-    } else if input.starts_with("while ") || input.starts_with("while(") {
+    } else if starts_with_keyword(input, "while") || input.starts_with("while(") {
         parse_while_stmt(input, ctx)
-    } else if input.starts_with("return ") {
+    } else if starts_with_keyword(input, "return") {
         parse_return_stmt(input, ctx)
     } else {
         // Try assignment or expression statement
@@ -176,12 +199,11 @@ fn parse_let_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
     ctx.add_node()
         .map_err(|e| nom::Err::Failure(e))?;
 
-    let input = &input[4..]; // skip "let "
-    let input = ws(input);
+    let input = ws(&input[3..]); // skip "let" + whitespace
 
     // Check for "mut"
-    let (input, mutable) = if input.starts_with("mut ") {
-        (&input[4..], true)
+    let (input, mutable) = if starts_with_keyword(input, "mut") {
+        (ws(&input[3..]), true)
     } else {
         (input, false)
     };
@@ -190,10 +212,16 @@ fn parse_let_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
     // Parse variable name
     let (input, name) = parse_identifier(input)
         .map_err(|_| nom::Err::Failure(ParseError::new("expected variable name after 'let'")))?;
+    if is_reserved_keyword(name) {
+        return Err(nom::Err::Failure(ParseError::new(format!(
+            "'{}' is a reserved keyword and cannot be used as a variable name",
+            name
+        ))));
+    }
     let input = ws(input);
 
-    // Expect '='
-    if !input.starts_with('=') {
+    // Expect '=' but not '=='
+    if !input.starts_with('=') || input.starts_with("==") {
         return Err(nom::Err::Failure(ParseError::new(
             "expected '=' after variable name in let statement",
         )));
@@ -242,8 +270,12 @@ fn parse_if_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stm
     // Parse "else if" and "else" chains
     let mut else_body = None;
     loop {
-        if current_input.starts_with("else if ") || current_input.starts_with("else if(") {
-            current_input = &current_input[7..]; // skip "else if"
+        if starts_with_keyword(current_input, "else") && {
+            let after_else = ws(&current_input[4..]);
+            starts_with_keyword(after_else, "if") || after_else.starts_with("if(")
+        } {
+            current_input = ws(&current_input[4..]); // skip "else", then ws
+            current_input = &current_input[2..]; // skip "if"
             let trimmed = ws(current_input);
 
             let (rest, condition) = parse_expr(trimmed, ctx)?;
@@ -257,7 +289,9 @@ fn parse_if_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stm
             let (rest, body) = parse_block(&rest[1..], ctx)?;
             branches.push((condition, body));
             current_input = ws(rest);
-        } else if current_input.starts_with("else") && current_input[4..].trim_start().starts_with('{') {
+        } else if (starts_with_keyword(current_input, "else") || current_input.starts_with("else{"))
+            && current_input[4..].trim_start().starts_with('{')
+        {
             current_input = current_input[4..].trim_start();
             let (rest, body) = parse_block(&current_input[1..], ctx)?;
             else_body = Some(body);
@@ -284,16 +318,22 @@ fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
     ctx.enter_nesting()
         .map_err(|e| nom::Err::Failure(e))?;
 
-    let input = &input[4..]; // skip "for "
-    let input = ws(input);
+    let input = ws(&input[3..]); // skip "for" + whitespace
 
     // Parse loop variable name
     let (input, var_name) = parse_identifier(input)
         .map_err(|_| nom::Err::Failure(ParseError::new("expected variable name after 'for'")))?;
+    if is_reserved_keyword(var_name) {
+        ctx.leave_nesting();
+        return Err(nom::Err::Failure(ParseError::new(format!(
+            "'{}' is a reserved keyword and cannot be used as a loop variable",
+            var_name
+        ))));
+    }
     let input = ws(input);
 
     // Expect "in"
-    if !input.starts_with("in ") && !input.starts_with("in\t") {
+    if !starts_with_keyword(input, "in") {
         ctx.leave_nesting();
         return Err(nom::Err::Failure(ParseError::new(
             "expected 'in' after for variable",
@@ -376,8 +416,7 @@ fn parse_while_stmt<'a>(
     ctx.enter_nesting()
         .map_err(|e| nom::Err::Failure(e))?;
 
-    let input = &input[5..]; // skip "while"
-    let input = ws(input);
+    let input = ws(&input[5..]); // skip "while" + whitespace
 
     let (input, condition) = parse_expr(input, ctx)?;
     let input = ws(input);
@@ -399,8 +438,7 @@ fn parse_return_stmt<'a>(
     ctx.add_node()
         .map_err(|e| nom::Err::Failure(e))?;
 
-    let input = &input[7..]; // skip "return "
-    let input = ws(input);
+    let input = ws(&input[6..]); // skip "return" + whitespace
 
     if input.starts_with("next()") || input.starts_with("next ()") {
         let skip = if input.starts_with("next()") {
@@ -465,6 +503,10 @@ fn parse_assign_or_expr_stmt<'a>(
                 }),
             ));
         }
+        // Non-identifier left-hand side in assignment
+        return Err(nom::Err::Failure(ParseError::new(
+            "cannot assign to this expression; only simple variable names can be assigned",
+        )));
     }
 
     Ok((rest, Stmt::new(StmtKind::ExprStmt { expr })))
@@ -577,11 +619,13 @@ fn parse_unary_or_atom<'a>(
         ));
     }
 
-    // Unary - (negative)
-    if input.starts_with('-') && !input[1..].starts_with(|c: char| c == '>' || c == '-') {
-        // Make sure it's not part of `->` or `--`
-        // Also check if this is really a unary minus (not binary)
-        if input.len() > 1 && (input.as_bytes()[1].is_ascii_digit() || input.as_bytes()[1] == b'(') {
+    // Unary - (negative): supports -42, -x, -(expr), -func()
+    if input.starts_with('-') && input.len() > 1
+        && !input[1..].starts_with(|c: char| c == '>' || c == '-')
+    {
+        let next = input.as_bytes()[1];
+        // Accept digits, '(', identifiers (alpha/underscore)
+        if next.is_ascii_digit() || next == b'(' || next.is_ascii_alphabetic() || next == b'_' {
             ctx.add_node()
                 .map_err(|e| nom::Err::Failure(e))?;
             let (rest, operand) = parse_unary_or_atom(&input[1..], ctx)?;

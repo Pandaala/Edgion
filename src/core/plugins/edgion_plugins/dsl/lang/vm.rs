@@ -170,7 +170,7 @@ impl VmState {
 pub struct Vm {
     script: CompiledScript,
     regex_cache: Vec<Option<regex::Regex>>,
-    limits: VmLimits,
+    pub(crate) limits: VmLimits,
 }
 
 impl Vm {
@@ -218,7 +218,11 @@ impl Vm {
             match opcode {
                 // ===== Stack Operations =====
                 OpCode::LoadConst(idx) => {
-                    let value = match &self.script.constants[idx as usize] {
+                    let constant = self.script.constants.get(idx as usize)
+                        .ok_or_else(|| RuntimeError::Internal {
+                            message: format!("constant index {} out of bounds (pool size: {})", idx, self.script.constants.len()),
+                        })?;
+                    let value = match constant {
                         Constant::Str(s) => Value::Str(s.clone()),
                         Constant::Int(n) => Value::Int(*n),
                         Constant::Regex(_) => Value::Nil, // regex itself is not a value
@@ -241,6 +245,10 @@ impl Vm {
                     let val = state.pop()?;
                     if (slot as usize) < state.locals.len() {
                         state.locals[slot as usize] = val;
+                    } else {
+                        return Err(RuntimeError::Internal {
+                            message: format!("SetLocal slot {} out of bounds (locals size: {})", slot, state.locals.len()),
+                        });
                     }
                 }
 
@@ -270,6 +278,17 @@ impl Vm {
                                 });
                             }
                             Value::Str(format!("{}{}", a, b_str))
+                        }
+                        (_, Value::Str(b)) => {
+                            let a_str = a.into_string();
+                            let new_len = a_str.len() + b.len();
+                            if new_len > self.limits.max_string_len {
+                                return Err(RuntimeError::StringTooLong {
+                                    len: new_len,
+                                    limit: self.limits.max_string_len,
+                                });
+                            }
+                            Value::Str(format!("{}{}", a_str, b))
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
@@ -321,7 +340,11 @@ impl Vm {
                             return Err(RuntimeError::DivisionByZero);
                         }
                         (Value::Int(a), Value::Int(b)) => {
-                            state.push(Value::Int(a / b), self.limits.max_stack_depth)?;
+                            // Protect against i64::MIN / -1 overflow
+                            let result = a.checked_div(*b).ok_or(RuntimeError::Internal {
+                                message: "integer division overflow".into(),
+                            })?;
+                            state.push(Value::Int(result), self.limits.max_stack_depth)?;
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
@@ -335,7 +358,10 @@ impl Vm {
                 OpCode::Neg => {
                     let v = state.pop()?;
                     match v {
-                        Value::Int(n) => state.push(Value::Int(-n), self.limits.max_stack_depth)?,
+                        Value::Int(n) => {
+                            // Protect against -i64::MIN overflow
+                            state.push(Value::Int(n.wrapping_neg()), self.limits.max_stack_depth)?;
+                        }
                         _ => {
                             return Err(RuntimeError::TypeError {
                                 expected: "Int",
@@ -449,12 +475,24 @@ impl Vm {
 
                 // ===== Control Flow =====
                 OpCode::Jump(offset) => {
-                    state.pc = (state.pc as i32 + offset) as usize;
+                    let target = state.pc as i64 + offset as i64;
+                    if target < 0 || target as usize > self.script.code.len() {
+                        return Err(RuntimeError::Internal {
+                            message: format!("Jump target {} out of bounds (code length: {})", target, self.script.code.len()),
+                        });
+                    }
+                    state.pc = target as usize;
                 }
                 OpCode::JumpIfFalse(offset) => {
                     let v = state.pop()?;
                     if !v.is_truthy() {
-                        state.pc = (state.pc as i32 + offset) as usize;
+                        let target = state.pc as i64 + offset as i64;
+                        if target < 0 || target as usize > self.script.code.len() {
+                            return Err(RuntimeError::Internal {
+                                message: format!("JumpIfFalse target {} out of bounds (code length: {})", target, self.script.code.len()),
+                            });
+                        }
+                        state.pc = target as usize;
                     }
                 }
                 OpCode::LoopInit => {
@@ -468,8 +506,22 @@ impl Vm {
                                 limit: self.limits.max_loop_iterations,
                             });
                         }
+                    } else {
+                        return Err(RuntimeError::Internal {
+                            message: "LoopBack without matching LoopInit".into(),
+                        });
                     }
-                    state.pc = (state.pc as i32 + offset) as usize;
+                    let target = state.pc as i64 + offset as i64;
+                    if target < 0 || target as usize > self.script.code.len() {
+                        return Err(RuntimeError::Internal {
+                            message: format!("LoopBack target {} out of bounds (code length: {})", target, self.script.code.len()),
+                        });
+                    }
+                    state.pc = target as usize;
+                }
+                OpCode::LoopEnd => {
+                    // Clean up the loop counter pushed by LoopInit
+                    state.loop_counters.pop();
                 }
 
                 // ===== List Operations =====
@@ -486,7 +538,11 @@ impl Vm {
                     let list = state.pop()?;
                     let val = match (&list, &idx) {
                         (Value::List(l), Value::Int(i)) => {
-                            l.get(*i as usize).cloned().map(Value::Str).unwrap_or(Value::Nil)
+                            if *i < 0 {
+                                Value::Nil
+                            } else {
+                                l.get(*i as usize).cloned().map(Value::Str).unwrap_or(Value::Nil)
+                            }
                         }
                         _ => Value::Nil,
                     };
@@ -508,7 +564,15 @@ impl Vm {
                     let body = state.pop()?;
                     let status = state.pop()?;
                     let status_code = match &status {
-                        Value::Int(n) => *n as u16,
+                        Value::Int(n) => {
+                            let code = *n;
+                            if !(100..=599).contains(&code) {
+                                tracing::warn!("DSL deny status {} out of valid range, using 500", code);
+                                500u16
+                            } else {
+                                code as u16
+                            }
+                        }
                         _ => 500,
                     };
                     let body_str = match body {

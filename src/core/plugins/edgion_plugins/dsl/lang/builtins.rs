@@ -10,6 +10,18 @@ use super::error::RuntimeError;
 use super::value::Value;
 use super::vm::{Vm, VmState};
 
+/// Check that a string result doesn't exceed the VM's max_string_len limit.
+fn check_string_len(s: &str, limit: usize) -> Result<(), RuntimeError> {
+    if s.len() > limit {
+        Err(RuntimeError::StringTooLong {
+            len: s.len(),
+            limit,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 impl Vm {
     pub(crate) fn call_builtin(
         &self,
@@ -48,11 +60,25 @@ impl Vm {
                 Ok(Value::List(names))
             }
             BuiltinId::ReqScheme => {
-                // Use header_value as a fallback for scheme
-                Ok(Value::Str("http".to_string()))
+                // Detect scheme from common proxy headers, fallback to "http"
+                let scheme = session
+                    .header_value("X-Forwarded-Proto")
+                    .or_else(|| session.header_value("X-Scheme"))
+                    .unwrap_or_else(|| "http".to_string());
+                Ok(Value::Str(scheme))
             }
             BuiltinId::ReqHost => Ok(session.header_value("Host").into()),
-            BuiltinId::ReqUri => Ok(Value::Str(session.get_path().to_string())),
+            BuiltinId::ReqUri => {
+                let path = session.get_path().to_string();
+                match session.get_query() {
+                    Some(q) if !q.is_empty() => {
+                        let uri = format!("{}?{}", path, q);
+                        check_string_len(&uri, self.limits.max_string_len)?;
+                        Ok(Value::Str(uri))
+                    }
+                    _ => Ok(Value::Str(path)),
+                }
+            }
             BuiltinId::ReqContentType => Ok(session.header_value("Content-Type").into()),
             BuiltinId::ReqHasHeader => {
                 let name = state.pop()?.into_string();
@@ -193,7 +219,7 @@ impl Vm {
             BuiltinId::Len => {
                 let v = state.pop()?;
                 match &v {
-                    Value::Str(s) => Ok(Value::Int(s.len() as i64)),
+                    Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
                     Value::Nil => Ok(Value::Int(0)),
                     Value::List(l) => Ok(Value::Int(l.len() as i64)),
                     _ => Err(RuntimeError::TypeError {
@@ -204,15 +230,19 @@ impl Vm {
                 }
             }
             BuiltinId::Substr => {
-                let end = state.pop()?.as_int().unwrap_or(0) as usize;
-                let start = state.pop()?.as_int().unwrap_or(0) as usize;
+                let end = state.pop()?.as_int().unwrap_or(0).max(0) as usize;
+                let start = state.pop()?.as_int().unwrap_or(0).max(0) as usize;
                 let s = state.pop()?;
                 match &s {
                     Value::Str(s) => {
-                        let start = start.min(s.len());
-                        let end = end.min(s.len());
+                        // Use char_indices for UTF-8 safe slicing
+                        let char_count = s.chars().count();
+                        let start = start.min(char_count);
+                        let end = end.min(char_count);
                         if start <= end {
-                            Ok(Value::Str(s[start..end].to_string()))
+                            let byte_start = s.char_indices().nth(start).map(|(i, _)| i).unwrap_or(s.len());
+                            let byte_end = s.char_indices().nth(end).map(|(i, _)| i).unwrap_or(s.len());
+                            Ok(Value::Str(s[byte_start..byte_end].to_string()))
                         } else {
                             Ok(Value::Str(String::new()))
                         }
@@ -239,23 +269,32 @@ impl Vm {
             }
             BuiltinId::ToUpper => {
                 let s = state.pop()?.into_string();
-                Ok(Value::Str(s.to_uppercase()))
+                let result = s.to_uppercase();
+                check_string_len(&result, self.limits.max_string_len)?;
+                Ok(Value::Str(result))
             }
             BuiltinId::ToLower => {
                 let s = state.pop()?.into_string();
-                Ok(Value::Str(s.to_lowercase()))
+                let result = s.to_lowercase();
+                check_string_len(&result, self.limits.max_string_len)?;
+                Ok(Value::Str(result))
             }
             BuiltinId::Base64Encode => {
                 use base64::Engine;
                 let s = state.pop()?.into_string();
                 let encoded = base64::engine::general_purpose::STANDARD.encode(s.as_bytes());
+                check_string_len(&encoded, self.limits.max_string_len)?;
                 Ok(Value::Str(encoded))
             }
             BuiltinId::Base64Decode => {
                 use base64::Engine;
                 let s = state.pop()?.into_string();
                 match base64::engine::general_purpose::STANDARD.decode(s.as_bytes()) {
-                    Ok(bytes) => Ok(Value::Str(String::from_utf8_lossy(&bytes).to_string())),
+                    Ok(bytes) => {
+                        let decoded = String::from_utf8_lossy(&bytes).to_string();
+                        check_string_len(&decoded, self.limits.max_string_len)?;
+                        Ok(Value::Str(decoded))
+                    }
                     Err(_) => Ok(Value::Nil),
                 }
             }
@@ -266,8 +305,85 @@ impl Vm {
                     .unwrap_or(0);
                 Ok(Value::Int(now))
             }
-            // Remaining builtins — return Nil for now, implement as needed
-            _ => Ok(Value::Nil),
+            BuiltinId::UrlEncode => {
+                let s = state.pop()?.into_string();
+                let encoded: String = s.chars().map(|c| {
+                    if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
+                        c.to_string()
+                    } else {
+                        let mut buf = [0u8; 4];
+                        let bytes = c.encode_utf8(&mut buf);
+                        bytes.as_bytes().iter().map(|b| format!("%{:02X}", b)).collect()
+                    }
+                }).collect();
+                check_string_len(&encoded, self.limits.max_string_len)?;
+                Ok(Value::Str(encoded))
+            }
+            BuiltinId::UrlDecode => {
+                let s = state.pop()?.into_string();
+                let mut result = Vec::new();
+                let bytes = s.as_bytes();
+                let mut i = 0;
+                while i < bytes.len() {
+                    if bytes[i] == b'%' && i + 2 < bytes.len() {
+                        // Safe: only attempt hex parse on ASCII bytes
+                        let hi = bytes[i + 1];
+                        let lo = bytes[i + 2];
+                        if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() {
+                            // Both bytes are ASCII, safe to use from_str_radix on the str slice
+                            if let Ok(byte) = u8::from_str_radix(
+                                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
+                                16,
+                            ) {
+                                result.push(byte);
+                                i += 3;
+                                continue;
+                            }
+                        }
+                    } else if bytes[i] == b'+' {
+                        // application/x-www-form-urlencoded: '+' → space
+                        result.push(b' ');
+                        i += 1;
+                        continue;
+                    }
+                    result.push(bytes[i]);
+                    i += 1;
+                }
+                let decoded = String::from_utf8_lossy(&result).to_string();
+                check_string_len(&decoded, self.limits.max_string_len)?;
+                Ok(Value::Str(decoded))
+            }
+            BuiltinId::Sha256 => {
+                // Not implemented — return error so users know
+                Err(RuntimeError::ApiError {
+                    function: "sha256".into(),
+                    message: "sha256() is not yet implemented".into(),
+                })
+            }
+            BuiltinId::Md5 => {
+                Err(RuntimeError::ApiError {
+                    function: "md5".into(),
+                    message: "md5() is not yet implemented".into(),
+                })
+            }
+            BuiltinId::RegexFind => {
+                Err(RuntimeError::ApiError {
+                    function: "regex_find".into(),
+                    message: "regex_find() is not yet implemented".into(),
+                })
+            }
+            BuiltinId::RegexReplace => {
+                Err(RuntimeError::ApiError {
+                    function: "regex_replace".into(),
+                    message: "regex_replace() is not yet implemented".into(),
+                })
+            }
+            BuiltinId::Range => {
+                Err(RuntimeError::ApiError {
+                    function: "range".into(),
+                    message: "range() is not yet implemented".into(),
+                })
+            }
         }
     }
 }
