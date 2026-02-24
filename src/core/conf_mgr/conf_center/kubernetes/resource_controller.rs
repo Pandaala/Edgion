@@ -586,8 +586,24 @@ where
         kind: K::kind(&dt).to_string(),
     });
 
-    // Build status patch
+    // SSA requires apiVersion and kind in the patch body
+    let gvk_group = K::group(&dt);
+    let gvk_version = K::version(&dt);
+    let api_version = if gvk_group.is_empty() {
+        gvk_version.to_string()
+    } else {
+        format!("{}/{}", gvk_group, gvk_version)
+    };
+
+    let metadata = match namespace {
+        Some(ns) => serde_json::json!({ "name": name, "namespace": ns }),
+        None => serde_json::json!({ "name": name }),
+    };
+
     let patch = serde_json::json!({
+        "apiVersion": api_version,
+        "kind": K::kind(&dt),
+        "metadata": metadata,
         "status": status_value
     });
 

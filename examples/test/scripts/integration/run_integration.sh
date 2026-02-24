@@ -24,6 +24,9 @@ DO_CLEANUP=true
 # Whether to run full tests including slow tests (default: false for faster iteration)
 FULL_TEST=false
 
+# Required open files limit for integration run.
+REQUIRED_NOFILE=65535
+
 # Report file path (will be set after WORK_DIR is determined)
 REPORT_FILE=""
 
@@ -111,6 +114,50 @@ check_docker_environment_ready() {
     fi
 
     log_success "Docker environment is ready"
+    return 0
+}
+
+ensure_nofile_limit() {
+    local required="${1:-65535}"
+    local soft hard
+
+    soft=$(ulimit -Sn 2>/dev/null || true)
+    hard=$(ulimit -Hn 2>/dev/null || true)
+
+    if [ -z "$soft" ] || [ -z "$hard" ]; then
+        log_error "Cannot read current ulimit -n (soft/hard). Please run in a shell that supports ulimit."
+        return 1
+    fi
+
+    if [ "$soft" = "unlimited" ]; then
+        log_success "ulimit -n is unlimited"
+        return 0
+    fi
+
+    if [ "$soft" -ge "$required" ]; then
+        log_success "ulimit -n is sufficient (current: $soft, required: $required)"
+        return 0
+    fi
+
+    log_info "Current ulimit -n is too low (soft=$soft hard=$hard), trying to set soft limit to $required"
+    if ! ulimit -Sn "$required" 2>/dev/null; then
+        log_error "Failed to set ulimit -n to $required (current soft=$soft hard=$hard)"
+        echo "Please increase your shell file descriptor limit and rerun:"
+        echo "  ulimit -n $required"
+        return 1
+    fi
+
+    soft=$(ulimit -Sn 2>/dev/null || true)
+    if [ -z "$soft" ]; then
+        log_error "ulimit -n is still below required value after setting (current: ${soft:-unknown}, required: $required)"
+        return 1
+    fi
+    if [ "$soft" != "unlimited" ] && [ "$soft" -lt "$required" ]; then
+        log_error "ulimit -n is still below required value after setting (current: ${soft:-unknown}, required: $required)"
+        return 1
+    fi
+
+    log_success "ulimit -n set successfully (current: $soft)"
     return 0
 }
 
@@ -835,6 +882,11 @@ main() {
     echo ""
     
     cd "$PROJECT_ROOT"
+
+    if ! ensure_nofile_limit "$REQUIRED_NOFILE"; then
+        log_error "File descriptor limit check failed"
+        exit 1
+    fi
 
     if ! check_docker_environment_ready; then
         log_error "Docker environment check failed"

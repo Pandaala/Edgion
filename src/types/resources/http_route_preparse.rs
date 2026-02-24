@@ -101,12 +101,6 @@ impl HTTPRoute {
         let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
 
         for rule in rules.iter_mut() {
-            if let Some(filters) = &rule.filters {
-                tracing::error!("HTTPRoute.preparse: found {} filters for rule", filters.len());
-            } else {
-                tracing::error!("HTTPRoute.preparse: no filters found for rule");
-            }
-
             // Initialize rule-level plugin_runtime from rule.plugins
             if let Some(filters) = &rule.filters {
                 rule.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters, namespace));

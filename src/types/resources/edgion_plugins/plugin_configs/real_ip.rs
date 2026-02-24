@@ -49,6 +49,7 @@ pub struct RealIpConfig {
     /// Only requests from these IPs will trigger real IP extraction.
     ///
     /// Examples: ["10.0.0.0/8", "192.168.1.1", "2001:db8::/32"]
+    #[serde(default)]
     pub trusted_ips: Vec<String>,
 
     /// Header name to extract real IP from

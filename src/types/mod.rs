@@ -35,8 +35,8 @@ pub mod link_sys {
 pub use self::resource::ResourceKind;
 pub use self::resource::ResourceMeta;
 pub use self::resource::{
-    all_resource_type_names, base_conf_resource_names, get_resource_metadata, ResourceTypeMetadata,
-    DEFAULT_NO_SYNC_KINDS, RESOURCE_TYPES,
+    all_resource_type_names, base_conf_resource_names, default_capacity_for_kind, get_resource_metadata,
+    ResourceTypeMetadata, DEFAULT_NO_SYNC_KINDS, RESOURCE_TYPES,
 };
 
 // Re-export from other modules

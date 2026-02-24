@@ -86,12 +86,12 @@ pub fn get_no_sync_kinds() -> Vec<String> {
 
 /// Get the cache capacity for a specific resource kind.
 /// This reads from the global controller configuration.
-/// Returns default capacity (1000) if config not initialized or no override set.
+/// Falls back to per-resource macro default, then global default (1000).
 pub fn get_cache_capacity(kind_name: &str) -> usize {
     CONTROLLER_CONFIG
         .get()
         .map(|c| c.conf_sync.get_capacity(kind_name) as usize)
-        .unwrap_or(1000) // Default if config not initialized
+        .unwrap_or_else(|| crate::types::default_capacity_for_kind(kind_name).unwrap_or(1000) as usize)
 }
 
 /// Edgion Controller configuration
@@ -273,16 +273,21 @@ impl ConfSyncConfig {
         }
     }
 
-    /// Get the capacity for a specific resource kind
+    /// Get the capacity for a specific resource kind.
     ///
-    /// Checks capacity_overrides first, falls back to default_capacity.
-    /// The kind_name should match the ResourceKind variant name (e.g., "HTTPRoute", "GatewayClass").
+    /// Resolution order:
+    /// 1. `capacity_overrides` map (explicit per-resource override from config)
+    /// 2. Per-resource default from `define_resources!` macro (small=50, normal=200, large=1000)
+    /// 3. `default_capacity` (global fallback, default 1000)
     pub fn get_capacity(&self, kind_name: &str) -> u32 {
-        self.capacity_overrides
+        if let Some(v) = self
+            .capacity_overrides
             .as_ref()
             .and_then(|overrides| overrides.get(kind_name))
-            .copied()
-            .unwrap_or(self.default_capacity)
+        {
+            return *v;
+        }
+        crate::types::default_capacity_for_kind(kind_name).unwrap_or(self.default_capacity)
     }
 }
 
@@ -460,5 +465,53 @@ impl EdgionControllerConfig {
             console: true,
             level: self.log_level(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resource::macros::{CAPACITY_NORMAL, CAPACITY_SMALL};
+
+    #[test]
+    fn test_get_capacity_override_wins() {
+        let mut overrides = HashMap::new();
+        overrides.insert("HTTPRoute".to_string(), 999);
+        let config = ConfSyncConfig {
+            default_capacity: 1000,
+            capacity_overrides: Some(overrides),
+            no_sync_kinds: None,
+        };
+        assert_eq!(config.get_capacity("HTTPRoute"), 999);
+    }
+
+    #[test]
+    fn test_get_capacity_falls_back_to_macro_default() {
+        let config = ConfSyncConfig {
+            default_capacity: 1000,
+            capacity_overrides: None,
+            no_sync_kinds: None,
+        };
+        assert_eq!(config.get_capacity("GatewayClass"), CAPACITY_SMALL);
+        assert_eq!(config.get_capacity("HTTPRoute"), CAPACITY_NORMAL);
+        assert_eq!(config.get_capacity("EdgionAcme"), CAPACITY_SMALL);
+        assert_eq!(config.get_capacity("Service"), CAPACITY_NORMAL);
+    }
+
+    #[test]
+    fn test_get_capacity_unknown_falls_back_to_global() {
+        let config = ConfSyncConfig {
+            default_capacity: 1000,
+            capacity_overrides: None,
+            no_sync_kinds: None,
+        };
+        assert_eq!(config.get_capacity("SomeUnknownKind"), 1000);
+    }
+
+    #[test]
+    fn test_conf_sync_default() {
+        let config = ConfSyncConfig::default();
+        assert_eq!(config.default_capacity, 1000);
+        assert!(config.capacity_overrides.is_none());
     }
 }

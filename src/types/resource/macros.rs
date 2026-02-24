@@ -10,6 +10,12 @@
 //! - Backward compatible with existing code
 //! - Does not break list/watch architecture
 
+/// Capacity tier constants for resource EventStore sizing.
+/// Used in `define_resources!` via the `default_capacity` field.
+pub const CAPACITY_SMALL: u32 = 50;
+pub const CAPACITY_NORMAL: u32 = 200;
+pub const CAPACITY_LARGE: u32 = 1000;
+
 /// Main macro for defining all resource types in a unified way.
 ///
 /// This macro generates:
@@ -61,6 +67,8 @@ macro_rules! define_resources {
             pub cache_field_name: &'static str,
             /// Capacity config field name
             pub capacity_field_name: &'static str,
+            /// Default EventStore capacity (from capacity tier: small/normal/large)
+            pub default_capacity: u32,
             /// Whether this is a cluster-scoped resource
             pub cluster_scoped: bool,
             /// Whether this is a base configuration resource
@@ -78,6 +86,7 @@ macro_rules! define_resources {
                     kind_name: $kind_name,
                     cache_field_name: stringify!($cache_field),
                     capacity_field_name: stringify!($cap_field),
+                    default_capacity: $crate::define_resources!(@capacity $cap_default),
                     cluster_scoped: $crate::define_resources!(@default_bool $($cluster)?),
                     is_base_conf: $crate::define_resources!(@default_bool $($base)?),
                     in_registry: $crate::define_resources!(@default_true $($in_reg)?),
@@ -145,6 +154,24 @@ macro_rules! define_resources {
             get_resource_info(kind).map(|info| info.cluster_scoped).unwrap_or(false)
         }
 
+        /// Get the default EventStore capacity for a resource kind by name.
+        ///
+        /// Accepts the PascalCase variant name used by spawn (e.g., "HTTPRoute"),
+        /// the lowercase kind_name (e.g., "httproute"), or the cache_field_name
+        /// (e.g., "routes"). Returns `None` if no match is found.
+        pub fn default_capacity_for_kind(name: &str) -> Option<u32> {
+            let lower = name.to_lowercase();
+            $(
+                if lower == stringify!($variant).to_lowercase()
+                    || lower == $kind_name
+                    || lower == stringify!($cache_field)
+                {
+                    return Some($crate::define_resources!(@capacity $cap_default));
+                }
+            )*
+            None
+        }
+
         /// Compile-time exhaustiveness check helper
         /// This ensures all ResourceKind variants are covered in the macro definition
         #[allow(dead_code)]
@@ -161,6 +188,11 @@ macro_rules! define_resources {
             check($crate::types::ResourceKind::Unspecified);
         }
     };
+
+    // Helper: map capacity tier identifier to constant
+    (@capacity small) => { $crate::types::resource::macros::CAPACITY_SMALL };
+    (@capacity normal) => { $crate::types::resource::macros::CAPACITY_NORMAL };
+    (@capacity large) => { $crate::types::resource::macros::CAPACITY_LARGE };
 
     // Helper: default to false if not specified
     (@default_bool) => { false };
