@@ -113,6 +113,7 @@ Options:
     --version TAG       Specify version tag (default: git tag or "dev")
     --compile-only      Only compile binaries, don't build images
     --with-examples     Also build test_server and test_client images
+    --with-example      Alias of --with-examples
     -h, --help          Show this help message
 
 Environment Variables:
@@ -646,7 +647,7 @@ main() {
                 compile_only=true
                 shift
                 ;;
-            --with-examples)
+            --with-examples|--with-example)
                 with_examples=true
                 shift
                 ;;

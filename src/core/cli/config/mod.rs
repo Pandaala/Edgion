@@ -200,6 +200,11 @@ pub struct LoggingConfig {
     #[serde(default)]
     pub json_format: Option<bool>,
 
+    /// Enable console output
+    #[arg(long, value_name = "BOOL")]
+    #[serde(default)]
+    pub console: Option<bool>,
+
     #[arg(skip)]
     #[serde(default = "default_buffer_size")]
     pub buffer_size: usize,
@@ -312,6 +317,10 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
+fn default_console() -> bool {
+    true
+}
+
 fn default_buffer_size() -> usize {
     10_000
 }
@@ -333,6 +342,7 @@ impl Default for LoggingConfig {
             log_prefix: default_log_prefix(),
             log_level: None,
             json_format: None,
+            console: None,
             buffer_size: default_buffer_size(),
         }
     }
@@ -412,6 +422,9 @@ impl EdgionControllerConfig {
         if cli.logging.json_format.is_some() {
             base.logging.json_format = cli.logging.json_format;
         }
+        if cli.logging.console.is_some() {
+            base.logging.console = cli.logging.console;
+        }
     }
 
     /// Get grpc_listen with default fallback
@@ -439,6 +452,11 @@ impl EdgionControllerConfig {
         self.logging.json_format.unwrap_or(false)
     }
 
+    /// Get console flag with default fallback
+    pub fn console(&self) -> bool {
+        self.logging.console.unwrap_or_else(default_console)
+    }
+
     /// Check if running in Kubernetes mode
     pub fn is_k8s_mode(&self) -> bool {
         self.conf_center.is_k8s_mode()
@@ -462,7 +480,7 @@ impl EdgionControllerConfig {
             log_dir,
             file_prefix: self.logging.log_prefix.clone(),
             json_format: self.json_format(),
-            console: true,
+            console: self.console(),
             level: self.log_level(),
         }
     }
@@ -513,5 +531,13 @@ mod tests {
         let config = ConfSyncConfig::default();
         assert_eq!(config.default_capacity, 1000);
         assert!(config.capacity_overrides.is_none());
+    }
+
+    #[test]
+    fn test_to_log_config_respects_console_flag() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.logging.console = Some(false);
+        let log_cfg = cfg.to_log_config();
+        assert!(!log_cfg.console);
     }
 }
