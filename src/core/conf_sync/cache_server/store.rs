@@ -57,6 +57,23 @@ impl<T> EventStore<T> {
     where
         T: Clone + Resource,
     {
+        // Stage A: Stale event guard.
+        // If the incoming sync_version is strictly older than the current store version,
+        // drop the event immediately to prevent out-of-order async tasks from
+        // overwriting newer state with stale data.
+        if sync_version < self.sync_version {
+            tracing::warn!(
+                kind = std::any::type_name::<T>(),
+                event_type = ?event_type,
+                resource_name = %resource.name_any(),
+                resource_namespace = ?resource.namespace(),
+                incoming_sync_version = sync_version,
+                current_sync_version = self.sync_version,
+                "Stale event dropped: incoming sync_version is older than current store version"
+            );
+            return;
+        }
+
         let key = Self::resource_key(&resource);
         match event_type {
             EventType::Add | EventType::Update => {
@@ -413,5 +430,73 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         // The key should be "default/test-route", so only one entry exists
         assert_eq!(snapshot[0].name, "test-route");
+    }
+
+    /// Stage A regression: a stale event (lower sync_version) must not
+    /// overwrite state that was written by a newer event.
+    #[test]
+    fn stale_event_does_not_overwrite_newer_state() {
+        let mut store = make_store();
+
+        // Apply the "newer" event first (simulates the scheduler running v2 before v1)
+        let newer = TestResource::new("new-value", Some("default"));
+        store.apply_event(EventType::Update, newer.clone(), 10);
+
+        // Now attempt to apply a stale event with a lower sync_version
+        let stale = TestResource::new("old-value", Some("default"));
+        store.apply_event(EventType::Update, stale.clone(), 5);
+
+        // The store must reflect the newer state, not the stale one
+        let (snapshot, version) = store.snapshot_owned();
+        assert_eq!(
+            version, 10,
+            "sync_version must stay at the newer value after a stale event is dropped"
+        );
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(
+            snapshot[0].name, "new-value",
+            "stale event must not overwrite newer state"
+        );
+
+        // The stale event must also not appear in the event queue
+        let (_, events_opt) = store.get_events_from_sync_version(0).unwrap();
+        let events = events_opt.expect("expected events");
+        assert_eq!(events.len(), 1, "only the newer event should be in the queue");
+        assert_eq!(events[0].sync_version, 10);
+        assert_eq!(events[0].data.name, "new-value");
+    }
+
+    /// Stage A regression: when events arrive in a reordered sequence (v2 before v1),
+    /// the resulting data snapshot and version must always reflect the latest (highest-versioned)
+    /// write, not the last write in wall-clock time.
+    #[test]
+    fn out_of_order_apply_sequence_preserves_latest_data() {
+        let mut store = make_store();
+
+        // Simulate a scenario where v1 arrives first (normal order)
+        let v1 = TestResource::new("state-v1", Some("default"));
+        store.apply_event(EventType::Add, v1.clone(), 1);
+
+        // v3 arrives next (out of order - scheduler executed it before v2)
+        let v3 = TestResource::new("state-v3", Some("default"));
+        store.apply_event(EventType::Update, v3.clone(), 3);
+
+        // v2 arrives last - must be dropped because version 3 is already committed
+        let v2 = TestResource::new("state-v2", Some("default"));
+        store.apply_event(EventType::Update, v2.clone(), 2);
+
+        let (snapshot, version) = store.snapshot_owned();
+        assert_eq!(version, 3, "sync_version must be the highest seen");
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(
+            snapshot[0].name, "state-v3",
+            "data must reflect v3 (highest version), not the last-arriving v2"
+        );
+
+        // Event queue must contain v1 and v3 (v2 was dropped)
+        let (_, events_opt) = store.get_events_from_sync_version(0).unwrap();
+        let events = events_opt.expect("expected events");
+        let versions: Vec<u64> = events.iter().map(|e| e.sync_version).collect();
+        assert_eq!(versions, vec![1, 3], "only in-order events should be in the queue");
     }
 }

@@ -276,7 +276,12 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         data_rx
     }
 
-    /// Add event to the circular queue
+    /// Add event to the circular queue.
+    ///
+    /// Stage B: Apply the event inline (synchronously) instead of spawning a new task.
+    /// This guarantees that write order follows the caller's invocation order,
+    /// eliminating the tokio-scheduler-induced reordering window that could cause
+    /// stale state to overwrite newer state in the EventStore.
     fn push_event(&self, event_type: EventType, resource: T, sync_version: u64)
     where
         T: Clone + Send + 'static,
@@ -287,26 +292,11 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             tracing::trace!("Pushing event while cache not yet ready (expected during initial sync)");
         }
 
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                let store = self.store.clone();
-                let notify = self.notify.clone();
-                handle.spawn(async move {
-                    {
-                        let mut store_guard = store.write().unwrap();
-                        store_guard.apply_event(event_type, resource, sync_version);
-                    }
-                    notify.notify_waiters();
-                });
-            }
-            Err(_) => {
-                {
-                    let mut store_guard = self.store.write().unwrap();
-                    store_guard.apply_event(event_type, resource, sync_version);
-                }
-                self.notify.notify_waiters();
-            }
+        {
+            let mut store_guard = self.store.write().unwrap();
+            store_guard.apply_event(event_type, resource, sync_version);
         }
+        self.notify.notify_waiters();
     }
 }
 
@@ -461,8 +451,6 @@ mod tests {
     use crate::types::{ResourceKind, ResourceMeta};
     use kube::api::ObjectMeta;
     use serde::{Deserialize, Serialize};
-    use tokio::task::yield_now;
-    use tokio::time::{sleep, Duration};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestResource {
@@ -526,27 +514,24 @@ mod tests {
         }
     }
 
-    async fn wait_for_async_store_update() {
-        // Ensure spawned tasks have a chance to persist events into the store
-        yield_now().await;
-        sleep(Duration::from_millis(5)).await;
-    }
-
-    #[tokio::test]
-    async fn event_add_stores_resource_and_updates_version() {
-        let cache = ServerCache::<TestResource>::new(10);
-        let resource = TestResource {
-            name: "foo".to_string(),
-            version: 1,
+    fn make_resource(name: &str, version: u64) -> TestResource {
+        TestResource {
+            name: name.to_string(),
+            version,
             metadata: ObjectMeta {
                 name: Some("test-resource".to_string()),
                 namespace: Some("default".to_string()),
                 ..Default::default()
             },
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn event_add_stores_resource_and_updates_version() {
+        let cache = ServerCache::<TestResource>::new(10);
+        let resource = make_resource("foo", 1);
 
         cache.apply_change(ResourceChange::EventAdd, resource.clone());
-        wait_for_async_store_update().await;
 
         let snapshot = cache.list_owned();
         assert_eq!(snapshot.data.len(), 1);
@@ -558,33 +543,14 @@ mod tests {
     #[tokio::test]
     async fn event_update_replaces_existing_resource() {
         let cache = ServerCache::<TestResource>::new(10);
-        let original = TestResource {
-            name: "foo".to_string(),
-            version: 1,
-            metadata: ObjectMeta {
-                name: Some("test-resource".to_string()),
-                namespace: Some("default".to_string()),
-                ..Default::default()
-            },
-        };
-        let updated = TestResource {
-            name: "foo-updated".to_string(),
-            version: 2, // version must be greater than original
-            metadata: ObjectMeta {
-                name: Some("test-resource".to_string()),
-                namespace: Some("default".to_string()),
-                ..Default::default()
-            },
-        };
+        let original = make_resource("foo", 1);
+        let updated = make_resource("foo-updated", 2);
 
         // Set cache as ready before applying changes
         CacheEventDispatch::set_ready(&cache);
 
         cache.apply_change(ResourceChange::EventAdd, original.clone());
-        wait_for_async_store_update().await;
-
         cache.apply_change(ResourceChange::EventUpdate, updated.clone());
-        wait_for_async_store_update().await;
 
         let snapshot = cache.list_owned();
         assert_eq!(snapshot.data.len(), 1);
@@ -596,38 +562,44 @@ mod tests {
     #[tokio::test]
     async fn event_delete_removes_resource() {
         let cache = ServerCache::<TestResource>::new(10);
-        let resource = TestResource {
-            name: "foo".to_string(),
-            version: 42,
-            metadata: ObjectMeta {
-                name: Some("test-resource".to_string()),
-                namespace: Some("default".to_string()),
-                ..Default::default()
-            },
-        };
-
-        let resource_delete = TestResource {
-            name: "foo".to_string(),
-            version: 43, // version must be greater than the added resource
-            metadata: ObjectMeta {
-                name: Some("test-resource".to_string()),
-                namespace: Some("default".to_string()),
-                ..Default::default()
-            },
-        };
+        let resource = make_resource("foo", 42);
+        let resource_delete = make_resource("foo", 43);
 
         // Set cache as ready before applying changes
         CacheEventDispatch::set_ready(&cache);
 
         cache.apply_change(ResourceChange::EventAdd, resource.clone());
-        wait_for_async_store_update().await;
-
         cache.apply_change(ResourceChange::EventDelete, resource_delete.clone());
-        wait_for_async_store_update().await;
 
         let snapshot = cache.list_owned();
         assert!(snapshot.data.is_empty());
         // sync_version is now independently generated, just check it's non-zero
+        assert!(snapshot.sync_version > 0);
+    }
+
+    /// Stage B regression: rapid sequential apply_change calls must leave the cache
+    /// in the state of the LAST call, not some arbitrary scheduler-determined order.
+    /// With the synchronous inline write path, this must now hold deterministically.
+    #[tokio::test]
+    async fn rapid_updates_preserve_latest_state() {
+        let cache = ServerCache::<TestResource>::new(200);
+        CacheEventDispatch::set_ready(&cache);
+
+        // Issue 50 rapid updates - all synchronous after Stage B
+        let n: u64 = 50;
+        for i in 1..=n {
+            let r = make_resource(&format!("state-{}", i), i);
+            cache.apply_change(ResourceChange::EventUpdate, r);
+        }
+
+        // Final snapshot must reflect the last update
+        let snapshot = cache.list_owned();
+        assert_eq!(snapshot.data.len(), 1, "only one item in the store");
+        assert_eq!(
+            snapshot.data[0].name,
+            format!("state-{}", n),
+            "cache must contain the last (highest-versioned) state after rapid updates"
+        );
         assert!(snapshot.sync_version > 0);
     }
 }
