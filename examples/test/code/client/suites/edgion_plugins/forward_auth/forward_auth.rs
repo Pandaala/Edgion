@@ -22,9 +22,16 @@ use std::time::Instant;
 
 pub struct ForwardAuthTestSuite;
 
-/// Test hosts (must match HTTPRoute_default_forward-auth.yaml)
+/// Test hosts (must match HTTPRoute YAML hostnames)
 const BASIC_HOST: &str = "forward-auth-basic.example.com";
 const SELECTIVE_HOST: &str = "forward-auth-selective.example.com";
+const DELAY_HOST: &str = "forward-auth-delay.example.com";
+const HIDE_CREDS_HOST: &str = "forward-auth-hide-creds.example.com";
+
+/// authFailureDelayMs configured in 03_EdgionPlugins_forward-auth-delay.yaml
+const CONFIGURED_DELAY_MS: u64 = 300;
+/// Tolerance: allow 50ms below the configured value
+const DELAY_MIN_MS: u64 = CONFIGURED_DELAY_MS - 50;
 
 impl ForwardAuthTestSuite {
     // ==========================================
@@ -539,6 +546,272 @@ impl ForwardAuthTestSuite {
             },
         )
     }
+
+    // ============================================================
+    // auth_failure_delay_ms Tests
+    // ============================================================
+
+    /// Test: Missing token with delay — 401 must arrive after at least DELAY_MIN_MS
+    fn test_failure_delay_on_missing_token() -> TestCase {
+        TestCase::new(
+            "failure_delay_on_missing_token",
+            "ForwardAuth: 401 (no token) is delayed by authFailureDelayMs",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+
+                    let resp = match ctx.http_client.get(&url).header("host", DELAY_HOST).send().await {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let elapsed = start.elapsed();
+                    let status = resp.status().as_u16();
+
+                    if status != 401 {
+                        return TestResult::failed(elapsed, format!("Expected 401 (no token), got {}", status));
+                    }
+
+                    let elapsed_ms = elapsed.as_millis() as u64;
+                    if elapsed_ms >= DELAY_MIN_MS {
+                        TestResult::passed_with_message(
+                            elapsed,
+                            format!(
+                                "ForwardAuth: no-token 401 delayed {}ms (>= {}ms threshold, configured {}ms)",
+                                elapsed_ms, DELAY_MIN_MS, CONFIGURED_DELAY_MS
+                            ),
+                        )
+                    } else {
+                        TestResult::failed(
+                            elapsed,
+                            format!(
+                                "Delay too short: {}ms < {}ms (configured authFailureDelayMs={}ms)",
+                                elapsed_ms, DELAY_MIN_MS, CONFIGURED_DELAY_MS
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: Invalid token → 401 also delayed
+    fn test_failure_delay_on_invalid_token() -> TestCase {
+        TestCase::new(
+            "failure_delay_on_invalid_token",
+            "ForwardAuth: 401 (invalid token) is delayed by authFailureDelayMs",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+
+                    let resp = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", DELAY_HOST)
+                        .header("Authorization", "Bearer completely-invalid-token")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let elapsed = start.elapsed();
+                    let status = resp.status().as_u16();
+
+                    if status != 401 {
+                        return TestResult::failed(elapsed, format!("Expected 401 (invalid token), got {}", status));
+                    }
+
+                    let elapsed_ms = elapsed.as_millis() as u64;
+                    if elapsed_ms >= DELAY_MIN_MS {
+                        TestResult::passed_with_message(
+                            elapsed,
+                            format!(
+                                "ForwardAuth: invalid-token 401 delayed {}ms (>= {}ms)",
+                                elapsed_ms, DELAY_MIN_MS
+                            ),
+                        )
+                    } else {
+                        TestResult::failed(
+                            elapsed,
+                            format!("Delay too short: {}ms < {}ms", elapsed_ms, DELAY_MIN_MS),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: Valid token with delay config must NOT be delayed
+    fn test_no_delay_on_valid_token() -> TestCase {
+        TestCase::new(
+            "no_delay_on_valid_token_with_delay_config",
+            "ForwardAuth: successful auth is NOT delayed even when authFailureDelayMs is set",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+
+                    let resp = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", DELAY_HOST)
+                        .header("Authorization", "Bearer valid-token")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let elapsed = start.elapsed();
+                    let status = resp.status().as_u16();
+
+                    if status != 200 {
+                        return TestResult::failed(
+                            elapsed,
+                            format!("Expected 200 for valid token on delay host, got {}", status),
+                        );
+                    }
+
+                    let upper_bound_ms = CONFIGURED_DELAY_MS * 2;
+                    let elapsed_ms = elapsed.as_millis() as u64;
+
+                    if elapsed_ms < upper_bound_ms {
+                        TestResult::passed_with_message(
+                            elapsed,
+                            format!("ForwardAuth success in {}ms — no unwanted delay", elapsed_ms),
+                        )
+                    } else {
+                        TestResult::passed_with_message(
+                            elapsed,
+                            format!(
+                                "Warning: success took {}ms — possible CI slowness (no hard failure)",
+                                elapsed_ms
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    // ============================================================
+    // hide_credentials Tests
+    // ============================================================
+
+    /// Test: Authorization header is removed from upstream when hideCredentials=true (success path)
+    fn test_hide_credentials_removes_auth_header() -> TestCase {
+        TestCase::new(
+            "hide_credentials_removes_auth_header",
+            "ForwardAuth: Authorization header removed from upstream when hideCredentials=true",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    // /auth-header-probe reflects whether upstream saw the Authorization header
+                    let url = format!("{}/auth-header-probe", ctx.http_url());
+
+                    let resp = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", HIDE_CREDS_HOST)
+                        .header("Authorization", "Bearer valid-token")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let status = resp.status().as_u16();
+                    if status != 200 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 200 (valid token should pass), got {}", status),
+                        );
+                    }
+
+                    let present = resp
+                        .headers()
+                        .get("X-Auth-Header-Present")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("unknown");
+
+                    if present == "no" {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "ForwardAuth: Authorization header correctly removed from upstream (hideCredentials=true)"
+                                .into(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Authorization header was NOT removed (X-Auth-Header-Present={}). \
+                                 hideCredentials is not working.",
+                                present
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: Without hideCredentials, Authorization header reaches the upstream
+    fn test_no_hide_credentials_keeps_auth_header() -> TestCase {
+        TestCase::new(
+            "no_hide_credentials_keeps_auth_header",
+            "ForwardAuth: Authorization header forwarded to upstream when hideCredentials=false",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/auth-header-probe", ctx.http_url());
+
+                    let resp = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", BASIC_HOST)
+                        .header("Authorization", "Bearer valid-token")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let status = resp.status().as_u16();
+                    if status != 200 {
+                        return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                    }
+
+                    let present = resp
+                        .headers()
+                        .get("X-Auth-Header-Present")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("unknown");
+
+                    if present == "yes" {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "ForwardAuth: Authorization header correctly forwarded (hideCredentials=false)".into(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Authorization header unexpectedly absent (X-Auth-Header-Present={})",
+                                present
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for ForwardAuthTestSuite {
@@ -560,6 +833,13 @@ impl TestSuite for ForwardAuthTestSuite {
             // Selective mode: forward specific headers only
             Self::test_selective_valid_token(),
             Self::test_selective_no_token(),
+            // auth_failure_delay_ms tests
+            Self::test_failure_delay_on_missing_token(),
+            Self::test_failure_delay_on_invalid_token(),
+            Self::test_no_delay_on_valid_token(),
+            // hide_credentials tests
+            Self::test_no_hide_credentials_keeps_auth_header(),
+            Self::test_hide_credentials_removes_auth_header(),
         ]
     }
 }

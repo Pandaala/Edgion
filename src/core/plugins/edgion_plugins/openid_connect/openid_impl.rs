@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::plugins::edgion_plugins::common::auth_common::apply_auth_failure_delay as auth_delay;
 
 impl OpenidConnect {
     pub fn new(config: &OpenidConnectConfig, plugin_namespace: String) -> Self {
@@ -41,6 +42,21 @@ impl OpenidConnect {
 
     pub(super) async fn send_forbidden(&self, session: &mut dyn PluginSession, body: &str) -> OidcResult<()> {
         send_auth_error_response(session, 403, "Bearer", &self.config.realm, body).await
+    }
+
+    /// Apply failure delay before returning a 401/403 response.
+    pub(super) async fn apply_auth_failure_delay(&self) {
+        auth_delay(self.config.auth_failure_delay_ms).await;
+    }
+
+    /// Remove the Authorization header from the upstream request if hide_credentials is enabled.
+    ///
+    /// This is only meaningful in bearer_only mode (where the credential IS the Authorization
+    /// header). In session-cookie mode the credential is in a cookie, so there is nothing to hide.
+    pub(super) fn hide_credentials_if_needed(&self, session: &mut dyn PluginSession) {
+        if self.config.hide_credentials {
+            let _ = session.remove_request_header("authorization");
+        }
     }
 
     pub(super) async fn send_plain_error(

@@ -200,6 +200,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/health", get(health_handler))
         .route("/echo", get(echo_handler).post(echo_post_handler))
         .route("/headers", get(headers_handler))
+        .route("/auth-header-probe", get(auth_header_probe_handler))
         .route(
             "/webhook/resolve",
             get(webhook_resolve_handler).post(webhook_resolve_handler),
@@ -262,6 +263,52 @@ async fn headers_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     });
 
     (StatusCode::OK, Json(response))
+}
+
+/// Auth-header probe handler.
+///
+/// This endpoint is designed specifically to test the `hide_credentials` feature of auth plugins.
+/// It checks whether the incoming request contains an `Authorization` header and
+/// reflects that information back to the client via response headers.
+///
+/// Response headers returned:
+///   - `X-Auth-Header-Present`: `"yes"` if Authorization header was received, `"no"` otherwise.
+///   - `X-Auth-Header-Value-Prefix`: The first 6 characters of the Authorization header value
+///     (e.g., "Bearer" or "Basic "), or `"none"` if the header is absent.
+///     This is useful to confirm the type of credential without leaking the full secret.
+///
+/// Usage in tests:
+///   1. Route a request with an Authorization header through an auth plugin with
+///      `hideCredentials: true`.
+///   2. Check `X-Auth-Header-Present == "no"` in the response to verify Gateway did remove it.
+///   3. Without `hideCredentials`, `X-Auth-Header-Present` should be `"yes"`.
+async fn auth_header_probe_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::Body as RespBody;
+    use axum::http::StatusCode;
+    use axum::response::Response;
+
+    let auth_present = req.headers().contains_key("authorization");
+    let value_prefix = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            // Return first 6 chars to indicate type ("Bearer", "Basic ") without leaking the full secret
+            let prefix_len = s.len().min(6);
+            s[..prefix_len].to_string()
+        })
+        .unwrap_or_else(|| "none".to_string());
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("X-Auth-Header-Present", if auth_present { "yes" } else { "no" })
+        .header("X-Auth-Header-Value-Prefix", &value_prefix)
+        .body(RespBody::from(if auth_present {
+            "Authorization header was received by upstream"
+        } else {
+            "Authorization header was NOT received by upstream (removed by gateway)"
+        }))
+        .unwrap()
 }
 
 /// Webhook resolve handler — returns resolved key value via response header and JSON body.

@@ -1,7 +1,10 @@
 # Edgion Project Architecture
 
 > Comprehensive architecture reference for the Edgion API Gateway system. Single-crate Rust project with three binaries: controller (control plane), gateway (data plane), and edgion-ctl (CLI tool).
-
+>
+> **TODO (2026-02-25): Small Improvement**
+> - [ ] Add CI/CD and build pipeline overview section (`.github/workflows/ci.yml`, `build-image.yml`, `docker/Dockerfile`, cargo-chef multi-stage build)
+> (Note: Annotation system and Feature flags split into separate docs)
 ## High-Level Architecture
 
 ```

@@ -1,6 +1,12 @@
 # Edgion Plugin Development Guide
 
 > Quick reference for adding new EdgionPlugins. Follow the checklist, copy the patterns, ship fast.
+>
+> **TODO (2026-02-25): Medium Improvement**
+> - [ ] Add UpstreamResponseFilter / UpstreamResponseBodyFilter minimal development example (not just trait signature)
+> - [ ] Add ConditionalFilter condition configuration guide (how users configure `skip`/`run` conditions in YAML)
+> - [ ] Clarify plugin preparse flow: where preparse happens (EdgionPluginsHandler vs HTTPRouteHandler), controller-side vs gateway-side
+> - [ ] Add cross-plugin data passing patterns via `ctx_map` (e.g., RealIp sets `client_ip` → RateLimit reads `client_ip`)
 
 ## Directory Structure
 

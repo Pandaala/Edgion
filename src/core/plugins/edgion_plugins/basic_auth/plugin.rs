@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::core::conf_mgr::sync_runtime::resource_processor::get_secret;
-use crate::core::plugins::edgion_plugins::common::auth_common::send_auth_error_response;
+use crate::core::plugins::edgion_plugins::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::BasicAuthConfig;
@@ -304,7 +304,8 @@ impl RequestFilter for BasicAuth {
                     return PluginRunningResult::GoodNext;
                 }
 
-                // No anonymous access, return 401
+                // No anonymous access — apply delay then return 401
+                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 let _ = self.auth_failed_return(session).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
@@ -335,6 +336,7 @@ mod tests {
             secret_refs: None,
             realm: "Test Realm".to_string(),
             hide_credentials: false,
+            auth_failure_delay_ms: 0,
             anonymous: None,
             resolved_users: None,
             validation_error: None,
@@ -408,6 +410,7 @@ mod tests {
             secret_refs: None,
             realm: "Test".to_string(),
             hide_credentials: false,
+            auth_failure_delay_ms: 0,
             anonymous: Some("anonymous-user".to_string()),
             resolved_users: None,
             validation_error: None,
@@ -432,6 +435,7 @@ mod tests {
             secret_refs: None,
             realm: "Test".to_string(),
             hide_credentials: true,
+            auth_failure_delay_ms: 0,
             anonymous: None,
             resolved_users: None,
             validation_error: None,

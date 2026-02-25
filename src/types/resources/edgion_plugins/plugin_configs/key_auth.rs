@@ -45,6 +45,12 @@ pub struct KeyAuthConfig {
     #[serde(default)]
     pub hide_credentials: bool,
 
+    /// Delay in milliseconds before returning an authentication failure response.
+    /// Increases the time cost for brute-force / credential-stuffing attacks.
+    /// Default: 0 (no delay).
+    #[serde(default)]
+    pub auth_failure_delay_ms: u64,
+
     /// Username for anonymous access when no key provided (optional)
     /// If set, requests without key will be allowed with this username
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,6 +124,7 @@ impl Default for KeyAuthConfig {
         Self {
             key_sources: default_key_sources(),
             hide_credentials: false,
+            auth_failure_delay_ms: 0,
             anonymous: None,
             realm: default_realm(),
             key_field: default_key_field(),

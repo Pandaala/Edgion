@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::core::plugins::edgion_plugins::common::auth_common::send_auth_error_response;
+use crate::core::plugins::edgion_plugins::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::common::KeyGet;
 use crate::types::filters::PluginRunningResult;
@@ -180,6 +180,7 @@ impl RequestFilter for KeyAuth {
                 }
 
                 plugin_log.push("No key; ");
+                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session, "Missing API key").await;
             }
         };
@@ -189,6 +190,7 @@ impl RequestFilter for KeyAuth {
             Some(m) => m,
             None => {
                 plugin_log.push("Invalid key; ");
+                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session, "Invalid API key").await;
             }
         };
@@ -223,6 +225,7 @@ mod tests {
                 },
             ],
             hide_credentials: false,
+            auth_failure_delay_ms: 0,
             anonymous: None,
             realm: "Test API".to_string(),
             key_field: "key".to_string(),

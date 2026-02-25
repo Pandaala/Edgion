@@ -18,6 +18,12 @@ pub struct BasicAuthConfig {
     #[serde(default)]
     pub hide_credentials: bool,
 
+    /// Delay in milliseconds before returning an authentication failure response.
+    /// Increases the time cost for brute-force / credential-stuffing attacks.
+    /// Default: 0 (no delay).
+    #[serde(default)]
+    pub auth_failure_delay_ms: u64,
+
     /// Realm for WWW-Authenticate header
     #[serde(default = "default_realm")]
     pub realm: String,
@@ -47,6 +53,7 @@ impl Default for BasicAuthConfig {
         Self {
             secret_refs: None,
             hide_credentials: false,
+            auth_failure_delay_ms: 0,
             realm: default_realm(),
             anonymous: None,
             resolved_users: None,
@@ -85,6 +92,12 @@ mod tests {
     fn test_detect_validation_error_requires_creds_or_anonymous() {
         let cfg = BasicAuthConfig::default();
         assert!(cfg.detect_validation_error().is_some_and(|e| e.contains("secretRefs")));
+    }
+
+    #[test]
+    fn test_default_auth_failure_delay_ms_is_zero() {
+        let cfg = BasicAuthConfig::default();
+        assert_eq!(cfg.auth_failure_delay_ms, 0);
     }
 
     #[test]

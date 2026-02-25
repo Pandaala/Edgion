@@ -589,6 +589,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_HmacAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HmacAuth" || test_failed=true
                     run_test "EdgionPlugins_HeaderCertAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HeaderCertAuth" || test_failed=true
                     run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
+                    run_test "EdgionPlugins_BasicAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BasicAuth" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_LdapAuth"; then
                         run_test "EdgionPlugins_LdapAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i LdapAuth" || test_failed=true
                     else
@@ -697,6 +698,7 @@ run_all_tests() {
         run_test "EdgionPlugins_HmacAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HmacAuth" || test_failed=true
         run_test "EdgionPlugins_HeaderCertAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HeaderCertAuth" || test_failed=true
         run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
+        run_test "EdgionPlugins_BasicAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BasicAuth" || test_failed=true
         if ! should_skip_test "EdgionPlugins_LdapAuth"; then
             run_test "EdgionPlugins_LdapAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i LdapAuth" || test_failed=true
         else
@@ -828,7 +830,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/AllEndpointStatus"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/AllEndpointStatus"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth"
                 fi

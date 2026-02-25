@@ -2,6 +2,10 @@
 
 > Skill for writing and maintaining Edgion documentation under `docs/zh-CN/`.
 > Focus: user-guide (for app developers) and ops-guide (for operators).
+>
+> **TODO (2026-02-25): Small Improvement**
+> - [ ] Add CRD schema update workflow (how to update `config/crd/edgion-crd/` when adding new plugin/resource)
+> - [ ] Add versioning and changelog guidelines (whether docs should annotate "since vX.Y.Z")
 
 ## Scope & Language
 

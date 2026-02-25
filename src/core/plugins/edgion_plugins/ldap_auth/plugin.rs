@@ -11,7 +11,7 @@ use ldap3::{LdapConnAsync, LdapConnSettings};
 use pingora_http::ResponseHeader;
 use sha2::{Digest, Sha256};
 
-use crate::core::plugins::edgion_plugins::common::auth_common::send_auth_error_response;
+use crate::core::plugins::edgion_plugins::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::LdapAuthConfig;
@@ -250,10 +250,12 @@ impl RequestFilter for LdapAuth {
                 }
 
                 plugin_log.push("Auth failed; ");
+                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session).await;
             }
             ParseAuthResult::Invalid => {
                 plugin_log.push("Auth failed; ");
+                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session).await;
             }
         };
@@ -283,6 +285,7 @@ impl RequestFilter for LdapAuth {
             }
             Err(LdapAuthError::InvalidCredentials) => {
                 plugin_log.push("Auth failed; ");
+                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 self.unauthorized(session).await
             }
             Err(LdapAuthError::ConnectionFailed(e)) => {

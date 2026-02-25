@@ -1,6 +1,10 @@
 # LinkSys Development Guide
 
 > Quick reference for adding new LinkSys external system connectors. Choose the best Rust crate for each system, design the interface around its native API, and follow this guide to integrate cleanly.
+>
+> **TODO (2026-02-25): Small Improvement**
+> - [ ] Add detailed `ConfHandler` bridge pattern code snippet (`full_set()` and `partial_update()` implementation)
+> - [ ] Add Webhook subsystem documentation (currently listed in directory but not described)
 
 ## Architecture Overview
 

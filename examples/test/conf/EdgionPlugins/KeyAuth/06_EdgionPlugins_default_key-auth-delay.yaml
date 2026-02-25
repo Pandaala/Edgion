@@ -1,0 +1,21 @@
+# KeyAuth with authFailureDelayMs = 300ms
+# After auth failure (no key / wrong key), response is delayed 300ms
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: key-auth-delay
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: KeyAuth
+      config:
+        keySources:
+          - type: header
+            name: "X-API-Key"
+        authFailureDelayMs: 300
+        realm: "Test API"
+        keyField: "key"
+        secretRefs:
+          - name: api-keys
+            namespace: edgion-default

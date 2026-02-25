@@ -1,6 +1,10 @@
 # Edgion Integration Testing Guide
 
 > How to add, run, and debug integration tests. All test code lives under `examples/test/`.
+>
+> **TODO (2026-02-25): Small Improvement**
+> - [ ] Add non-Plugin test type guide (HTTPRoute/Gateway/GRPCRoute/TCPRoute/UDPRoute/EdgionTls test patterns and differences)
+> - [ ] Add `test_server` capability reference (supported endpoints: `/health`, `/headers`, `/body`, gRPC services, WebSocket, TCP echo, UDP echo, auth service :30040, etc.)
 
 ## Architecture Overview
 

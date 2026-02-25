@@ -77,6 +77,7 @@ impl RequestFilter for OpenidConnect {
         if token.is_none() {
             if self.config.bearer_only {
                 plugin_log.push("No token (bearer_only); ");
+                self.apply_auth_failure_delay().await;
                 let _ = self
                     .send_unauthorized(session, "Unauthorized - Missing bearer token")
                     .await;
@@ -244,6 +245,7 @@ impl RequestFilter for OpenidConnect {
                 }
                 UnauthAction::Deny => {
                     plugin_log.push("No token; deny; ");
+                    self.apply_auth_failure_delay().await;
                     let _ = self
                         .send_unauthorized(session, "Unauthorized - Authentication required")
                         .await;
@@ -288,11 +290,32 @@ impl RequestFilter for OpenidConnect {
             Ok(claims) => {
                 let userinfo_json = self.fetch_userinfo_json(&token).await;
                 self.apply_upstream_headers(session, &token, None, userinfo_json.as_deref(), &claims);
+                // hide_credentials: remove the original Authorization header from the upstream
+                // request. Note: apply_upstream_headers may have already set a *new*
+                // Authorization header (if access_token_in_authorization_header=true), but we
+                // must call hide_credentials_if_needed BEFORE that step would overwrite it.
+                // The current ordering is: apply_upstream_headers first (sets new Bearer header
+                // when configured), then we remove the original – but since
+                // apply_upstream_headers uses set_request_header which overwrites, the new
+                // Bearer value is already set before we remove.
+                // Actually: the original token was already in Authorization before this block.
+                // apply_upstream_headers may overwrite Authorization if
+                // access_token_in_authorization_header=true. In that case removing Authorization
+                // afterwards would undo the overwrite. To avoid that conflict, we only remove
+                // if access_token_in_authorization_header is false.
+                if !self.config.access_token_in_authorization_header {
+                    self.hide_credentials_if_needed(session);
+                }
                 plugin_log.push("OIDC token verified; ");
                 PluginRunningResult::GoodNext
             }
             Err((status, message)) => {
                 plugin_log.push("OIDC verify failed; ");
+                // Apply failure delay only for actual auth failures (401/403),
+                // not for upstream/infra errors (502).
+                if status != 502 {
+                    self.apply_auth_failure_delay().await;
+                }
                 match status {
                     403 => {
                         let _ = self.send_forbidden(session, &message).await;

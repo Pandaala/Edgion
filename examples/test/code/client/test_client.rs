@@ -165,6 +165,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/PluginCondition" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
         "EdgionPlugins/CtxSet" => "EdgionPlugins",
+        "EdgionPlugins/BasicAuth" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
         "EdgionPlugins/JweDecrypt" => "EdgionPlugins",
         "EdgionPlugins/KeyAuth" => "EdgionPlugins",
@@ -399,6 +400,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::JwtAuthTestSuite));
+        }
+        "EdgionPlugins/BasicAuth" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/BasicAuth tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::BasicAuthTestSuite));
         }
         "EdgionPlugins/JweDecrypt" => {
             if !gateway {

@@ -53,6 +53,7 @@ use pingora_http::ResponseHeader;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::time::Duration;
 
+use crate::core::plugins::edgion_plugins::common::auth_common::apply_auth_failure_delay;
 use crate::core::plugins::edgion_plugins::common::http_client::{get_http_client, is_hop_by_hop};
 use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -258,6 +259,10 @@ impl RequestFilter for ForwardAuth {
                     }
                 }
             }
+            // Hide credentials if configured
+            if self.config.hide_credentials {
+                let _ = session.remove_request_header("authorization");
+            }
             plugin_log.push(&format!("Auth passed (status: {}); ", status));
             PluginRunningResult::GoodNext
         } else {
@@ -275,6 +280,7 @@ impl RequestFilter for ForwardAuth {
             let body = resp.text().await.unwrap_or_default();
 
             plugin_log.push(&format!("Auth failed (status: {}); ", status));
+            apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
             self.send_error_response(session, status, &body, Some(&extra_headers))
                 .await
         }

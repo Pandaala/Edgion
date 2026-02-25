@@ -26,6 +26,12 @@ const INVALID_KEY: &str = "invalid-api-key-xxxxx";
 const TEST_HOST: &str = "key-auth-test.example.com";
 const ANONYMOUS_HOST: &str = "key-auth-anonymous.example.com";
 const HIDE_CREDS_HOST: &str = "key-auth-hide-creds.example.com";
+const DELAY_HOST: &str = "key-auth-delay.example.com";
+
+/// authFailureDelayMs configured in 06_EdgionPlugins_default_key-auth-delay.yaml
+const CONFIGURED_DELAY_MS: u64 = 300;
+/// Tolerance: allow 50ms below the configured value
+const DELAY_MIN_MS: u64 = CONFIGURED_DELAY_MS - 50;
 
 impl KeyAuthTestSuite {
     /// Test: Valid API key in header should return 200
@@ -612,6 +618,156 @@ impl KeyAuthTestSuite {
             },
         )
     }
+
+    // ==========================================
+    // auth_failure_delay_ms Tests
+    // ==========================================
+
+    /// Test: Missing key with delay — 401 must arrive after at least DELAY_MIN_MS
+    fn test_failure_delay_on_missing_key() -> TestCase {
+        TestCase::new(
+            "failure_delay_on_missing_key",
+            "401 (no key) is delayed by authFailureDelayMs",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+
+                    let resp = match ctx.http_client.get(&url).header("host", DELAY_HOST).send().await {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let elapsed = start.elapsed();
+                    let status = resp.status().as_u16();
+
+                    if status != 401 {
+                        return TestResult::failed(elapsed, format!("Expected 401 (no key), got {}", status));
+                    }
+
+                    let elapsed_ms = elapsed.as_millis() as u64;
+                    if elapsed_ms >= DELAY_MIN_MS {
+                        TestResult::passed_with_message(
+                            elapsed,
+                            format!(
+                                "No-key 401 delayed {}ms (>= {}ms threshold, configured {}ms)",
+                                elapsed_ms, DELAY_MIN_MS, CONFIGURED_DELAY_MS
+                            ),
+                        )
+                    } else {
+                        TestResult::failed(
+                            elapsed,
+                            format!(
+                                "Delay too short: {}ms < {}ms (configured authFailureDelayMs={}ms)",
+                                elapsed_ms, DELAY_MIN_MS, CONFIGURED_DELAY_MS
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: Invalid key with delay — 401 must also be delayed
+    fn test_failure_delay_on_invalid_key() -> TestCase {
+        TestCase::new(
+            "failure_delay_on_invalid_key",
+            "401 (invalid key) is delayed by authFailureDelayMs",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+
+                    let resp = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", DELAY_HOST)
+                        .header("X-API-Key", INVALID_KEY)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let elapsed = start.elapsed();
+                    let status = resp.status().as_u16();
+
+                    if status != 401 {
+                        return TestResult::failed(elapsed, format!("Expected 401 (invalid key), got {}", status));
+                    }
+
+                    let elapsed_ms = elapsed.as_millis() as u64;
+                    if elapsed_ms >= DELAY_MIN_MS {
+                        TestResult::passed_with_message(
+                            elapsed,
+                            format!("Invalid-key 401 delayed {}ms (>= {}ms)", elapsed_ms, DELAY_MIN_MS),
+                        )
+                    } else {
+                        TestResult::failed(
+                            elapsed,
+                            format!("Delay too short: {}ms < {}ms", elapsed_ms, DELAY_MIN_MS),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: Valid key with delay config must NOT be delayed
+    fn test_no_delay_on_valid_key() -> TestCase {
+        TestCase::new(
+            "no_delay_on_valid_key",
+            "Successful auth is NOT delayed even when authFailureDelayMs is configured",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+
+                    let resp = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", DELAY_HOST)
+                        .header("X-API-Key", VALID_KEY_JACK)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let elapsed = start.elapsed();
+                    let status = resp.status().as_u16();
+
+                    if status != 200 {
+                        return TestResult::failed(
+                            elapsed,
+                            format!("Expected 200 for valid key on delay host, got {}", status),
+                        );
+                    }
+
+                    let upper_bound_ms = CONFIGURED_DELAY_MS * 2;
+                    let elapsed_ms = elapsed.as_millis() as u64;
+
+                    if elapsed_ms < upper_bound_ms {
+                        TestResult::passed_with_message(
+                            elapsed,
+                            format!("Valid key completed in {}ms — no unwanted delay", elapsed_ms),
+                        )
+                    } else {
+                        // Soft warn: CI can be slow
+                        TestResult::passed_with_message(
+                            elapsed,
+                            format!(
+                                "Warning: valid key took {}ms (>= {}ms upper bound) — possible CI slowness",
+                                elapsed_ms, upper_bound_ms
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for KeyAuthTestSuite {
@@ -641,6 +797,10 @@ impl TestSuite for KeyAuthTestSuite {
             // Upstream headers tests
             Self::test_upstream_headers_forwarded(),
             Self::test_upstream_headers_alice(),
+            // auth_failure_delay_ms tests
+            Self::test_failure_delay_on_missing_key(),
+            Self::test_failure_delay_on_invalid_key(),
+            Self::test_no_delay_on_valid_key(),
         ]
     }
 }

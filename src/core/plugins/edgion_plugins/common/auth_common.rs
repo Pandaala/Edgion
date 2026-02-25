@@ -4,6 +4,7 @@ use bytes::Bytes;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::core::plugins::plugin_runtime::PluginSession;
 
@@ -30,6 +31,15 @@ pub async fn send_auth_error_response(
         .await?;
     session.shutdown().await;
     Ok(())
+}
+
+/// Apply authentication failure delay to mitigate brute-force / credential-stuffing attacks.
+///
+/// Call this before returning a 401/403 error response. When `delay_ms` is 0, this is a no-op.
+pub async fn apply_auth_failure_delay(delay_ms: u64) {
+    if delay_ms > 0 {
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+    }
 }
 
 /// JWT claims container with standard fields + flexible custom fields.

@@ -35,7 +35,7 @@ pub use gateway::{
 
 // EdgionPlugins tests
 pub use edgion_plugins::{
-    AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite, CtxSetTestSuite,
+    AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite, BasicAuthTestSuite, CtxSetTestSuite,
     DirectEndpointTestSuite, DslTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite,
     ForwardAuthTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite, JweDecryptTestSuite, JwtAuthTestSuite,
     KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite, PluginConditionTestSuite, PluginLogsTestSuite,
