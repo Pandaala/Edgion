@@ -168,4 +168,4 @@
 
 - [Kubernetes Gateway API Specification](https://gateway-api.sigs.k8s.io/)
 - 实现代码: [`src/core/gateway/gateway/route_match.rs`](../../../src/core/gateway/gateway/route_match.rs)
-- 测试框架: [`examples/test/code/client/framework.rs`](../../code/client/framework.rs)
+- 测试框架: [`examples/code/client/framework.rs`](../../code/client/framework.rs)

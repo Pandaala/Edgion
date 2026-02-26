@@ -1,0 +1,13 @@
+# EdgionTls gRPC TLS 测试套件 Gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edgiontls-grpctls-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # gRPC TLS 监听器 - 由 EdgionTls 配置 TLS
+    - name: grpctls
+      protocol: HTTPS
+      port: 31200

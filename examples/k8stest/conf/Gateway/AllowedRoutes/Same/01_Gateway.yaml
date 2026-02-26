@@ -1,0 +1,17 @@
+# AllowedRoutes Same Namespace 测试
+# Gateway 配置 allowedRoutes.namespaces.from: Same
+# 只允许同一 namespace 的 Route 连接
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: allowed-routes-same-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31210
+      allowedRoutes:
+        namespaces:
+          from: Same  # 只允许同 namespace 的 Route

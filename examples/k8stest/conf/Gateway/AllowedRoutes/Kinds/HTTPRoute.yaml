@@ -1,0 +1,21 @@
+# HTTPRoute（应允许）
+# Gateway 配置 allowedRoutes.kinds 包含 HTTPRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kinds-http-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: allowed-routes-kinds-gateway
+      namespace: edgion-test
+  hostnames:
+    - "kinds-http.example.com"
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          port: 30001

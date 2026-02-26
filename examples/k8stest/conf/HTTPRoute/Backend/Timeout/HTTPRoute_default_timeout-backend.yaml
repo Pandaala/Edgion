@@ -1,0 +1,30 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: timeout-backend
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: timeout-gateway
+      namespace: edgion-test
+  hostnames:
+    - "timeout-backend.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: timeout-debug
+      timeouts:
+        request: "5s"           # 请求总超时（包含所有重试）
+        backendRequest: "1s"    # 后端请求超时
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+

@@ -12,7 +12,7 @@
 #   ./generate_k8s_conf.sh [输出目录]
 #
 # 示例：
-#   ./generate_k8s_conf.sh              # 输出到 ../k8s-conf
+#   ./generate_k8s_conf.sh              # 输出到 examples/k8stest/conf
 #   ./generate_k8s_conf.sh /tmp/k8s     # 输出到 /tmp/k8s
 #
 
@@ -22,10 +22,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # test 目录
 TEST_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# k8stest 目录
+K8S_TEST_DIR="$(cd "$TEST_DIR/.." && pwd)/k8stest"
 # conf 源目录
 CONF_DIR="$TEST_DIR/conf"
 # 默认输出目录
-OUTPUT_DIR="${1:-$TEST_DIR/k8s-conf}"
+OUTPUT_DIR="${1:-$K8S_TEST_DIR/conf}"
 # Deployment 源文件（相对于 workspace root）
 WORKSPACE_ROOT="$(cd "$TEST_DIR/../../.." && pwd)"
 DEPLOYMENT_SRC="$WORKSPACE_ROOT/edgion-deploy/kubernetes/test/test-server/deployment.yaml"

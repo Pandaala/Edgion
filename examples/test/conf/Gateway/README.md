@@ -189,4 +189,4 @@ cd examples/test
 
 - Kubernetes Gateway API Spec: https://gateway-api.sigs.k8s.io/
 - 实现代码: `src/core/gateway/gateway/route_match.rs` (`check_gateway_listener_match`)
-- 测试代码: `examples/test/code/client/suites/gateway/`
+- 测试代码: `examples/code/client/suites/gateway/`

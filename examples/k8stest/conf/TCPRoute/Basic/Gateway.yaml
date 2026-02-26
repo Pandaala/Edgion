@@ -1,0 +1,15 @@
+# TCP 测试套件 Gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tcp-test-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tcp
+      protocol: TCP
+      port: 31090
+    - name: tcp-filtered
+      protocol: TCP
+      port: 31091
