@@ -274,4 +274,4 @@ async fn read_body_limited(resp: reqwest::Response, max_bytes: usize) -> Option<
 
 // NOTE: extract_value_from_response tests require a real HTTP server (mockito).
 // These are covered by integration tests instead.
-// See examples/test/code/client/suites/edgion_plugins/webhook_key_get/ for full integration tests.
+// See examples/code/client/suites/edgion_plugins/webhook_key_get/ for full integration tests.

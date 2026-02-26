@@ -559,9 +559,9 @@ Useful for debugging: compare `server` vs `client` to check sync status.
 
 | Component | Path | Purpose |
 |-----------|------|---------|
-| `test_server` | `examples/test/code/server/test_server.rs` | Multi-protocol echo backend (HTTP, gRPC, WebSocket, TCP, UDP, auth) |
-| `test_client` | `examples/test/code/client/test_client.rs` | Suite-based test runner with `TestSuite` trait |
-| `resource_diff` | `examples/test/code/validator/resource_diff.rs` | Controller ↔ Gateway sync verification |
+| `test_server` | `examples/code/server/test_server.rs` | Multi-protocol echo backend (HTTP, gRPC, WebSocket, TCP, UDP, auth) |
+| `test_client` | `examples/code/client/test_client.rs` | Suite-based test runner with `TestSuite` trait |
+| `resource_diff` | `examples/code/validator/resource_diff.rs` | Controller ↔ Gateway sync verification |
 | `run_integration.sh` | `examples/test/scripts/integration/` | Full integration test orchestrator |
 | Test configs | `examples/test/conf/` | YAML resources organized by `Resource/Item/` |
 | Port registry | `examples/test/conf/ports.json` | Unique port allocation per test suite |

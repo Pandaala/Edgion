@@ -22,27 +22,27 @@ path = "src/bin/edgion_ctl.rs"
 
 [[example]]
 name = "build_test_proto"
-path = "examples/test/code/build_test_proto.rs"
+path = "examples/code/build_test_proto.rs"
 
 [[example]]
 name = "test_server"
-path = "examples/test/code/server/test_server.rs"
+path = "examples/code/server/test_server.rs"
 
 [[example]]
 name = "test_client"
-path = "examples/test/code/client/test_client.rs"
+path = "examples/code/client/test_client.rs"
 
 [[example]]
 name = "test_client_direct"
-path = "examples/test/code/client_direct/test_client_direct.rs"
+path = "examples/code/client_direct/test_client_direct.rs"
 
 [[example]]
 name = "resource_diff"
-path = "examples/test/code/validator/resource_diff.rs"
+path = "examples/code/validator/resource_diff.rs"
 
 [[example]]
 name = "config_load_validator"
-path = "examples/test/code/validator/config_load_validator.rs"
+path = "examples/code/validator/config_load_validator.rs"
 
 [features]
 # Default features

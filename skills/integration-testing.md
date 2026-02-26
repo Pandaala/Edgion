@@ -318,7 +318,7 @@ spec:
 
 ### Step 4: Write Test Suite Code
 
-Create `examples/test/code/client/suites/edgion_plugins/your_plugin/`:
+Create `examples/code/client/suites/edgion_plugins/your_plugin/`:
 
 **`mod.rs`:**
 
