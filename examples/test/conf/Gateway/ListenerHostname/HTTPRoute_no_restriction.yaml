@@ -1,5 +1,5 @@
-# 无 Hostname 限制测试
-# Listener 未指定 hostname，应允许任意 HTTPRoute hostname
+#  Hostname 
+# Listener  hostname， HTTPRoute hostname
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,7 +11,7 @@ spec:
       namespace: edgion-test
       sectionName: http-no-restriction
   hostnames:
-    - "any-domain.example.com"  # Listener 无限制，任意 hostname 都应允许
+    - "any-domain.example.com"  # Listener ， hostname 
   rules:
     - matches:
         - path:

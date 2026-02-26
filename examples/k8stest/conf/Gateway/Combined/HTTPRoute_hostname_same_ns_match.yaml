@@ -1,5 +1,5 @@
-# 组合测试 1: Hostname 匹配 + Same Namespace（正面测试）
-# Route 在同 namespace 且 hostname 匹配通配符
+#  1: Hostname  + Same Namespace（）
+# Route  namespace  hostname 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,7 +11,7 @@ spec:
       namespace: edgion-test
       sectionName: http-hostname-same-ns
   hostnames:
-    - "api.combined.example.com"  # 匹配 *.combined.example.com
+    - "api.combined.example.com"  #  *.combined.example.com
   rules:
     - matches:
         - path:

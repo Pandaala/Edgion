@@ -1,4 +1,4 @@
-# RoundRobin + 多 EndpointSlice 模式
+# RoundRobin +  EndpointSlice 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

@@ -1,4 +1,4 @@
-# EdgionTls gRPC TLS 测试 GRPCRoute
+# EdgionTls gRPC TLS  GRPCRoute
 apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
 metadata:

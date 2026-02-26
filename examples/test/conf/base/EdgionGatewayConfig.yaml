@@ -3,7 +3,7 @@ kind: EdgionGatewayConfig
 metadata:
   name: example-gateway
 spec:
-  # Server 配置（Pingora 服务器参数）
+  # Server （Pingora ）
   server:
     threads: 4
     workStealing: true
@@ -11,7 +11,7 @@ spec:
     gracefulShutdownTimeoutS: 10
     upstreamKeepalivePoolSize: 128
 
-  # Real IP 提取配置
+  # Real IP 
   realIp:
     trustedIps:
       - "127.0.0.0/8"
@@ -21,13 +21,13 @@ spec:
       - "172.16.0.0/12"
     realIpHeader: "X-Forwarded-For"
 
-  # 安全防护配置
+  # 
   securityProtect:
     xForwardedForLimit: 200
     requireSniHostMatch: true
     fallbackSni: "default.example.com"
 
-  # HTTP 超时配置
+  # HTTP 
   httpTimeout:
     client:
       readTimeout: 60s

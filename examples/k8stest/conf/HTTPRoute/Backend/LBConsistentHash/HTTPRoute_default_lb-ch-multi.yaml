@@ -1,5 +1,5 @@
-# ConsistentHash (Header) + 多 EndpointSlice 模式
-# 使用 X-User-Id header 进行一致性哈希，测试跨多个 slice 的一致性
+# ConsistentHash (Header) +  EndpointSlice 
+#  X-User-Id header ， slice 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

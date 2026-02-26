@@ -1,4 +1,4 @@
-# TLS Cipher 测试套件 Gateway
+# TLS Cipher  Gateway
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -7,11 +7,11 @@ metadata:
 spec:
   gatewayClassName: public-gateway
   listeners:
-    # Legacy cipher 监听器 - TLS 1.2 + 弱算法
+    # Legacy cipher  - TLS 1.2 + 
     - name: https-legacy
       protocol: HTTPS
       port: 31195
-    # Modern cipher 监听器 - TLS 1.2 + 现代算法
+    # Modern cipher  - TLS 1.2 + 
     - name: https-modern
       protocol: HTTPS
       port: 31196

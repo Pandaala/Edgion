@@ -1,4 +1,4 @@
-# HTTPRoute for RequestRestriction 集成测试
+# HTTPRoute for RequestRestriction 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,7 +11,7 @@ spec:
   hostnames:
     - "request-restriction.example.com"
   rules:
-    # 1. Header 拒绝列表测试
+    # 1. Header 
     - matches:
         - path:
             type: PathPrefix
@@ -27,7 +27,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 2. Path 允许列表测试
+    # 2. Path 
     - matches:
         - path:
             type: PathPrefix
@@ -43,7 +43,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 3. Method 允许列表测试
+    # 3. Method 
     - matches:
         - path:
             type: PathPrefix
@@ -59,7 +59,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 4. Header 必须存在测试
+    # 4. Header 
     - matches:
         - path:
             type: PathPrefix
@@ -75,7 +75,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 5. 综合测试
+    # 5. 
     - matches:
         - path:
             type: PathPrefix

@@ -1,4 +1,4 @@
-# EdgionTls gRPC TLS 配置
+# EdgionTls gRPC TLS 
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:

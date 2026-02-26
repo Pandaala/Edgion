@@ -1,4 +1,4 @@
-# HTTPRoute for DSL Header Check 集成测试
+# HTTPRoute for DSL Header Check 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

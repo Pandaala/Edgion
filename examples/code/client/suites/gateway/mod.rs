@@ -13,7 +13,7 @@ mod security;
 mod stream_plugins;
 mod tls;
 
-// 导出Test suite
+// Test suite
 pub use allowed_routes::AllowedRoutesAllNamespacesTestSuite;
 pub use allowed_routes::AllowedRoutesKindsTestSuite;
 pub use allowed_routes::AllowedRoutesSameNamespaceTestSuite;

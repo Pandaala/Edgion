@@ -1,4 +1,4 @@
-# WebSocket 测试套件端点
+# WebSocket 
 apiVersion: discovery.k8s.io/v1
 kind: EndpointSlice
 metadata:

@@ -26,10 +26,10 @@ impl InitialPhaseTestSuite {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-                    // 尝试访问 hostname 不匹配的路由
+                    //  hostname 
                     let resp = client
                         .get(format!("http://{}:31250/match", ctx.target_host))
-                        .header("Host", "other.example.com") // 不匹配 api.example.com
+                        .header("Host", "other.example.com") //  api.example.com
                         .send()
                         .await;
 
@@ -64,7 +64,7 @@ impl InitialPhaseTestSuite {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-                    // GET 请求应该成功（需要带正确的 Host header）
+                    // GET （ Host header）
                     let resp = client
                         .get(format!("http://{}:31251/api/v1", ctx.target_host))
                         .header("Host", "method-test.example.com")
@@ -74,7 +74,7 @@ impl InitialPhaseTestSuite {
                     match resp {
                         Ok(resp) => {
                             let status = resp.status();
-                            // 接受 200、502 或 503 (backend 未运行)
+                            //  200502  503 (backend )
                             if status.is_success() || status == 502 || status == 503 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),

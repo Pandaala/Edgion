@@ -19,7 +19,7 @@ spec:
           extensionRef:
             group: edgion.io
             kind: EdgionPlugins
-            name: timeout-debug  # 复用现有的debug插件
+            name: timeout-debug  # debug
       backendRefs:
         - name: backend-a
           namespace: edgion-test

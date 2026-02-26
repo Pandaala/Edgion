@@ -1,4 +1,4 @@
-# LB RoundRobin 多 Slice 测试服务
+# LB RoundRobin  Slice 
 apiVersion: v1
 kind: Service
 metadata:

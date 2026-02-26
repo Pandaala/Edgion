@@ -352,7 +352,7 @@ impl TestRunner {
     }
 }
 
-/// 所有Test result
+/// Test result
 pub struct TestResults {
     pub suite_results: Vec<SuiteResult>,
 }

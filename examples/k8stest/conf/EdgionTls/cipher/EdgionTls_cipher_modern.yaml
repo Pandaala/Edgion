@@ -1,5 +1,5 @@
-# TLS 1.2 Modern Cipher 配置
-# 配置仅支持现代加密算法（安全性更高）
+# TLS 1.2 Modern Cipher 
+# （）
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
@@ -15,9 +15,9 @@ spec:
   secretRef:
     name: edge-tls
     namespace: edgion-test
-  # 最低 TLS 版本
+  #  TLS 
   minTlsVersion: TLS1_2
-  # 现代算法列表（GCM 模式，AEAD）
+  # （GCM ，AEAD）
   ciphers:
     - "ECDHE-RSA-AES256-GCM-SHA384"
     - "ECDHE-RSA-AES128-GCM-SHA256"

@@ -1,5 +1,5 @@
-# Header Modifier 测试套件路由配置
-# 测试 RequestHeaderModifier 和 ResponseHeaderModifier 的 set/add/remove 功能
+# Header Modifier 
+#  RequestHeaderModifier  ResponseHeaderModifier  set/add/remove 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -12,7 +12,7 @@ spec:
   hostnames:
     - "header-test.example.com"
   rules:
-    # 规则1: RequestHeaderModifier - 测试 set/add/remove
+    # 1: RequestHeaderModifier -  set/add/remove
     - matches:
         - path:
             type: Exact
@@ -32,7 +32,7 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则2: ResponseHeaderModifier - 测试 set/add/remove
+    # 2: ResponseHeaderModifier -  set/add/remove
     - matches:
         - path:
             type: Exact
@@ -52,7 +52,7 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则3: 请求头和响应头同时修改
+    # 3: 
     - matches:
         - path:
             type: Exact
@@ -72,7 +72,7 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则4: 多个请求头修改（测试多值）
+    # 4: （）
     - matches:
         - path:
             type: Exact
@@ -94,7 +94,7 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则5: 多个响应头修改（测试多值）
+    # 5: （）
     - matches:
         - path:
             type: Exact
@@ -118,7 +118,7 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则6: 默认路由（无 filter）
+    # 6: （ filter）
     - matches:
         - path:
             type: PathPrefix

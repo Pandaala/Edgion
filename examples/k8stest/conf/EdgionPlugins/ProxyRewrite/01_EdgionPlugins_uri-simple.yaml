@@ -1,4 +1,4 @@
-# 1. URI 简单替换
+# 1. URI 
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

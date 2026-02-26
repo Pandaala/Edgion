@@ -9,6 +9,6 @@ pub mod test;
 mod basic;
 mod r#match;
 
-// 导出Test suite
+// Test suite
 pub use basic::GrpcTestSuite;
 pub use r#match::GrpcMatchTestSuite;

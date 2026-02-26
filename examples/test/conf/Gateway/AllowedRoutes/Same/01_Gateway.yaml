@@ -1,6 +1,6 @@
-# AllowedRoutes Same Namespace 测试
-# Gateway 配置 allowedRoutes.namespaces.from: Same
-# 只允许同一 namespace 的 Route 连接
+# AllowedRoutes Same Namespace 
+# Gateway  allowedRoutes.namespaces.from: Same
+#  namespace  Route 
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -14,4 +14,4 @@ spec:
       port: 31210
       allowedRoutes:
         namespaces:
-          from: Same  # 只允许同 namespace 的 Route
+          from: Same  #  namespace  Route

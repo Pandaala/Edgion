@@ -24,17 +24,17 @@ static INIT: Once = Once::new();
 
 #[derive(Parser, Debug)]
 #[command(name = "test-client")]
-#[command(about = "Edgion 统一测试客户端")]
+#[command(about = "Edgion ")]
 struct Cli {
     /// Resource type (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLS, Security, Plugins)
     #[arg(short = 'r', long = "resource")]
     resource: Option<String>,
 
-    /// sub-item (Match, Backend, Filters, Protocol 等)
+    /// sub-item (Match, Backend, Filters, Protocol )
     #[arg(short = 'i', long = "item")]
     item: Option<String>,
 
-    /// 使用 Gateway Mode（Passed Gateway 代理测试）
+    ///  Gateway Mode（Passed Gateway ）
     #[arg(short = 'g', long = "gateway")]
     gateway: bool,
 
@@ -78,14 +78,14 @@ struct Cli {
     #[arg(long)]
     phase: Option<String>,
 
-    /// 兼容旧命令：直接指定测试类型
+    /// ：
     #[arg(value_name = "COMMAND")]
     legacy_command: Option<String>,
 }
 
-/// 解析资源和sub-item，返回 suite 名称
+/// sub-item， suite 
 fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str>) -> String {
-    // 优先使用旧的兼容命令
+    // 
     if let Some(cmd) = legacy {
         return match cmd.to_lowercase().as_str() {
             "http" => "HTTPRoute/Basic".to_string(),
@@ -126,16 +126,16 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
         };
     }
 
-    // 使用新的 -r/-i 参数
+    //  -r/-i 
     match (resource, item) {
         (Some(r), Some(i)) => format!("{}/{}", r, i),
         (Some(r), None) => r.to_string(),
-        (None, Some(i)) => format!("HTTPRoute/{}", i), // 默认资源为 HTTPRoute
+        (None, Some(i)) => format!("HTTPRoute/{}", i), //  HTTPRoute
         (None, None) => "all".to_string(),
     }
 }
 
-/// 根据 suite 名称获取Port config key
+///  suite Port config key
 fn suite_to_port_key(suite: &str) -> &str {
     match suite {
         // HTTPRoute
@@ -197,10 +197,10 @@ fn suite_to_port_key(suite: &str) -> &str {
     }
 }
 
-/// 根据 suite Add test suite到 runner
+///  suite Add test suite runner
 fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, phase: Option<&str>) {
     match suite {
-        // HTTPRoute 资源
+        // HTTPRoute 
         "HTTPRoute/Basic" | "HTTPRoute" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
         }
@@ -295,9 +295,9 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::HttpsTestSuite));
         }
-        // GRPCRoute 资源
+        // GRPCRoute 
         "GRPCRoute" => {
-            // 运行 GRPCRoute 全部测试
+            //  GRPCRoute 
             runner.add_suite(Box::new(suites::GrpcTestSuite));
             if gateway {
                 runner.add_suite(Box::new(suites::GrpcMatchTestSuite));
@@ -320,7 +320,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::GrpcTlsTestSuite));
         }
-        // TCP/UDP 资源
+        // TCP/UDP 
         "tcp" | "TCPRoute" | "TCPRoute/Basic" => {
             runner.add_suite(Box::new(suites::TcpTestSuite));
         }
@@ -334,7 +334,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         "udp" | "UDPRoute" | "UDPRoute/Basic" => {
             runner.add_suite(Box::new(suites::UdpTestSuite));
         }
-        // Gateway 资源
+        // Gateway 
         "Gateway" => {
             if !gateway {
                 eprintln!("Error: Gateway tests require --gateway flag");
@@ -610,7 +610,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                     runner.add_suite(Box::new(suites::UpdatePhaseTestSuite));
                 }
                 None => {
-                    // 默认运行两个阶段
+                    // 
                     runner.add_suite(Box::new(suites::InitialPhaseTestSuite));
                     runner.add_suite(Box::new(suites::UpdatePhaseTestSuite));
                 }
@@ -620,7 +620,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 }
             }
         }
-        // EdgionTls 资源
+        // EdgionTls 
         "EdgionTls" => {
             if !gateway {
                 eprintln!("Error: EdgionTls tests require --gateway flag");
@@ -670,7 +670,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         "Services/acme" => {
             runner.add_suite(Box::new(suites::AcmeTestSuite));
         }
-        // 运行所有测试
+        // 
         "all" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
             runner.add_suite(Box::new(suites::GrpcTestSuite));
@@ -702,7 +702,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 初始化 rustls（仅一次）
+    //  rustls（）
     INIT.call_once(|| {
         rustls::crypto::ring::default_provider()
             .install_default()
@@ -715,14 +715,14 @@ async fn main() -> Result<()> {
         tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init();
     }
 
-    // 解析 suite 名称
+    //  suite 
     let suite = resolve_suite(
         cli.resource.as_deref(),
         cli.item.as_deref(),
         cli.legacy_command.as_deref(),
     );
 
-    // 获取Port config key
+    // Port config key
     let port_key = suite_to_port_key(&suite);
 
     // Determine ports and host based on gateway flag
@@ -797,7 +797,7 @@ async fn main() -> Result<()> {
     let mode_name = if cli.gateway { "Gateway" } else { "Direct" };
 
     println!("\n========================================");
-    println!("Edgion 测试客户端");
+    println!("Edgion ");
     println!("========================================");
     println!("Mode: {}", mode_name);
     println!("Suite: {}", suite);
@@ -841,7 +841,7 @@ async fn main() -> Result<()> {
     if cli.json {
         let json_reporter = JsonReporter::new();
         json_reporter.save_to_file(&results, total_duration, &cli.json_output)?;
-        println!("\n✓ JSON 报告已保存到: {}", cli.json_output);
+        println!("\n✓ JSON : {}", cli.json_output);
     }
 
     if results.has_failures() {

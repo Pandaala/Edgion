@@ -127,7 +127,7 @@ impl HttpTestSuite {
     }
 
     fn test_delay() -> TestCase {
-        TestCase::new("delay", "测试delay响应", |ctx: TestContext| {
+        TestCase::new("delay", "delay", |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
                 let delay_seconds = 1;

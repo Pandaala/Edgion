@@ -1,6 +1,6 @@
-# AllowedRoutes All Namespaces 测试
-# Gateway 配置 allowedRoutes.namespaces.from: All
-# 允许所有 namespace 的 Route 连接
+# AllowedRoutes All Namespaces 
+# Gateway  allowedRoutes.namespaces.from: All
+#  namespace  Route 
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -14,4 +14,4 @@ spec:
       port: 31211
       allowedRoutes:
         namespaces:
-          from: All  # 允许所有 namespace 的 Route
+          from: All  #  namespace  Route

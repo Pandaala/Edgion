@@ -1,5 +1,5 @@
-# 组合测试 4: sectionName + Hostname 匹配（正面测试）
-# Route 绑定到 secure listener，hostname 匹配
+#  4: sectionName + Hostname （）
+# Route  secure listener，hostname 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,7 +11,7 @@ spec:
       namespace: edgion-test
       sectionName: http-secure
   hostnames:
-    - "secure.combined.example.com"  # 精确匹配 listener hostname
+    - "secure.combined.example.com"  #  listener hostname
   rules:
     - matches:
         - path:

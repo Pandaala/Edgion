@@ -3,5 +3,5 @@
 // Sub-modules - by function
 mod basic;
 
-// 导出Test suite
+// Test suite
 pub use basic::UdpTestSuite;

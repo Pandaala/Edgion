@@ -1,5 +1,5 @@
-# ConsistentHash (Header) + Endpoints 模式
-# 使用 X-User-Id header 进行一致性哈希
+# ConsistentHash (Header) + Endpoints 
+#  X-User-Id header 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

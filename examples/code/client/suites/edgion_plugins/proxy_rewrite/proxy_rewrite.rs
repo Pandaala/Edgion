@@ -1,11 +1,11 @@
 // ProxyRewrite Plugin Test Suite
 //
-// 测试策略：
-// - URI 重写类：每种方式独立测试（互斥场景）
-// - 综合测试：Host + Method + Headers 组合验证
-// - Path 参数：验证 $uid 路径参数提取
+// ：
+// - URI ：（）
+// - ：Host + Method + Headers 
+// - Path ： $uid 
 //
-// test_server 返回纯文本格式：
+// test_server ：
 // Server: 0.0.0.0:30001
 // Client: 127.0.0.1:xxxxx
 // Method: GET
@@ -20,7 +20,7 @@ use std::time::Instant;
 
 pub struct ProxyRewriteTestSuite;
 
-/// 解析 test_server 返回的纯文本响应
+///  test_server 
 fn parse_echo_response(text: &str) -> EchoInfo {
     let mut info = EchoInfo::default();
     let mut in_headers = false;
@@ -37,14 +37,14 @@ fn parse_echo_response(text: &str) -> EchoInfo {
         }
 
         if in_headers {
-            // 解析 Header: "  Name: Value"
+            //  Header: "  Name: Value"
             if let Some(pos) = line.find(':') {
                 let name = line[..pos].trim().to_lowercase();
                 let value = line[pos + 1..].trim().to_string();
                 info.headers.insert(name, value);
             }
         } else {
-            // 解析顶层字段: "Field: Value"
+            // : "Field: Value"
             if let Some(pos) = line.find(':') {
                 let field = line[..pos].trim();
                 let value = line[pos + 1..].trim();
@@ -68,11 +68,11 @@ struct EchoInfo {
 }
 
 impl ProxyRewriteTestSuite {
-    // ==================== 1. URI 简单替换 ====================
+    // ==================== 1. URI  ====================
     fn test_uri_simple() -> TestCase {
         TestCase::new(
             "uri_simple",
-            "URI 简单替换: /uri/simple/test -> /internal/api/v2",
+            "URI : /uri/simple/test -> /internal/api/v2",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -112,11 +112,11 @@ impl ProxyRewriteTestSuite {
         )
     }
 
-    // ==================== 2. URI + $uri 变量 ====================
+    // ==================== 2. URI + $uri  ====================
     fn test_uri_var() -> TestCase {
         TestCase::new(
             "uri_var",
-            "URI $uri 变量: /uri/var/test -> /prefix/uri/var/test/suffix",
+            "URI $uri : /uri/var/test -> /prefix/uri/var/test/suffix",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -157,11 +157,11 @@ impl ProxyRewriteTestSuite {
         )
     }
 
-    // ==================== 3. URI + $arg_xxx 变量 ====================
+    // ==================== 3. URI + $arg_xxx  ====================
     fn test_uri_arg() -> TestCase {
         TestCase::new(
             "uri_arg",
-            "URI $arg 变量: ?keyword=hello&lang=en -> /search/hello/en",
+            "URI $arg : ?keyword=hello&lang=en -> /search/hello/en",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -179,7 +179,7 @@ impl ProxyRewriteTestSuite {
                             match response.text().await {
                                 Ok(text) => {
                                     let echo = parse_echo_response(&text);
-                                    // 期望: /search/hello/en (原 query string 会保留在 path 后面)
+                                    // : /search/hello/en ( query string  path )
                                     if echo.path.starts_with("/search/hello/en") {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
@@ -202,7 +202,7 @@ impl ProxyRewriteTestSuite {
         )
     }
 
-    // ==================== 4. Regex URI 捕获组 ====================
+    // ==================== 4. Regex URI  ====================
     fn test_regex_uri() -> TestCase {
         TestCase::new(
             "regex_uri",
@@ -246,11 +246,11 @@ impl ProxyRewriteTestSuite {
         )
     }
 
-    // ==================== 5. 综合测试 ====================
+    // ==================== 5.  ====================
     fn test_combined() -> TestCase {
         TestCase::new(
             "combined",
-            "综合: Host + Headers(add/set/remove)",
+            ": Host + Headers(add/set/remove)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -274,7 +274,7 @@ impl ProxyRewriteTestSuite {
                                     let echo = parse_echo_response(&text);
                                     let mut errors = Vec::new();
 
-                                    // 检查 Host 重写
+                                    //  Host 
                                     if let Some(host) = echo.headers.get("host") {
                                         if host != "backend.internal.svc" {
                                             errors.push(format!("Host: expected backend.internal.svc, got {}", host));
@@ -283,7 +283,7 @@ impl ProxyRewriteTestSuite {
                                         errors.push("Host header not found".to_string());
                                     }
 
-                                    // 检查 Headers add
+                                    //  Headers add
                                     if echo.headers.get("x-gateway") != Some(&"edgion".to_string()) {
                                         errors.push(format!(
                                             "X-Gateway: expected edgion, got {:?}",
@@ -291,7 +291,7 @@ impl ProxyRewriteTestSuite {
                                         ));
                                     }
 
-                                    // 检查 Headers set
+                                    //  Headers set
                                     if let Some(path) = echo.headers.get("x-original-path") {
                                         if !path.contains("/combined") {
                                             errors.push(format!("X-Original-Path: wrong value {}", path));
@@ -300,7 +300,7 @@ impl ProxyRewriteTestSuite {
                                         errors.push("X-Original-Path not set".to_string());
                                     }
 
-                                    // 检查 Headers remove
+                                    //  Headers remove
                                     if echo.headers.contains_key("x-debug") {
                                         errors.push("X-Debug not removed".to_string());
                                     }
@@ -331,11 +331,11 @@ impl ProxyRewriteTestSuite {
         )
     }
 
-    // ==================== 6. Path 参数测试 ====================
+    // ==================== 6. Path  ====================
     fn test_path_param() -> TestCase {
         TestCase::new(
             "path_param",
-            "Path 参数: /params/789/info -> URI=/user-service/789/profile, Header X-User-Id=789",
+            "Path : /params/789/info -> URI=/user-service/789/profile, Header X-User-Id=789",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -355,7 +355,7 @@ impl ProxyRewriteTestSuite {
                                     let echo = parse_echo_response(&text);
                                     let mut errors = Vec::new();
 
-                                    // 检查 URI 中的 $uid 替换
+                                    //  URI  $uid 
                                     if echo.path != "/user-service/789/profile" {
                                         errors.push(format!(
                                             "URI: expected /user-service/789/profile, got {}",
@@ -363,7 +363,7 @@ impl ProxyRewriteTestSuite {
                                         ));
                                     }
 
-                                    // 检查 Header 中的 $uid 替换
+                                    //  Header  $uid 
                                     if echo.headers.get("x-user-id") != Some(&"789".to_string()) {
                                         errors.push(format!(
                                             "X-User-Id: expected 789, got {:?}",
@@ -402,9 +402,9 @@ impl TestSuite for ProxyRewriteTestSuite {
             Self::test_uri_var(),
             Self::test_uri_arg(),
             Self::test_regex_uri(),
-            // combined 和 path_param 暂时跳过：
-            // - combined: test_server 不返回 Headers，无法验证 Headers 操作
-            // - path_param: 需要路由参数提取支持（:uid 语法）
+            // combined  path_param ：
+            // - combined: test_server  Headers， Headers 
+            // - path_param: （:uid ）
         ]
     }
 }

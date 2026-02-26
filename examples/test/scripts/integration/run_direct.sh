@@ -1,27 +1,27 @@
 #!/bin/bash
 # =============================================================================
-# Edgion 直接Testscript
-# 直接Test test_client_direct 与 test_server 的连通性（不passed Gateway）
+# Edgion Testscript
+# Test test_client_direct  test_server （passed Gateway）
 # =============================================================================
 
 set -e
 
-# 颜色定义
+# 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# project根directory
+# projectdirectory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
-# 创建时间戳Workdirectory
+# Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK_DIR="${PROJECT_ROOT}/integration_testing/direct_${TIMESTAMP}"
 
-# 子directory
+# directory
 LOG_DIR="${WORK_DIR}/logs"
 PID_DIR="${WORK_DIR}/pids"
 
@@ -33,7 +33,7 @@ TEST_SERVER_TCP_PORT=30010
 TEST_SERVER_UDP_PORT=30011
 
 # =============================================================================
-# log函数
+# log
 # =============================================================================
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -59,10 +59,10 @@ log_section() {
 }
 
 # =============================================================================
-# healthCheck函数
+# healthCheck
 # =============================================================================
 
-# Waitport可用
+# Waitport
 wait_for_port() {
     local port=$1
     local service_name=$2
@@ -72,15 +72,15 @@ wait_for_port() {
     
     log_info "Wait $service_name (port $port)..."
     while [ $elapsed -lt $timeout ]; do
-        # Checkprocess是否存活
+        # Checkprocess
         if [ -f "$pid_file" ]; then
             if ! kill -0 $(cat "$pid_file") 2>/dev/null; then
-                log_error "$service_name process意外退出"
+                log_error "$service_name process"
                 return 1
             fi
         fi
         
-        # Checkport是否开放
+        # Checkport
         if nc -z 127.0.0.1 $port 2>/dev/null; then
             log_success "$service_name ready (port $port)"
             return 0
@@ -89,11 +89,11 @@ wait_for_port() {
         elapsed=$((elapsed + 1))
     done
     
-    log_error "$service_name 在 ${timeout}s 内未能Start"
+    log_error "$service_name  ${timeout}s Start"
     return 1
 }
 
-# Wait HTTP 端点可用
+# Wait HTTP 
 wait_for_http() {
     local url=$1
     local service_name=$2
@@ -103,18 +103,18 @@ wait_for_http() {
     log_info "Wait $service_name (HTTP: $url)..."
     while [ $elapsed -lt $timeout ]; do
         if curl -sf -o /dev/null "$url" 2>/dev/null; then
-            log_success "$service_name ready (HTTP 响应正常)"
+            log_success "$service_name ready (HTTP )"
             return 0
         fi
         sleep 1
         elapsed=$((elapsed + 1))
     done
     
-    log_warn "$service_name HTTP 端点未响应，继续..."
+    log_warn "$service_name HTTP ，..."
     return 0
 }
 
-# Cleanup函数
+# Cleanup
 cleanup() {
     echo ""
     log_info "Stopallservice..."
@@ -134,7 +134,7 @@ cleanup() {
     log_info "logfile: ${LOG_DIR}/test_server.log"
 }
 
-# capture退出信号
+# capture
 trap cleanup EXIT SIGINT SIGTERM
 
 # =============================================================================
@@ -143,14 +143,14 @@ trap cleanup EXIT SIGINT SIGTERM
 start_test_server() {
     log_section "Start test_server"
     
-    # 先Cleanupmay存在的旧process
-    pkill -f "test_server" 2>/dev/null && log_info "Stop旧 test_server" || true
+    # Cleanupmayprocess
+    pkill -f "test_server" 2>/dev/null && log_info "Stop test_server" || true
     sleep 1
     
-    # CheckBuild产物
+    # CheckBuild
     local test_server_bin="${PROJECT_ROOT}/target/debug/examples/test_server"
     if [ ! -f "$test_server_bin" ]; then
-        log_error "test_server 未Build，Please先Run prepare.sh"
+        log_error "test_server Build，PleaseRun prepare.sh"
         exit 1
     fi
     
@@ -173,7 +173,7 @@ start_test_server() {
         exit 1
     fi
     
-    # verify health 端点
+    # verify health 
     wait_for_http "http://127.0.0.1:${TEST_SERVER_HTTP_PORT}/health" "test_server" 10
     
     log_success "test_server Startsuccess (PID: $(cat ${PID_DIR}/test_server.pid))"
@@ -185,12 +185,12 @@ start_test_server() {
 run_tests() {
     local test_command="${1:-all}"
     
-    log_section "Run直接Test: $test_command"
+    log_section "RunTest: $test_command"
     
     # Check test_client_direct
     local test_client_bin="${PROJECT_ROOT}/target/debug/examples/test_client_direct"
     if [ ! -f "$test_client_bin" ]; then
-        log_error "test_client_direct 未Build，Please先Run prepare.sh"
+        log_error "test_client_direct Build，PleaseRun prepare.sh"
         exit 1
     fi
     
@@ -212,23 +212,23 @@ run_tests() {
 }
 
 # =============================================================================
-# 主函数
+# 
 # =============================================================================
 main() {
     local test_command="${1:-all}"
     
     echo ""
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${BLUE}Edgion 直接Test${NC}"
+    echo -e "${BLUE}Edgion Test${NC}"
     echo -e "${BLUE}========================================${NC}"
     echo -e "Test: test_client_direct <-> test_server"
-    echo -e "命令: $test_command"
+    echo -e ": $test_command"
     echo -e "Workdirectory: ${WORK_DIR}"
     echo ""
     
     cd "$PROJECT_ROOT"
     
-    # 创建Workdirectory
+    # Workdirectory
     mkdir -p "$LOG_DIR"
     mkdir -p "$PID_DIR"
     
@@ -238,10 +238,10 @@ main() {
     # RunTest
     local test_result=0
     if run_tests "$test_command"; then
-        log_section "Test结果"
-        log_success "all直接Testpassed!"
+        log_section "Test"
+        log_success "allTestpassed!"
     else
-        log_section "Test结果"
+        log_section "Test"
         log_error "partialTestfailed!"
         test_result=1
     fi

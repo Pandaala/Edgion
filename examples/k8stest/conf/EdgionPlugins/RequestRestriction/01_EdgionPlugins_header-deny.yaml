@@ -1,4 +1,4 @@
-# 1. Header 拒绝列表 - 阻止 Bot User-Agent
+# 1. Header  -  Bot User-Agent
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

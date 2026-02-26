@@ -8,7 +8,7 @@
 // - EndpointSlice_edge_backend-a.yaml          # Backend A endpoints
 // - EndpointSlice_edge_backend-b.yaml          # Backend B endpoints
 // - EndpointSlice_edge_backend-c.yaml          # Backend C endpoints
-// - EdgionPlugins_default_timeout-debug.yaml   # Debug插件config
+// - EdgionPlugins_default_timeout-debug.yaml   # Debugconfig
 // - Gateway_edge_example-gateway.yaml          # Gateway config
 // - GatewayClass__public-gateway.yaml          # GatewayClass config
 

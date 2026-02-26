@@ -1,4 +1,4 @@
-# EdgionTls HTTPS 测试套件 Gateway
+# EdgionTls HTTPS  Gateway
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -7,7 +7,7 @@ metadata:
 spec:
   gatewayClassName: public-gateway
   listeners:
-    # HTTPS 监听器 - 由 EdgionTls 配置 TLS
+    # HTTPS  -  EdgionTls  TLS
     - name: https
       protocol: HTTPS
       port: 31190

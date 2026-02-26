@@ -1,4 +1,4 @@
-# HTTP Security 测试套件路由
+# HTTP Security 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

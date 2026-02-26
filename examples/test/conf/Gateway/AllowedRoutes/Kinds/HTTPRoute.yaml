@@ -1,5 +1,5 @@
-# HTTPRoute（应允许）
-# Gateway 配置 allowedRoutes.kinds 包含 HTTPRoute
+# HTTPRoute（）
+# Gateway  allowedRoutes.kinds  HTTPRoute
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

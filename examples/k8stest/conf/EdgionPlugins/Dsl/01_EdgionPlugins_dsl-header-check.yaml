@@ -1,5 +1,5 @@
-# DSL Plugin - Header Check 测试
-# 检查 X-Api-Token 请求头是否存在，缺少则返回 403
+# DSL Plugin - Header Check 
+#  X-Api-Token ， 403
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

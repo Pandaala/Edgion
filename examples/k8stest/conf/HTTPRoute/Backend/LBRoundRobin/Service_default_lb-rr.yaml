@@ -1,4 +1,4 @@
-# LB RoundRobin 测试服务（单 slice / EP 场景共用）
+# LB RoundRobin （ slice / EP ）
 apiVersion: v1
 kind: Service
 metadata:

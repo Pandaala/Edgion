@@ -1,4 +1,4 @@
-# ResponseRewrite - 响应头设置测试
+# ResponseRewrite - 
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

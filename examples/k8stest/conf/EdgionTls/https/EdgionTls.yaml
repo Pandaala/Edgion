@@ -1,4 +1,4 @@
-# EdgionTls HTTPS 配置
+# EdgionTls HTTPS 
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:

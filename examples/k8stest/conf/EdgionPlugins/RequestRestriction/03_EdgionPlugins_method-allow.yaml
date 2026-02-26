@@ -1,4 +1,4 @@
-# 3. Method 允许列表 - 只允许 GET/HEAD
+# 3. Method  -  GET/HEAD
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

@@ -6,12 +6,12 @@ metadata:
 spec:
   gatewayClassName: public-gateway
   listeners:
-  # Listener 1: 移除 hostname 限制
+  # Listener 1:  hostname 
   - name: http-with-hostname
     port: 31250
     protocol: HTTP
-    # hostname 已移除，现在接受任何 hostname
-  # Listener 2: 保持不变
+    # hostname ， hostname
+  # Listener 2: 
   - name: http-general
     port: 31251
     protocol: HTTP

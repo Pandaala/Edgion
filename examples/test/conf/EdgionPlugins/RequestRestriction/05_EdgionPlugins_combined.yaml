@@ -1,4 +1,4 @@
-# 5. 综合测试 - 多规则组合
+# 5.  - 
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

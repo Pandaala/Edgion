@@ -1,5 +1,5 @@
-# 通配符不匹配根域名测试（负面测试）
-# *.wildcard.example.com 不应匹配 wildcard.example.com（根域名）
+# （）
+# *.wildcard.example.com  wildcard.example.com（）
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,7 +11,7 @@ spec:
       namespace: edgion-test
       sectionName: http-wildcard
   hostnames:
-    - "wildcard.example.com"  # 根域名，不应匹配 *.wildcard.example.com
+    - "wildcard.example.com"  # ， *.wildcard.example.com
   rules:
     - matches:
         - path:

@@ -1,5 +1,5 @@
-# CtxSet 插件配置 - 集成测试
-# 测试设置上下文变量、模板、转换和映射功能
+# CtxSet  - 
+# 
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -7,30 +7,30 @@ metadata:
   namespace: edgion-default
 spec:
   requestPlugins:
-    # CtxSet 插件
+    # CtxSet 
     - enable: true
       type: CtxSet
       config:
         vars:
-          # 1. 直接从 Header 获取值
+          # 1.  Header 
           - name: tenant_id
             from:
               type: header
               name: X-Tenant-Id
             default: "default-tenant"
 
-          # 2. 模板插值
+          # 2. 
           - name: rate_key
             template: "${header:X-Tenant-Id}_${clientIp}"
 
-          # 3. 大小写转换
+          # 3. 
           - name: method_lower
             from:
               type: method
             transform:
               case: lower
 
-          # 4. 值映射
+          # 4. 
           - name: tier
             from:
               type: header
@@ -42,7 +42,7 @@ spec:
                 basic: "tier_2"
               default: "tier_3"
 
-          # 5. 从 path 获取
+          # 5.  path 
           - name: api_version
             from:
               type: path

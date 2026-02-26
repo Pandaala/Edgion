@@ -1,4 +1,4 @@
-# UDP 测试套件 Gateway
+# UDP  Gateway
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:

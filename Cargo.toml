@@ -99,7 +99,7 @@ schemars = { version = "1" }
 
 # gRPC (config sync)
 tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
-# rustls 加密后端（tonic TLS 需要）
+# rustls （tonic TLS ）
 rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2.2"

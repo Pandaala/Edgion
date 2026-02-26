@@ -1,4 +1,4 @@
-# EdgionTls gRPC TLS 测试 Service
+# EdgionTls gRPC TLS  Service
 apiVersion: v1
 kind: Service
 metadata:

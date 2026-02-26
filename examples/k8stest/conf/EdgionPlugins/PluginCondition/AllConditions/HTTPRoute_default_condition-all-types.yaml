@@ -1,5 +1,5 @@
 # HTTPRoute for condition-all-types tests
-# 用于测试所有 PluginCondition 类型
+#  PluginCondition 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

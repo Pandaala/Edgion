@@ -1,4 +1,4 @@
-# Weighted Backend 测试套件 Gateway
+# Weighted Backend  Gateway
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:

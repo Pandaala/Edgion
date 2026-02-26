@@ -26,7 +26,7 @@ impl UpdatePhaseTestSuite {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-                    // 同样的请求，现在应该成功（或 502 backend 不可用）
+                    // ，（ 502 backend ）
                     let resp = client
                         .get(format!("http://{}:31250/match", ctx.target_host))
                         .header("Host", "other.example.com")
@@ -36,7 +36,7 @@ impl UpdatePhaseTestSuite {
                     match resp {
                         Ok(resp) => {
                             let status = resp.status();
-                            // 接受 200、502 或 503，不应该是 404
+                            //  200502  503， 404
                             if status.is_success() || status == 502 || status == 503 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
@@ -71,7 +71,7 @@ impl UpdatePhaseTestSuite {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-                    // GET 应该失败 (404)（需要带正确的 Host header）
+                    // GET  (404)（ Host header）
                     let get_resp = client
                         .get(format!("http://{}:31251/api/v1", ctx.target_host))
                         .header("Host", "method-test.example.com")
@@ -90,7 +90,7 @@ impl UpdatePhaseTestSuite {
                         );
                     }
 
-                    // POST 应该成功 (200 或 502)（需要带正确的 Host header）
+                    // POST  (200  502)（ Host header）
                     let post_resp = client
                         .post(format!("http://{}:31251/api/v1", ctx.target_host))
                         .header("Host", "method-test.example.com")
@@ -100,7 +100,7 @@ impl UpdatePhaseTestSuite {
                     match post_resp {
                         Ok(resp) => {
                             let status = resp.status();
-                            // 接受 200、502 或 503 (backend 未运行)
+                            //  200502  503 (backend )
                             if status.is_success() || status == 502 || status == 503 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),

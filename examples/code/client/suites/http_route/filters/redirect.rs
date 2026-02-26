@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use reqwest::redirect::Policy;
 use std::time::Instant;
 
-// HTTP redirect test port loaded from ports.json，使用 ctx.http_port
+// HTTP redirect test port loaded from ports.json， ctx.http_port
 
 pub struct HttpRedirectTestSuite;
 

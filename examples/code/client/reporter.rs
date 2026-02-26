@@ -7,7 +7,7 @@ use console::style;
 use serde::Serialize;
 use std::time::Duration;
 
-/// 控制台报告器
+/// 
 pub struct ConsoleReporter;
 
 impl ConsoleReporter {
@@ -63,7 +63,7 @@ impl ConsoleReporter {
         println!("Total tests: {}", results.total_tests());
         println!("{}: {}", style("Passed").green(), results.total_passed());
         println!("{}: {}", style("Failed").red(), results.total_failed());
-        println!("Passed率: {:.1}%", results.pass_rate());
+        println!("Passed: {:.1}%", results.pass_rate());
         println!("Total time: {:.2}s", total_duration.as_secs_f64());
 
         if results.has_failures() {
@@ -74,7 +74,7 @@ impl ConsoleReporter {
     }
 }
 
-/// JSON 报告器
+/// JSON 
 pub struct JsonReporter;
 
 impl JsonReporter {

@@ -27,7 +27,7 @@ impl GrpcTestSuite {
                 // Build connection URL
                 let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
 
-                // Create gRPC client，Passed origin 设置 :authority
+                // Create gRPC client，Passed origin  :authority
                 let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                     Ok(mut ep) => {
                         // Gateway Mode: set origin to control :authority pseudo-header

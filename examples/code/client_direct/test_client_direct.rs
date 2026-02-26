@@ -69,7 +69,7 @@ struct Cli {
     #[arg(long, default_value = "30011")]
     udp_port: u16,
 
-    /// 详细输出
+    /// 
     #[arg(short, long)]
     verbose: bool,
 }
@@ -92,7 +92,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 初始化 rustls（仅一次）
+    //  rustls（）
     INIT.call_once(|| {
         rustls::crypto::ring::default_provider()
             .install_default()

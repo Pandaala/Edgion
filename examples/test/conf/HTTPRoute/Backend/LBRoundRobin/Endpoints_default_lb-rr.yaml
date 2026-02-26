@@ -1,4 +1,4 @@
-# Endpoints 资源 - RoundRobin EP 模式测试
+# Endpoints  - RoundRobin EP 
 apiVersion: v1
 kind: Endpoints
 metadata:

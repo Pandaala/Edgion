@@ -1,24 +1,24 @@
 // RateLimit Plugin Test Suite
 //
-// 测试策略：
-// - 在限制内的请求应通过
-// - 超过限制的请求应返回 429
-// - 限流响应头正确返回
-// - 不同 key 有独立的限流计数
+// ：
+// - 
+// -  429
+// - 
+// -  key 
 //
-// 配置：rate=5, interval=10s, key=Header(X-Rate-Key)
+// ：rate=5, interval=10s, key=Header(X-Rate-Key)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-// 全局计数器用于生成唯一 key
+//  key
 static KEY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct RateLimitTestSuite;
 
 impl RateLimitTestSuite {
-    /// 生成唯一的测试 key，避免测试间干扰
+    ///  key，
     fn generate_test_key() -> String {
         let count = KEY_COUNTER.fetch_add(1, Ordering::SeqCst);
         let now = std::time::SystemTime::now()
@@ -28,11 +28,11 @@ impl RateLimitTestSuite {
         format!("test-key-{}-{}", now, count)
     }
 
-    // ==================== 1. 限制内请求通过测试 ====================
+    // ==================== 1.  ====================
     fn test_allows_within_limit() -> TestCase {
         TestCase::new(
             "rate_limit_allows_within_limit",
-            "限流: 在限制内的请求应通过 (200)",
+            ":  (200)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -40,7 +40,7 @@ impl RateLimitTestSuite {
                     let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
                     let test_key = Self::generate_test_key();
 
-                    // 发送 3 个请求（限制是 5），应该全部通过
+                    //  3 （ 5），
                     for i in 0..3 {
                         let response = client
                             .get(&url)
@@ -74,11 +74,11 @@ impl RateLimitTestSuite {
         )
     }
 
-    // ==================== 2. 超过限制被阻止测试 ====================
+    // ==================== 2.  ====================
     fn test_blocks_over_limit() -> TestCase {
         TestCase::new(
             "rate_limit_blocks_over_limit",
-            "限流: 超过限制的请求应返回 429",
+            ":  429",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -86,7 +86,7 @@ impl RateLimitTestSuite {
                     let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
                     let test_key = Self::generate_test_key();
 
-                    // 先发送 5 个请求消耗配额
+                    //  5 
                     for i in 0..5 {
                         let response = client
                             .get(&url)
@@ -114,7 +114,7 @@ impl RateLimitTestSuite {
                         }
                     }
 
-                    // 第 6 个请求应该被限流
+                    //  6 
                     let response = client
                         .get(&url)
                         .header("host", "rate-limit.example.com")
@@ -126,7 +126,7 @@ impl RateLimitTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status == 429 {
-                                // 验证响应体包含限流消息
+                                // 
                                 let body = resp.text().await.unwrap_or_default();
                                 TestResult::passed_with_message(
                                     start.elapsed(),
@@ -143,11 +143,11 @@ impl RateLimitTestSuite {
         )
     }
 
-    // ==================== 3. 限流响应头验证测试 ====================
+    // ==================== 3.  ====================
     fn test_headers_present() -> TestCase {
         TestCase::new(
             "rate_limit_headers_present",
-            "限流: 响应应包含 X-RateLimit-* 头",
+            ":  X-RateLimit-* ",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -167,7 +167,7 @@ impl RateLimitTestSuite {
                             let status = resp.status().as_u16();
                             let headers = resp.headers();
 
-                            // 检查限流响应头
+                            // 
                             let limit = headers.get("X-RateLimit-Limit");
                             let remaining = headers.get("X-RateLimit-Remaining");
                             let reset = headers.get("X-RateLimit-Reset");
@@ -209,11 +209,11 @@ impl RateLimitTestSuite {
         )
     }
 
-    // ==================== 4. 不同 key 独立限流测试 ====================
+    // ==================== 4.  key  ====================
     fn test_different_keys_independent() -> TestCase {
         TestCase::new(
             "rate_limit_different_keys_independent",
-            "限流: 不同 key 应有独立的限流计数",
+            ":  key ",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -223,7 +223,7 @@ impl RateLimitTestSuite {
                     let key_a = Self::generate_test_key();
                     let key_b = Self::generate_test_key();
 
-                    // 用 key_a 消耗全部配额 (5 个请求)
+                    //  key_a  (5 )
                     for i in 0..5 {
                         let response = client
                             .get(&url)
@@ -240,7 +240,7 @@ impl RateLimitTestSuite {
                         }
                     }
 
-                    // 验证 key_a 的下一个请求被限流
+                    //  key_a 
                     let resp_a = client
                         .get(&url)
                         .header("host", "rate-limit.example.com")
@@ -262,7 +262,7 @@ impl RateLimitTestSuite {
                         }
                     }
 
-                    // key_b 应该仍然可以请求（独立计数）
+                    // key_b （）
                     let resp_b = client
                         .get(&url)
                         .header("host", "rate-limit.example.com")
@@ -292,18 +292,18 @@ impl RateLimitTestSuite {
         )
     }
 
-    // ==================== 5. 缺少 key 时放行测试 ====================
+    // ==================== 5.  key  ====================
     fn test_missing_key_allows() -> TestCase {
         TestCase::new(
             "rate_limit_missing_key_allows",
-            "限流: 缺少 X-Rate-Key 时应放行 (onMissingKey=Allow)",
+            ":  X-Rate-Key  (onMissingKey=Allow)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
                     let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
 
-                    // 不发送 X-Rate-Key header
+                    //  X-Rate-Key header
                     let response = client.get(&url).header("host", "rate-limit.example.com").send().await;
 
                     match response {
@@ -328,11 +328,11 @@ impl RateLimitTestSuite {
         )
     }
 
-    // ==================== 6. 429 响应包含 Retry-After 头测试 ====================
+    // ==================== 6. 429  Retry-After  ====================
     fn test_retry_after_header() -> TestCase {
         TestCase::new(
             "rate_limit_retry_after_header",
-            "限流: 429 响应应包含 Retry-After 头",
+            ": 429  Retry-After ",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -340,7 +340,7 @@ impl RateLimitTestSuite {
                     let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
                     let test_key = Self::generate_test_key();
 
-                    // 先消耗配额
+                    // 
                     for _ in 0..5 {
                         let _ = client
                             .get(&url)
@@ -350,7 +350,7 @@ impl RateLimitTestSuite {
                             .await;
                     }
 
-                    // 触发 429
+                    //  429
                     let response = client
                         .get(&url)
                         .header("host", "rate-limit.example.com")
@@ -393,19 +393,19 @@ impl TestSuite for RateLimitTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            // 基本限流测试
+            // 
             Self::test_allows_within_limit(),
-            // TODO: test_blocks_over_limit 和 test_headers_present 暂时禁用
-            // 原因:
-            // 1. test_blocks_over_limit: 429 响应有 ~30s 延迟，导致测试超时
-            //    (可能是 pingora 框架 early response 处理问题)
-            // 2. test_headers_present: set_response_header 在 request 阶段调用时
-            //    response_header 尚未初始化，无法设置响应头
-            //    (需要在 ctx 中存储响应头，然后在 response 阶段添加)
+            // TODO: test_blocks_over_limit  test_headers_present 
+            // :
+            // 1. test_blocks_over_limit: 429  ~30s ，
+            //    ( pingora  early response )
+            // 2. test_headers_present: set_response_header  request 
+            //    response_header ，
+            //    ( ctx ， response )
             // Self::test_blocks_over_limit(),
             // Self::test_headers_present(),
             Self::test_retry_after_header(),
-            // key 行为测试
+            // key 
             Self::test_different_keys_independent(),
             Self::test_missing_key_allows(),
         ]

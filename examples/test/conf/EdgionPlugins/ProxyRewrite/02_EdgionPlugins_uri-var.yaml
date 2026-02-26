@@ -1,4 +1,4 @@
-# 2. URI + $uri 变量
+# 2. URI + $uri 
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

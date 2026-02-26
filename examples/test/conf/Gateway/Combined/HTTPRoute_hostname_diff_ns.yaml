@@ -1,5 +1,5 @@
-# 组合测试 2: Hostname 匹配但 Different Namespace（负面测试）
-# Route 在不同 namespace，hostname 匹配但 allowedRoutes 限制应拒绝
+#  2: Hostname  Different Namespace（）
+# Route  namespace，hostname  allowedRoutes 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,7 +11,7 @@ spec:
       namespace: edgion-test
       sectionName: http-hostname-same-ns
   hostnames:
-    - "www.combined.example.com"  # 匹配 *.combined.example.com
+    - "www.combined.example.com"  #  *.combined.example.com
   rules:
     - matches:
         - path:

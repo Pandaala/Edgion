@@ -1,4 +1,4 @@
-# HTTPRoute for DSL Deny Path 集成测试
+# HTTPRoute for DSL Deny Path 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

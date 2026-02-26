@@ -1,14 +1,14 @@
-# EdgionPlugins 配置 - 覆盖所有 Condition 类型测试
+# EdgionPlugins  -  Condition 
 # 
-# Condition 类型:
-# 1. keyExist - 检查键是否存在 (header, query, cookie, method, path)
-# 2. keyMatch - 检查键值匹配 (精确值/正则)
-# 3. timeRange - 时间范围检查
-# 4. probability - 概率执行
-# 5. include - 包含条件
-# 6. exclude - 排除条件
+# Condition :
+# 1. keyExist -  (header, query, cookie, method, path)
+# 2. keyMatch -  (/)
+# 3. timeRange - 
+# 4. probability - 
+# 5. include - 
+# 6. exclude - 
 #
-# 使用 Mock 插件来测试条件，通过 Access Log Store 检查 cond_skip 字段验证
+#  Mock ， Access Log Store  cond_skip 
 
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -18,7 +18,7 @@ metadata:
 spec:
   requestPlugins:
     # =========================================================================
-    # 1. KeyExist Tests - 检查键是否存在
+    # 1. KeyExist Tests - 
     # =========================================================================
     
     # 1.1 KeyExist + Header source (skip when X-Skip-KeyExist-Header exists)
@@ -29,7 +29,7 @@ spec:
         terminate: false
         headers:
           X-KeyExist-Header-Ran: "true"
-        # 不设置 body，让请求继续
+        #  body，
       conditions:
         skip:
           - type: keyExist
@@ -68,7 +68,7 @@ spec:
               name: "session_id"
 
     # =========================================================================
-    # 2. KeyMatch Tests - 检查键值匹配
+    # 2. KeyMatch Tests - 
     # =========================================================================
     
     # 2.1 KeyMatch exact value (run when X-Env: production)
@@ -160,7 +160,7 @@ spec:
               - "ap-northeast"
 
     # =========================================================================
-    # 3. TimeRange Tests - 时间范围检查
+    # 3. TimeRange Tests - 
     # =========================================================================
     
     # 3.1 TimeRange valid (always runs - wide time range)
@@ -192,7 +192,7 @@ spec:
             before: "2020-12-31T23:59:59Z"
 
     # =========================================================================
-    # 4. Probability Tests - 概率执行
+    # 4. Probability Tests - 
     # =========================================================================
     
     # 4.1 Probability 100% (always runs)
@@ -238,7 +238,7 @@ spec:
               name: "X-User-ID"
 
     # =========================================================================
-    # 5. Include Tests - 包含条件
+    # 5. Include Tests - 
     # =========================================================================
     
     # 5.1 Include path (run for /api/* paths)
@@ -295,7 +295,7 @@ spec:
               - "(?i:^/internal/.*)"   # case-insensitive
 
     # =========================================================================
-    # 6. Exclude Tests - 排除条件
+    # 6. Exclude Tests - 
     # =========================================================================
     
     # 6.1 Exclude path (skip for /health, /ready, /metrics)

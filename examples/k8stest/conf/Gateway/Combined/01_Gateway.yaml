@@ -1,6 +1,6 @@
-# 组合场景测试 Gateway
-# 测试 Listener Hostname + AllowedRoutes 组合
-# 测试 sectionName + Listener Hostname 组合
+#  Gateway
+#  Listener Hostname + AllowedRoutes 
+#  sectionName + Listener Hostname 
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:

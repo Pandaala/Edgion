@@ -1,4 +1,4 @@
-# mTLS 测试套件 Gateway
+# mTLS  Gateway
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -7,7 +7,7 @@ metadata:
 spec:
   gatewayClassName: public-gateway
   listeners:
-    # mTLS 监听器 - 由 EdgionTls 配置 TLS
+    # mTLS  -  EdgionTls  TLS
     - name: https-mtls
       protocol: HTTPS
       port: 31110

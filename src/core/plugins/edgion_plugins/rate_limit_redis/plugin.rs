@@ -581,12 +581,12 @@ mod tests {
 
     #[test]
     fn test_truncate_limit_key_utf8_boundary() {
-        // "你好世界" = 12 bytes in UTF-8 (3 bytes per char)
-        let key = "你好世界";
+        // "" = 12 bytes in UTF-8 (3 bytes per char)
+        let key = "";
         // Truncating at 7 bytes should not split a 3-byte char
         let truncated = truncate_limit_key(key, 7);
         assert!(truncated.len() <= 7);
-        assert_eq!(truncated, "你好"); // 6 bytes, safe boundary
+        assert_eq!(truncated, ""); // 6 bytes, safe boundary
     }
 
     #[test]

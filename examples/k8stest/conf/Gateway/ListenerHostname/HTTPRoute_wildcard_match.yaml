@@ -1,5 +1,5 @@
-# 通配符 Hostname 匹配测试
-# HTTPRoute hostname 匹配 Listener 通配符 hostname
+#  Hostname 
+# HTTPRoute hostname  Listener  hostname
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,8 +11,8 @@ spec:
       namespace: edgion-test
       sectionName: http-wildcard
   hostnames:
-    - "api.wildcard.example.com"  # 匹配 *.wildcard.example.com
-    - "www.wildcard.example.com"  # 也匹配
+    - "api.wildcard.example.com"  #  *.wildcard.example.com
+    - "www.wildcard.example.com"  # 
   rules:
     - matches:
         - path:

@@ -1,6 +1,6 @@
-# AllowedRoutes Kinds 测试
-# Gateway 配置 allowedRoutes.kinds 只允许 HTTPRoute
-# GRPCRoute 应被拒绝
+# AllowedRoutes Kinds 
+# Gateway  allowedRoutes.kinds  HTTPRoute
+# GRPCRoute 
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -15,4 +15,4 @@ spec:
       allowedRoutes:
         kinds:
           - group: gateway.networking.k8s.io
-            kind: HTTPRoute  # 只允许 HTTPRoute
+            kind: HTTPRoute  #  HTTPRoute

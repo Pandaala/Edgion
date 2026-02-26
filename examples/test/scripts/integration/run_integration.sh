@@ -213,29 +213,29 @@ finalize_report() {
 # Dynamic Test function
 # =============================================================================
 run_dynamic_tests() {
-    local stage=${1:-0}  # 0=完整，1=仅初始，2=仅更新后
+    local stage=${1:-0}  # 0=，1=，2=
     local edgion_ctl="${PROJECT_ROOT}/target/debug/edgion-ctl"
     local conf_dir="${PROJECT_ROOT}/examples/test/conf"
     local controller_url="http://127.0.0.1:5800"
     local gateway_url="http://127.0.0.1:5900"
     
-    log_section "🔄 Gateway 动态性测试"
+    log_section "🔄 Gateway "
     
     if [ $stage -eq 0 ] || [ $stage -eq 1 ]; then
-        log_info ">>> 阶段 1/2: 初始配置验证"
+        log_info ">>>  1/2: "
         
-        # 运行初始阶段测试（验证约束生效）
+        # （）
         run_test "Dynamic_Initial_Phase" \
             "${PROJECT_ROOT}/target/debug/examples/test_client \
              -g -r Gateway -i Dynamic --phase initial" || test_failed=true
         
-        log_success "初始阶段测试完成"
+        log_success ""
     fi
     
     if [ $stage -eq 0 ]; then
-        log_section "📦 加载动态更新配置"
+        log_section "📦 "
         
-        # 1. 加载更新配置
+        # 1. 
         log_info "Applying updates from DynamicTest/updates/..."
         "${edgion_ctl}" --server "${controller_url}" \
             apply -f "${conf_dir}/Gateway/DynamicTest/updates/" || {
@@ -243,12 +243,12 @@ run_dynamic_tests() {
             return 1
         }
         
-        # 2. 处理删除操作
+        # 2. 
         if [ -f "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt" ]; then
             log_info "Deleting resources..."
             while IFS= read -r resource; do
                 [ -z "$resource" ] || [[ "$resource" =~ ^# ]] && continue
-                # 解析格式: Kind/Namespace/Name
+                # : Kind/Namespace/Name
                 IFS='/' read -r kind namespace name <<< "$resource"
                 if [ -n "$kind" ] && [ -n "$namespace" ] && [ -n "$name" ]; then
                     log_info "Deleting: $kind/$namespace/$name"
@@ -257,7 +257,7 @@ run_dynamic_tests() {
             done < "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt"
         fi
         
-        # 3. 验证资源同步（不阻止阶段2执行）
+        # 3. （2）
         log_info "Verifying resource synchronization..."
         run_test "Resource_Diff_After_Dynamic_Update" \
             "${PROJECT_ROOT}/target/debug/examples/resource_diff \
@@ -266,25 +266,25 @@ run_dynamic_tests() {
             log_info "Resource sync has some issues (non-blocking, continuing...)"
         }
         
-        # 4. 等待配置生效
+        # 4. 
         log_info "Waiting 3s for configuration to take effect..."
         sleep 3
         
-        log_success "动态配置加载完成"
+        log_success ""
     fi
     
     if [ $stage -eq 0 ] || [ $stage -eq 2 ]; then
-        log_info ">>> 阶段 2/2: 动态更新后验证"
+        log_info ">>>  2/2: "
         
-        # 运行更新后测试（验证约束变更生效）
+        # （）
         run_test "Dynamic_After_Update_Phase" \
             "${PROJECT_ROOT}/target/debug/examples/test_client \
              -g -r Gateway -i Dynamic --phase update" || test_failed=true
         
-        log_success "更新阶段测试完成"
+        log_success ""
     fi
     
-    log_section "✅ 动态性测试完成"
+    log_section "✅ "
 }
 
 # =============================================================================

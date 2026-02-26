@@ -46,7 +46,7 @@ impl GrpcTlsTestSuite {
 
                 let ca = Certificate::from_pem(ca_pem);
 
-                // config TLS - 使用 CA certificate和 domain_name
+                // config TLS -  CA certificate domain_name
                 let domain_name = ctx.grpc_host.as_deref().unwrap_or("localhost");
                 let tls = ClientTlsConfig::new().ca_certificate(ca).domain_name(domain_name);
 

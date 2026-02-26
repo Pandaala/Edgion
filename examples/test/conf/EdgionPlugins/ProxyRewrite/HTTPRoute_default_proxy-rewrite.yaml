@@ -1,4 +1,4 @@
-# HTTPRoute for ProxyRewrite 集成测试
+# HTTPRoute for ProxyRewrite 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,7 +11,7 @@ spec:
   hostnames:
     - "proxy-rewrite.example.com"
   rules:
-    # 1. URI 简单替换
+    # 1. URI 
     - matches:
         - path:
             type: PathPrefix
@@ -27,7 +27,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 2. URI + $uri 变量
+    # 2. URI + $uri 
     - matches:
         - path:
             type: PathPrefix
@@ -43,7 +43,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 3. URI + $arg_xxx 变量
+    # 3. URI + $arg_xxx 
     - matches:
         - path:
             type: PathPrefix
@@ -59,7 +59,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 4. Regex URI 捕获组
+    # 4. Regex URI 
     - matches:
         - path:
             type: PathPrefix
@@ -75,7 +75,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 5. 综合测试：Host + Method + Headers
+    # 5. ：Host + Method + Headers
     - matches:
         - path:
             type: PathPrefix
@@ -91,7 +91,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 6. Path 参数测试 (路由: /params/:uid/info)
+    # 6. Path  (: /params/:uid/info)
     - matches:
         - path:
             type: RegularExpression

@@ -1,5 +1,5 @@
-# ConsistentHash (Query Arg) + EndpointSlice 模式
-# 使用 user_id query argument 进行一致性哈希
+# ConsistentHash (Query Arg) + EndpointSlice 
+#  user_id query argument 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

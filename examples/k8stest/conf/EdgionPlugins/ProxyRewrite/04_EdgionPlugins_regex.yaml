@@ -1,4 +1,4 @@
-# 4. Regex URI 捕获组
+# 4. Regex URI 
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

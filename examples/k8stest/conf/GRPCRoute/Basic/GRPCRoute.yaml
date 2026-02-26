@@ -13,7 +13,7 @@ spec:
     - "grpc.example.com"
 
   rules:
-    # 规则1: 匹配 test.TestService 的所有方法
+    # 1:  test.TestService 
     - matches:
         - method:
             type: Exact
@@ -22,7 +22,7 @@ spec:
         - name: test-grpc
           port: 30021
 
-    # 规则2: 匹配 test.TestService.SayHello 方法
+    # 2:  test.TestService.SayHello 
     - matches:
         - method:
             type: Exact

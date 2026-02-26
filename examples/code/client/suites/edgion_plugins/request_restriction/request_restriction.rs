@@ -1,11 +1,11 @@
 // RequestRestriction Plugin Test Suite
 //
-// 测试策略：
-// - Header 拒绝列表测试 (User-Agent Bot 检测)
-// - Path 允许列表测试 (路径白名单)
-// - Method 允许列表测试 (只读 API)
-// - Header 必须存在测试 (认证 Token)
-// - 综合功能测试
+// ：
+// - Header  (User-Agent Bot )
+// - Path  ()
+// - Method  ( API)
+// - Header  ( Token)
+// - 
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -13,11 +13,11 @@ use std::time::Instant;
 pub struct RequestRestrictionTestSuite;
 
 impl RequestRestrictionTestSuite {
-    // ==================== 1. Header 拒绝列表测试 ====================
+    // ==================== 1. Header  ====================
     fn test_header_deny_blocks_bot() -> TestCase {
         TestCase::new(
             "header_deny_blocks_bot",
-            "Header 拒绝: Bot User-Agent 应被阻止 (403)",
+            "Header : Bot User-Agent  (403)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -51,7 +51,7 @@ impl RequestRestrictionTestSuite {
     fn test_header_deny_allows_normal() -> TestCase {
         TestCase::new(
             "header_deny_allows_normal",
-            "Header 拒绝: 正常 User-Agent 应通过 (200)",
+            "Header :  User-Agent  (200)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -82,11 +82,11 @@ impl RequestRestrictionTestSuite {
         )
     }
 
-    // ==================== 2. Method 允许列表测试 ====================
+    // ==================== 2. Method  ====================
     fn test_method_allow_get() -> TestCase {
         TestCase::new(
             "method_allow_get",
-            "Method 允许: GET 请求应通过 (200)",
+            "Method : GET  (200)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -117,7 +117,7 @@ impl RequestRestrictionTestSuite {
     fn test_method_allow_blocks_post() -> TestCase {
         TestCase::new(
             "method_allow_blocks_post",
-            "Method 允许: POST 请求应被阻止 (405)",
+            "Method : POST  (405)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -148,11 +148,11 @@ impl RequestRestrictionTestSuite {
         )
     }
 
-    // ==================== 3. Header 必须存在测试 ====================
+    // ==================== 3. Header  ====================
     fn test_header_required_with_token() -> TestCase {
         TestCase::new(
             "header_required_with_token",
-            "Header 必须: 有效 Token 应通过 (200)",
+            "Header :  Token  (200)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -186,7 +186,7 @@ impl RequestRestrictionTestSuite {
     fn test_header_required_missing() -> TestCase {
         TestCase::new(
             "header_required_missing",
-            "Header 必须: 缺少 Token 应被拒绝 (401)",
+            "Header :  Token  (401)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -194,7 +194,7 @@ impl RequestRestrictionTestSuite {
                     let url = format!("{}/test/header-required/api", ctx.http_url());
 
                     let request = client.get(&url).header("host", "request-restriction.example.com");
-                    // 不发送 X-Auth-Token
+                    //  X-Auth-Token
 
                     match request.send().await {
                         Ok(response) => {
@@ -215,11 +215,11 @@ impl RequestRestrictionTestSuite {
         )
     }
 
-    // ==================== 4. 综合测试 ====================
+    // ==================== 4.  ====================
     fn test_combined_normal() -> TestCase {
         TestCase::new(
             "combined_normal",
-            "综合测试: 正常请求应通过 (200)",
+            ":  (200)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -253,7 +253,7 @@ impl RequestRestrictionTestSuite {
     fn test_combined_bot_blocked() -> TestCase {
         TestCase::new(
             "combined_bot_blocked",
-            "综合测试: Bot UA 应被阻止 (403)",
+            ": Bot UA  (403)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -287,7 +287,7 @@ impl RequestRestrictionTestSuite {
     fn test_combined_admin_blocked() -> TestCase {
         TestCase::new(
             "combined_admin_blocked",
-            "综合测试: Admin 路径应被阻止 (403)",
+            ": Admin  (403)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -326,16 +326,16 @@ impl TestSuite for RequestRestrictionTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            // Header 拒绝列表测试
+            // Header 
             Self::test_header_deny_blocks_bot(),
             Self::test_header_deny_allows_normal(),
-            // Method 允许列表测试
+            // Method 
             Self::test_method_allow_get(),
             Self::test_method_allow_blocks_post(),
-            // Header 必须存在测试
+            // Header 
             Self::test_header_required_with_token(),
             Self::test_header_required_missing(),
-            // 综合测试
+            // 
             Self::test_combined_normal(),
             Self::test_combined_bot_blocked(),
             Self::test_combined_admin_blocked(),

@@ -1,5 +1,5 @@
-# DSL Plugin - Path Deny 测试
-# 如果请求路径包含 "/admin"，返回 403；否则放行
+# DSL Plugin - Path Deny 
+#  "/admin"， 403；
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

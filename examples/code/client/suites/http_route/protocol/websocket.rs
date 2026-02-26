@@ -29,7 +29,7 @@ impl WebSocketTestSuite {
                 let ws_url = ctx.websocket_url();
                 let mut request = ws_url.into_client_request().unwrap();
 
-                // Gateway Mode：设置 Host header
+                // Gateway Mode： Host header
                 if let Some(ref host) = ctx.http_host {
                     request.headers_mut().insert("Host", host.parse().unwrap());
                 }

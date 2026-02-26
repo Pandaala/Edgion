@@ -1,5 +1,5 @@
-# 组合测试 5: sectionName + Hostname 不匹配（负面测试）
-# Route 绑定到 secure listener，但 hostname 不匹配
+#  5: sectionName + Hostname （）
+# Route  secure listener， hostname 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,7 +11,7 @@ spec:
       namespace: edgion-test
       sectionName: http-secure
   hostnames:
-    - "other.combined.example.com"  # 不匹配 listener hostname
+    - "other.combined.example.com"  #  listener hostname
   rules:
     - matches:
         - path:

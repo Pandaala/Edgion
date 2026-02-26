@@ -3,7 +3,7 @@
 // Required config files (in examples/conf/):
 // - HTTPRoute_default_timeout-backend.yaml    # backend timeout test route
 // - HTTPRoute_default_timeout-client.yaml     # client timeout test route
-// - EdgionPlugins_default_timeout-debug.yaml  # Debug插件config
+// - EdgionPlugins_default_timeout-debug.yaml  # Debugconfig
 // - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
 // - Service_edge_test-http.yaml               # HTTP service definition
 // - Gateway_edge_example-gateway.yaml         # Gateway config
@@ -237,7 +237,7 @@ impl TimeoutTestSuite {
                             let elapsed = start.elapsed();
 
                             // normally should return in3s or so200
-                            // 因为backend timeout是10s，client timeout是5s
+                            // backend timeout10s，client timeout5s
                             if status_code == 200 {
                                 TestResult::passed_with_message(
                                     elapsed,

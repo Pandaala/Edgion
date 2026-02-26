@@ -1,4 +1,4 @@
-# HTTP 路由配置
+# HTTP 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -13,7 +13,7 @@ spec:
     - "test.example.com"
   
   rules:
-    # 规则1: 健康检查端点（精确匹配）
+    # 1: （）
     - matches:
         - path:
             type: Exact
@@ -22,7 +22,7 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则2: Echo 端点（前缀匹配）
+    # 2: Echo （）
     - matches:
         - path:
             type: PathPrefix
@@ -31,7 +31,7 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则3: Headers 端点（精确匹配）- 用于 Real IP 测试
+    # 3: Headers （）-  Real IP 
     - matches:
         - path:
             type: Exact
@@ -40,7 +40,7 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则4: Status 端点（前缀匹配）
+    # 4: Status （）
     - matches:
         - path:
             type: PathPrefix
@@ -49,7 +49,7 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则5: Delay 端点（前缀匹配）
+    # 5: Delay （）
     - matches:
         - path:
             type: PathPrefix
@@ -58,7 +58,7 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则6: WebSocket 端点（前缀匹配）
+    # 6: WebSocket （）
     - matches:
         - path:
             type: PathPrefix
@@ -67,7 +67,7 @@ spec:
         - name: test-websocket
           port: 30005
 
-    # 规则7: API 路径（前缀匹配）
+    # 7: API （）
     - matches:
         - path:
             type: PathPrefix
@@ -76,7 +76,7 @@ spec:
         - name: test-http
           port: 30001
 
-    # 规则8: HTTPS 专用测试路径
+    # 8: HTTPS 
     - matches:
         - path:
             type: PathPrefix

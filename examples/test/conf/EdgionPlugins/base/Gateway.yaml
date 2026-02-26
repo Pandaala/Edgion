@@ -1,5 +1,5 @@
-# EdgionPlugins 测试套件统一 Gateway
-# 所有 EdgionPlugins 测试共用此 Gateway，避免每个插件开一个 Gateway
+# EdgionPlugins  Gateway
+#  EdgionPlugins  Gateway， Gateway
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:

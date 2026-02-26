@@ -1,5 +1,5 @@
-# Hostname 不匹配测试（负面测试）
-# HTTPRoute hostname 不匹配 Listener hostname，应返回 404
+# Hostname （）
+# HTTPRoute hostname  Listener hostname， 404
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,7 +11,7 @@ spec:
       namespace: edgion-test
       sectionName: http-exact
   hostnames:
-    - "other.example.com"  # 不匹配 listener hostname (api.example.com)
+    - "other.example.com"  #  listener hostname (api.example.com)
   rules:
     - matches:
         - path:

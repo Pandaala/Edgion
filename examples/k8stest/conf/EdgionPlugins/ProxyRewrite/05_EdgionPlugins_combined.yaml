@@ -1,5 +1,5 @@
-# 5. 综合测试：Host + Headers 组合
-# 注：Method 重写需要 test_server 支持 POST，这里先不测试
+# 5. ：Host + Headers 
+# ：Method  test_server  POST，
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

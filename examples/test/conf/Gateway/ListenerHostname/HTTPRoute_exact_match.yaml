@@ -1,5 +1,5 @@
-# 精确 Hostname 匹配测试
-# HTTPRoute hostname 精确匹配 Listener hostname
+#  Hostname 
+# HTTPRoute hostname  Listener hostname
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,7 +11,7 @@ spec:
       namespace: edgion-test
       sectionName: http-exact
   hostnames:
-    - "api.example.com"  # 精确匹配 listener hostname
+    - "api.example.com"  #  listener hostname
   rules:
     - matches:
         - path:

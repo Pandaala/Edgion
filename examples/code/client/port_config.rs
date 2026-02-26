@@ -1,5 +1,5 @@
-// Port config加载模块
-// 从 ports.json 文件加载各套件的Port config
+// Port config
+//  ports.json Port config
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -23,9 +23,9 @@ pub struct SuitePorts {
 }
 
 impl PortConfig {
-    /// 从 ports.json 加载Port config
+    ///  ports.json Port config
     pub fn load() -> Result<Self, String> {
-        // 尝试多个可能的路径
+        // 
         let possible_paths = ["examples/test/conf/ports.json", "../conf/ports.json", "conf/ports.json"];
 
         for path in &possible_paths {
@@ -38,13 +38,13 @@ impl PortConfig {
         Err("Could not find ports.json in any expected location".to_string())
     }
 
-    /// 获取指定套件的Port config
+    /// Port config
     pub fn get_ports(&self, suite: &str) -> SuitePorts {
         self.suites.get(suite).cloned().unwrap_or_default()
     }
 }
 
-/// 命令名到suite name的映射
+/// suite name
 pub fn command_to_suite(command: &str) -> &str {
     match command {
         "http" => "http",
@@ -69,7 +69,7 @@ pub fn command_to_suite(command: &str) -> &str {
         "backend-tls" | "backendtls" => "backend-tls",
         "plugin-logs" | "pluginlogs" => "plugin-logs",
         "stream-plugins" | "streamplugins" => "stream-plugins",
-        _ => "http", // 默认使用 http 套件port
+        _ => "http", //  http port
     }
 }
 

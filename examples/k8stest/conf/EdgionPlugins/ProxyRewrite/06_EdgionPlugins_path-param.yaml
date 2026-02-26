@@ -1,4 +1,4 @@
-# 6. Path 参数测试：$uid 在 URI 和 Header 中
+# 6. Path ：$uid  URI  Header 
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

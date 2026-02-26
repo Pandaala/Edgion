@@ -1,4 +1,4 @@
-# 4. Header 必须存在 - 要求 X-Auth-Token
+# 4. Header  -  X-Auth-Token
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

@@ -1,4 +1,4 @@
-# HTTPRoute for ResponseRewrite 集成测试
+# HTTPRoute for ResponseRewrite 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,7 +11,7 @@ spec:
   hostnames:
     - "response-rewrite.example.com"
   rules:
-    # 1. 状态码修改测试
+    # 1. 
     - matches:
         - path:
             type: PathPrefix
@@ -27,7 +27,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 2. 响应头设置测试
+    # 2. 
     - matches:
         - path:
             type: PathPrefix
@@ -43,7 +43,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 3. 响应头重命名测试
+    # 3. 
     - matches:
         - path:
             type: PathPrefix
@@ -59,7 +59,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 4. 综合功能测试
+    # 4. 
     - matches:
         - path:
             type: PathPrefix

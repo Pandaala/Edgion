@@ -4,14 +4,14 @@ metadata:
   name: redirect-gateway
   namespace: edgion-test
   annotations:
-    # 启用 HTTP 到 HTTPS 重定向
+    #  HTTP  HTTPS 
     edgion.io/http-to-https-redirect: "true"
-    # 指定重定向到 10443 端口
+    #  10443 
     edgion.io/https-redirect-port: "31011"
 spec:
   gatewayClassName: public-gateway
   listeners:
-    # HTTP 监听器 - 会自动重定向到 HTTPS
+    # HTTP  -  HTTPS
     - name: http-redirect
       protocol: HTTP
       port: 31040

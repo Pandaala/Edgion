@@ -1,4 +1,4 @@
-# HTTP Filters 测试套件共享后端服务
+# HTTP Filters 
 apiVersion: v1
 kind: Service
 metadata:

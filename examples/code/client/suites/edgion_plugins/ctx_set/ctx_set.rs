@@ -1,10 +1,10 @@
 // CtxSet Plugin Test Suite
 //
-// 测试策略：
-// - 通过 Access Log Store 验证 ctx 变量被正确设置
-// - 检查 Access Log 中的 stage_logs 或自定义上下文数据
+// ：
+// -  Access Log Store  ctx 
+// -  Access Log  stage_logs 
 //
-// 配置参考：conf/EdgionPlugins/CtxSet/01_EdgionPlugins_ctx-setter.yaml
+// ：conf/EdgionPlugins/CtxSet/01_EdgionPlugins_ctx-setter.yaml
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -12,11 +12,11 @@ use std::time::Instant;
 pub struct CtxSetTestSuite;
 
 impl CtxSetTestSuite {
-    // ==================== 1. 从 Header 设置 ctx 变量测试 ====================
+    // ==================== 1.  Header  ctx  ====================
     fn test_ctx_from_header() -> TestCase {
         TestCase::new(
             "ctx_set_from_header",
-            "CtxSet: 从 Header 设置 ctx 变量",
+            "CtxSet:  Header  ctx ",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -41,7 +41,7 @@ impl CtxSetTestSuite {
                                 return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
 
-                            // 从 Access Log Store 获取日志
+                            //  Access Log Store 
                             let al_client = ctx.access_log_client();
                             let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(e) => e,
@@ -55,7 +55,7 @@ impl CtxSetTestSuite {
 
                             let access_log = entry.data.to_string();
 
-                            // 验证 tenant_id 被设置
+                            //  tenant_id 
                             if access_log.contains(r#""tenant_id":"acme-corp""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
@@ -75,11 +75,11 @@ impl CtxSetTestSuite {
         )
     }
 
-    // ==================== 2. 默认值测试 ====================
+    // ==================== 2.  ====================
     fn test_ctx_default_value() -> TestCase {
         TestCase::new(
             "ctx_set_default_value",
-            "CtxSet: 缺少 Header 时使用默认值",
+            "CtxSet:  Header ",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -88,7 +88,7 @@ impl CtxSetTestSuite {
 
                     let trace_id = format!("test-ctx-default-{}", uuid::Uuid::new_v4());
 
-                    // 不发送 X-Tenant-Id header，应使用默认值
+                    //  X-Tenant-Id header，
                     let response = client
                         .get(url)
                         .header("host", "ctx-setter.example.com")
@@ -117,7 +117,7 @@ impl CtxSetTestSuite {
 
                             let access_log = entry.data.to_string();
 
-                            // 验证使用了默认值
+                            // 
                             if access_log.contains(r#""tenant_id":"default-tenant""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
@@ -137,11 +137,11 @@ impl CtxSetTestSuite {
         )
     }
 
-    // ==================== 3. 大小写转换测试 ====================
+    // ==================== 3.  ====================
     fn test_ctx_transform_case() -> TestCase {
         TestCase::new(
             "ctx_set_transform_case",
-            "CtxSet: 大小写转换 (method -> lower)",
+            "CtxSet:  (method -> lower)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -178,7 +178,7 @@ impl CtxSetTestSuite {
 
                             let access_log = entry.data.to_string();
 
-                            // 验证 method 被转换为小写
+                            //  method 
                             if access_log.contains(r#""method_lower":"get""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
@@ -198,11 +198,11 @@ impl CtxSetTestSuite {
         )
     }
 
-    // ==================== 4. 值映射测试 ====================
+    // ==================== 4.  ====================
     fn test_ctx_mapping() -> TestCase {
         TestCase::new(
             "ctx_set_mapping",
-            "CtxSet: 值映射 (premium -> tier_1)",
+            "CtxSet:  (premium -> tier_1)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -240,7 +240,7 @@ impl CtxSetTestSuite {
 
                             let access_log = entry.data.to_string();
 
-                            // 验证 premium 被映射为 tier_1
+                            //  premium  tier_1
                             if access_log.contains(r#""tier":"tier_1""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
@@ -260,11 +260,11 @@ impl CtxSetTestSuite {
         )
     }
 
-    // ==================== 5. 映射默认值测试 ====================
+    // ==================== 5.  ====================
     fn test_ctx_mapping_default() -> TestCase {
         TestCase::new(
             "ctx_set_mapping_default",
-            "CtxSet: 映射默认值 (unknown -> tier_3)",
+            "CtxSet:  (unknown -> tier_3)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -302,7 +302,7 @@ impl CtxSetTestSuite {
 
                             let access_log = entry.data.to_string();
 
-                            // 验证未匹配时使用 mapping.default
+                            //  mapping.default
                             if access_log.contains(r#""tier":"tier_3""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),

@@ -6,12 +6,12 @@ metadata:
 spec:
   gatewayClassName: public-gateway
   listeners:
-  # Listener 1: 带 hostname 限制，用于测试 hostname 动态移除
+  # Listener 1:  hostname ， hostname 
   - name: http-with-hostname
     port: 31250
     protocol: HTTP
     hostname: api.example.com
-  # Listener 2: 通用 listener，用于 HTTPRoute 方法修改测试
+  # Listener 2:  listener， HTTPRoute 
   - name: http-general
     port: 31251
     protocol: HTTP

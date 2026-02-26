@@ -1,5 +1,5 @@
-# ConsistentHash (Cookie) + EndpointSlice 模式
-# 使用 session-id cookie 进行一致性哈希
+# ConsistentHash (Cookie) + EndpointSlice 
+#  session-id cookie 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

@@ -105,7 +105,7 @@ if [[ "${RESOURCE}" == "Gateway" && "${ITEM}" == "PortConflict" ]]; then
 
   echo
   echo "========================================"
-  echo "Edgion 测试客户端（脚本内置 PortConflict 校验）"
+  echo "Edgion （ PortConflict ）"
   echo "========================================"
   echo "Mode: Gateway"
   echo "Suite: Gateway/PortConflict"

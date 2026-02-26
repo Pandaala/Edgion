@@ -1,4 +1,4 @@
-# Gateway TLS 测试 HTTPRoute - 简单路由用于测试
+# Gateway TLS  HTTPRoute - 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

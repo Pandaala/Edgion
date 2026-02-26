@@ -1,5 +1,5 @@
-# GRPCRoute（应拒绝）
-# Gateway 配置 allowedRoutes.kinds 不包含 GRPCRoute
+# GRPCRoute（）
+# Gateway  allowedRoutes.kinds  GRPCRoute
 apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
 metadata:

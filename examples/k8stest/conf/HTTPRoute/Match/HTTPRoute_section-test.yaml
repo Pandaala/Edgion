@@ -7,7 +7,7 @@ spec:
   parentRefs:
     - name: http-match-gateway
       namespace: edgion-test
-      sectionName: http  # 只绑定到 HTTP listener
+      sectionName: http  #  HTTP listener
   hostnames:
     - "section-test.example.com"
   rules:
