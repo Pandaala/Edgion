@@ -1,5 +1,5 @@
 use super::EdgionHttp;
-use crate::core::observe::metrics::{record_backend_request, status_group};
+use crate::core::observe::metrics::{global_metrics, record_backend_request, status_group};
 use crate::core::observe::test_metrics::{TestData, TestType};
 use crate::core::observe::AccessLogEntry;
 use crate::types::EdgionHttpContext;
@@ -16,6 +16,10 @@ pub async fn logging(
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         upstream.set_response_body_size(session.upstream_body_bytes_received());
     }
+    // Record proxied request bytes for bandwidth monitoring
+    global_metrics().add_request_bytes(session.body_bytes_read() as u64);
+    // Record proxied response bytes for bandwidth monitoring
+    global_metrics().add_response_bytes(session.upstream_body_bytes_received() as u64);
     // Update LB metrics based on policy type
     if let Some(upstream) = ctx.get_current_upstream() {
         if let Some(addr) = &upstream.backend_addr {

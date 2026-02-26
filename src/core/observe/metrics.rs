@@ -25,6 +25,13 @@ pub mod names {
     pub const CONFIG_RELIST_TOTAL: &str = "edgion_config_relist_total";
     // Backend request metrics (for LB testing and monitoring)
     pub const BACKEND_REQUESTS_TOTAL: &str = "edgion_backend_requests_total";
+    // Gateway traffic byte counters
+    pub const GATEWAY_REQUEST_BYTES: &str = "edgion_gateway_request_bytes_total";
+    pub const GATEWAY_RESPONSE_BYTES: &str = "edgion_gateway_response_bytes_total";
+    // Controller: number of gateway instances connected via gRPC long-poll
+    pub const CONTROLLER_CONNECTED_GATEWAYS: &str = "edgion_controller_connected_gateways";
+    // Controller: schema validation failures from Admin API (non-K8s mode)
+    pub const SCHEMA_VALIDATION_ERRORS: &str = "edgion_controller_schema_validation_errors_total";
 }
 
 /// Global metrics singleton
@@ -66,6 +73,14 @@ pub struct GatewayMetrics {
     config_reload_signals: Counter,
     /// Total config relist operations
     config_relist_total: Counter,
+    /// Total gateway request bytes proxied (downstream → upstream)
+    gateway_request_bytes: Counter,
+    /// Total gateway response bytes proxied (upstream → downstream)
+    gateway_response_bytes: Counter,
+    /// Currently connected gateway instances (gRPC WatchServerMeta)
+    controller_connected_gateways: Gauge,
+    /// Total schema validation errors from Admin API (non-K8s mode)
+    schema_validation_errors: Counter,
 }
 
 impl GatewayMetrics {
@@ -85,6 +100,10 @@ impl GatewayMetrics {
             status_update_skipped: counter!(names::STATUS_UPDATE_SKIPPED),
             config_reload_signals: counter!(names::CONFIG_RELOAD_SIGNALS),
             config_relist_total: counter!(names::CONFIG_RELIST_TOTAL),
+            gateway_request_bytes: counter!(names::GATEWAY_REQUEST_BYTES),
+            gateway_response_bytes: counter!(names::GATEWAY_RESPONSE_BYTES),
+            controller_connected_gateways: gauge!(names::CONTROLLER_CONNECTED_GATEWAYS),
+            schema_validation_errors: counter!(names::SCHEMA_VALIDATION_ERRORS),
         }
     }
 
@@ -167,6 +186,36 @@ impl GatewayMetrics {
     #[inline]
     pub fn config_relist(&self) {
         self.config_relist_total.increment(1);
+    }
+
+    /// Record proxied request bytes (downstream → upstream body)
+    #[inline]
+    pub fn add_request_bytes(&self, bytes: u64) {
+        self.gateway_request_bytes.increment(bytes);
+    }
+
+    /// Record proxied response bytes (upstream → downstream body)
+    #[inline]
+    pub fn add_response_bytes(&self, bytes: u64) {
+        self.gateway_response_bytes.increment(bytes);
+    }
+
+    /// Record a gateway instance connected to controller via gRPC
+    #[inline]
+    pub fn gateway_connected(&self) {
+        self.controller_connected_gateways.increment(1.0);
+    }
+
+    /// Record a gateway instance disconnected from controller
+    #[inline]
+    pub fn gateway_disconnected(&self) {
+        self.controller_connected_gateways.decrement(1.0);
+    }
+
+    /// Record a schema validation error from Admin API (non-K8s mode)
+    #[inline]
+    pub fn schema_validation_error(&self) {
+        self.schema_validation_errors.increment(1);
     }
 }
 
