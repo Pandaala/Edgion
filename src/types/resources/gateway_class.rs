@@ -5,6 +5,7 @@
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use super::common::Condition;
 
 /// API group for GatewayClass
 pub const GATEWAY_CLASS_GROUP: &str = "gateway.networking.k8s.io";
@@ -18,7 +19,8 @@ pub const GATEWAY_CLASS_KIND: &str = "GatewayClass";
     group = "gateway.networking.k8s.io",
     version = "v1",
     kind = "GatewayClass",
-    plural = "gatewayclasses"
+    plural = "gatewayclasses",
+    status = "GatewayClassStatus"
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayClassSpec {
@@ -32,6 +34,15 @@ pub struct GatewayClassSpec {
     /// ParametersRef references a resource that contains parameters
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters_ref: Option<ParametersReference>,
+}
+
+/// GatewayClassStatus describes the status of the GatewayClass resource.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayClassStatus {
+    /// Conditions describe the current conditions of the GatewayClass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]

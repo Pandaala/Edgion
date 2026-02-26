@@ -47,6 +47,11 @@ pub struct HTTPRouteSpec {
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteRule {
+    /// Name identifies this rule for observability and status correlation
+    /// Support: Extended
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
     /// Matches define conditions used for matching the rule against requests
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matches: Option<Vec<HTTPRouteMatch>>,
@@ -102,6 +107,7 @@ pub struct HTTPRouteRule {
 impl Clone for HTTPRouteRule {
     fn clone(&self) -> Self {
         Self {
+            name: self.name.clone(),
             matches: self.matches.clone(),
             filters: self.filters.clone(),
             backend_refs: self.backend_refs.clone(),
@@ -121,6 +127,7 @@ impl Clone for HTTPRouteRule {
 impl fmt::Debug for HTTPRouteRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HTTPRouteRule")
+            .field("name", &self.name)
             .field("matches", &self.matches)
             .field("plugins", &self.filters)
             .field("backend_refs", &self.backend_refs)

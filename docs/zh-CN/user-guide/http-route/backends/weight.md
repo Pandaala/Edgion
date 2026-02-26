@@ -92,4 +92,4 @@ rules:
 ## 相关文档
 
 - [Service 引用](./service-ref.md)
-- [灰度发布](../../advanced/canary-release.md)
+- 灰度发布（即将推出）

@@ -133,6 +133,12 @@ pub enum EdgionService {
     ServiceEndpointSlice,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackendAppProtocol {
+    H2c,
+    WebSocket,
+}
+
 impl EdgionService {
     /// Parse service type from kind string
     pub fn from_kind(kind: Option<&String>) -> Self {
@@ -150,6 +156,42 @@ impl EdgionService {
                 _ => EdgionService::Service, // Default to Service for unknown types
             },
         }
+    }
+}
+
+fn detect_backend_app_protocol(service_key: &str, backend_port: Option<i32>) -> Option<BackendAppProtocol> {
+    let service = get_global_service_store().get(service_key)?;
+    let ports = service.spec.as_ref()?.ports.as_ref()?;
+
+    let target_port = backend_port.or_else(|| ports.first().map(|p| p.port))?;
+    let port = ports.iter().find(|p| p.port == target_port).or_else(|| ports.first())?;
+    let app_protocol = port.app_protocol.as_deref()?.to_ascii_lowercase();
+
+    match app_protocol.as_str() {
+        "kubernetes.io/h2c" | "h2c" => Some(BackendAppProtocol::H2c),
+        "kubernetes.io/ws" | "ws" | "kubernetes.io/wss" | "wss" => Some(BackendAppProtocol::WebSocket),
+        _ => None,
+    }
+}
+
+fn apply_backend_app_protocol(
+    peer: &mut Box<HttpPeer>,
+    app_protocol: Option<BackendAppProtocol>,
+    ctx: &mut EdgionHttpContext,
+) {
+    match app_protocol {
+        Some(BackendAppProtocol::H2c) => {
+            // H2C backend: force cleartext HTTP/2 upstream.
+            peer.options.set_http_version(2, 2);
+        }
+        Some(BackendAppProtocol::WebSocket) => {
+            // Explicitly use HTTP/1.1 upgrade style for WebSocket backends.
+            peer.options.set_http_version(1, 1);
+            if ctx.request_info.discover_protocol.is_none() {
+                ctx.request_info.discover_protocol = Some("websocket".to_string());
+            }
+        }
+        None => {}
     }
 }
 
@@ -549,6 +591,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
         .ok_or(EdgionStatus::Unknown)?;
 
     let service_key = format!("{}/{}", namespace, br_name);
+    let backend_app_protocol = detect_backend_app_protocol(&service_key, br_port);
 
     match service_type {
         EdgionService::Service => {
@@ -590,7 +633,9 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 }
             }
 
-            create_tls_peer(addr, &backend_tls_policy)
+            let mut peer = create_tls_peer(addr, &backend_tls_policy)?;
+            apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
+            Ok(peer)
         }
 
         EdgionService::ServiceClusterIp => {
@@ -629,7 +674,9 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
             record_tls_to_upstream(ctx, use_tls, &sni);
 
-            create_tls_peer(addr, &backend_tls_policy)
+            let mut peer = create_tls_peer(addr, &backend_tls_policy)?;
+            apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
+            Ok(peer)
         }
 
         EdgionService::ServiceExternalName => {
@@ -668,7 +715,9 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
             record_tls_to_upstream(ctx, use_tls, &sni);
 
-            create_tls_peer(addr, &backend_tls_policy)
+            let mut peer = create_tls_peer(addr, &backend_tls_policy)?;
+            apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
+            Ok(peer)
         }
 
         EdgionService::ServiceImport => {
@@ -709,7 +758,9 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 }
             }
 
-            create_tls_peer(addr, &backend_tls_policy)
+            let mut peer = create_tls_peer(addr, &backend_tls_policy)?;
+            apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
+            Ok(peer)
         }
 
         EdgionService::ServiceEndpointSlice => {
@@ -745,7 +796,9 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 }
             }
 
-            create_tls_peer(addr, &backend_tls_policy)
+            let mut peer = create_tls_peer(addr, &backend_tls_policy)?;
+            apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
+            Ok(peer)
         }
     }
 }

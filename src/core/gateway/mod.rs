@@ -7,4 +7,4 @@ pub mod gateway_class;
 pub mod listener_builder;
 pub mod server_header;
 
-pub use err_resp::{end_response_400, end_response_404, end_response_500, end_response_503};
+pub use err_resp::{end_response_400, end_response_404, end_response_421, end_response_500, end_response_503};

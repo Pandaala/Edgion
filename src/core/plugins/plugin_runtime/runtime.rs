@@ -53,7 +53,7 @@ use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
 use crate::core::plugins::gapi_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
 use crate::core::plugins::gapi_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter,
-    ResponseHeaderModifierFilter,
+    ResponseHeaderModifierFilter, URLRewriteFilter,
 };
 
 pub struct PluginRuntime {
@@ -133,6 +133,11 @@ impl PluginRuntime {
                 HTTPRouteFilterType::RequestRedirect => {
                     if let Some(config) = &filter.request_redirect {
                         self.add_request_filter(Box::new(RequestRedirectFilter::new(config.clone())));
+                    }
+                }
+                HTTPRouteFilterType::URLRewrite => {
+                    if let Some(config) = &filter.url_rewrite {
+                        self.add_request_filter(Box::new(URLRewriteFilter::new(config.clone())));
                     }
                 }
                 HTTPRouteFilterType::ExtensionRef => {

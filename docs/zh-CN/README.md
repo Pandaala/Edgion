@@ -38,7 +38,7 @@
 | 📚 用户指南 | [user-guide/](./user-guide/) | 路由和插件配置 |
 | 🔧 运维指南 | [ops-guide/](./ops-guide/) | Gateway/TLS 配置 |
 | 🛠️ 开发指南 | [dev-guide/](./dev-guide/) | 架构和开发 |
-| 📦 示例配置 | [examples/conf/](../../examples/conf/) | YAML 配置示例 |
+| 📦 示例配置 | [examples/k8stest/](../../examples/k8stest/) | 集成测试与示例配置 |
 
 ---
 

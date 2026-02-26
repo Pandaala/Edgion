@@ -9,11 +9,13 @@
 
 use std::collections::HashSet;
 
+use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
     get_listener_port_manager, get_secret, make_port_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
-use crate::types::prelude_resources::Gateway;
+use crate::types::prelude_resources::{GRPCRoute, Gateway, HTTPRoute, TCPRoute, TLSRoute, UDPRoute};
+use crate::types::resources::common::ParentReference;
 use crate::types::resources::gateway::{GatewayStatus, ListenerStatus, RouteGroupKind};
 use crate::types::ResourceKind;
 
@@ -269,6 +271,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     listener_statuses.last_mut().unwrap()
                 };
 
+                ls.attached_routes = count_attached_routes_for_listener(gateway, &listener.name);
+
                 // Set Conflicted condition based on ListenerPortManager
                 let is_conflicted = if let Some((reason, _)) = conflicts.get(&listener.name) {
                     let cond = condition_true(
@@ -294,6 +298,96 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 update_listener_conditions(ls, validation_errors, generation, is_conflicted);
             }
         }
+    }
+}
+
+fn count_attached_routes_for_listener(gateway: &Gateway, listener_name: &str) -> i32 {
+    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
+    let gateway_name = gateway.metadata.name.as_deref().unwrap_or("");
+    count_attached_routes_for_listener_by_key(gateway_ns, gateway_name, listener_name)
+}
+
+fn count_attached_routes_for_listener_by_key(gateway_ns: &str, gateway_name: &str, listener_name: &str) -> i32 {
+    if gateway_name.is_empty() {
+        return 0;
+    }
+
+    let mut total = 0_i32;
+    total += count_attached_routes_of_kind::<HTTPRoute, _>("HTTPRoute", gateway_ns, gateway_name, listener_name, |route| {
+        (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
+    });
+    total += count_attached_routes_of_kind::<GRPCRoute, _>("GRPCRoute", gateway_ns, gateway_name, listener_name, |route| {
+            (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
+        });
+    total += count_attached_routes_of_kind::<TCPRoute, _>("TCPRoute", gateway_ns, gateway_name, listener_name, |route| {
+        (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
+    });
+    total += count_attached_routes_of_kind::<TLSRoute, _>("TLSRoute", gateway_ns, gateway_name, listener_name, |route| {
+        (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
+    });
+    total += count_attached_routes_of_kind::<UDPRoute, _>("UDPRoute", gateway_ns, gateway_name, listener_name, |route| {
+        (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
+    });
+    total
+}
+
+fn count_attached_routes_of_kind<K, F>(
+    kind: &str,
+    gateway_ns: &str,
+    gateway_name: &str,
+    listener_name: &str,
+    parent_refs_fn: F,
+) -> i32
+where
+    K: serde::de::DeserializeOwned,
+    F: Fn(&K) -> (Option<&Vec<ParentReference>>, Option<&str>),
+{
+    let Some(processor) = PROCESSOR_REGISTRY.get(kind) else {
+        return 0;
+    };
+
+    let Ok((json, _)) = processor.as_watch_obj().list_json() else {
+        tracing::warn!(kind = %kind, "Failed to list resources while calculating attachedRoutes");
+        return 0;
+    };
+
+    let routes: Vec<K> = match serde_json::from_str(&json) {
+        Ok(routes) => routes,
+        Err(e) => {
+            tracing::warn!(kind = %kind, error = %e, "Failed to decode resources while calculating attachedRoutes");
+            return 0;
+        }
+    };
+
+    routes
+        .iter()
+        .filter(|route| {
+            let (parent_refs_opt, route_ns) = parent_refs_fn(route);
+            let Some(parent_refs) = parent_refs_opt else {
+                return false;
+            };
+            parent_refs.iter().any(|parent_ref| {
+                parent_ref_matches_gateway_and_listener(parent_ref, route_ns, gateway_ns, gateway_name, listener_name)
+            })
+        })
+        .count() as i32
+}
+
+fn parent_ref_matches_gateway_and_listener(
+    parent_ref: &ParentReference,
+    route_ns: Option<&str>,
+    gateway_ns: &str,
+    gateway_name: &str,
+    listener_name: &str,
+) -> bool {
+    let parent_ns = parent_ref.namespace.as_deref().or(route_ns).unwrap_or("default");
+    if parent_ns != gateway_ns || parent_ref.name != gateway_name {
+        return false;
+    }
+
+    match parent_ref.section_name.as_deref() {
+        Some(section_name) => section_name == listener_name,
+        None => true,
     }
 }
 

@@ -1,5 +1,5 @@
 use super::EdgionHttp;
-use crate::core::gateway::{end_response_400, end_response_404, end_response_500};
+use crate::core::gateway::{end_response_400, end_response_404, end_response_421, end_response_500};
 use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 use crate::core::routes::grpc_routes::try_match_grpc_route;
 use crate::types::filters::PluginRunningResult;
@@ -253,6 +253,23 @@ async fn build_request_metadata(
         }
     }
 
+    // HTTPS listener isolation:
+    // 1) enforce SNI and Host consistency when enabled
+    // 2) reject requests whose Host does not match listener hostname constraint
+    if should_enforce_listener_isolation(edgion_http) {
+        if is_sni_host_mismatch(ctx.request_info.sni.as_deref(), &ctx.request_info.hostname) {
+            ctx.add_error(EdgionStatus::SniHostMismatch);
+            end_response_421(session, ctx, &edgion_http.server_header_opts).await?;
+            return Ok(true);
+        }
+
+        if listener_hostname_mismatch(edgion_http.listener.hostname.as_deref(), &ctx.request_info.hostname) {
+            ctx.add_error(EdgionStatus::SniHostMismatch);
+            end_response_421(session, ctx, &edgion_http.server_header_opts).await?;
+            return Ok(true);
+        }
+    }
+
     // Validate X-Forwarded-For length against security configuration
     if let Some(security_config) = &edgion_http.edgion_gateway_config.spec.security_protect {
         if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
@@ -267,6 +284,51 @@ async fn build_request_metadata(
     }
 
     Ok(false) // Continue processing
+}
+
+#[inline]
+fn should_enforce_listener_isolation(edgion_http: &EdgionHttp) -> bool {
+    let require_sni_host_match = edgion_http
+        .edgion_gateway_config
+        .spec
+        .security_protect
+        .as_ref()
+        .map(|s| s.require_sni_host_match)
+        .unwrap_or(true);
+
+    require_sni_host_match && edgion_http.listener.protocol.eq_ignore_ascii_case("HTTPS")
+}
+
+#[inline]
+fn listener_hostname_mismatch(listener_hostname: Option<&str>, host: &str) -> bool {
+    let Some(listener_hostname) = listener_hostname else {
+        return false;
+    };
+    normalize_hostname(listener_hostname) != normalize_hostname(host)
+}
+
+#[inline]
+fn is_sni_host_mismatch(sni: Option<&str>, host: &str) -> bool {
+    let Some(sni) = sni else {
+        return false;
+    };
+    normalize_hostname(sni) != normalize_hostname(host)
+}
+
+#[inline]
+fn normalize_hostname(value: &str) -> String {
+    let mut host = value.trim();
+
+    // Handle HTTP Host header value that may contain port.
+    if let Some(stripped) = host.strip_prefix('[') {
+        if let Some(end) = stripped.find(']') {
+            host = &stripped[..end];
+        }
+    } else if let Some((h, _)) = host.split_once(':') {
+        host = h;
+    }
+
+    host.trim_end_matches('.').to_ascii_lowercase()
 }
 
 /// Append client IP to X-Forwarded-For header (inline for performance)
