@@ -4,11 +4,13 @@ use crate::core::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispat
 use crate::core::conf_sync::types::ListData;
 use crate::core::routes::create_route_manager_handler;
 use crate::types::prelude_resources::*;
+use crate::types::resource_defs::get_resource_info;
 use crate::types::{all_resource_type_names, GatewayBaseConf, ResourceKind, ResourceMeta};
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Endpoints, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::Resource;
+use std::collections::HashSet;
 use std::sync::RwLock;
 
 pub struct ConfigClient {
@@ -35,6 +37,9 @@ pub struct ConfigClient {
     plugin_metadata: ClientCache<PluginMetaData>,
     edgion_acme: ClientCache<EdgionAcme>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
+    /// Optional cache-field whitelist used for readiness checks.
+    /// When set, `is_ready()` only waits for these caches.
+    required_cache_names: RwLock<Option<HashSet<String>>>,
 }
 
 impl ConfigClient {
@@ -150,7 +155,41 @@ impl ConfigClient {
             backend_tls_policies: backend_tls_policies_cache,
             plugin_metadata: ClientCache::new(client_id.clone(), client_name.clone()),
             edgion_acme: edgion_acme_cache,
+            required_cache_names: RwLock::new(None),
         }
+    }
+
+    /// Set required resource kinds for readiness checks.
+    ///
+    /// Only kinds that are both known and cached on Gateway are retained.
+    /// If no valid cache kind is resolved, readiness falls back to checking all caches.
+    pub fn set_required_kinds_for_readiness(&self, kind_names: &[String]) {
+        let mut required = HashSet::new();
+
+        for kind_name in kind_names {
+            let Some(kind) = ResourceKind::from_kind_name(kind_name) else {
+                continue;
+            };
+            // Skip kinds intentionally not cached on Gateway.
+            if self.get_dyn_cache(kind).is_none() {
+                continue;
+            }
+            if let Some(info) = get_resource_info(kind) {
+                required.insert(info.cache_field_name.to_string());
+            }
+        }
+
+        let mut guard = self.required_cache_names.write().unwrap();
+        if required.is_empty() {
+            *guard = None;
+            tracing::warn!(
+                component = "config_client",
+                supported_kinds = ?kind_names,
+                "No valid cache kinds resolved for readiness; fallback to all caches"
+            );
+            return;
+        }
+        *guard = Some(required);
     }
 
     /// Set gRPC client for all caches that have a DynClientCache entry.
@@ -332,8 +371,10 @@ impl ConfigClient {
     /// Get all caches status based on global resource registry
     /// Returns a list of tuples: (cache_name, is_ready)
     fn all_caches_status(&self) -> Vec<(&'static str, bool)> {
+        let required = self.required_cache_names.read().unwrap().clone();
         all_resource_type_names()
             .into_iter()
+            .filter(|name| required.as_ref().map(|set| set.contains(*name)).unwrap_or(true))
             .filter_map(|name| self.get_cache_status(name).map(|ready| (name, ready)))
             .collect()
     }
@@ -491,6 +532,40 @@ impl ConfigClient {
     /// Trigger update event for an endpoint slice by key
     pub fn trigger_endpoint_slice_update_event(&self, key: &str) {
         self.endpoint_slices.trigger_update_event_by_key(key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_ready_uses_required_kinds() {
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let _enter = rt.enter();
+        let client = ConfigClient::new("cid".to_string(), "cname".to_string());
+        client.set_required_kinds_for_readiness(&[
+            "GatewayClass".to_string(),
+            "Gateway".to_string(),
+            "HTTPRoute".to_string(),
+        ]);
+
+        // Mark only required kinds as ready.
+        client
+            .get_dyn_cache(ResourceKind::GatewayClass)
+            .expect("gateway class cache")
+            .set_ready();
+        client
+            .get_dyn_cache(ResourceKind::Gateway)
+            .expect("gateway cache")
+            .set_ready();
+        client
+            .get_dyn_cache(ResourceKind::HTTPRoute)
+            .expect("http route cache")
+            .set_ready();
+
+        // Other caches remain not ready, but should not block.
+        assert!(client.is_ready().is_ok());
     }
 }
 

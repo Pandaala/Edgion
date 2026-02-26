@@ -28,6 +28,7 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::fs;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Instant;
 
 pub struct MtlsTestSuite;
@@ -45,12 +46,22 @@ fn load_client_identity(cert_path: &str, key_path: &str) -> Result<reqwest::Iden
 }
 
 // Helper function to create HTTP client without client certificate (for SNI only)
+fn resolve_target(ip_or_host: &str, port: u16) -> Result<SocketAddr, String> {
+    let mut addrs = format!("{}:{}", ip_or_host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("Failed to resolve target {}:{}: {}", ip_or_host, port, e))?;
+    addrs
+        .next()
+        .ok_or_else(|| format!("No resolved address for {}:{}", ip_or_host, port))
+}
+
 fn create_client_with_sni(hostname: &str, ip: &str, port: u16) -> Result<reqwest::Client, String> {
+    let target = resolve_target(ip, port)?;
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .danger_accept_invalid_certs(true) // Accept self-signed server certs
         .no_proxy() // Disable proxy for local testing
-        .resolve(hostname, format!("{}:{}", ip, port).parse().unwrap()) // Set SNI via DNS resolution
+        .resolve(hostname, target) // Set SNI via DNS resolution
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))
 }
@@ -64,13 +75,14 @@ fn create_mtls_client(
     port: u16,
 ) -> Result<reqwest::Client, String> {
     let identity = load_client_identity(cert_path, key_path)?;
+    let target = resolve_target(ip, port)?;
 
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .danger_accept_invalid_certs(true) // Accept self-signed server certs
         .no_proxy() // Disable proxy for local testing
         .identity(identity)
-        .resolve(hostname, format!("{}:{}", ip, port).parse().unwrap()) // Set SNI via DNS resolution
+        .resolve(hostname, target) // Set SNI via DNS resolution
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))
 }

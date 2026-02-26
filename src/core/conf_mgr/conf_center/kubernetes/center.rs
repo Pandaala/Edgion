@@ -487,16 +487,27 @@ impl KubernetesCenter {
             const CACHE_READY_TIMEOUT_SECS: u64 = 30;
             let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
             let start = Instant::now();
+            let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
+
+            // Treat no_sync_kinds as optional for cache readiness as well:
+            // if those resources are unavailable in the cluster (e.g. experimental CRDs),
+            // they should not block ConfigSyncServer startup.
+            let pending_sync_kinds = || -> Vec<&'static str> {
+                PROCESSOR_REGISTRY
+                    .not_ready_kinds()
+                    .into_iter()
+                    .filter(|k| !no_sync_refs.contains(k))
+                    .collect()
+            };
 
             // Wait for PROCESSOR_REGISTRY to be ready
-            while !PROCESSOR_REGISTRY.is_all_ready() && start.elapsed() < timeout {
+            while !pending_sync_kinds().is_empty() && start.elapsed() < timeout {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
 
-            if PROCESSOR_REGISTRY.is_all_ready() {
+            if pending_sync_kinds().is_empty() {
                 // Register all WatchObjs to ConfigSyncServer
                 // Filter out resources configured in no_sync_kinds
-                let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
                 css.register_all(PROCESSOR_REGISTRY.all_watch_objs(&no_sync_refs));
 
                 // Trigger full cross-namespace revalidation
@@ -508,12 +519,7 @@ impl KubernetesCenter {
 
                 let _ = tx.send(LifecycleEvent::CachesReady).await;
             } else {
-                let not_ready: Vec<String> = PROCESSOR_REGISTRY
-                    .all_kinds()
-                    .into_iter()
-                    .filter(|kind| PROCESSOR_REGISTRY.get(kind).map(|p| !p.is_ready()).unwrap_or(false))
-                    .map(|s| s.to_string())
-                    .collect();
+                let not_ready: Vec<String> = pending_sync_kinds().into_iter().map(|s| s.to_string()).collect();
 
                 tracing::warn!(
                     component = "kubernetes_center",

@@ -738,7 +738,8 @@ async fn main() -> Result<()> {
         http_host,
         grpc_host,
     ) = if cli.gateway {
-        // Gateway mode: load ports from ports.json
+        // Gateway mode: prefer ports from ports.json, but allow CLI ports as fallback/override.
+        // This is important for K8s service mode where gateway often listens on 80/443 instead of 31xxx.
         match port_config::PortConfig::load() {
             Ok(config) => {
                 let ports = config.get_ports(port_key);
@@ -747,30 +748,31 @@ async fn main() -> Result<()> {
                     "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
                     _ => "test.example.com",
                 };
+                let http_port = ports.http.unwrap_or(cli.http_port);
                 (
-                    ports.http.unwrap_or(31000),
-                    ports.grpc.unwrap_or(ports.http.unwrap_or(31000)),
-                    ports.tcp.unwrap_or(31090),
-                    ports.tcp_filtered.unwrap_or(31091),
-                    ports.udp.unwrap_or(31100),
-                    ports.http.unwrap_or(31000),
-                    ports.https.unwrap_or(ports.http.map(|p| p + 1).unwrap_or(31001)),
-                    ports.grpc_tls.unwrap_or(31070),
+                    http_port,
+                    ports.grpc.unwrap_or(cli.grpc_port),
+                    ports.tcp.unwrap_or(cli.tcp_port),
+                    ports.tcp_filtered.unwrap_or(cli.tcp_port + 1),
+                    ports.udp.unwrap_or(cli.udp_port),
+                    http_port,
+                    ports.https.unwrap_or(cli.https_port),
+                    ports.grpc_tls.unwrap_or(cli.grpc_https_port),
                     Some(http_host.to_string()),
                     Some("grpc.example.com".to_string()),
                 )
             }
             Err(e) => {
-                eprintln!("Warning: Failed to load ports.json: {}. Using default ports.", e);
+                eprintln!("Warning: Failed to load ports.json: {}. Using CLI/default ports.", e);
                 (
-                    31000,
-                    31000,
-                    31090,
-                    31091,
-                    31100,
-                    31000,
-                    31001,
-                    31070,
+                    cli.http_port,
+                    cli.grpc_port,
+                    cli.tcp_port,
+                    cli.tcp_port + 1,
+                    cli.udp_port,
+                    cli.websocket_port,
+                    cli.https_port,
+                    cli.grpc_https_port,
                     Some("test.example.com".to_string()),
                     Some("grpc.example.com".to_string()),
                 )

@@ -100,6 +100,10 @@ impl ConfigSyncClient {
     /// Runs as a background task. Updates the global GATEWAY_INSTANCE_COUNT
     /// via set_gateway_instance_count(). Automatically reconnects on failure.
     ///
+    /// On server switch (server_id change mid-stream), reconnect immediately
+    /// without backoff to ensure fast convergence. Exponential backoff is only
+    /// applied for real connection/transport failures.
+    ///
     /// This should be called once at startup via tokio::spawn.
     pub async fn start_watch_server_meta(self: Arc<Self>) {
         let client_id = self.client_id.clone();
@@ -121,17 +125,46 @@ impl ConfigSyncClient {
                 .await
             {
                 Ok(response) => {
-                    backoff = Duration::from_secs(1); // Reset on success
+                    backoff = Duration::from_secs(1); // Reset on successful connection
                     let mut stream = response.into_inner();
+
+                    // Track the server_id seen on the first event of this stream session.
+                    // If a subsequent event carries a different server_id it is the terminal
+                    // server-switch signal from the server side (Stage A); reconnect immediately.
+                    let mut stream_server_id: Option<String> = None;
+                    let mut server_switched = false;
 
                     loop {
                         match stream.message().await {
                             Ok(Some(event)) => {
                                 set_gateway_instance_count(event.gateway_instance_count);
 
-                                // Also track server_id for consistency
                                 if !event.server_id.is_empty() {
-                                    self.config_client.set_current_server_id(event.server_id);
+                                    match &stream_server_id {
+                                        None => {
+                                            // First event: record the authoritative server_id
+                                            // and update the config client.
+                                            stream_server_id = Some(event.server_id.clone());
+                                            self.config_client.set_current_server_id(event.server_id);
+                                        }
+                                        Some(sid) if *sid != event.server_id => {
+                                            // server_id changed mid-stream — server has reloaded.
+                                            // Update config client with new server_id and reconnect
+                                            // immediately (skip backoff sleep below).
+                                            tracing::info!(
+                                                old_server_id = %sid,
+                                                new_server_id = %event.server_id,
+                                                "WatchServerMeta: server switch detected, reconnecting immediately"
+                                            );
+                                            self.config_client.set_current_server_id(event.server_id);
+                                            server_switched = true;
+                                            break;
+                                        }
+                                        Some(_) => {
+                                            // Same server_id — normal update.
+                                            self.config_client.set_current_server_id(event.server_id);
+                                        }
+                                    }
                                 }
                             }
                             Ok(None) => {
@@ -147,6 +180,11 @@ impl ConfigSyncClient {
                             }
                         }
                     }
+
+                    if server_switched {
+                        // Intentional switch — skip backoff and reconnect immediately.
+                        continue;
+                    }
                 }
                 Err(e) => {
                     tracing::error!(
@@ -158,7 +196,7 @@ impl ConfigSyncClient {
             }
 
             tokio::time::sleep(backoff).await;
-            backoff = (backoff * 2).min(max_backoff); // Exponential backoff
+            backoff = (backoff * 2).min(max_backoff); // Exponential backoff for real failures
         }
     }
 
@@ -171,12 +209,26 @@ impl ConfigSyncClient {
     /// - If a kind resolves but has no Gateway cache (Secret, ReferenceGrant): skip.
     /// - If a kind string is completely unknown: warn and skip (forward compat).
     pub async fn start_watch_kinds(&mut self, supported_kinds: &[String]) -> Result<(), tonic::Status> {
+        let mut effective_kinds = supported_kinds.to_vec();
+        for required in [
+            "GatewayClass".to_string(),
+            "Gateway".to_string(),
+            "EdgionGatewayConfig".to_string(),
+        ] {
+            if !effective_kinds.iter().any(|k| k == &required) {
+                effective_kinds.push(required);
+            }
+        }
+
         tracing::info!(
             supported_kinds = ?supported_kinds,
+            effective_kinds = ?effective_kinds,
             "Starting watch for supported resource kinds"
         );
+        self.config_client
+            .set_required_kinds_for_readiness(&effective_kinds);
 
-        for kind_name in supported_kinds {
+        for kind_name in &effective_kinds {
             // Resolve string -> ResourceKind via exhaustive enum
             let kind = match ResourceKind::from_kind_name(kind_name) {
                 Some(k) => k,
