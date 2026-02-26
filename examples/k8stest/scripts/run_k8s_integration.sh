@@ -5,14 +5,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONF_ROOT="${CONF_ROOT:-$PROJECT_ROOT/examples/k8stest/conf}"
 K8S_DEPLOY_ROOT="${K8S_DEPLOY_ROOT:-$PROJECT_ROOT/../edgion-deploy/kubernetes}"
+COMMON_SCRIPT_DIR="${SCRIPT_DIR}/common"
+ORBSTACK_SCRIPT_DIR="${SCRIPT_DIR}/orbstack"
 
-VALIDATE_SCRIPT="$SCRIPT_DIR/validate_no_endpoints.sh"
-DEPLOY_SCRIPT="$SCRIPT_DIR/deploy_integration.sh"
-APPLY_ALL_SCRIPT="$SCRIPT_DIR/apply_all_conf_strict.sh"
-RUN_CLIENT_SCRIPT="$SCRIPT_DIR/run_test_client.sh"
-GENERATE_CERTS_SCRIPT="$SCRIPT_DIR/generate_runtime_certs.sh"
+VALIDATE_SCRIPT="$COMMON_SCRIPT_DIR/validate_no_endpoints.sh"
+DEPLOY_SCRIPT="$COMMON_SCRIPT_DIR/deploy_integration.sh"
+APPLY_ALL_SCRIPT="$COMMON_SCRIPT_DIR/apply_all_conf_strict.sh"
+RUN_CLIENT_SCRIPT="$COMMON_SCRIPT_DIR/run_test_client.sh"
+GENERATE_CERTS_SCRIPT="$COMMON_SCRIPT_DIR/generate_runtime_certs.sh"
+LOCAL_IMAGE_PREPARE_SCRIPT="$ORBSTACK_SCRIPT_DIR/prepare_local_images.sh"
 GENERATED_DIR="${GENERATED_DIR:-$PROJECT_ROOT/examples/k8stest/generated}"
 GENERATED_SECRET_DIR="${GENERATED_DIR}/secrets"
+IMAGE_CONFIG_FILE="${IMAGE_CONFIG_FILE:-$SCRIPT_DIR/config/images.env}"
 STATE_NAMESPACE="${STATE_NAMESPACE:-edgion-system}"
 STATE_CONFIGMAP_NAME="${STATE_CONFIGMAP_NAME:-edgion-k8s-integration-state}"
 
@@ -30,6 +34,17 @@ SPEC_PROFILE="${SPEC_PROFILE:-recommended}"
 FULL_TEST=false
 WITH_RELOAD=false
 BACKEND_TEST_NAMESPACE="${BACKEND_TEST_NAMESPACE:-edgion-backend}"
+CLUSTER_MODE="${CLUSTER_MODE:-auto}" # auto|local|remote
+TEST_CLIENT_IMAGE="${TEST_CLIENT_IMAGE:-}"
+TEST_SERVER_IMAGE="${TEST_SERVER_IMAGE:-}"
+CONTROLLER_IMAGE="${CONTROLLER_IMAGE:-}"
+GATEWAY_IMAGE="${GATEWAY_IMAGE:-}"
+IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
+IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
+IMAGE_VERSION="${IMAGE_VERSION:-dev}"
+IMAGE_ARCH="${IMAGE_ARCH:-}"
+PREPARE_LOCAL_IMAGES=false
+LOCAL_IMAGE_REBUILD=false
 
 FILTERED_MODE=false
 SELECTED_COUNT=0
@@ -64,6 +79,12 @@ Options:
   -i, --item <name>              Run specific item with -r (e.g. JwtAuth)
   --test-server-replicas <n>     Deploy/scale test-server replicas (default: ${TEST_SERVER_REPLICAS})
   --spec-profile <name>          Deploy profile (default: ${SPEC_PROFILE})
+  --cluster-mode <auto|local|remote>
+                                 Cluster mode for image compatibility checks
+                                 (default: ${CLUSTER_MODE})
+  --image-config <path>          Image config file (default: ${IMAGE_CONFIG_FILE})
+  --prepare-local-images         Build local test images and auto-set TEST_*_IMAGE
+  --rebuild-local-images         With --prepare-local-images, force rebuild
   --full-test                    Include slow tests (Timeout/AllEndpointStatus/LdapAuth)
   --with-reload                  Run test rounds twice with reload in between
   -h, --help                     Show this help
@@ -71,6 +92,11 @@ Options:
 Env:
   BACKEND_TEST_NAMESPACE         Backend test namespace for deploy/cleanup scripts
                                  (default: ${BACKEND_TEST_NAMESPACE})
+  TEST_CLIENT_IMAGE              Optional test-client image override (passed to deploy script)
+  TEST_SERVER_IMAGE              Optional test-server image override (passed to deploy script)
+  CONTROLLER_IMAGE               Optional controller image override (passed to deploy script)
+  GATEWAY_IMAGE                  Optional gateway image override (passed to deploy script)
+  IMAGE_CONFIG_FILE              Path to image config file
 EOF
 }
 
@@ -136,6 +162,34 @@ while [[ $# -gt 0 ]]; do
       fi
       shift 2
       ;;
+    --cluster-mode)
+      CLUSTER_MODE="${2:-}"
+      if [[ -z "${CLUSTER_MODE}" ]]; then
+        echo "missing value for --cluster-mode"
+        exit 1
+      fi
+      if [[ "${CLUSTER_MODE}" != "auto" && "${CLUSTER_MODE}" != "local" && "${CLUSTER_MODE}" != "remote" ]]; then
+        echo "invalid --cluster-mode: ${CLUSTER_MODE} (expected: auto|local|remote)"
+        exit 1
+      fi
+      shift 2
+      ;;
+    --image-config)
+      IMAGE_CONFIG_FILE="${2:-}"
+      if [[ -z "${IMAGE_CONFIG_FILE}" ]]; then
+        echo "missing value for --image-config"
+        exit 1
+      fi
+      shift 2
+      ;;
+    --prepare-local-images)
+      PREPARE_LOCAL_IMAGES=true
+      shift
+      ;;
+    --rebuild-local-images)
+      LOCAL_IMAGE_REBUILD=true
+      shift
+      ;;
     --full-test)
       FULL_TEST=true
       shift
@@ -189,6 +243,137 @@ if ! command -v curl >/dev/null 2>&1; then
   echo "curl not found"
   exit 1
 fi
+
+get_cluster_arches() {
+  kubectl get nodes -o json | jq -r '.items[].status.nodeInfo.architecture' | sort -u
+}
+
+detect_cluster_mode_auto() {
+  local names
+  names="$(kubectl get nodes -o json | jq -r '.items[].metadata.name' | tr '[:upper:]' '[:lower:]')"
+  if echo "${names}" | grep -Eq 'orbstack|docker-desktop|minikube|kind|rancher-desktop'; then
+    echo "local"
+  else
+    echo "remote"
+  fi
+}
+
+detect_cluster_mode() {
+  if [[ "${CLUSTER_MODE}" == "auto" ]]; then
+    detect_cluster_mode_auto
+  else
+    echo "${CLUSTER_MODE}"
+  fi
+}
+
+load_image_config_file() {
+  local f="$1"
+  [[ -f "${f}" ]] || return 0
+
+  # shellcheck disable=SC1090
+  source "${f}"
+
+  IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
+  IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
+  IMAGE_VERSION="${IMAGE_VERSION:-dev}"
+
+  if [[ -z "${TEST_CLIENT_IMAGE}" ]]; then
+    if [[ -n "${IMAGE_ARCH:-}" ]]; then
+      TEST_CLIENT_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-test-client:${IMAGE_VERSION}_${IMAGE_ARCH}"
+    fi
+  fi
+  if [[ -z "${TEST_SERVER_IMAGE}" ]]; then
+    if [[ -n "${IMAGE_ARCH:-}" ]]; then
+      TEST_SERVER_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-test-server:${IMAGE_VERSION}_${IMAGE_ARCH}"
+    fi
+  fi
+  if [[ -z "${CONTROLLER_IMAGE}" ]]; then
+    if [[ -n "${IMAGE_ARCH:-}" ]]; then
+      CONTROLLER_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-controller:${IMAGE_VERSION}_${IMAGE_ARCH}"
+    fi
+  fi
+  if [[ -z "${GATEWAY_IMAGE}" ]]; then
+    if [[ -n "${IMAGE_ARCH:-}" ]]; then
+      GATEWAY_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-gateway:${IMAGE_VERSION}_${IMAGE_ARCH}"
+    fi
+  fi
+}
+
+prepare_local_images_if_needed() {
+  local mode="$1"
+  if [[ "${PREPARE_LOCAL_IMAGES}" != "true" ]]; then
+    return 0
+  fi
+  if [[ "${mode}" != "local" ]]; then
+    echo "--prepare-local-images is only supported for local cluster mode (current: ${mode})"
+    exit 1
+  fi
+  if [[ ! -x "${LOCAL_IMAGE_PREPARE_SCRIPT}" ]]; then
+    echo "local image prepare script not found or not executable: ${LOCAL_IMAGE_PREPARE_SCRIPT}"
+    exit 1
+  fi
+
+  local arch
+  case "$(get_cluster_arches | head -n1)" in
+    arm64|aarch64) arch="arm64" ;;
+    amd64|x86_64) arch="amd64" ;;
+    *) arch="amd64" ;;
+  esac
+
+  local args=(--arch "${arch}")
+  if [[ "${LOCAL_IMAGE_REBUILD}" == "true" ]]; then
+    args+=(--rebuild)
+  fi
+  "${LOCAL_IMAGE_PREPARE_SCRIPT}" "${args[@]}" --write-config "${IMAGE_CONFIG_FILE}"
+  load_image_config_file "${IMAGE_CONFIG_FILE}"
+  export TEST_CLIENT_IMAGE TEST_SERVER_IMAGE CONTROLLER_IMAGE GATEWAY_IMAGE
+}
+
+check_image_arch_compat() {
+  local image="$1"
+  local cluster_arch="$2"
+  local role="$3"
+  [[ -n "${image}" ]] || return 0
+
+  # Heuristic by common tag suffixes from build-image.sh output.
+  if [[ "${image}" =~ (_|:|-)arm64($|[^a-zA-Z0-9]) ]] && [[ "${cluster_arch}" == "amd64" || "${cluster_arch}" == "x86_64" ]]; then
+    echo "[ERROR] ${role} image appears arm64 but cluster arch is ${cluster_arch}: ${image}"
+    return 1
+  fi
+  if [[ "${image}" =~ (_|:|-)amd64($|[^a-zA-Z0-9]) ]] && [[ "${cluster_arch}" == "arm64" || "${cluster_arch}" == "aarch64" ]]; then
+    echo "[ERROR] ${role} image appears amd64 but cluster arch is ${cluster_arch}: ${image}"
+    return 1
+  fi
+  return 0
+}
+
+print_cluster_and_image_context() {
+  local mode arches primary
+  load_image_config_file "${IMAGE_CONFIG_FILE}"
+  mode="$(detect_cluster_mode)"
+  prepare_local_images_if_needed "${mode}"
+  arches="$(get_cluster_arches | xargs)"
+  primary="$(get_cluster_arches | head -n1)"
+
+  echo "Cluster mode: ${mode} (configured: ${CLUSTER_MODE})"
+  echo "Cluster node arch(es): ${arches}"
+  echo "Image override CONTROLLER_IMAGE: ${CONTROLLER_IMAGE:-<unset>}"
+  echo "Image override GATEWAY_IMAGE: ${GATEWAY_IMAGE:-<unset>}"
+  echo "Image override TEST_CLIENT_IMAGE: ${TEST_CLIENT_IMAGE:-<unset>}"
+  echo "Image override TEST_SERVER_IMAGE: ${TEST_SERVER_IMAGE:-<unset>}"
+
+  check_image_arch_compat "${CONTROLLER_IMAGE}" "${primary}" "CONTROLLER_IMAGE"
+  check_image_arch_compat "${GATEWAY_IMAGE}" "${primary}" "GATEWAY_IMAGE"
+  check_image_arch_compat "${TEST_CLIENT_IMAGE}" "${primary}" "TEST_CLIENT_IMAGE"
+  check_image_arch_compat "${TEST_SERVER_IMAGE}" "${primary}" "TEST_SERVER_IMAGE"
+
+  if [[ "${mode}" == "remote" && "${SKIP_DEPLOY}" == "false" ]]; then
+    if [[ -z "${CONTROLLER_IMAGE}" || -z "${GATEWAY_IMAGE}" || -z "${TEST_CLIENT_IMAGE}" || -z "${TEST_SERVER_IMAGE}" ]]; then
+      echo "[WARN] remote mode detected without explicit test image overrides."
+      echo "[WARN] recommend setting CONTROLLER_IMAGE/GATEWAY_IMAGE/TEST_CLIENT_IMAGE/TEST_SERVER_IMAGE to pushed tags."
+    fi
+  fi
+}
 
 hash_file() {
   local f="$1"
@@ -526,6 +711,7 @@ run_all_selected_suites() {
 if [[ "${SKIP_PREPARE}" == "false" ]]; then
   echo "Phase 1/2: Prepare environment"
   echo "Using BACKEND_TEST_NAMESPACE=${BACKEND_TEST_NAMESPACE}"
+  print_cluster_and_image_context
   PREPARE_CONF_HASH="$(compute_prepare_conf_hash)"
   "${VALIDATE_SCRIPT}" "${CONF_ROOT}"
 
@@ -545,6 +731,7 @@ if [[ "${SKIP_PREPARE}" == "false" ]]; then
   kubectl apply --server-side --force-conflicts --field-manager=edgion-k8s-test -f "${GENERATED_SECRET_DIR}"
 
   if [[ "${SKIP_DEPLOY}" == "false" ]]; then
+    export CONTROLLER_IMAGE GATEWAY_IMAGE TEST_CLIENT_IMAGE TEST_SERVER_IMAGE
     K8S_DEPLOY_ROOT="$K8S_DEPLOY_ROOT" BACKEND_TEST_NAMESPACE="${BACKEND_TEST_NAMESPACE}" "${DEPLOY_SCRIPT}" \
       --spec-profile "${SPEC_PROFILE}" \
       --test-server-replicas "${TEST_SERVER_REPLICAS}"
@@ -561,6 +748,7 @@ if [[ "${SKIP_PREPARE}" == "false" ]]; then
   write_prepare_state_marker "${PREPARE_CONF_HASH}"
   echo "Prepare phase finished."
 else
+  print_cluster_and_image_context
   verify_skip_prepare_preconditions
 fi
 

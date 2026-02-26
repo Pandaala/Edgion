@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 CONF_ROOT="${1:-$PROJECT_ROOT/examples/k8stest/conf}"
 
 if [[ ! -d "$CONF_ROOT" ]]; then
@@ -13,7 +13,13 @@ fi
 echo "[INFO] validating no Endpoint/EndpointSlice in: $CONF_ROOT"
 
 # 1) Strict kind check in YAML docs.
-if matches=$(rg -n "^[[:space:]]*kind:[[:space:]]*Endpoint(Slice)?[[:space:]]*$" "$CONF_ROOT" -S); then
+KIND_PATTERN="^[[:space:]]*kind:[[:space:]]*Endpoint(Slice)?[[:space:]]*$"
+if command -v rg >/dev/null 2>&1; then
+  matches="$(rg -n "$KIND_PATTERN" "$CONF_ROOT" -S || true)"
+else
+  matches="$(find "$CONF_ROOT" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 | xargs -0 grep -nE "$KIND_PATTERN" || true)"
+fi
+if [[ -n "${matches}" ]]; then
   echo "[ERROR] Endpoint/EndpointSlice kind found in k8s conf:"
   echo "$matches"
   exit 1

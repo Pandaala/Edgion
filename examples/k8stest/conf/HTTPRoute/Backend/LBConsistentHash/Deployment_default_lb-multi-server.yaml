@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: test-server
-          image: docker.io/pandaala/edgion-test-server:0.1.0
+          image: docker.io/pandaala/edgion-test-server:dev
           imagePullPolicy: IfNotPresent
           command:
             - /usr/local/bin/test_server

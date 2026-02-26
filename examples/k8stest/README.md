@@ -12,19 +12,18 @@ This directory is the Kubernetes test entry for Edgion examples.
 Validate conf does not contain Endpoint/EndpointSlice:
 
 ```bash
-./examples/k8stest/scripts/validate_no_endpoints.sh
+./examples/k8stest/scripts/common/validate_no_endpoints.sh
 ```
 
 Refresh k8s conf from `examples/test/conf`:
 
 ```bash
-./examples/k8stest/scripts/refresh_conf_from_test.sh
 ```
 
 Deploy integration environment (controller/gateway/test pods):
 
 ```bash
-./examples/k8stest/scripts/deploy_integration.sh --spec-profile recommended --test-server-replicas 3
+./examples/k8stest/scripts/common/deploy_integration.sh --spec-profile recommended --test-server-replicas 3
 ```
 
 Run full Kubernetes integration (apply suites from `examples/k8stest/conf` + run test_client):
@@ -73,7 +72,7 @@ Run full mode and reload-two-round mode (aligned with old integration script):
 Run test_client directly:
 
 ```bash
-./examples/k8stest/scripts/run_test_client.sh -r EdgionPlugins -i JweDecrypt
+./examples/k8stest/scripts/common/run_test_client.sh -r EdgionPlugins -i JweDecrypt
 ```
 
 Clean test environment:

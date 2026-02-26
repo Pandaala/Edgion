@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 OUTPUT_DIR="${1:-${OUTPUT_DIR:-$PROJECT_ROOT/examples/k8stest/generated}}"
 SECRETS_DIR="${OUTPUT_DIR}/secrets"
 CERTS_DIR="${OUTPUT_DIR}/certs"
