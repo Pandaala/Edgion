@@ -13,6 +13,8 @@ RUN_CLIENT_SCRIPT="$SCRIPT_DIR/run_test_client.sh"
 GENERATE_CERTS_SCRIPT="$SCRIPT_DIR/generate_runtime_certs.sh"
 GENERATED_DIR="${GENERATED_DIR:-$PROJECT_ROOT/examples/k8stest/generated}"
 GENERATED_SECRET_DIR="${GENERATED_DIR}/secrets"
+STATE_NAMESPACE="${STATE_NAMESPACE:-edgion-system}"
+STATE_CONFIGMAP_NAME="${STATE_CONFIGMAP_NAME:-edgion-k8s-integration-state}"
 
 CONTROLLER_ADMIN_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller.edgion-system.svc.cluster.local:5800}"
 GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://edgion-gateway.edgion-system.svc.cluster.local:5900}"
@@ -187,6 +189,115 @@ if ! command -v curl >/dev/null 2>&1; then
   echo "curl not found"
   exit 1
 fi
+
+hash_file() {
+  local f="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${f}" | awk '{print $1}'
+  else
+    shasum -a 256 "${f}" | awk '{print $1}'
+  fi
+}
+
+compute_prepare_conf_hash() {
+  local tmp
+  tmp="$(mktemp /tmp/edgion-k8s-prepare-hash.XXXXXX)"
+
+  # Sort file list for deterministic hash.
+  find "${CONF_ROOT}" -type f \( -name "*.yaml" -o -name "*.yml" \) | sort > "${tmp}"
+  {
+    echo "spec_profile=${SPEC_PROFILE}"
+    echo "test_server_replicas=${TEST_SERVER_REPLICAS}"
+    echo "backend_test_namespace=${BACKEND_TEST_NAMESPACE}"
+    echo "conf_root=${CONF_ROOT}"
+    while IFS= read -r f; do
+      [[ -f "${f}" ]] || continue
+      echo "${f}:$(hash_file "${f}")"
+    done < "${tmp}"
+  } | if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  else
+    shasum -a 256 | awk '{print $1}'
+  fi
+
+  rm -f "${tmp}"
+}
+
+write_prepare_state_marker() {
+  local conf_hash="$1"
+  local now_utc
+  now_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  kubectl -n "${STATE_NAMESPACE}" create configmap "${STATE_CONFIGMAP_NAME}" \
+    --from-literal=prepare_ok=true \
+    --from-literal=conf_hash="${conf_hash}" \
+    --from-literal=spec_profile="${SPEC_PROFILE}" \
+    --from-literal=test_server_replicas="${TEST_SERVER_REPLICAS}" \
+    --from-literal=backend_test_namespace="${BACKEND_TEST_NAMESPACE}" \
+    --from-literal=updated_at="${now_utc}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+}
+
+get_state_data() {
+  local key="$1"
+  kubectl -n "${STATE_NAMESPACE}" get configmap "${STATE_CONFIGMAP_NAME}" -o "jsonpath={.data.${key}}" 2>/dev/null || true
+}
+
+verify_skip_prepare_preconditions() {
+  local conf_hash expected actual
+  conf_hash="$(compute_prepare_conf_hash)"
+
+  if ! kubectl -n "${STATE_NAMESPACE}" get configmap "${STATE_CONFIGMAP_NAME}" >/dev/null 2>&1; then
+    echo "--skip-prepare denied: state ConfigMap not found: ${STATE_NAMESPACE}/${STATE_CONFIGMAP_NAME}"
+    echo "Run once without --skip-prepare to complete prepare phase."
+    exit 1
+  fi
+
+  actual="$(get_state_data prepare_ok)"
+  if [[ "${actual}" != "true" ]]; then
+    echo "--skip-prepare denied: prepare_ok is not true in ${STATE_NAMESPACE}/${STATE_CONFIGMAP_NAME}"
+    exit 1
+  fi
+
+  expected="${conf_hash}"
+  actual="$(get_state_data conf_hash)"
+  if [[ -z "${actual}" || "${actual}" != "${expected}" ]]; then
+    echo "--skip-prepare denied: conf hash mismatch"
+    echo "  expected(current): ${expected}"
+    echo "  recorded(state):   ${actual:-<empty>}"
+    echo "Run once without --skip-prepare to refresh prepare state."
+    exit 1
+  fi
+
+  expected="${SPEC_PROFILE}"
+  actual="$(get_state_data spec_profile)"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "--skip-prepare denied: spec_profile mismatch (current=${expected}, state=${actual:-<empty>})"
+    exit 1
+  fi
+
+  expected="${TEST_SERVER_REPLICAS}"
+  actual="$(get_state_data test_server_replicas)"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "--skip-prepare denied: test_server_replicas mismatch (current=${expected}, state=${actual:-<empty>})"
+    exit 1
+  fi
+
+  expected="${BACKEND_TEST_NAMESPACE}"
+  actual="$(get_state_data backend_test_namespace)"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "--skip-prepare denied: BACKEND_TEST_NAMESPACE mismatch (current=${expected}, state=${actual:-<empty>})"
+    exit 1
+  fi
+
+  # Runtime readiness checks.
+  kubectl rollout status deployment/edgion-gateway -n edgion-system --timeout=120s >/dev/null
+  kubectl rollout status deployment/edgion-test-client -n edgion-test --timeout=120s >/dev/null
+  kubectl -n edgion-system get svc edgion-gateway >/dev/null
+  kubectl -n edgion-test get svc edgion-test-server >/dev/null
+
+  echo "Skip-prepare precheck passed: ${STATE_NAMESPACE}/${STATE_CONFIGMAP_NAME} is valid."
+}
 
 wait_gateway_stable() {
   local timeout_sec="${1:-300}"
@@ -415,6 +526,7 @@ run_all_selected_suites() {
 if [[ "${SKIP_PREPARE}" == "false" ]]; then
   echo "Phase 1/2: Prepare environment"
   echo "Using BACKEND_TEST_NAMESPACE=${BACKEND_TEST_NAMESPACE}"
+  PREPARE_CONF_HASH="$(compute_prepare_conf_hash)"
   "${VALIDATE_SCRIPT}" "${CONF_ROOT}"
 
   if [[ "${SKIP_DEPLOY}" == "false" ]]; then
@@ -446,7 +558,10 @@ if [[ "${SKIP_PREPARE}" == "false" ]]; then
   wait_gateway_stable 300
   sleep 5
 
+  write_prepare_state_marker "${PREPARE_CONF_HASH}"
   echo "Prepare phase finished."
+else
+  verify_skip_prepare_preconditions
 fi
 
 if [[ "${PREPARE_ONLY}" == "true" ]]; then
