@@ -27,7 +27,7 @@ impl LBRoundRobinTestSuite {
         TestCase::new(
             "roundrobin_eps",
             "Verify RoundRobin LB with EndpointSlice (default, single slice)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
@@ -43,7 +43,7 @@ impl LBRoundRobinTestSuite {
 
                     for i in 0..request_count {
                         let client = client.clone();
-                        let url = "http://127.0.0.1:31120/test".to_string();
+                        let url = format!("http://{}:31120/test", ctx.target_host);
                         let trace_id = format!("rr-eps-{:04}", i);
 
                         let task = tokio::spawn(async move {
@@ -63,7 +63,7 @@ impl LBRoundRobinTestSuite {
 
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    let metrics_client = MetricsClient::from_host_port("127.0.0.1", 5901);
+                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 5901);
                     match metrics_client.analyze_lb_distribution("lb-rr-test").await {
                         Ok(analysis) => {
                             if analysis.total_requests == 0 {
@@ -110,7 +110,7 @@ impl LBRoundRobinTestSuite {
         TestCase::new(
             "roundrobin_ep",
             "Verify RoundRobin LB with Endpoints (ServiceEndpoint kind)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
@@ -126,7 +126,7 @@ impl LBRoundRobinTestSuite {
 
                     for i in 0..request_count {
                         let client = client.clone();
-                        let url = "http://127.0.0.1:31120/test".to_string();
+                        let url = format!("http://{}:31120/test", ctx.target_host);
                         let trace_id = format!("rr-ep-{:04}", i);
 
                         let task = tokio::spawn(async move {
@@ -146,7 +146,7 @@ impl LBRoundRobinTestSuite {
 
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    let metrics_client = MetricsClient::from_host_port("127.0.0.1", 5901);
+                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 5901);
                     match metrics_client.analyze_lb_distribution("lb-rr-test").await {
                         Ok(analysis) => {
                             if analysis.total_requests == 0 {
@@ -193,7 +193,7 @@ impl LBRoundRobinTestSuite {
         TestCase::new(
             "roundrobin_multi_slice",
             "Verify RoundRobin LB across multiple EndpointSlices (2 slices, 4 backends)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
@@ -209,7 +209,7 @@ impl LBRoundRobinTestSuite {
 
                     for i in 0..request_count {
                         let client = client.clone();
-                        let url = "http://127.0.0.1:31120/test".to_string();
+                        let url = format!("http://{}:31120/test", ctx.target_host);
                         let trace_id = format!("rr-multi-{:04}", i);
 
                         let task = tokio::spawn(async move {
@@ -229,7 +229,7 @@ impl LBRoundRobinTestSuite {
 
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    let metrics_client = MetricsClient::from_host_port("127.0.0.1", 5901);
+                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 5901);
                     match metrics_client.analyze_lb_distribution("lb-rr-test").await {
                         Ok(analysis) => {
                             if analysis.total_requests == 0 {

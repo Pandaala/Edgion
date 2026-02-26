@@ -1,0 +1,15 @@
+# 4. Regex URI 捕获组
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: proxy-rewrite-regex
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        regexUri:
+          pattern: "^/regex/users/(\\d+)"
+          replacement: "/user-service/$1"
+

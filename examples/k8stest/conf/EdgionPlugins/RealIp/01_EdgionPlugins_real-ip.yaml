@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: real-ip-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RealIp
+      config:
+        trustedIps:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+          - "127.0.0.1/32"
+        realIpHeader: "X-Forwarded-For"
+        recursive: true

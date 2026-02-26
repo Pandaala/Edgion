@@ -1,0 +1,13 @@
+# 2. URI + $uri 变量
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: proxy-rewrite-uri-var
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        uri: "/prefix$uri/suffix"
+

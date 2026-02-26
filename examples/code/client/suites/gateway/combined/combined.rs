@@ -19,11 +19,11 @@ impl CombinedScenariosTestSuite {
         TestCase::new(
             "hostname_and_same_ns_match",
             "Test hostname matches and same namespace (both constraints pass)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31230/health".to_string();
+                    let url = format!("http://{}:31230/health", ctx.target_host);
 
                     let response = client.get(&url).header("Host", "api.combined.example.com").send().await;
 
@@ -53,11 +53,11 @@ impl CombinedScenariosTestSuite {
         TestCase::new(
             "hostname_match_diff_ns",
             "Test hostname matches but different namespace (should deny)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31230/health".to_string();
+                    let url = format!("http://{}:31230/health", ctx.target_host);
 
                     let response = client.get(&url).header("Host", "www.combined.example.com").send().await;
 
@@ -87,11 +87,11 @@ impl CombinedScenariosTestSuite {
         TestCase::new(
             "same_ns_hostname_mismatch",
             "Test same namespace but hostname mismatch (should deny)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31230/health".to_string();
+                    let url = format!("http://{}:31230/health", ctx.target_host);
 
                     let response = client.get(&url).header("Host", "other.example.com").send().await;
 
@@ -121,11 +121,11 @@ impl CombinedScenariosTestSuite {
         TestCase::new(
             "section_and_hostname_match",
             "Test sectionName and hostname both match",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31231/health".to_string();
+                    let url = format!("http://{}:31231/health", ctx.target_host);
 
                     let response = client
                         .get(&url)
@@ -159,11 +159,11 @@ impl CombinedScenariosTestSuite {
         TestCase::new(
             "section_match_hostname_mismatch",
             "Test sectionName matches but hostname mismatch (should deny)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31231/health".to_string();
+                    let url = format!("http://{}:31231/health", ctx.target_host);
 
                     let response = client
                         .get(&url)

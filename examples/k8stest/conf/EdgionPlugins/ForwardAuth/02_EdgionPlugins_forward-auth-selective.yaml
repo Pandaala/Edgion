@@ -1,0 +1,30 @@
+# ForwardAuth selective test: forward only specific headers to auth service
+# Auth service: edgion-test-server.edgion-test.svc.cluster.local:30040
+#
+# Test scenario:
+#   - request_headers is set → forward ONLY Authorization and X-Request-ID
+#   - Other original headers (e.g., X-Custom-Header) should NOT be forwarded
+#   - upstreamHeaders: copy X-User-ID, X-User-Role from auth response
+#   - Custom success status codes: only 200 and 204
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-selective
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        uri: "http://edgion-test-server.edgion-test.svc.cluster.local:30040/verify"
+        requestMethod: GET
+        timeoutMs: 5000
+        requestHeaders:
+          - Authorization
+          - X-Request-ID
+        upstreamHeaders:
+          - X-User-ID
+          - X-User-Role
+        clientHeaders:
+          - WWW-Authenticate
+        successStatusCodes: [200, 204]

@@ -1,0 +1,32 @@
+# ConsistentHash (Header) + EndpointSlice 模式
+# 使用 X-User-Id header 进行一致性哈希
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lb-ch-header-eps
+  namespace: edgion-default
+  annotations:
+    edgion.io/max-retries: "0"
+spec:
+  parentRefs:
+    - name: lb-ch-gateway
+      namespace: edgion-test
+  hostnames:
+    - "lb-ch-header-eps.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test
+      timeouts:
+        request: 2s
+        backendRequest: 1s
+      backendRefs:
+        - name: lb-ch-service
+          port: 8080
+          filters:
+            - type: ExtensionRef
+              extensionRef:
+                group: edgion.io
+                kind: LBPolicyConsistentHash
+                name: header.x-user-id

@@ -1,0 +1,15 @@
+# Fallback backend for DynamicExternalUpstream tests
+# Used when plugin skips (no match / missing key)
+apiVersion: v1
+kind: Service
+metadata:
+  name: deu-fallback
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP

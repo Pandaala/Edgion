@@ -49,14 +49,18 @@ RUN cargo chef prepare --recipe-path recipe.json
 # =============================================================================
 # Stage 3: Builder - Build dependencies and application
 # =============================================================================
-FROM rust:${RUST_VERSION} AS builder
+FROM rust:${RUST_VERSION}-slim AS builder
 
 WORKDIR /app
 
 # Install additional build dependencies
 RUN apt-get update && apt-get install -y \
+    g++ \
     cmake \
+    git \
     libclang-dev \
+    perl \
+    pkg-config \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
@@ -98,7 +102,7 @@ RUN if [ "$BUILD_TYPE" = "example" ]; then \
 # =============================================================================
 # Stage 4: Runtime - Minimal runtime environment
 # =============================================================================
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 # Build arguments
 ARG BINARY

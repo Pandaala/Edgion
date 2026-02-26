@@ -3,7 +3,7 @@
 # generate_k8s_conf.sh - 将本地测试配置转换为 K8s 标准模式
 #
 # 功能：
-#   1. 跳过 EndpointSlice 文件（K8s 会自动创建）
+#   1. 跳过 Endpoint/EndpointSlice 文件（K8s 会自动创建）
 #   2. 为 Service 添加 selector 指向 test-server Pod
 #   3. 生成 namespace 和 deployment 配置
 #   4. 保留原有目录结构
@@ -60,18 +60,18 @@ check_yq() {
     fi
 }
 
-# 判断文件是否为 EndpointSlice
-is_endpoint_slice() {
+# 判断文件是否为 Endpoint/EndpointSlice
+is_endpoint_resource() {
     local file="$1"
     local filename=$(basename "$file")
     
-    # 文件名以 EndpointSlice 开头（如 EndpointSlice_xxx.yaml）
-    if [[ "$filename" == EndpointSlice* ]]; then
+    # 文件名以 Endpoint/EndpointSlice 开头
+    if [[ "$filename" == EndpointSlice* || "$filename" == Endpoint* ]]; then
         return 0
     fi
     
     # 检查顶级 kind 字段（行首匹配，避免误匹配嵌套的 kind）
-    if grep -qE "^kind:[[:space:]]*EndpointSlice" "$file" 2>/dev/null; then
+    if grep -qE "^kind:[[:space:]]*Endpoint(Slice)?[[:space:]]*$" "$file" 2>/dev/null; then
         return 0
     fi
     
@@ -204,7 +204,7 @@ main() {
     
     # 统计
     local total=0
-    local skipped=0
+    local skipped_endpoint_like=0
     local services=0
     local copied=0
     
@@ -225,10 +225,10 @@ main() {
         local output_file="$OUTPUT_DIR/$rel_path"
         local output_dir=$(dirname "$output_file")
         
-        # 跳过 EndpointSlice
-        if is_endpoint_slice "$file"; then
-            ((skipped++))
-            warn "跳过 EndpointSlice: $rel_path"
+        # 跳过 Endpoint/EndpointSlice
+        if is_endpoint_resource "$file"; then
+            ((skipped_endpoint_like++))
+            warn "跳过 Endpoint/EndpointSlice: $rel_path"
             continue
         fi
         
@@ -251,10 +251,25 @@ main() {
     echo ""
     info "========== 完成 =========="
     info "总文件数: $total"
-    info "跳过 EndpointSlice: $skipped"
+    info "跳过 Endpoint/EndpointSlice: $skipped_endpoint_like"
     info "处理 Service: $services"
     info "直接复制: $copied"
     info "输出目录: $OUTPUT_DIR"
+
+    # 4. 最终强校验：输出目录不允许出现 Endpoint/EndpointSlice
+    local endpoint_kinds
+    endpoint_kinds="$(rg -n "^[[:space:]]*kind:[[:space:]]*Endpoint(Slice)?[[:space:]]*$" "$OUTPUT_DIR" -S || true)"
+    if [[ -n "$endpoint_kinds" ]]; then
+        error "输出目录仍包含 Endpoint/EndpointSlice kind:\n$endpoint_kinds"
+    fi
+
+    local endpoint_files
+    endpoint_files="$(find "$OUTPUT_DIR" -type f \( -name '*.yaml' -o -name '*.yml' \) | grep -E '/[^/]*Endpoint(Slice)?[^/]*\.ya?ml$' || true)"
+    if [[ -n "$endpoint_files" ]]; then
+        error "输出目录仍包含 Endpoint/EndpointSlice-like 文件名:\n$endpoint_files"
+    fi
+
+    info "输出目录校验通过：不包含 Endpoint/EndpointSlice"
     echo ""
     info "使用方法:"
     echo "  kubectl apply -f $OUTPUT_DIR/00-namespace.yaml"

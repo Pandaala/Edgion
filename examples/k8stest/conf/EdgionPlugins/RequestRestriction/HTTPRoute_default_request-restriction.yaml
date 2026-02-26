@@ -1,0 +1,92 @@
+# HTTPRoute for RequestRestriction 集成测试
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: request-restriction-test-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "request-restriction.example.com"
+  rules:
+    # 1. Header 拒绝列表测试
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/header-deny
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-header-deny
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 2. Path 允许列表测试
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/path-allow
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-path-allow
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 3. Method 允许列表测试
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/method-allow
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-method-allow
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 4. Header 必须存在测试
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/header-required
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-header-required
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 5. 综合测试
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/combined
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-combined
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

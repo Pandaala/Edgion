@@ -11,5 +11,3 @@ spec:
       targetPort: 30001
   selector:
     app: edgion-test-server
-    app: test-http
-

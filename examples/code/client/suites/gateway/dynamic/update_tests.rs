@@ -21,14 +21,14 @@ impl UpdatePhaseTestSuite {
         TestCase::new(
             "scenario1_after_hostname_removed",
             "[AFTER UPDATE] Previously rejected hostname should now work (expect 200 or 502)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     // 同样的请求，现在应该成功（或 502 backend 不可用）
                     let resp = client
-                        .get("http://127.0.0.1:31250/match")
+                        .get(format!("http://{}:31250/match", ctx.target_host))
                         .header("Host", "other.example.com")
                         .send()
                         .await;
@@ -66,14 +66,14 @@ impl UpdatePhaseTestSuite {
         TestCase::new(
             "scenario2_after_post_method_works",
             "[AFTER UPDATE] POST should work, GET should fail (404)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     // GET 应该失败 (404)（需要带正确的 Host header）
                     let get_resp = client
-                        .get("http://127.0.0.1:31251/api/v1")
+                        .get(format!("http://{}:31251/api/v1", ctx.target_host))
                         .header("Host", "method-test.example.com")
                         .send()
                         .await;
@@ -92,7 +92,7 @@ impl UpdatePhaseTestSuite {
 
                     // POST 应该成功 (200 或 502)（需要带正确的 Host header）
                     let post_resp = client
-                        .post("http://127.0.0.1:31251/api/v1")
+                        .post(format!("http://{}:31251/api/v1", ctx.target_host))
                         .header("Host", "method-test.example.com")
                         .send()
                         .await;

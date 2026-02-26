@@ -1,0 +1,32 @@
+# 5. 综合测试 - 多规则组合
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-combined
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        matchMode: Any
+        rules:
+          - name: "block-bots"
+            source: Header
+            key: "User-Agent"
+            denyRegex:
+              - "(?i).*Bot.*"
+          - name: "block-admin"
+            source: Path
+            denyRegex:
+              - ".*/admin/.*"
+              - ".*/internal/.*"
+          - name: "block-debug-cookie"
+            source: Cookie
+            key: "debug"
+            deny:
+              - "true"
+              - "1"
+        status: 403
+        message: "Access denied by security policy"
+

@@ -16,12 +16,12 @@ impl AllowedRoutesKindsTestSuite {
         TestCase::new(
             "http_route_allowed",
             "Test HTTPRoute is allowed when specified in kinds",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     // Use no_proxy to bypass system proxy for local testing
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31213/health".to_string();
+                    let url = format!("http://{}:31213/health", ctx.target_host);
 
                     let response = client.get(&url).header("Host", "kinds-http.example.com").send().await;
 
@@ -57,7 +57,7 @@ impl AllowedRoutesKindsTestSuite {
         TestCase::new(
             "grpc_route_denied",
             "Test GRPCRoute is denied when not in kinds (negative test)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
@@ -71,7 +71,7 @@ impl AllowedRoutesKindsTestSuite {
                         .build()
                         .unwrap();
 
-                    let url = "http://127.0.0.1:31213/test.TestService/SayHello".to_string();
+                    let url = format!("http://{}:31213/test.TestService/SayHello", ctx.target_host);
 
                     let response = client
                         .post(&url)

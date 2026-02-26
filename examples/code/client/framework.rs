@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use std::future::Future;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -30,6 +31,22 @@ pub struct TestContext {
 }
 
 impl TestContext {
+    fn resolve_target_ip(target_host: &str) -> Option<IpAddr> {
+        if target_host.eq_ignore_ascii_case("localhost") {
+            return Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        }
+
+        if let Ok(ip) = target_host.parse::<IpAddr>() {
+            return Some(ip);
+        }
+
+        (target_host, 0)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut addrs| addrs.next())
+            .map(|addr| addr.ip())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         target_host: String,
@@ -55,20 +72,17 @@ impl TestContext {
             .danger_accept_invalid_certs(true)
             .no_proxy(); // Disable proxy to connect directly to Gateway
 
-        // Add DNS resolution for hosts to support proper SNI
-        // This maps hostnames to 127.0.0.1 so the client sends correct SNI
-        //
-        // NOTE: reqwest's resolve() only replaces the IP address, the port from URL is still used.
-        // So we only need to map the hostname to 127.0.0.1, the port in SocketAddr is informational.
-        if let Some(ref host) = http_host {
-            // Use a common port (the actual port comes from the URL)
-            let addr: std::net::SocketAddr = format!("127.0.0.1:{}", https_port).parse().unwrap();
-            client_builder = client_builder.resolve(host, addr);
-        }
-        if let Some(ref host) = grpc_host {
-            // Resolve gRPC host for gRPC-TLS connections
-            let addr: std::net::SocketAddr = format!("127.0.0.1:{}", grpc_https_port).parse().unwrap();
-            client_builder = client_builder.resolve(host, addr);
+        // Add DNS overrides for host-based TLS tests (SNI / Host header suites).
+        // Local mode resolves to 127.0.0.1; k8s mode resolves to target service IP.
+        if let Some(target_ip) = Self::resolve_target_ip(&target_host) {
+            if let Some(ref host) = http_host {
+                let addr = SocketAddr::new(target_ip, https_port);
+                client_builder = client_builder.resolve(host, addr);
+            }
+            if let Some(ref host) = grpc_host {
+                let addr = SocketAddr::new(target_ip, grpc_https_port);
+                client_builder = client_builder.resolve(host, addr);
+            }
         }
 
         let http_client = client_builder.build().expect("Failed to create HTTP client");
@@ -134,6 +148,12 @@ impl TestContext {
 
     /// Get the Admin API base URL (Controller)
     pub fn admin_api_url(&self) -> String {
+        if let Ok(url) = std::env::var("EDGION_TEST_ADMIN_API_URL") {
+            let trimmed = url.trim();
+            if !trimmed.is_empty() {
+                return trimmed.trim_end_matches('/').to_string();
+            }
+        }
         format!("http://{}:{}", self.target_host, self.admin_port)
     }
 

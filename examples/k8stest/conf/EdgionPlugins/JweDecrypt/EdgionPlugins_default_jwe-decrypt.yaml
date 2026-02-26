@@ -1,0 +1,32 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: jwe-decrypt-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: JweDecrypt
+      config:
+        secretRef:
+          name: jwe-secret
+          namespace: edgion-default
+        keyManagementAlgorithm: Dir
+        contentEncryptionAlgorithm: A256GCM
+        header: authorization
+        forwardHeader: x-decrypted-auth
+        stripPrefix: "Bearer "
+        strict: true
+        hideCredentials: true
+        maxTokenSize: 8192
+        allowedAlgorithms:
+          - A256GCM
+        payloadToHeaders:
+          uid: x-user-id
+          user.department: x-user-dept
+          permissions.admin: x-is-admin
+        maxHeaderValueBytes: 4096
+        maxTotalHeaderBytes: 16384
+        storePayloadInCtx: true
+        authFailureDelayMs: 0
+

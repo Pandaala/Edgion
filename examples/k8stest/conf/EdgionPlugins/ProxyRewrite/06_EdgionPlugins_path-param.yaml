@@ -1,0 +1,17 @@
+# 6. Path 参数测试：$uid 在 URI 和 Header 中
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: proxy-rewrite-path-param
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        uri: "/user-service/$uid/profile"
+        headers:
+          set:
+            - name: X-User-Id
+              value: "$uid"
+

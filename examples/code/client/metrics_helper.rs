@@ -57,7 +57,7 @@ pub struct TestData {
 /// Metrics client for fetching and parsing Prometheus metrics
 pub struct MetricsClient {
     client: Client,
-    base_url: String,
+    base_urls: Vec<String>,
 }
 
 impl MetricsClient {
@@ -68,17 +68,66 @@ impl MetricsClient {
             .build()
             .expect("Failed to create HTTP client");
 
-        Self { client, base_url }
+        Self {
+            client,
+            base_urls: vec![base_url],
+        }
+    }
+
+    pub fn with_base_urls(base_urls: Vec<String>) -> Self {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("Failed to create HTTP client");
+
+        let filtered = base_urls
+            .into_iter()
+            .map(|u| u.trim().trim_end_matches('/').to_string())
+            .filter(|u| !u.is_empty())
+            .collect::<Vec<_>>();
+
+        Self {
+            client,
+            base_urls: if filtered.is_empty() {
+                vec!["http://127.0.0.1:5901".to_string()]
+            } else {
+                filtered
+            },
+        }
     }
 
     /// Create from host and port
     pub fn from_host_port(host: &str, port: u16) -> Self {
+        if let Ok(raw) = std::env::var("EDGION_TEST_GATEWAY_METRICS_ENDPOINTS") {
+            let endpoints = raw
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    if s.starts_with("http://") || s.starts_with("https://") {
+                        s.trim_end_matches('/').to_string()
+                    } else if s.contains(':') {
+                        format!("http://{}", s)
+                    } else {
+                        format!("http://{}:{}", s, port)
+                    }
+                })
+                .collect::<Vec<_>>();
+            if !endpoints.is_empty() {
+                return Self::with_base_urls(endpoints);
+            }
+        }
         Self::new(format!("http://{}:{}", host, port))
     }
 
     /// Fetch raw Prometheus metrics text
     pub async fn fetch_raw_metrics(&self) -> Result<String> {
-        let url = format!("{}/metrics", self.base_url);
+        let base_url = self
+            .base_urls
+            .first()
+            .cloned()
+            .ok_or_else(|| anyhow!("No metrics endpoint configured"))?;
+        let url = format!("{}/metrics", base_url);
         let response = self.client.get(&url).send().await?;
 
         if !response.status().is_success() {
@@ -92,8 +141,40 @@ impl MetricsClient {
     ///
     /// Returns all `edgion_backend_requests_total` metrics parsed into structured data.
     pub async fn fetch_backend_metrics(&self) -> Result<Vec<BackendMetric>> {
-        let raw = self.fetch_raw_metrics().await?;
-        parse_backend_metrics(&raw)
+        if self.base_urls.len() <= 1 {
+            let raw = self.fetch_raw_metrics().await?;
+            return parse_backend_metrics(&raw);
+        }
+
+        let mut all_metrics = Vec::new();
+        let mut errors = Vec::new();
+
+        for base_url in &self.base_urls {
+            let url = format!("{}/metrics", base_url);
+            match self.client.get(&url).send().await {
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        errors.push(format!("{} -> HTTP {}", url, resp.status()));
+                        continue;
+                    }
+                    match resp.text().await {
+                        Ok(body) => match parse_backend_metrics(&body) {
+                            Ok(mut metrics) => all_metrics.append(&mut metrics),
+                            Err(e) => errors.push(format!("{} -> parse error: {}", url, e)),
+                        },
+                        Err(e) => errors.push(format!("{} -> read body error: {}", url, e)),
+                    }
+                }
+                Err(e) => {
+                    errors.push(format!("{} -> request error: {}", url, e));
+                }
+            }
+        }
+
+        if all_metrics.is_empty() {
+            return Err(anyhow!("Failed to fetch metrics from all endpoints: {}", errors.join("; ")));
+        }
+        Ok(all_metrics)
     }
 
     /// Fetch backend metrics filtered by test_key

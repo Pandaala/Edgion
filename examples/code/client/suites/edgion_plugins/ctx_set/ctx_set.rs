@@ -21,7 +21,7 @@ impl CtxSetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/ctx-setter/api";
+                    let url = format!("http://{}:31180/test/ctx-setter/api", ctx.target_host);
 
                     let trace_id = format!("test-ctx-header-{}", uuid::Uuid::new_v4());
 
@@ -84,7 +84,7 @@ impl CtxSetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/ctx-setter/api";
+                    let url = format!("http://{}:31180/test/ctx-setter/api", ctx.target_host);
 
                     let trace_id = format!("test-ctx-default-{}", uuid::Uuid::new_v4());
 
@@ -146,7 +146,7 @@ impl CtxSetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/ctx-setter/api";
+                    let url = format!("http://{}:31180/test/ctx-setter/api", ctx.target_host);
 
                     let trace_id = format!("test-ctx-transform-{}", uuid::Uuid::new_v4());
 
@@ -207,7 +207,7 @@ impl CtxSetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/ctx-setter/api";
+                    let url = format!("http://{}:31180/test/ctx-setter/api", ctx.target_host);
 
                     let trace_id = format!("test-ctx-mapping-{}", uuid::Uuid::new_v4());
 
@@ -269,7 +269,7 @@ impl CtxSetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/ctx-setter/api";
+                    let url = format!("http://{}:31180/test/ctx-setter/api", ctx.target_host);
 
                     let trace_id = format!("test-ctx-map-def-{}", uuid::Uuid::new_v4());
 

@@ -30,7 +30,7 @@ impl LBConsistentHashTestSuite {
         TestCase::new(
             "chash_header_eps",
             "Verify ConsistentHash (header) with EndpointSlice - same key routes to same backend",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
@@ -49,7 +49,7 @@ impl LBConsistentHashTestSuite {
                     for user_id in &user_ids {
                         for i in 0..requests_per_user {
                             let client = client.clone();
-                            let url = "http://127.0.0.1:31121/test".to_string();
+                            let url = format!("http://{}:31121/test", ctx.target_host);
                             let trace_id = format!("ch-header-{}-{}", user_id, i);
                             let user_id = user_id.to_string();
 
@@ -72,7 +72,7 @@ impl LBConsistentHashTestSuite {
 
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    let metrics_client = MetricsClient::from_host_port("127.0.0.1", 5901);
+                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 5901);
                     match metrics_client.analyze_chash_consistency("lb-ch-test").await {
                         Ok(analysis) => {
                             if analysis.total_requests == 0 {
@@ -112,7 +112,7 @@ impl LBConsistentHashTestSuite {
         TestCase::new(
             "chash_header_ep",
             "Verify ConsistentHash (header) with Endpoints (ServiceEndpoint kind)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
@@ -130,7 +130,7 @@ impl LBConsistentHashTestSuite {
                     for user_id in &user_ids {
                         for i in 0..requests_per_user {
                             let client = client.clone();
-                            let url = "http://127.0.0.1:31121/test".to_string();
+                            let url = format!("http://{}:31121/test", ctx.target_host);
                             let trace_id = format!("ch-ep-{}-{}", user_id, i);
                             let user_id = user_id.to_string();
 
@@ -153,7 +153,7 @@ impl LBConsistentHashTestSuite {
 
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    let metrics_client = MetricsClient::from_host_port("127.0.0.1", 5901);
+                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 5901);
                     match metrics_client.analyze_chash_consistency("lb-ch-test").await {
                         Ok(analysis) => {
                             if analysis.total_requests == 0 {
@@ -192,7 +192,7 @@ impl LBConsistentHashTestSuite {
         TestCase::new(
             "chash_cookie",
             "Verify ConsistentHash (cookie) - same session routes to same backend",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
@@ -210,7 +210,7 @@ impl LBConsistentHashTestSuite {
                     for session_id in &session_ids {
                         for i in 0..requests_per_session {
                             let client = client.clone();
-                            let url = "http://127.0.0.1:31121/test".to_string();
+                            let url = format!("http://{}:31121/test", ctx.target_host);
                             let trace_id = format!("ch-cookie-{}-{}", session_id, i);
                             let cookie = format!("session-id={}", session_id);
 
@@ -233,7 +233,7 @@ impl LBConsistentHashTestSuite {
 
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    let metrics_client = MetricsClient::from_host_port("127.0.0.1", 5901);
+                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 5901);
                     match metrics_client.analyze_chash_consistency("lb-ch-test").await {
                         Ok(analysis) => {
                             if analysis.total_requests == 0 {
@@ -272,7 +272,7 @@ impl LBConsistentHashTestSuite {
         TestCase::new(
             "chash_arg",
             "Verify ConsistentHash (query arg) - same user_id routes to same backend",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
@@ -290,7 +290,7 @@ impl LBConsistentHashTestSuite {
                     for user_id in &user_ids {
                         for i in 0..requests_per_user {
                             let client = client.clone();
-                            let url = format!("http://127.0.0.1:31121/test?user_id={}", user_id);
+                            let url = format!("http://{}:31121/test?user_id={}", ctx.target_host, user_id);
                             let trace_id = format!("ch-arg-{}-{}", user_id, i);
 
                             let task = tokio::spawn(async move {
@@ -311,7 +311,7 @@ impl LBConsistentHashTestSuite {
 
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    let metrics_client = MetricsClient::from_host_port("127.0.0.1", 5901);
+                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 5901);
                     match metrics_client.analyze_chash_consistency("lb-ch-test").await {
                         Ok(analysis) => {
                             if analysis.total_requests == 0 {
@@ -350,7 +350,7 @@ impl LBConsistentHashTestSuite {
         TestCase::new(
             "chash_multi_slice",
             "Verify ConsistentHash across multiple EndpointSlices (2 slices, 4 backends)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
@@ -369,7 +369,7 @@ impl LBConsistentHashTestSuite {
                     for user_id in &user_ids {
                         for i in 0..requests_per_user {
                             let client = client.clone();
-                            let url = "http://127.0.0.1:31121/test".to_string();
+                            let url = format!("http://{}:31121/test", ctx.target_host);
                             let trace_id = format!("ch-multi-{}-{}", user_id, i);
                             let user_id = user_id.to_string();
 
@@ -392,7 +392,7 @@ impl LBConsistentHashTestSuite {
 
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    let metrics_client = MetricsClient::from_host_port("127.0.0.1", 5901);
+                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 5901);
                     match metrics_client.analyze_chash_consistency("lb-ch-test").await {
                         Ok(analysis) => {
                             if analysis.total_requests == 0 {

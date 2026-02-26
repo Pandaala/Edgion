@@ -1,0 +1,2 @@
+# Runtime-generated certs and k8s Secret YAMLs (created by scripts/generate_runtime_certs.sh)
+generated/

@@ -1,0 +1,25 @@
+# DynamicInternalUpstream - Rules mode
+# Maps X-Backend-Target header values to specific backend services
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: diu-rules
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: DynamicInternalUpstream
+      config:
+        from:
+          type: header
+          name: X-Backend-Target
+        rules:
+          - value: "canary"
+            backendRef:
+              name: diu-backend-canary
+          - value: "debug"
+            backendRef:
+              name: diu-backend-debug
+        onMissing: fallback
+        onNoMatch: fallback
+        onInvalid: reject
+        debugHeader: true

@@ -37,7 +37,7 @@ impl RateLimitTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = format!("http://127.0.0.1:31180/test/rate-limit/api");
+                    let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
                     let test_key = Self::generate_test_key();
 
                     // 发送 3 个请求（限制是 5），应该全部通过
@@ -83,7 +83,7 @@ impl RateLimitTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = format!("http://127.0.0.1:31180/test/rate-limit/api");
+                    let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
                     let test_key = Self::generate_test_key();
 
                     // 先发送 5 个请求消耗配额
@@ -152,7 +152,7 @@ impl RateLimitTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = format!("http://127.0.0.1:31180/test/rate-limit/api");
+                    let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
                     let test_key = Self::generate_test_key();
 
                     let response = client
@@ -218,7 +218,7 @@ impl RateLimitTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = format!("http://127.0.0.1:31180/test/rate-limit/api");
+                    let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
 
                     let key_a = Self::generate_test_key();
                     let key_b = Self::generate_test_key();
@@ -301,7 +301,7 @@ impl RateLimitTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = format!("http://127.0.0.1:31180/test/rate-limit/api");
+                    let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
 
                     // 不发送 X-Rate-Key header
                     let response = client.get(&url).header("host", "rate-limit.example.com").send().await;
@@ -337,7 +337,7 @@ impl RateLimitTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = format!("http://127.0.0.1:31180/test/rate-limit/api");
+                    let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
                     let test_key = Self::generate_test_key();
 
                     // 先消耗配额

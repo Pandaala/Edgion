@@ -10,10 +10,16 @@ spec:
     - name: http
       protocol: HTTP
       port: 31020
+      allowedRoutes:
+        namespaces:
+          from: All
     - name: https
       protocol: HTTPS
       port: 31021
       hostname: "*.example.com"
+      allowedRoutes:
+        namespaces:
+          from: All
       tls:
         mode: Terminate
         certificateRefs:

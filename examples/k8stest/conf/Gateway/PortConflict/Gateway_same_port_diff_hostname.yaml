@@ -1,0 +1,23 @@
+# Test: Same Port Different Hostname - No Conflict
+# For HTTP/HTTPS/TLS, different hostnames on the same port are allowed
+# Both Listeners should be Conflicted=False
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: port-no-conflict-hostname
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # Listener 1: HTTP on port 31262 with hostname api.example.com
+    - name: api
+      protocol: HTTP
+      port: 31262
+      hostname: "api.example.com"
+
+    # Listener 2: HTTP on same port 31262 but different hostname web.example.com
+    # This is NOT a conflict for HTTP protocol
+    - name: web
+      protocol: HTTP
+      port: 31262
+      hostname: "web.example.com"

@@ -19,11 +19,11 @@ impl ListenerHostnameTestSuite {
         TestCase::new(
             "exact_hostname_match",
             "Test exact hostname match between Route and Listener",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31240/health".to_string();
+                    let url = format!("http://{}:31240/health", ctx.target_host);
 
                     let response = client.get(&url).header("Host", "api.example.com").send().await;
 
@@ -56,11 +56,11 @@ impl ListenerHostnameTestSuite {
         TestCase::new(
             "hostname_mismatch",
             "Test hostname mismatch returns 404 (negative test)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31240/health".to_string();
+                    let url = format!("http://{}:31240/health", ctx.target_host);
 
                     let response = client.get(&url).header("Host", "other.example.com").send().await;
 
@@ -90,13 +90,13 @@ impl ListenerHostnameTestSuite {
         TestCase::new(
             "wildcard_hostname_match",
             "Test wildcard hostname match (*.wildcard.example.com)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     // Test 1: api.wildcard.example.com should match
-                    let url1 = "http://127.0.0.1:31241/health".to_string();
+                    let url1 = format!("http://{}:31241/health", ctx.target_host);
                     let response1 = client
                         .get(&url1)
                         .header("Host", "api.wildcard.example.com")
@@ -119,7 +119,7 @@ impl ListenerHostnameTestSuite {
                     }
 
                     // Test 2: www.wildcard.example.com should also match
-                    let url2 = "http://127.0.0.1:31241/health".to_string();
+                    let url2 = format!("http://{}:31241/health", ctx.target_host);
                     let response2 = client
                         .get(&url2)
                         .header("Host", "www.wildcard.example.com")
@@ -152,11 +152,11 @@ impl ListenerHostnameTestSuite {
         TestCase::new(
             "wildcard_root_mismatch",
             "Test wildcard doesn't match root domain (negative test)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31241/health".to_string();
+                    let url = format!("http://{}:31241/health", ctx.target_host);
 
                     let response = client
                         .get(&url)
@@ -193,11 +193,11 @@ impl ListenerHostnameTestSuite {
         TestCase::new(
             "no_hostname_restriction",
             "Test listener with no hostname restriction allows any hostname",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31242/health".to_string();
+                    let url = format!("http://{}:31242/health", ctx.target_host);
 
                     let response = client.get(&url).header("Host", "any-domain.example.com").send().await;
 

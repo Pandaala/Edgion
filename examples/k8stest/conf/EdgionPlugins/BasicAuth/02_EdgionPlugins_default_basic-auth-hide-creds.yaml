@@ -1,0 +1,19 @@
+# BasicAuth with hideCredentials enabled
+# After successful auth, Authorization header is removed from upstream request
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: basic-auth-hide-creds
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: BasicAuth
+      config:
+        realm: "Test Realm"
+        hideCredentials: true
+        secretRefs:
+          - name: basic-auth-alice
+            namespace: edgion-default
+          - name: basic-auth-bob
+            namespace: edgion-default

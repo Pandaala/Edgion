@@ -1,0 +1,17 @@
+# DynamicInternalUpstream - Direct mode
+# X-Backend-Target header value is used directly as backend_ref name
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: diu-direct
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: DynamicInternalUpstream
+      config:
+        from:
+          type: header
+          name: X-Backend-Target
+        onMissing: reject
+        onInvalid: reject
+        debugHeader: true

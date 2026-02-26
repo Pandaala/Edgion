@@ -16,11 +16,11 @@ impl AllowedRoutesAllNamespacesTestSuite {
         TestCase::new(
             "all_same_namespace_allowed",
             "Test Route in same namespace is allowed (with from: All)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31211/health".to_string();
+                    let url = format!("http://{}:31211/health", ctx.target_host);
 
                     let response = client.get(&url).header("Host", "all-same-ns.example.com").send().await;
 
@@ -53,11 +53,11 @@ impl AllowedRoutesAllNamespacesTestSuite {
         TestCase::new(
             "all_cross_namespace_allowed",
             "Test Route in different namespace is allowed (with from: All)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31211/health".to_string();
+                    let url = format!("http://{}:31211/health", ctx.target_host);
 
                     let response = client.get(&url).header("Host", "all-cross-ns.example.com").send().await;
 

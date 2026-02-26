@@ -1,0 +1,12 @@
+# LB ConsistentHash 测试服务（单 slice / EP 场景共用）
+apiVersion: v1
+kind: Service
+metadata:
+  name: lb-ch-service
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - port: 8080
+      protocol: TCP

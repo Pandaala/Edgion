@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edgion-test-openldap
+  namespace: edgion-test
+  labels:
+    app: edgion-test-openldap
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: edgion-test-openldap
+  template:
+    metadata:
+      labels:
+        app: edgion-test-openldap
+    spec:
+      initContainers:
+        - name: init-seed
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              cp /seed-config/10-users.ldif /seed-work/10-users.ldif
+          volumeMounts:
+            - name: seed-config
+              mountPath: /seed-config
+              readOnly: true
+            - name: seed-work
+              mountPath: /seed-work
+      containers:
+        - name: openldap
+          image: osixia/openldap:1.5.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LDAP_ORGANISATION
+              value: "Edgion Test"
+            - name: LDAP_DOMAIN
+              value: "example.org"
+            - name: LDAP_ADMIN_PASSWORD
+              value: "admin"
+            - name: LDAP_TLS
+              value: "false"
+            - name: LDAP_LOG_LEVEL
+              value: "256"
+            - name: LDAP_REMOVE_CONFIG_AFTER_SETUP
+              value: "false"
+          ports:
+            - containerPort: 389
+              name: ldap
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: ldap
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: ldap
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          volumeMounts:
+            - name: seed-work
+              mountPath: /container/service/slapd/assets/config/bootstrap/ldif/custom
+      volumes:
+        - name: seed-config
+          configMap:
+            name: edgion-test-openldap-seed
+        - name: seed-work
+          emptyDir: {}

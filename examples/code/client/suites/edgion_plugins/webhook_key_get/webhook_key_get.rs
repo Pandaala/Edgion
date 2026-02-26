@@ -28,7 +28,7 @@ impl WebhookKeyGetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/webhook-keyget/api";
+                    let url = format!("http://{}:31180/test/webhook-keyget/api", ctx.target_host);
 
                     let trace_id = format!("test-wh-body-json-{}", uuid::Uuid::new_v4());
 
@@ -94,7 +94,7 @@ impl WebhookKeyGetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/webhook-keyget/api";
+                    let url = format!("http://{}:31180/test/webhook-keyget/api", ctx.target_host);
 
                     let trace_id = format!("test-wh-header-{}", uuid::Uuid::new_v4());
 
@@ -161,7 +161,7 @@ impl WebhookKeyGetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/webhook-keyget/api";
+                    let url = format!("http://{}:31180/test/webhook-keyget/api", ctx.target_host);
 
                     let trace_id = format!("test-wh-bodytext-{}", uuid::Uuid::new_v4());
 
@@ -227,7 +227,7 @@ impl WebhookKeyGetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/webhook-keyget/api";
+                    let url = format!("http://{}:31180/test/webhook-keyget/api", ctx.target_host);
 
                     let trace_id = format!("test-wh-local-{}", uuid::Uuid::new_v4());
 
@@ -289,7 +289,7 @@ impl WebhookKeyGetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/webhook-keyget/api";
+                    let url = format!("http://{}:31180/test/webhook-keyget/api", ctx.target_host);
 
                     let trace_id = format!("test-wh-default-{}", uuid::Uuid::new_v4());
 
@@ -362,7 +362,7 @@ impl WebhookKeyGetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/webhook-keyget/api";
+                    let url = format!("http://{}:31180/test/webhook-keyget/api", ctx.target_host);
 
                     let trace_id = format!("test-wh-noheader-{}", uuid::Uuid::new_v4());
 

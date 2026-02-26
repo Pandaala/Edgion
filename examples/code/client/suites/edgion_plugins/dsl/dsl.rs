@@ -30,7 +30,7 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/dsl-header-check/api";
+                    let url = format!("http://{}:31180/test/dsl-header-check/api", ctx.target_host);
 
                     let response = client
                         .get(url)
@@ -77,7 +77,7 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/dsl-header-check/api";
+                    let url = format!("http://{}:31180/test/dsl-header-check/api", ctx.target_host);
 
                     let response = client
                         .get(url)
@@ -124,7 +124,7 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/dsl-header-rewrite/api";
+                    let url = format!("http://{}:31180/test/dsl-header-rewrite/api", ctx.target_host);
 
                     let response = client
                         .get(url)
@@ -191,7 +191,7 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/dsl-header-rewrite/api";
+                    let url = format!("http://{}:31180/test/dsl-header-rewrite/api", ctx.target_host);
 
                     let response = client
                         .get(url)
@@ -241,7 +241,7 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/dsl-deny-path/admin/secret";
+                    let url = format!("http://{}:31180/test/dsl-deny-path/admin/secret", ctx.target_host);
 
                     let response = client.get(url).header("host", "dsl-deny-path.example.com").send().await;
 
@@ -284,7 +284,7 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = "http://127.0.0.1:31180/test/dsl-deny-path/api/users";
+                    let url = format!("http://{}:31180/test/dsl-deny-path/api/users", ctx.target_host);
 
                     let response = client.get(url).header("host", "dsl-deny-path.example.com").send().await;
 

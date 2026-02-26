@@ -1,0 +1,21 @@
+# 2. Path 允许列表 - 只允许特定路径
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-path-allow
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        rules:
+          - name: "api-whitelist"
+            source: Path
+            allow:
+              - "/health"
+            allowRegex:
+              - "^/api/.*"
+        status: 404
+        message: "Path not allowed"
+

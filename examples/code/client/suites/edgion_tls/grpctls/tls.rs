@@ -34,7 +34,7 @@ impl GrpcTlsTestSuite {
                 let start = Instant::now();
 
                 // Build HTTPS connection URL
-                let grpc_url = format!("https://127.0.0.1:{}", ctx.grpc_https_port);
+                let grpc_url = format!("https://{}:{}", ctx.target_host, ctx.grpc_https_port);
 
                 // Read CA certificate
                 let ca_pem = match std::fs::read_to_string("examples/test/certs/ca.pem") {

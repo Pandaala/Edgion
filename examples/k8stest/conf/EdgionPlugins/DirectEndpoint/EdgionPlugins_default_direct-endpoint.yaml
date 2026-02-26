@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: direct-endpoint
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: DirectEndpoint
+      config:
+        from:
+          type: header
+          name: x-target-ip
+        onMissing: fallback # Allow requests to pass normally if header is missing
+        onInvalid: reject   # Reject if IP is not valid or not in backend endpoints
+        inheritTls: false
+        debugHeader: true   # Set X-Direct-Endpoint response header for verification

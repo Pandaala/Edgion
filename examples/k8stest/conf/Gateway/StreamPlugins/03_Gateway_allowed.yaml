@@ -1,0 +1,13 @@
+# Gateway without ConnectionFilter (control group)
+# HTTP listener on port 31270 — normal access, no stream-plugins annotation
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: stream-plugins-allowed-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31270

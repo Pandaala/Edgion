@@ -25,7 +25,7 @@ impl GrpcTestSuite {
                 let start = Instant::now();
 
                 // Build connection URL
-                let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
+                let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
 
                 // Create gRPC client，Passed origin 设置 :authority
                 let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {

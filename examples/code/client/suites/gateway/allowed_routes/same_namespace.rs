@@ -16,11 +16,11 @@ impl AllowedRoutesSameNamespaceTestSuite {
         TestCase::new(
             "same_namespace_allowed",
             "Test Route in same namespace is allowed",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31210/health".to_string();
+                    let url = format!("http://{}:31210/health", ctx.target_host);
 
                     let response = client.get(&url).header("Host", "same-ns.example.com").send().await;
 
@@ -50,11 +50,11 @@ impl AllowedRoutesSameNamespaceTestSuite {
         TestCase::new(
             "diff_namespace_denied",
             "Test Route in different namespace is denied (negative test)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = "http://127.0.0.1:31210/health".to_string();
+                    let url = format!("http://{}:31210/health", ctx.target_host);
 
                     let response = client.get(&url).header("Host", "diff-ns.example.com").send().await;
 

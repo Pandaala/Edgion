@@ -1,0 +1,15 @@
+# Gateway with allow-all ConnectionFilter
+# TCP listener on port 31272 — connections pass through filter
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: stream-plugins-pass-gw
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "edgion-test/allow-all-ips"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tcp
+      protocol: TCP
+      port: 31272

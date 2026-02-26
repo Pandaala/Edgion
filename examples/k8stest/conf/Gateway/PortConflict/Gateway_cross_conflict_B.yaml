@@ -1,0 +1,14 @@
+# Test: Cross-Gateway Port Conflict - Gateway B
+# This Gateway's Listener conflicts with Gateway A on port 31261
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: port-conflict-cross-b
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # HTTP Listener on port 31261 (CONFLICT with Gateway A!)
+    - name: http
+      protocol: HTTP
+      port: 31261

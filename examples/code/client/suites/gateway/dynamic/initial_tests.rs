@@ -21,14 +21,14 @@ impl InitialPhaseTestSuite {
         TestCase::new(
             "scenario1_initial_hostname_restriction",
             "[INITIAL] Hostname mismatch should be rejected (expect 404)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     // 尝试访问 hostname 不匹配的路由
                     let resp = client
-                        .get("http://127.0.0.1:31250/match")
+                        .get(format!("http://{}:31250/match", ctx.target_host))
                         .header("Host", "other.example.com") // 不匹配 api.example.com
                         .send()
                         .await;
@@ -59,14 +59,14 @@ impl InitialPhaseTestSuite {
         TestCase::new(
             "scenario2_initial_get_method_only",
             "[INITIAL] GET /api/v1 should work (expect 200 or backend response)",
-            |_ctx: TestContext| {
+            |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     // GET 请求应该成功（需要带正确的 Host header）
                     let resp = client
-                        .get("http://127.0.0.1:31251/api/v1")
+                        .get(format!("http://{}:31251/api/v1", ctx.target_host))
                         .header("Host", "method-test.example.com")
                         .send()
                         .await;

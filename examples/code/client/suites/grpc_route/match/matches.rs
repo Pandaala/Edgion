@@ -28,7 +28,7 @@ impl GrpcMatchTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
+                    let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
                     let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                         Ok(mut ep) => {
                             // Set correct hostname
@@ -85,7 +85,7 @@ impl GrpcMatchTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
+                    let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
                     let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                         Ok(mut ep) => {
                             // Set wrong hostname
@@ -151,7 +151,7 @@ impl GrpcMatchTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
+                    let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
                     let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                         Ok(mut ep) => {
                             let origin_uri = match format!("http://grpc-match.example.com:{}", ctx.grpc_port).parse() {
@@ -206,7 +206,7 @@ impl GrpcMatchTestSuite {
                     // 使用 HTTP listener (10080)
                     // 但是 GRPCRoute config的是 sectionName: https
                     // so should not match，returns 404
-                    let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
+                    let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
                     let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                         Ok(mut ep) => {
                             // 设置 hostname 为 grpc-section-wrong.example.com
@@ -272,7 +272,7 @@ impl GrpcMatchTestSuite {
             Box::pin(async move {
                 let start = Instant::now();
 
-                let grpc_url = format!("http://127.0.0.1:{}", ctx.grpc_port);
+                let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
                 let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                     Ok(mut ep) => {
                         let origin_uri = match format!("http://grpc-match.example.com:{}", ctx.grpc_port).parse() {

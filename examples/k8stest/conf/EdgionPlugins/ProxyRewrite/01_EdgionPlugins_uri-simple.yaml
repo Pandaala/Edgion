@@ -1,0 +1,13 @@
+# 1. URI 简单替换
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: proxy-rewrite-uri-simple
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        uri: "/internal/api/v2"
+
