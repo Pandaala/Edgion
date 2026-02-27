@@ -46,6 +46,33 @@ impl RefGrantStatusTestSuite {
         Ok(body["data"].clone())
     }
 
+    /// Helper to fetch GatewayClass from configserver API (cluster-scoped)
+    async fn fetch_gateway_class_status(ctx: &TestContext, name: &str) -> Result<Value, String> {
+        let url = format!("{}/configserver/GatewayClass?name={}", ctx.admin_api_url(), name);
+
+        let response = ctx
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch GatewayClass: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("API returned status: {}", response.status()));
+        }
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+        if !body["success"].as_bool().unwrap_or(false) {
+            return Err(format!("API error: {}", body["error"].as_str().unwrap_or("unknown")));
+        }
+
+        Ok(body["data"].clone())
+    }
+
     /// Check if status has ResolvedRefs=True condition
     fn has_resolved_refs_true(status: &Value) -> bool {
         if let Some(parents) = status["status"]["parents"].as_array() {
@@ -244,6 +271,48 @@ impl RefGrantStatusTestSuite {
             },
         )
     }
+
+    /// Test: GatewayClass has Accepted=True condition
+    fn test_gateway_class_accepted() -> TestCase {
+        TestCase::new(
+            "gateway_class_accepted",
+            "GatewayClass status should have Accepted=True condition",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match Self::fetch_gateway_class_status(&ctx, "public-gateway").await {
+                        Ok(gc) => {
+                            let accepted_true = gc["status"]["conditions"].as_array().map_or(false, |conds| {
+                                conds.iter().any(|c| {
+                                    c["type"].as_str() == Some("Accepted")
+                                        && c["status"].as_str() == Some("True")
+                                })
+                            });
+
+                            if accepted_true {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "GatewayClass has Accepted=True".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected GatewayClass Accepted=True, got status: {}",
+                                        serde_json::to_string_pretty(&gc["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -254,6 +323,7 @@ impl TestSuite for RefGrantStatusTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
+            Self::test_gateway_class_accepted(),
             Self::test_has_accepted_condition(),
             Self::test_cross_ns_allowed(),
             Self::test_cross_ns_denied(),

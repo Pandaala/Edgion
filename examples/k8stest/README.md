@@ -5,7 +5,8 @@ This directory is the Kubernetes test entry for Edgion examples.
 ## Layout
 
 - `conf/`: Kubernetes-oriented test manifests converted from `examples/test/conf`.
-- `scripts/`: wrappers to run Kubernetes integration in `edgion-deploy/kubernetes`.
+- `scripts/`: K8s integration runner and helpers.
+- `kubernetes/`: self-contained deployment manifests for controller/gateway/test workloads.
 
 ## Usage
 
@@ -23,7 +24,7 @@ Refresh k8s conf from `examples/test/conf`:
 Deploy integration environment (controller/gateway/test pods):
 
 ```bash
-./examples/k8stest/scripts/common/deploy_integration.sh --spec-profile recommended --test-server-replicas 3
+./examples/k8stest/scripts/common/deploy_integration.sh --test-server-replicas 3
 ```
 
 Run full Kubernetes integration (apply suites from `examples/k8stest/conf` + run test_client):
@@ -85,8 +86,10 @@ Clean test environment:
 
 ## Notes
 
-- Default deploy repo path is `../edgion-deploy/kubernetes` relative to this repository.
+- Default deploy manifest path is `examples/k8stest/kubernetes` (self-contained).
 - Override with environment variable `K8S_DEPLOY_ROOT`.
+- CRDs are applied from `config/crd` (not from `examples/k8stest/kubernetes`).
+- `--spec-profile` is kept for compatibility and is a no-op.
 - `run_k8s_integration.sh` and `deploy_integration.sh` will fail fast if
   `examples/k8stest/conf` contains `Endpoint` or `EndpointSlice`.
 - `run_k8s_integration.sh` applies configs directly from `examples/k8stest/conf`

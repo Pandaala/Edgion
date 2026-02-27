@@ -23,19 +23,19 @@ impl URLRewriteFilter {
             return;
         };
 
-        let original_path = session.get_path();
+        let original_path = session.get_path().to_string();
         let query = session.get_query();
 
         let rewritten_path = match path_modifier.modifier_type {
             HTTPPathModifierType::ReplaceFullPath => path_modifier
                 .replace_full_path
                 .clone()
-                .unwrap_or_else(|| original_path.to_string()),
+                .unwrap_or_else(|| original_path.clone()),
             HTTPPathModifierType::ReplacePrefixMatch => {
                 let replacement = path_modifier
                     .replace_prefix_match
                     .clone()
-                    .unwrap_or_else(|| original_path.to_string());
+                    .unwrap_or_else(|| original_path.clone());
 
                 // Prefer matched route prefix length when available.
                 let matched_prefix_len = session

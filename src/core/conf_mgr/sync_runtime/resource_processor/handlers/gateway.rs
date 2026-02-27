@@ -191,6 +191,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
     fn update_status(&self, gateway: &mut Gateway, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = gateway.metadata.generation;
+        let gateway_ns = gateway.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
+        let gateway_name = gateway.metadata.name.clone().unwrap_or_default();
 
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
@@ -271,7 +273,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     listener_statuses.last_mut().unwrap()
                 };
 
-                ls.attached_routes = count_attached_routes_for_listener(gateway, &listener.name);
+                ls.attached_routes =
+                    count_attached_routes_for_listener_by_key(&gateway_ns, &gateway_name, &listener.name);
 
                 // Set Conflicted condition based on ListenerPortManager
                 let is_conflicted = if let Some((reason, _)) = conflicts.get(&listener.name) {
@@ -299,12 +302,6 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             }
         }
     }
-}
-
-fn count_attached_routes_for_listener(gateway: &Gateway, listener_name: &str) -> i32 {
-    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
-    let gateway_name = gateway.metadata.name.as_deref().unwrap_or("");
-    count_attached_routes_for_listener_by_key(gateway_ns, gateway_name, listener_name)
 }
 
 fn count_attached_routes_for_listener_by_key(gateway_ns: &str, gateway_name: &str, listener_name: &str) -> i32 {

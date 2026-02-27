@@ -101,6 +101,8 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -out "${TMP_DIR}/client-ca.crt" \
   -days 365 \
   -subj "/CN=Edgion Client CA/O=Edgion/OU=Testing" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
   >/dev/null 2>&1
 
 openssl req -newkey rsa:2048 -nodes \
@@ -228,6 +230,8 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -out "${TMP_DIR}/backend-ca.crt" \
   -days 365 \
   -subj "/CN=Backend Test CA/O=Edgion Testing" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
   >/dev/null 2>&1
 
 echo "[certs] generate backend server certificate (signed by backend CA)"
@@ -238,7 +242,7 @@ openssl req -newkey rsa:2048 -nodes \
   >/dev/null 2>&1
 
 cat > "${TMP_DIR}/backend-server.ext" <<EOF
-subjectAltName=DNS:backend.example.com,DNS:edgion-test-server.edgion-test.svc.cluster.local,DNS:edgion-test-server.edgion-test.svc
+subjectAltName=DNS:backend.example.com,DNS:edgion-test-server.edgion-test.svc.cluster.local,DNS:edgion-test-server.edgion-test.svc,DNS:test-backend-tls.edgion-test.svc.cluster.local,DNS:test-backend-tls.edgion-test.svc,DNS:test-backend-mtls.edgion-test.svc.cluster.local,DNS:test-backend-mtls.edgion-test.svc,DNS:test-backend-mtls-no-client-cert.edgion-test.svc.cluster.local,DNS:test-backend-mtls-no-client-cert.edgion-test.svc
 extendedKeyUsage=serverAuth
 EOF
 

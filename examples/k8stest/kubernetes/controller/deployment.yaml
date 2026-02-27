@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edgion-controller
+  namespace: edgion-system
+  labels:
+    app: edgion-controller
+    app.kubernetes.io/name: edgion-controller
+    app.kubernetes.io/component: controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: edgion-controller
+  template:
+    metadata:
+      labels:
+        app: edgion-controller
+        app.kubernetes.io/name: edgion-controller
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: edgion-controller
+      containers:
+      - name: edgion-controller
+        image: docker.io/pandaala/edgion-controller:dev
+        imagePullPolicy: IfNotPresent
+        command:
+        - "/usr/local/bin/edgion-controller"
+        args:
+        - "--config-file"
+        - "/usr/local/edgion/config/edgion-controller.toml"
+        - "--test-mode"
+        ports:
+        - name: grpc
+          containerPort: 50051
+          protocol: TCP
+        - name: http
+          containerPort: 5800
+          protocol: TCP
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: KUBERNETES_SERVICE_HOST
+          value: "kubernetes.default.svc"
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: config
+          mountPath: /usr/local/edgion/config
+          readOnly: true
+        - name: logs
+          mountPath: /usr/local/edgion/logs
+      volumes:
+      - name: config
+        configMap:
+          name: edgion-controller-config
+      - name: logs
+        emptyDir: {}

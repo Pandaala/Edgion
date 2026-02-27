@@ -3,37 +3,38 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-K8S_DEPLOY_ROOT="${K8S_DEPLOY_ROOT:-$PROJECT_ROOT/../edgion-deploy/kubernetes}"
-TARGET_SCRIPT="$K8S_DEPLOY_ROOT/scripts/cleanup.sh"
+K8S_DEPLOY_ROOT="${K8S_DEPLOY_ROOT:-$PROJECT_ROOT/examples/k8stest/kubernetes}"
+CRD_ROOT="${CRD_ROOT:-$PROJECT_ROOT/config/crd}"
 CONF_ROOT="${CONF_ROOT:-$PROJECT_ROOT/examples/k8stest/conf}"
-SCRIPT_ARGS=()
 
+WITH_CRDS=false
 WITH_IMAGES=false
 NS_TIMEOUT_SECONDS=300
 NAMESPACES=("edgion-system" "edgion-default" "edgion-test" "edgion-backend")
 
 show_help() {
-  cat <<EOF
+  cat <<EOF_HELP
 Usage: $0 [options]
 
 Options:
-  --with-crds                    Also delete CRDs (passed through to deploy cleanup)
+  --with-crds                    Also delete CRDs from ${CRD_ROOT}
   --with-images                  Also clean old local test images
   --ns-timeout <seconds>         Wait timeout for namespace deletion (default: ${NS_TIMEOUT_SECONDS})
   -h, --help                     Show this help
 
 Behavior:
   1) Delete all manifests under examples/k8stest/conf (cluster-scoped + namespaced)
-  2) Run deploy cleanup script (workloads + namespaces [+ optional CRDs])
+  2) Delete workloads from examples/k8stest/kubernetes (test/controller/gateway + namespaces)
   3) Wait namespaces fully deleted
-  4) Optional: clean old Edgion test images
-EOF
+  4) Optional: delete CRDs from config/crd
+  5) Optional: clean old Edgion test images
+EOF_HELP
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-crds)
-      SCRIPT_ARGS+=("$1")
+      WITH_CRDS=true
       shift
       ;;
     --with-images)
@@ -60,14 +61,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ! -x "$TARGET_SCRIPT" ]]; then
-  echo "cleanup script not found or not executable: $TARGET_SCRIPT"
-  echo "set K8S_DEPLOY_ROOT to your deploy repo kubernetes directory"
+if ! command -v kubectl >/dev/null 2>&1; then
+  echo "kubectl not found"
   exit 1
 fi
 
-if ! command -v kubectl >/dev/null 2>&1; then
-  echo "kubectl not found"
+if [[ ! -f "$K8S_DEPLOY_ROOT/namespace.yaml" ]]; then
+  echo "namespace manifest not found: $K8S_DEPLOY_ROOT/namespace.yaml"
   exit 1
 fi
 
@@ -86,6 +86,29 @@ delete_k8stest_conf_resources() {
 
   if [[ "${deleted_any}" == "false" ]]; then
     echo "[cleanup] no yaml found under ${CONF_ROOT}"
+  fi
+}
+
+delete_deploy_manifests() {
+  echo "[cleanup] delete test workloads"
+  kubectl delete -k "${K8S_DEPLOY_ROOT}/test/" --ignore-not-found=true >/dev/null 2>&1 || true
+
+  echo "[cleanup] delete gateway/controller workloads"
+  kubectl delete -f "${K8S_DEPLOY_ROOT}/gateway/" --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl delete -f "${K8S_DEPLOY_ROOT}/controller/" --ignore-not-found=true >/dev/null 2>&1 || true
+
+  echo "[cleanup] delete integration namespaces"
+  kubectl delete namespace edgion-test --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl delete namespace edgion-default --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl delete namespace edgion-system --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl delete namespace edgion-backend --ignore-not-found=true >/dev/null 2>&1 || true
+
+  if [[ "${WITH_CRDS}" == "true" ]]; then
+    echo "[cleanup] delete CRDs from ${CRD_ROOT}"
+    kubectl delete -f "${CRD_ROOT}/edgion-crd/" --ignore-not-found=true >/dev/null 2>&1 || true
+    kubectl delete -f "${CRD_ROOT}/gateway-api/" --ignore-not-found=true >/dev/null 2>&1 || true
+  else
+    echo "[cleanup] skip CRD deletion (use --with-crds to enable)"
   fi
 }
 
@@ -175,13 +198,7 @@ cleanup_old_test_images() {
 
 delete_k8stest_conf_resources
 delete_generated_artifacts
-
-echo "[cleanup] run deploy cleanup: ${TARGET_SCRIPT} ${SCRIPT_ARGS[*]:-}"
-if ((${#SCRIPT_ARGS[@]} > 0)); then
-  "${TARGET_SCRIPT}" "${SCRIPT_ARGS[@]}"
-else
-  "${TARGET_SCRIPT}"
-fi
+delete_deploy_manifests
 
 echo "[cleanup] wait namespaces deleted"
 for ns in "${NAMESPACES[@]}"; do

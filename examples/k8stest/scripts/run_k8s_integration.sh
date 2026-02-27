@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONF_ROOT="${CONF_ROOT:-$PROJECT_ROOT/examples/k8stest/conf}"
-K8S_DEPLOY_ROOT="${K8S_DEPLOY_ROOT:-$PROJECT_ROOT/../edgion-deploy/kubernetes}"
+K8S_DEPLOY_ROOT="${K8S_DEPLOY_ROOT:-$PROJECT_ROOT/examples/k8stest/kubernetes}"
 COMMON_SCRIPT_DIR="${SCRIPT_DIR}/common"
 ORBSTACK_SCRIPT_DIR="${SCRIPT_DIR}/orbstack"
 
@@ -30,7 +30,7 @@ SKIP_DEPLOY=false
 SKIP_PREPARE=false
 PREPARE_ONLY=false
 TEST_SERVER_REPLICAS="${TEST_SERVER_REPLICAS:-3}"
-SPEC_PROFILE="${SPEC_PROFILE:-recommended}"
+SPEC_PROFILE="${SPEC_PROFILE:-}"
 FULL_TEST=false
 WITH_RELOAD=false
 BACKEND_TEST_NAMESPACE="${BACKEND_TEST_NAMESPACE:-edgion-backend}"
@@ -78,7 +78,7 @@ Options:
   -r, --resource <name>          Run only one resource (e.g. EdgionPlugins)
   -i, --item <name>              Run specific item with -r (e.g. JwtAuth)
   --test-server-replicas <n>     Deploy/scale test-server replicas (default: ${TEST_SERVER_REPLICAS})
-  --spec-profile <name>          Deploy profile (default: ${SPEC_PROFILE})
+  --spec-profile <name>          Compatibility no-op (profiles no longer used)
   --cluster-mode <auto|local|remote>
                                  Cluster mode for image compatibility checks
                                  (default: ${CLUSTER_MODE})
@@ -391,7 +391,6 @@ compute_prepare_conf_hash() {
   # Sort file list for deterministic hash.
   find "${CONF_ROOT}" -type f \( -name "*.yaml" -o -name "*.yml" \) | sort > "${tmp}"
   {
-    echo "spec_profile=${SPEC_PROFILE}"
     echo "test_server_replicas=${TEST_SERVER_REPLICAS}"
     echo "backend_test_namespace=${BACKEND_TEST_NAMESPACE}"
     echo "conf_root=${CONF_ROOT}"
@@ -416,7 +415,6 @@ write_prepare_state_marker() {
   kubectl -n "${STATE_NAMESPACE}" create configmap "${STATE_CONFIGMAP_NAME}" \
     --from-literal=prepare_ok=true \
     --from-literal=conf_hash="${conf_hash}" \
-    --from-literal=spec_profile="${SPEC_PROFILE}" \
     --from-literal=test_server_replicas="${TEST_SERVER_REPLICAS}" \
     --from-literal=backend_test_namespace="${BACKEND_TEST_NAMESPACE}" \
     --from-literal=updated_at="${now_utc}" \
@@ -451,13 +449,6 @@ verify_skip_prepare_preconditions() {
     echo "  expected(current): ${expected}"
     echo "  recorded(state):   ${actual:-<empty>}"
     echo "Run once without --skip-prepare to refresh prepare state."
-    exit 1
-  fi
-
-  expected="${SPEC_PROFILE}"
-  actual="$(get_state_data spec_profile)"
-  if [[ "${actual}" != "${expected}" ]]; then
-    echo "--skip-prepare denied: spec_profile mismatch (current=${expected}, state=${actual:-<empty>})"
     exit 1
   fi
 
@@ -506,6 +497,29 @@ wait_gateway_stable() {
 
     sleep 2
   done
+}
+
+override_suite_test_server_images() {
+  if [[ -z "${TEST_SERVER_IMAGE}" ]]; then
+    return 0
+  fi
+
+  local ns
+  for ns in edgion-default edgion-test edgion-backend default; do
+    if kubectl get deployment lb-multi-test-server -n "${ns}" >/dev/null 2>&1; then
+      echo "Override lb-multi-test-server image in ${ns}: ${TEST_SERVER_IMAGE}"
+      kubectl set image deployment/lb-multi-test-server -n "${ns}" test-server="${TEST_SERVER_IMAGE}"
+      kubectl rollout status deployment/lb-multi-test-server -n "${ns}" --timeout=300s
+    fi
+  done
+}
+
+restart_secret_dependent_workloads() {
+  if kubectl get deployment edgion-test-server -n edgion-test >/dev/null 2>&1; then
+    echo "Restarting edgion-test/edgion-test-server to reload runtime TLS certs..."
+    kubectl rollout restart deployment/edgion-test-server -n edgion-test
+    kubectl rollout status deployment/edgion-test-server -n edgion-test --timeout=300s
+  fi
 }
 
 get_server_id() {
@@ -733,11 +747,12 @@ if [[ "${SKIP_PREPARE}" == "false" ]]; then
   if [[ "${SKIP_DEPLOY}" == "false" ]]; then
     export CONTROLLER_IMAGE GATEWAY_IMAGE TEST_CLIENT_IMAGE TEST_SERVER_IMAGE
     K8S_DEPLOY_ROOT="$K8S_DEPLOY_ROOT" BACKEND_TEST_NAMESPACE="${BACKEND_TEST_NAMESPACE}" "${DEPLOY_SCRIPT}" \
-      --spec-profile "${SPEC_PROFILE}" \
       --test-server-replicas "${TEST_SERVER_REPLICAS}"
   fi
 
   "${APPLY_ALL_SCRIPT}" "${CONF_ROOT}"
+  override_suite_test_server_images
+  restart_secret_dependent_workloads
 
   echo "Restarting gateway after full apply..."
   kubectl rollout restart deployment/edgion-gateway -n edgion-system

@@ -1,0 +1,312 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edgion-test-server
+  namespace: edgion-test
+  labels:
+    app: edgion-test-server
+    app.kubernetes.io/name: edgion-test-server
+    app.kubernetes.io/component: test
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: edgion-test-server
+  template:
+    metadata:
+      labels:
+        app: edgion-test-server
+        app.kubernetes.io/name: edgion-test-server
+        app.kubernetes.io/component: test
+    spec:
+      containers:
+      - name: test-server
+        image: docker.io/pandaala/edgion-test-server:dev
+        imagePullPolicy: IfNotPresent
+        command: ["/usr/local/bin/test_server"]
+        args:
+        - "--http-ports=30001,30002,30003,30004"
+        - "--grpc-ports=30021,30022"
+        - "--websocket-port=30005"
+        - "--tcp-port=30010"
+        - "--udp-port=30011"
+        - "--auth-port=30040"
+        - "--https-backend-port=30051"
+        - "--https-backend-mtls-port=30052"
+        - "--cert-file=/etc/edgion/backend-tls/tls.crt"
+        - "--key-file=/etc/edgion/backend-tls/tls.key"
+        - "--client-ca-file=/etc/edgion/client-ca/ca.crt"
+        - "--log-level=info"
+        ports:
+        - name: http-1
+          containerPort: 30001
+          protocol: TCP
+        - name: http-2
+          containerPort: 30002
+          protocol: TCP
+        - name: http-3
+          containerPort: 30003
+          protocol: TCP
+        - name: http-4
+          containerPort: 30004
+          protocol: TCP
+        - name: grpc-1
+          containerPort: 30021
+          protocol: TCP
+        - name: grpc-2
+          containerPort: 30022
+          protocol: TCP
+        - name: websocket
+          containerPort: 30005
+          protocol: TCP
+        - name: tcp
+          containerPort: 30010
+          protocol: TCP
+        - name: auth
+          containerPort: 30040
+          protocol: TCP
+        - name: https-backend
+          containerPort: 30051
+          protocol: TCP
+        - name: https-b-mtls
+          containerPort: 30052
+          protocol: TCP
+        - name: udp
+          containerPort: 30011
+          protocol: UDP
+        volumeMounts:
+        - name: backend-server-tls
+          mountPath: /etc/edgion/backend-tls
+          readOnly: true
+        - name: client-ca
+          mountPath: /etc/edgion/client-ca
+          readOnly: true
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 30001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30001
+          initialDelaySeconds: 3
+          periodSeconds: 5
+      volumes:
+      - name: backend-server-tls
+        secret:
+          secretName: backend-server-tls
+      - name: client-ca
+        secret:
+          secretName: client-ca
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edgion-test-server
+  namespace: edgion-default
+  labels:
+    app: edgion-test-server
+    app.kubernetes.io/name: edgion-test-server
+    app.kubernetes.io/component: test
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: edgion-test-server
+  template:
+    metadata:
+      labels:
+        app: edgion-test-server
+        app.kubernetes.io/name: edgion-test-server
+        app.kubernetes.io/component: test
+    spec:
+      containers:
+      - name: test-server
+        image: docker.io/pandaala/edgion-test-server:dev
+        imagePullPolicy: IfNotPresent
+        command: ["/usr/local/bin/test_server"]
+        args:
+        - "--http-ports=30001,30002,30003,30004"
+        - "--grpc-ports=30021,30022"
+        - "--websocket-port=30005"
+        - "--tcp-port=30010"
+        - "--udp-port=30011"
+        - "--auth-port=30040"
+        - "--log-level=info"
+        ports:
+        - name: http-1
+          containerPort: 30001
+          protocol: TCP
+        - name: http-2
+          containerPort: 30002
+          protocol: TCP
+        - name: http-3
+          containerPort: 30003
+          protocol: TCP
+        - name: http-4
+          containerPort: 30004
+          protocol: TCP
+        - name: grpc-1
+          containerPort: 30021
+          protocol: TCP
+        - name: grpc-2
+          containerPort: 30022
+          protocol: TCP
+        - name: websocket
+          containerPort: 30005
+          protocol: TCP
+        - name: tcp
+          containerPort: 30010
+          protocol: TCP
+        - name: auth
+          containerPort: 30040
+          protocol: TCP
+        - name: udp
+          containerPort: 30011
+          protocol: UDP
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 30001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30001
+          initialDelaySeconds: 3
+          periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edgion-test-server
+  namespace: edgion-backend
+  labels:
+    app: edgion-test-server
+    app.kubernetes.io/name: edgion-test-server
+    app.kubernetes.io/component: test
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: edgion-test-server
+  template:
+    metadata:
+      labels:
+        app: edgion-test-server
+        app.kubernetes.io/name: edgion-test-server
+        app.kubernetes.io/component: test
+    spec:
+      containers:
+      - name: test-server
+        image: docker.io/pandaala/edgion-test-server:dev
+        imagePullPolicy: IfNotPresent
+        command: ["/usr/local/bin/test_server"]
+        args:
+        - "--http-ports=30001,30002,30003,30004"
+        - "--grpc-ports=30021,30022"
+        - "--websocket-port=30005"
+        - "--tcp-port=30010"
+        - "--udp-port=30011"
+        - "--auth-port=30040"
+        - "--log-level=info"
+        ports:
+        - name: http-1
+          containerPort: 30001
+          protocol: TCP
+        - name: http-2
+          containerPort: 30002
+          protocol: TCP
+        - name: http-3
+          containerPort: 30003
+          protocol: TCP
+        - name: http-4
+          containerPort: 30004
+          protocol: TCP
+        - name: grpc-1
+          containerPort: 30021
+          protocol: TCP
+        - name: grpc-2
+          containerPort: 30022
+          protocol: TCP
+        - name: websocket
+          containerPort: 30005
+          protocol: TCP
+        - name: tcp
+          containerPort: 30010
+          protocol: TCP
+        - name: auth
+          containerPort: 30040
+          protocol: TCP
+        - name: udp
+          containerPort: 30011
+          protocol: UDP
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 30001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30001
+          initialDelaySeconds: 3
+          periodSeconds: 5
