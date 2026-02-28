@@ -664,6 +664,10 @@ wait_gateway_stable() {
 }
 
 override_suite_test_server_images() {
+  if [[ "${SKIP_DEPLOY}" == "true" ]]; then
+    return 0
+  fi
+
   if [[ -z "${TEST_SERVER_IMAGE}" ]]; then
     return 0
   fi
