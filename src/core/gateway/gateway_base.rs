@@ -72,7 +72,7 @@ impl GatewayBase {
         // when GatewayHandler has already added them via full_set/partial_update
         let gateway_store = get_global_gateway_store();
         {
-            let mut store_guard = gateway_store.write().unwrap();
+            let mut store_guard = gateway_store.write().unwrap_or_else(|e| e.into_inner());
             for gateway in gateways.iter() {
                 store_guard.update_gateway(gateway.clone());
             }

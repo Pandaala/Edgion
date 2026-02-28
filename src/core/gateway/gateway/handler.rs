@@ -31,7 +31,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
         );
 
         let global_store = get_global_gateway_store();
-        let mut store = global_store.write().unwrap();
+        let mut store = global_store.write().unwrap_or_else(|e| e.into_inner());
         store.clear();
 
         let route_manager = get_global_route_manager();
@@ -70,7 +70,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
 
     fn partial_update(&self, add: HashMap<String, Gateway>, update: HashMap<String, Gateway>, remove: HashSet<String>) {
         let global_store = get_global_gateway_store();
-        let mut store = global_store.write().unwrap();
+        let mut store = global_store.write().unwrap_or_else(|e| e.into_inner());
         let config_store = get_global_gateway_config_store();
 
         if !add.is_empty() {

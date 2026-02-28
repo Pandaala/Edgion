@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use tokio::sync::RwLock;
 
+use crate::core::plugins::edgion_plugins::common::http_client::{build_webhook_client, get_http_client_arc};
 use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
 
 use super::health::spawn_active_health_check;
@@ -27,9 +28,14 @@ pub fn get_webhook_manager() -> &'static WebhookManager {
 }
 
 /// Global webhook manager, keyed by "namespace/name" matching webhook_ref.
+struct WebhookEntry {
+    runtime: Arc<WebhookRuntime>,
+    health_task: Option<tokio::task::JoinHandle<()>>,
+}
+
 pub struct WebhookManager {
     /// Registered webhook services: webhook_ref → runtime state
-    services: RwLock<HashMap<String, Arc<WebhookRuntime>>>,
+    services: RwLock<HashMap<String, WebhookEntry>>,
 }
 
 impl WebhookManager {
@@ -41,7 +47,7 @@ impl WebhookManager {
 
     /// Look up a webhook by its ref ("namespace/name")
     pub async fn get(&self, webhook_ref: &str) -> Option<Arc<WebhookRuntime>> {
-        self.services.read().await.get(webhook_ref).cloned()
+        self.services.read().await.get(webhook_ref).map(|e| e.runtime.clone())
     }
 
     /// Register or update a webhook from a LinkSys resource change
@@ -51,8 +57,22 @@ impl WebhookManager {
             .as_ref()
             .map(|rl| SlidingWindowCounter::new(rl.rate, Duration::from_secs(rl.window_sec.max(1))));
 
+        let http_client = match build_webhook_client(&config) {
+            None => get_http_client_arc(),
+            Some(Ok(client)) => Arc::new(client),
+            Some(Err(e)) => {
+                tracing::error!(
+                    webhook = %webhook_ref,
+                    error = %e,
+                    "Failed to build webhook HTTP client with TLS config, falling back to default"
+                );
+                get_http_client_arc()
+            }
+        };
+
         let runtime = Arc::new(WebhookRuntime {
             config,
+            http_client,
             healthy: AtomicBool::new(true),
             passive_failures: AtomicU32::new(0),
             last_halfopen: AtomicU64::new(0),
@@ -60,8 +80,7 @@ impl WebhookManager {
             rate_counter,
         });
 
-        // Spawn active health check if configured
-        if runtime
+        let health_task = if runtime
             .config
             .health_check
             .as_ref()
@@ -70,18 +89,30 @@ impl WebhookManager {
         {
             let ref_clone = webhook_ref.to_string();
             let rt_clone = runtime.clone();
-            tokio::spawn(async move {
+            Some(tokio::spawn(async move {
                 spawn_active_health_check(ref_clone, rt_clone).await;
-            });
-        }
+            }))
+        } else {
+            None
+        };
 
-        self.services.write().await.insert(webhook_ref.to_string(), runtime);
+        let mut services = self.services.write().await;
+        if let Some(old) = services.remove(webhook_ref) {
+            if let Some(handle) = old.health_task {
+                handle.abort();
+            }
+        }
+        services.insert(webhook_ref.to_string(), WebhookEntry { runtime, health_task });
         tracing::info!(webhook = %webhook_ref, "Webhook registered/updated in manager");
     }
 
     /// Remove a webhook (LinkSys resource deleted)
     pub async fn remove(&self, webhook_ref: &str) {
-        self.services.write().await.remove(webhook_ref);
+        if let Some(entry) = self.services.write().await.remove(webhook_ref) {
+            if let Some(handle) = entry.health_task {
+                handle.abort();
+            }
+        }
         tracing::info!(webhook = %webhook_ref, "Webhook removed from manager");
     }
 }

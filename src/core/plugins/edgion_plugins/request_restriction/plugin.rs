@@ -162,9 +162,24 @@ impl RequestFilter for RequestRestriction {
         // Check for configuration errors
         if !self.config.is_valid() {
             let error = self.config.get_validation_error().unwrap_or("Unknown error");
-            plugin_log.push(&format!("Config error: {}; ", error));
-            // Allow request to proceed on config error (fail-open)
-            return PluginRunningResult::GoodNext;
+            tracing::error!(
+                plugin = "RequestRestriction",
+                error = error,
+                "Config invalid — fail-close"
+            );
+            plugin_log.push(&format!("Config error (fail-close): {}; ", error));
+            let resp = Box::new(
+                ResponseHeader::build(500, None)
+                    .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),
+            );
+            let _ = session.write_response_header(resp, false).await;
+            let _ = session
+                .write_response_body(
+                    Some(bytes::Bytes::from(r#"{"message":"Internal restriction policy error"}"#)),
+                    true,
+                )
+                .await;
+            return PluginRunningResult::ErrTerminateRequest;
         }
 
         // Evaluate all rules
@@ -181,7 +196,10 @@ impl RequestFilter for RequestRestriction {
                 .unwrap_or("Access denied by restriction policy");
 
             // Build error response
-            let mut resp = Box::new(ResponseHeader::build(self.config.status, None).unwrap());
+            let mut resp = Box::new(
+                ResponseHeader::build(self.config.status, None)
+                    .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),
+            );
             resp.insert_header("Content-Type", "application/json").ok();
 
             let body = Bytes::from(format!(r#"{{"message":"{}"}}"#, message));

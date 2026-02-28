@@ -6,7 +6,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use crate::core::plugins::edgion_plugins::common::http_client::{get_http_client, is_hop_by_hop};
+use crate::core::plugins::edgion_plugins::common::http_client::is_hop_by_hop;
 use crate::core::plugins::plugin_runtime::PluginSession;
 use crate::types::common::WebhookExtract;
 use crate::types::resources::link_sys::webhook::WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES;
@@ -14,6 +14,18 @@ use crate::types::resources::link_sys::webhook::WEBHOOK_GLOBAL_MAX_RESPONSE_BYTE
 use super::health::{record_passive_result, should_halfopen_probe};
 use super::manager::get_webhook_manager;
 use super::runtime::WebhookRuntime;
+
+const WEBHOOK_RETRY_MAX_DELAY_MS: u64 = 30_000;
+
+fn compute_retry_delay_ms(attempt: u32, base_ms: u64, max_ms: u64) -> u64 {
+    let exp_delay = base_ms.saturating_mul(1u64 << attempt.min(10));
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    let jitter = nanos % (base_ms / 2).max(1);
+    (exp_delay + jitter).min(max_ms)
+}
 
 /// Resolve a key value by calling an external webhook service.
 ///
@@ -70,8 +82,8 @@ pub async fn resolve_webhook_key(
     // Add X-Forwarded-* headers
     set_forwarded_headers(&mut headers, session);
 
-    // 5. Send request with retry
-    let client = get_http_client();
+    // 5. Send request with retry (use custom client when TLS config present)
+    let client = runtime.http_client.as_ref();
     let method: reqwest::Method = runtime.config.request_method.parse().unwrap_or(reqwest::Method::GET);
     let timeout = Duration::from_millis(runtime.config.timeout_ms);
     let max_attempts = 1 + runtime.config.retry.as_ref().map_or(0, |r| r.max_retries);
@@ -81,8 +93,9 @@ pub async fn resolve_webhook_key(
 
     for attempt in 0..max_attempts {
         if attempt > 0 {
-            let delay_ms = runtime.config.retry.as_ref().map_or(100, |r| r.retry_delay_ms);
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            let base_ms = runtime.config.retry.as_ref().map_or(100, |r| r.retry_delay_ms);
+            let delay = compute_retry_delay_ms(attempt as u32, base_ms, WEBHOOK_RETRY_MAX_DELAY_MS);
+            tokio::time::sleep(Duration::from_millis(delay)).await;
         }
 
         match client

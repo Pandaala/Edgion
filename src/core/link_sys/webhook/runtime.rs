@@ -4,9 +4,11 @@
 //! and time utilities.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
+use reqwest::Client;
 
 // ============================================================
 // WebhookRuntime — per-webhook runtime state
@@ -16,6 +18,9 @@ use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
 pub struct WebhookRuntime {
     /// Configuration from LinkSys resource
     pub config: WebhookServiceConfig,
+
+    /// HTTP client for this webhook. When TLS config is present, this is a custom client.
+    pub http_client: Arc<Client>,
 
     // ---- Health state ----
     /// Current health status (true = healthy). Lock-free reads via AtomicBool.
@@ -72,28 +77,32 @@ impl SlidingWindowCounter {
     /// estimated_count = previous * (1 - elapsed_ratio) + current
     pub fn try_acquire(&self) -> bool {
         let now = now_epoch_secs();
-        let ws = self.window_start.load(Ordering::Relaxed);
+        let ws = self.window_start.load(Ordering::Acquire);
 
-        // Check if we've moved to a new window
         if now >= ws + self.window_secs {
-            // Rotate: current → previous, reset current
-            let current = self.current.swap(0, Ordering::Relaxed);
-            self.previous.store(current, Ordering::Relaxed);
-            self.window_start.store(now, Ordering::Relaxed);
+            // CAS ensures only one thread performs the rotation
+            if self
+                .window_start
+                .compare_exchange(ws, now, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                let current = self.current.swap(0, Ordering::AcqRel);
+                self.previous.store(current, Ordering::Release);
+            }
         }
 
-        // Sliding window interpolation
-        let elapsed = now.saturating_sub(self.window_start.load(Ordering::Relaxed));
+        let ws_after = self.window_start.load(Ordering::Acquire);
+        let elapsed = now.saturating_sub(ws_after);
         let ratio = (elapsed as f64) / (self.window_secs as f64);
-        let prev = self.previous.load(Ordering::Relaxed) as f64;
-        let curr = self.current.load(Ordering::Relaxed) as f64;
+        let prev = self.previous.load(Ordering::Acquire) as f64;
+        let curr = self.current.load(Ordering::Acquire) as f64;
         let estimated = prev * (1.0 - ratio) + curr;
 
         if estimated >= self.limit as f64 {
-            return false; // Rate limited
+            return false;
         }
 
-        self.current.fetch_add(1, Ordering::Relaxed);
+        self.current.fetch_add(1, Ordering::AcqRel);
         true
     }
 }

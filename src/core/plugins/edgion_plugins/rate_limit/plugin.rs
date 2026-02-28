@@ -149,7 +149,10 @@ impl RateLimit {
     async fn reject_request(&self, session: &mut dyn PluginSession, retry_after: Duration) -> PluginRunningResult {
         let message = self.config.reject_message.as_deref().unwrap_or("Rate limit exceeded");
 
-        let mut resp = Box::new(ResponseHeader::build(self.config.reject_status, None).unwrap());
+        let mut resp = Box::new(
+            ResponseHeader::build(self.config.reject_status, None)
+                .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
+        );
         resp.insert_header("Content-Type", "application/json").ok();
         resp.insert_header("Retry-After", &retry_after.as_secs().to_string())
             .ok();

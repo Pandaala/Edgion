@@ -60,7 +60,7 @@ enum AcmeCommand {
 /// On startup, the service performs a full scan of all EdgionAcme resources
 /// to recover renewal timers that were lost during controller restart.
 pub fn start_acme_service(client: Client) {
-    let mut guard = ACME_SERVICE.lock().unwrap();
+    let mut guard = ACME_SERVICE.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_some() {
         tracing::warn!(
             component = "acme_service",
@@ -98,7 +98,7 @@ pub fn start_acme_service(client: Client) {
 ///
 /// After this call, `start_acme_service()` can be called again on re-election.
 pub fn stop_acme_service() {
-    let mut guard = ACME_SERVICE.lock().unwrap();
+    let mut guard = ACME_SERVICE.lock().unwrap_or_else(|e| e.into_inner());
     if guard.take().is_some() {
         tracing::info!(component = "acme_service", "ACME service stopped");
     }
@@ -147,7 +147,7 @@ async fn scan_all_acme_resources(client: Client) {
 /// Clone the current sender from the global handle.
 /// Returns `None` if the ACME service has not been started.
 fn get_sender() -> Option<mpsc::Sender<AcmeCommand>> {
-    let guard = ACME_SERVICE.lock().unwrap();
+    let guard = ACME_SERVICE.lock().unwrap_or_else(|e| e.into_inner());
     guard.as_ref().map(|h| h.tx.clone())
 }
 
@@ -233,7 +233,10 @@ impl AcmeServiceWorker {
             match cmd {
                 AcmeCommand::ResourceChanged { key } => {
                     // User or system changed the CRD: reset retry counter
-                    self.retry_tracker.write().unwrap().remove(&key);
+                    self.retry_tracker
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&key);
                     self.handle_resource_check(&key).await;
                 }
                 AcmeCommand::RenewalCheck { key } => {
@@ -253,7 +256,7 @@ impl AcmeServiceWorker {
     /// never via the K8s resource queue.
     async fn handle_resource_check(&self, key: &str) {
         // Skip if already processing
-        if self.processing.read().unwrap().contains(key) {
+        if self.processing.read().unwrap_or_else(|e| e.into_inner()).contains(key) {
             return;
         }
 
@@ -278,7 +281,10 @@ impl AcmeServiceWorker {
                     "Failed to get EdgionAcme resource (may have been deleted)"
                 );
                 // Resource deleted — clean up retry tracker
-                self.retry_tracker.write().unwrap().remove(key);
+                self.retry_tracker
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(key);
                 return;
             }
         };
@@ -304,7 +310,12 @@ impl AcmeServiceWorker {
             }
             AcmeCertPhase::Failed => {
                 // Check retry limit before attempting again
-                let attempt = *self.retry_tracker.read().unwrap().get(key).unwrap_or(&0);
+                let attempt = *self
+                    .retry_tracker
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(key)
+                    .unwrap_or(&0);
                 if attempt >= MAX_RETRY_ATTEMPTS {
                     tracing::warn!(
                         component = "acme_service",
@@ -338,7 +349,10 @@ impl AcmeServiceWorker {
         }
 
         // Mark as processing
-        self.processing.write().unwrap().insert(key.to_string());
+        self.processing
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.to_string());
 
         // Spawn the ACME flow task
         let client = self.client.clone();
@@ -359,12 +373,15 @@ impl AcmeServiceWorker {
                         "ACME flow completed successfully"
                     );
                     // Success: clear retry counter
-                    retry_tracker.write().unwrap().remove(&key_owned);
+                    retry_tracker
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&key_owned);
                 }
                 Err(e) => {
                     // Increment retry counter
                     let attempt = {
-                        let mut tracker = retry_tracker.write().unwrap();
+                        let mut tracker = retry_tracker.write().unwrap_or_else(|e| e.into_inner());
                         let count = tracker.entry(key_owned.clone()).or_insert(0);
                         *count += 1;
                         *count
@@ -412,7 +429,7 @@ impl AcmeServiceWorker {
             }
 
             // Remove from processing set
-            processing.write().unwrap().remove(&key_owned);
+            processing.write().unwrap_or_else(|e| e.into_inner()).remove(&key_owned);
         });
     }
 

@@ -35,12 +35,8 @@ RUN apt-get update && apt-get install -y \
 RUN groupadd -g 1000 edgion 2>/dev/null || groupadd edgion && \
     useradd -r -u 1000 -g edgion edgion 2>/dev/null || useradd -r -g edgion edgion
 
-# Create necessary directories
-RUN mkdir -p /usr/local/edgion/{config,logs,runtime} && \
-    chown -R edgion:edgion /usr/local/edgion
-
-# Set working directory
 WORKDIR /usr/local/edgion
+RUN chown -R edgion:edgion /usr/local/edgion
 
 # Copy prebuilt binaries based on BUILD_TYPE
 # For bin: copy from release/, for example: copy from release/examples/

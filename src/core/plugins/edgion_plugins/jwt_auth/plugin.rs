@@ -17,6 +17,7 @@ use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilt
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{JwtAlgorithm, JwtAuthConfig};
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 
@@ -395,8 +396,10 @@ impl JwtAuth {
         };
 
         // Verify signature and claims
-        let token_data = decode::<Claims>(token, &decoding_key, &validation)
-            .map_err(|e| format!("JWT verification failed: {}", e))?;
+        let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(|e| {
+            tracing::debug!("JWT verification failed: {}", e);
+            JwtAuthError::from(anyhow!("Invalid token"))
+        })?;
         let claims_value = token_data.claims.to_value();
 
         // Validate maximum_expiration if configured
@@ -548,15 +551,9 @@ impl RequestFilter for JwtAuth {
                 PluginRunningResult::GoodNext
             }
             Err(e) => {
-                // Log detailed error to system log, not access log (avoid leaking sensitive info)
                 tracing::debug!("JWT auth failed: {}", e);
                 plugin_log.push("FAIL; ");
-                // Check anonymous
-                if self.handle_anonymous_access(session, plugin_log) {
-                    self.hide_credentials_if_needed(session, source);
-                    return PluginRunningResult::GoodNext;
-                }
-                // Apply failure delay before returning 401
+                // Token present but invalid/expired — always reject, never allow anonymous
                 self.apply_auth_failure_delay().await;
                 let _ = self.auth_failed_return(session).await;
                 PluginRunningResult::ErrTerminateRequest
@@ -684,6 +681,43 @@ mod tests {
         let r = auth.run_request(&mut mock, &mut log).await;
         assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
         assert!(log.contains("FAIL"));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_token_with_anonymous_must_reject() {
+        let auth = jwt_auth_default(Some("anon-user".to_string()));
+        let mut mock = MockPluginSession::new();
+        let mut log = PluginLog::new("JwtAuth");
+
+        mock.expect_method().returning(|| "GET".to_string());
+        mock.expect_header_value()
+            .returning(|_| Some("Bearer invalid.token.here".to_string()));
+        mock.expect_get_query_param().returning(|_| None);
+        mock.expect_get_cookie().returning(|_| None);
+        mock.expect_write_response_header().returning(|_, _| Ok(()));
+        mock.expect_write_response_body().returning(|_, _| Ok(()));
+        mock.expect_shutdown().returning(|| {});
+
+        let r = auth.run_request(&mut mock, &mut log).await;
+        assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
+        assert!(log.contains("FAIL"));
+    }
+
+    #[tokio::test]
+    async fn test_no_token_with_anonymous_allows_access() {
+        let auth = jwt_auth_default(Some("anon-user".to_string()));
+        let mut mock = MockPluginSession::new();
+        let mut log = PluginLog::new("JwtAuth");
+
+        mock.expect_method().returning(|| "GET".to_string());
+        mock.expect_header_value().returning(|_| None);
+        mock.expect_get_query_param().returning(|_| None);
+        mock.expect_get_cookie().returning(|_| None);
+        mock.expect_set_request_header().returning(|_, _| Ok(()));
+
+        let r = auth.run_request(&mut mock, &mut log).await;
+        assert_eq!(r, PluginRunningResult::GoodNext);
+        assert!(log.contains("Anon=anon-user"));
     }
 
     // ========== P0: Valid Token Verification ==========

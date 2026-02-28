@@ -560,10 +560,10 @@ where
     })
 }
 
-/// Persist status to K8s API using Server-Side Apply on status subresource
+/// Persist status to K8s API using JSON Merge Patch on status subresource
 ///
-/// Note: This function uses DynamicObject to avoid the Scope type constraint issue.
-/// The status is patched using the resource's API path constructed from metadata.
+/// Uses DynamicObject to avoid the Scope type constraint issue.
+/// The `ApiResource` is built from K's `#[kube]`-derived GVK + plural metadata.
 async fn persist_k8s_status<K>(
     client: &Client,
     api_scope: &ApiScope,
@@ -578,46 +578,28 @@ where
     use kube::core::DynamicObject;
     use kube::discovery::ApiResource;
 
-    // Get API resource info from K type
     let dt = K::DynamicType::default();
-    let api_resource = ApiResource::from_gvk(&kube::core::GroupVersionKind {
-        group: K::group(&dt).to_string(),
-        version: K::version(&dt).to_string(),
-        kind: K::kind(&dt).to_string(),
-    });
+    let api_resource = ApiResource::from_gvk_with_plural(
+        &kube::core::GroupVersionKind {
+            group: K::group(&dt).to_string(),
+            version: K::version(&dt).to_string(),
+            kind: K::kind(&dt).to_string(),
+        },
+        &K::plural(&dt),
+    );
 
-    // SSA requires apiVersion and kind in the patch body
-    let gvk_group = K::group(&dt);
-    let gvk_version = K::version(&dt);
-    let api_version = if gvk_group.is_empty() {
-        gvk_version.to_string()
-    } else {
-        format!("{}/{}", gvk_group, gvk_version)
-    };
-
-    let metadata = match namespace {
-        Some(ns) => serde_json::json!({ "name": name, "namespace": ns }),
-        None => serde_json::json!({ "name": name }),
-    };
-
-    let patch = serde_json::json!({
-        "apiVersion": api_version,
-        "kind": K::kind(&dt),
-        "metadata": metadata,
-        "status": status_value
-    });
-
-    let params = PatchParams::apply("edgion-controller").force();
+    let patch = serde_json::json!({ "status": status_value });
+    let params = PatchParams::default();
 
     match api_scope {
         ApiScope::Namespaced(_) => {
             let ns = namespace.unwrap_or("default");
             let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), ns, &api_resource);
-            api.patch_status(name, &params, &Patch::Apply(&patch)).await?;
+            api.patch_status(name, &params, &Patch::Merge(&patch)).await?;
         }
         ApiScope::ClusterScoped => {
             let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
-            api.patch_status(name, &params, &Patch::Apply(&patch)).await?;
+            api.patch_status(name, &params, &Patch::Merge(&patch)).await?;
         }
     }
 

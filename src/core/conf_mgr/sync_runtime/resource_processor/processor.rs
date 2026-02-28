@@ -722,4 +722,59 @@ mod tests {
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().spec, "test spec");
     }
+
+    #[test]
+    fn test_gateway_class_status_change_detection() {
+        use crate::types::prelude_resources::GatewayClass;
+        use crate::types::resources::common::Condition;
+        use crate::types::resources::gateway_class::GatewayClassStatus;
+
+        let gc = GatewayClass {
+            metadata: ObjectMeta {
+                name: Some("test-gc".to_string()),
+                generation: Some(1),
+                ..Default::default()
+            },
+            spec: crate::types::resources::gateway_class::GatewayClassSpec {
+                controller_name: "example.com/controller".to_string(),
+                description: None,
+                parameters_ref: None,
+            },
+            status: Some(GatewayClassStatus {
+                conditions: vec![Condition {
+                    type_: "Accepted".to_string(),
+                    status: "Unknown".to_string(),
+                    reason: "Pending".to_string(),
+                    message: "Waiting for controller".to_string(),
+                    last_transition_time: "1970-01-01T00:00:00Z".to_string(),
+                    observed_generation: None,
+                }],
+            }),
+        };
+
+        let old_status = extract_status_json(&gc);
+
+        let mut gc_modified = gc.clone();
+        let status = gc_modified.status.get_or_insert_with(GatewayClassStatus::default);
+        crate::core::conf_mgr::sync_runtime::resource_processor::update_condition(
+            &mut status.conditions,
+            crate::core::conf_mgr::sync_runtime::resource_processor::accepted_condition(
+                gc_modified.metadata.generation,
+            ),
+        );
+        crate::core::conf_mgr::sync_runtime::resource_processor::update_condition(
+            &mut status.conditions,
+            crate::core::conf_mgr::sync_runtime::resource_processor::condition_true(
+                "SupportedVersion",
+                "SupportedVersion",
+                "Gateway API version is supported",
+                gc_modified.metadata.generation,
+            ),
+        );
+
+        let new_status = extract_status_json(&gc_modified);
+
+        let changed = status_has_changed(&old_status, &new_status);
+        assert!(changed, "Status should have changed after update_status");
+    }
 }

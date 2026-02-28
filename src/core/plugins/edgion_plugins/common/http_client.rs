@@ -25,7 +25,7 @@
 //! - **Default timeouts**: Prevent external services from hanging the gateway.
 //!   Individual plugins can override per-request timeouts.
 
-use reqwest::Client;
+use reqwest::{Certificate, Client, Identity};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -35,6 +35,15 @@ use std::time::Duration;
 /// reqwest::Client is designed to be shared — it maintains an internal connection pool.
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 static INSECURE_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+
+/// Get an Arc-wrapped HTTP client for sharing (e.g. in spawned tasks).
+/// Uses the default secure client.
+pub fn get_http_client_arc() -> std::sync::Arc<Client> {
+    static DEFAULT_ARC: OnceLock<std::sync::Arc<Client>> = OnceLock::new();
+    DEFAULT_ARC
+        .get_or_init(|| std::sync::Arc::new(get_http_client().clone()))
+        .clone()
+}
 
 /// Get the global HTTP client instance.
 ///
@@ -52,7 +61,10 @@ pub fn get_http_client() -> &'static Client {
             .connect_timeout(Duration::from_secs(5))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .expect("Failed to build HTTP client")
+            .unwrap_or_else(|e| {
+                eprintln!("FATAL: Failed to build HTTP client: {}", e);
+                std::process::exit(1);
+            })
     })
 }
 
@@ -73,8 +85,64 @@ pub fn get_http_client_with_ssl_verify(ssl_verify: bool) -> &'static Client {
             .redirect(reqwest::redirect::Policy::none())
             .danger_accept_invalid_certs(true)
             .build()
-            .expect("Failed to build insecure HTTP client")
+            .unwrap_or_else(|e| {
+                eprintln!("FATAL: Failed to build insecure HTTP client: {}", e);
+                std::process::exit(1);
+            })
     })
+}
+
+/// Build an HTTP client for webhook requests based on WebhookServiceConfig.
+///
+/// When `config.tls` is present, builds a custom client with the configured TLS settings
+/// (insecure_skip_verify, custom CA, client certs). When no TLS config, returns `None` to
+/// indicate the caller should use `get_http_client()` for connection pooling.
+pub fn build_webhook_client(
+    config: &crate::types::resources::link_sys::webhook::WebhookServiceConfig,
+) -> Option<Result<Client, reqwest::Error>> {
+    let tls = config.tls.as_ref()?;
+
+    let mut builder = Client::builder()
+        .pool_max_idle_per_host(32)
+        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none());
+
+    if tls.insecure_skip_verify == Some(true) {
+        tracing::warn!("Webhook TLS: insecure_skip_verify enabled — certificate verification disabled");
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+
+    if let Some(ref certs) = tls.certs {
+        if let Some(ref ca_pem) = certs.ca_cert {
+            match Certificate::from_pem(ca_pem.as_bytes()) {
+                Ok(cert) => {
+                    builder = builder.add_root_certificate(cert);
+                }
+                Err(e) => {
+                    tracing::error!("Webhook TLS: invalid CA certificate PEM: {}", e);
+                    return Some(Err(e));
+                }
+            }
+        }
+
+        if let (Some(ref client_cert), Some(ref client_key)) = (&certs.client_cert, &certs.client_key) {
+            let mut pem = client_cert.clone();
+            pem.push('\n');
+            pem.push_str(client_key);
+            match Identity::from_pem(pem.as_bytes()) {
+                Ok(identity) => {
+                    builder = builder.identity(identity);
+                }
+                Err(e) => {
+                    tracing::error!("Webhook TLS: invalid client certificate PEM: {}", e);
+                    return Some(Err(e));
+                }
+            }
+        }
+    }
+
+    Some(builder.build())
 }
 
 /// Hop-by-hop headers that MUST NOT be forwarded to external services.

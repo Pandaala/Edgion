@@ -99,7 +99,10 @@ impl RequestFilter for IpRestriction {
             plugin_log.push("Denied; ");
 
             // Build error response
-            let mut resp = Box::new(ResponseHeader::build(self.config.status, None).unwrap());
+            let mut resp = Box::new(
+                ResponseHeader::build(self.config.status, None)
+                    .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),
+            );
             resp.insert_header("Content-Type", "application/json").ok();
 
             let body = Bytes::from(format!(r#"{{"message":"{}"}}"#, message));

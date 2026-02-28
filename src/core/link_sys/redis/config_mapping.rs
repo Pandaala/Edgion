@@ -158,6 +158,13 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
     // TLS configuration
     if let Some(tls) = &crd.tls {
         if tls.enabled {
+            if tls.insecure_skip_verify.unwrap_or(false) {
+                anyhow::bail!(
+                    "Redis TLS insecure_skip_verify is configured but not supported by the fred client. \
+                     TLS always verifies certificates. Use a proper CA certificate or connect without TLS. \
+                     For development, consider using a self-signed cert with the system CA store."
+                );
+            }
             // Use default rustls config with system root CA store.
             // TODO: Build rustls ClientConfig from CRD certs (CA, client cert/key)
             // using the same approach as Edgion's core/tls/ module.
@@ -166,10 +173,6 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
             builder.with_config(|config| {
                 config.tls = Some(tls_connector.into());
             });
-
-            if tls.insecure_skip_verify.unwrap_or(false) {
-                tracing::warn!("Redis TLS insecure_skip_verify is enabled — this should only be used for testing");
-            }
         }
     }
 

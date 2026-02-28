@@ -93,7 +93,10 @@ pub fn map_jwt_decode_error(err: jsonwebtoken::errors::Error) -> (u16, String) {
         ErrorKind::ImmatureSignature => (401, "Token not yet valid".to_string()),
         ErrorKind::InvalidSignature => (401, "Invalid token signature".to_string()),
         ErrorKind::InvalidAlgorithm => (401, "Invalid token algorithm".to_string()),
-        _ => (401, format!("JWT verification failed: {}", err)),
+        _ => {
+            tracing::debug!("JWT verification failed: {}", err);
+            (401, "Invalid token".to_string())
+        }
     }
 }
 

@@ -119,7 +119,18 @@ pub fn build_es_client(crd: &ElasticsearchClientConfig) -> Result<(Client, Heade
     // ── TLS ────────────────────────────────────────────────────────
     if let Some(tls) = &crd.tls {
         if let Some(true) = tls.insecure_skip_verify {
-            tracing::warn!("ES client: TLS certificate verification disabled — insecure!");
+            let is_prod = std::env::var("EDGION_ENV")
+                .map(|v| v.eq_ignore_ascii_case("production"))
+                .unwrap_or(false);
+            if is_prod {
+                anyhow::bail!(
+                    "Elasticsearch insecure_skip_verify cannot be enabled in production (EDGION_ENV=production). \
+                     Use a proper CA certificate or disable TLS verification only in non-production environments."
+                );
+            }
+            tracing::warn!(
+                "ES client: TLS certificate verification disabled — insecure! Not allowed when EDGION_ENV=production"
+            );
             builder = builder.danger_accept_invalid_certs(true);
         }
         // TODO: Build rustls config from CRD certs/CA when TLS certs are provided.

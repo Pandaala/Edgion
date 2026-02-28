@@ -4,8 +4,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::core::plugins::edgion_plugins::common::http_client::get_http_client;
-
 use super::runtime::{now_epoch_secs, WebhookRuntime};
 
 // ============================================================
@@ -25,7 +23,7 @@ pub async fn spawn_active_health_check(webhook_ref: String, runtime: Arc<Webhook
         .and_then(|hc| hc.passive.as_ref())
         .is_some();
 
-    let client = get_http_client();
+    let client = runtime.http_client.as_ref();
     let check_url = match &active.path {
         Some(path) => format!("{}{}", runtime.config.uri.trim_end_matches('/'), path),
         None => runtime.config.uri.clone(),
@@ -178,6 +176,7 @@ mod tests {
 
         let runtime = WebhookRuntime {
             config,
+            http_client: std::sync::Arc::new(reqwest::Client::builder().build().expect("test client")),
             healthy: AtomicBool::new(true),
             passive_failures: AtomicU32::new(0),
             last_halfopen: AtomicU64::new(0),
@@ -212,6 +211,7 @@ mod tests {
 
         let runtime = WebhookRuntime {
             config,
+            http_client: std::sync::Arc::new(reqwest::Client::builder().build().expect("test client")),
             healthy: AtomicBool::new(true),
             passive_failures: AtomicU32::new(0),
             last_halfopen: AtomicU64::new(0),

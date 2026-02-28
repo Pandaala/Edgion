@@ -17,6 +17,13 @@ use dashmap::DashMap;
 type BasicAuthError = Box<dyn std::error::Error + Send + Sync>;
 type BasicAuthResult<T> = Result<T, BasicAuthError>;
 
+/// Distinguishes "no credentials" from "bad credentials" for anonymous access logic.
+#[derive(Debug)]
+enum AuthFailure {
+    MissingHeader,
+    BadCredentials(Box<dyn std::error::Error + Send + Sync>),
+}
+
 /// Basic Authentication plugin
 pub struct BasicAuth {
     name: String,
@@ -151,11 +158,12 @@ impl BasicAuth {
         false
     }
 
-    async fn authenticate_request(&self, session: &mut dyn PluginSession) -> BasicAuthResult<String> {
+    async fn authenticate_request(&self, session: &mut dyn PluginSession) -> Result<String, AuthFailure> {
         // Extract authorization header
-        let auth_header_value = session
-            .header_value("authorization")
-            .ok_or("Missing authorization header")?;
+        let auth_header_value = match session.header_value("authorization") {
+            Some(v) => v,
+            None => return Err(AuthFailure::MissingHeader),
+        };
 
         // 1. Check Cache (Fast Path)
         // If we have verified this exact header recently, skip cost.
@@ -172,13 +180,15 @@ impl BasicAuth {
 
         // 2. Slow Path: Full Verification
         // Extract and decode credentials
-        let (username, password) = self.extract_credentials(&auth_header_value)?;
+        let (username, password) = self
+            .extract_credentials(&auth_header_value)
+            .map_err(AuthFailure::BadCredentials)?;
 
         // Find user
         let stored_hash = self
             .user_passwords
             .get(&username)
-            .ok_or("Invalid username or password")?
+            .ok_or_else(|| AuthFailure::BadCredentials("Invalid username or password".into()))?
             .clone();
 
         // Verify password - OFF-LOADED TO BLOCKING THREAD
@@ -203,10 +213,10 @@ impl BasicAuth {
             false
         })
         .await
-        .map_err(|e| format!("Password verification task failed: {}", e))?;
+        .map_err(|e| AuthFailure::BadCredentials(format!("Password verification task failed: {}", e).into()))?;
 
         if !is_valid {
-            return Err("Invalid username or password".into());
+            return Err(AuthFailure::BadCredentials("Invalid username or password".into()));
         }
 
         // 3. Cache Success
@@ -289,22 +299,21 @@ impl RequestFilter for BasicAuth {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Try to authenticate
         let username = match self.authenticate_request(session).await {
             Ok(user) => user,
-            Err(_e) => {
-                plugin_log.push("Auth failed; ");
-
-                // Check if anonymous access is allowed
+            Err(AuthFailure::MissingHeader) => {
+                plugin_log.push("No credentials; ");
                 if self.handle_anonymous_access(session, plugin_log) {
-                    // Hide credentials if configured
-                    if self.config.hide_credentials {
-                        let _ = session.remove_request_header("authorization");
-                    }
                     return PluginRunningResult::GoodNext;
                 }
-
-                // No anonymous access — apply delay then return 401
+                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
+                let _ = self.auth_failed_return(session).await;
+                return PluginRunningResult::ErrTerminateRequest;
+            }
+            Err(AuthFailure::BadCredentials(e)) => {
+                tracing::debug!("BasicAuth credentials rejected: {}", e);
+                plugin_log.push("Auth failed; ");
+                // Credentials present but invalid — always reject, never anonymous
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 let _ = self.auth_failed_return(session).await;
                 return PluginRunningResult::ErrTerminateRequest;
@@ -427,6 +436,61 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.contains("Anonymous"));
+    }
+
+    #[tokio::test]
+    async fn test_wrong_password_with_anonymous_must_reject() {
+        let config = BasicAuthConfig {
+            secret_refs: None,
+            realm: "Test".to_string(),
+            hide_credentials: false,
+            auth_failure_delay_ms: 0,
+            anonymous: Some("anonymous-user".to_string()),
+            resolved_users: None,
+            validation_error: None,
+        };
+        let mut auth = BasicAuth::new(&config, "default".to_string());
+        let mut users = HashMap::new();
+        users.insert("admin".to_string(), "password".to_string());
+        auth.load_users(users).unwrap();
+
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("BasicAuth");
+        let wrong_auth_header = encode_credentials("admin", "wrongpassword");
+
+        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session
+            .expect_header_value()
+            .returning(move |_| Some(wrong_auth_header.clone()));
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+        mock_session.expect_shutdown().returning(|| {});
+
+        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    }
+
+    #[tokio::test]
+    async fn test_no_header_with_anonymous_allows_access() {
+        let config = BasicAuthConfig {
+            secret_refs: None,
+            realm: "Test".to_string(),
+            hide_credentials: false,
+            auth_failure_delay_ms: 0,
+            anonymous: Some("anonymous-user".to_string()),
+            resolved_users: None,
+            validation_error: None,
+        };
+        let auth = BasicAuth::new(&config, "default".to_string());
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("BasicAuth");
+
+        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session.expect_header_value().returning(|_| None);
+        mock_session.expect_set_request_header().returning(|_, _| Ok(()));
+
+        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 
     #[tokio::test]

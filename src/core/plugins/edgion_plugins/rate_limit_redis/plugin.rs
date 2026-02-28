@@ -415,7 +415,10 @@ impl RateLimitRedis {
     ) -> PluginRunningResult {
         let message = self.config.reject_message.as_deref().unwrap_or("Rate limit exceeded");
 
-        let mut resp = Box::new(ResponseHeader::build(self.config.reject_status, None).unwrap());
+        let mut resp = Box::new(
+            ResponseHeader::build(self.config.reject_status, None)
+                .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
+        );
         resp.insert_header("Content-Type", "application/json").ok();
         resp.insert_header("Retry-After", &retry_after.as_secs().to_string())
             .ok();
@@ -486,8 +489,20 @@ impl RequestFilter for RateLimitRedis {
         // 1. Validate config
         if !self.config.is_valid() {
             let err = self.config.get_validation_error().unwrap_or("Unknown error");
-            plugin_log.push(&format!("Config error: {}; ", err));
-            return PluginRunningResult::GoodNext; // fail-open
+            tracing::error!(plugin = "RateLimitRedis", error = err, "Config invalid — fail-close");
+            plugin_log.push(&format!("Config error (fail-close): {}; ", err));
+            let resp = Box::new(
+                ResponseHeader::build(500, None)
+                    .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
+            );
+            let _ = session.write_response_header(resp, false).await;
+            let _ = session
+                .write_response_body(
+                    Some(bytes::Bytes::from(r#"{"message":"Internal rate limiter error"}"#)),
+                    true,
+                )
+                .await;
+            return PluginRunningResult::ErrTerminateRequest;
         }
 
         // 2. Extract key (identical logic to RateLimit)

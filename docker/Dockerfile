@@ -118,12 +118,8 @@ RUN apt-get update && apt-get install -y \
 RUN groupadd -g 1000 edgion && \
     useradd -r -u 1000 -g edgion edgion
 
-# Create necessary directories
-RUN mkdir -p /usr/local/edgion/{config,logs,runtime} && \
-    chown -R edgion:edgion /usr/local/edgion
-
-# Set working directory
 WORKDIR /usr/local/edgion
+RUN chown -R edgion:edgion /usr/local/edgion
 
 # Copy binaries from builder
 COPY --from=builder /app/edgion-binary /usr/local/bin/${BINARY}
