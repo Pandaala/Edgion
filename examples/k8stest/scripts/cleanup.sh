@@ -196,6 +196,9 @@ cleanup_old_test_images() {
   echo "[ok] image cleanup done"
 }
 
+echo "[cleanup] delete prepare state ConfigMap"
+kubectl -n edgion-system delete configmap edgion-k8s-integration-state --ignore-not-found=true >/dev/null 2>&1 || true
+
 delete_k8stest_conf_resources
 delete_generated_artifacts
 delete_deploy_manifests

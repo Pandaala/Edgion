@@ -327,8 +327,8 @@ compile_examples() {
             --features \"${FEATURES}\""
 
     if [[ "${force_rebuild}" == "true" ]]; then
-        log_info "Force rebuild requested for examples (${arch}): cleaning target ${target} first"
-        build_cmd="cargo clean --target \"${target}\" && ${build_cmd}"
+        # Do not clean here: binaries compiled in Stage 2 are needed by Stage 3 image packaging.
+        log_info "Force rebuild requested for examples (${arch}): rebuilding examples without target clean"
     fi
 
     # Run compilation in Docker

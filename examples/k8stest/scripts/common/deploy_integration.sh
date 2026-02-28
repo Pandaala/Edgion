@@ -113,7 +113,7 @@ fi
 "$VALIDATE_SCRIPT" "$PROJECT_ROOT/examples/k8stest/conf"
 
 echo "[1/5] Apply namespaces"
-kubectl apply -f "$K8S_DEPLOY_ROOT/namespace.yaml"
+kubectl apply --server-side --force-conflicts -f "$K8S_DEPLOY_ROOT/namespace.yaml"
 
 if [[ "${SKIP_CRD}" != "true" ]]; then
   echo "[2/5] Apply Gateway API and Edgion CRDs from $CRD_ROOT"

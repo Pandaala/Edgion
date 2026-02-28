@@ -12,6 +12,7 @@ VALIDATE_SCRIPT="$COMMON_SCRIPT_DIR/validate_no_endpoints.sh"
 DEPLOY_SCRIPT="$COMMON_SCRIPT_DIR/deploy_integration.sh"
 APPLY_ALL_SCRIPT="$COMMON_SCRIPT_DIR/apply_all_conf_strict.sh"
 RUN_CLIENT_SCRIPT="$COMMON_SCRIPT_DIR/run_test_client.sh"
+RUN_CLIENT_BATCH_SCRIPT="$COMMON_SCRIPT_DIR/run_test_client_batch.sh"
 GENERATE_CERTS_SCRIPT="$COMMON_SCRIPT_DIR/generate_runtime_certs.sh"
 LOCAL_IMAGE_PREPARE_SCRIPT="$ORBSTACK_SCRIPT_DIR/prepare_local_images.sh"
 GENERATED_DIR="${GENERATED_DIR:-$PROJECT_ROOT/examples/k8stest/generated}"
@@ -28,6 +29,7 @@ ONLY_RESOURCE=""
 ONLY_ITEM=""
 SKIP_DEPLOY=false
 SKIP_PREPARE=false
+FORCE_PREPARE=false
 PREPARE_ONLY=false
 TEST_SERVER_REPLICAS="${TEST_SERVER_REPLICAS:-3}"
 SPEC_PROFILE="${SPEC_PROFILE:-}"
@@ -75,6 +77,7 @@ Default test rounds:
 Options:
   --skip-deploy                  Skip deploy step in prepare phase
   --skip-prepare                 Skip whole prepare phase, run tests only
+  --force-prepare                Force prepare even if state ConfigMap is up-to-date
   --prepare-only                 Run prepare phase only, do not run tests
   --no-prepare                   Compatibility alias of --skip-prepare
   --no-start                     Compatibility alias of --skip-prepare
@@ -115,6 +118,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-prepare)
       SKIP_PREPARE=true
+      shift
+      ;;
+    --force-prepare)
+      FORCE_PREPARE=true
       shift
       ;;
     --no-prepare)
@@ -244,7 +251,7 @@ if [[ "${SKIP_PREPARE}" == "true" && "${PREPARE_ONLY}" == "true" ]]; then
   exit 1
 fi
 
-for required in "$VALIDATE_SCRIPT" "$DEPLOY_SCRIPT" "$APPLY_ALL_SCRIPT" "$RUN_CLIENT_SCRIPT" "$GENERATE_CERTS_SCRIPT"; do
+for required in "$VALIDATE_SCRIPT" "$DEPLOY_SCRIPT" "$APPLY_ALL_SCRIPT" "$RUN_CLIENT_SCRIPT" "$RUN_CLIENT_BATCH_SCRIPT" "$GENERATE_CERTS_SCRIPT"; do
   if [[ ! -x "$required" ]]; then
     echo "required script not found or not executable: $required"
     exit 1
@@ -677,6 +684,12 @@ override_suite_test_server_images() {
     if kubectl get deployment lb-multi-test-server -n "${ns}" >/dev/null 2>&1; then
       echo "Override lb-multi-test-server image in ${ns}: ${TEST_SERVER_IMAGE}"
       kubectl set image deployment/lb-multi-test-server -n "${ns}" test-server="${TEST_SERVER_IMAGE}"
+      if [[ -n "${PULL_POLICY_OVERRIDE}" ]]; then
+        kubectl patch deployment lb-multi-test-server -n "${ns}" --type='json' \
+          -p="[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/imagePullPolicy\",\"value\":\"${PULL_POLICY_OVERRIDE}\"}]" \
+          >/dev/null 2>&1 || true
+      fi
+      kubectl rollout restart deployment/lb-multi-test-server -n "${ns}"
       kubectl rollout status deployment/lb-multi-test-server -n "${ns}" --timeout=300s
     fi
   done
@@ -773,6 +786,7 @@ run_one() {
   local suite_dir="$1"
   local resource="$2"
   local item="$3"
+  local skip_count="${4:-false}"
   local suite_conf_dir="${CONF_ROOT}/${suite_dir}"
 
   if ! suite_matches_filter "${resource}" "${item}"; then
@@ -780,7 +794,9 @@ run_one() {
     return 0
   fi
 
-  SELECTED_COUNT=$((SELECTED_COUNT + 1))
+  if [[ "${skip_count}" != "true" ]]; then
+    SELECTED_COUNT=$((SELECTED_COUNT + 1))
+  fi
 
   if [[ ! -d "${suite_conf_dir}" ]]; then
     echo "Skip suite: ${suite_dir} (missing config dir: ${suite_conf_dir})"
@@ -801,7 +817,9 @@ run_one() {
   echo "Running suite: ${suite_dir} (resource=${resource}, item=${item})"
   echo "=============================="
 
-  EXECUTED_COUNT=$((EXECUTED_COUNT + 1))
+  if [[ "${skip_count}" != "true" ]]; then
+    EXECUTED_COUNT=$((EXECUTED_COUNT + 1))
+  fi
   local max_attempts=2
   if [[ "${resource}" == "EdgionPlugins" && "${item}" == "DebugAccessLog" ]]; then
     max_attempts=6
@@ -821,6 +839,11 @@ run_one() {
     sleep 3
     attempt=$((attempt + 1))
   done
+}
+
+is_host_side_suite() {
+  local resource="$1" item="$2"
+  [[ "${resource}" == "Gateway" && "${item}" == "PortConflict" ]]
 }
 
 run_all_selected_suites() {
@@ -890,8 +913,13 @@ run_all_selected_suites() {
     local_start_from=""
   fi
 
+  # Phase 1: Classify suites into batch (in-pod) and host-side lists.
+  local batch_suites=()    # resource|item pairs to run inside test-client pod
+  local host_suites=()     # suite_dir|resource|item triples to run on host
+  local batch_suite_keys=() # resource/item for display
+
   for pair in "${suites[@]}"; do
-    local suite_dir rest resource item suite_key
+    local suite_dir rest resource item suite_key tname
     suite_dir="${pair%%|*}"
     rest="${pair#*|}"
     resource="${rest%%|*}"
@@ -906,14 +934,137 @@ run_all_selected_suites() {
       local_start_from=""
     fi
 
+    if ! suite_matches_filter "${resource}" "${item}"; then
+      echo "Skip (filtered): ${suite_dir}"
+      continue
+    fi
+
+    if [[ ! -d "${CONF_ROOT}/${suite_dir}" ]]; then
+      echo "Skip suite: ${suite_dir} (missing config dir)"
+      MISSING_COUNT=$((MISSING_COUNT + 1))
+      MISSING_SUITES+=("${suite_dir}")
+      continue
+    fi
+
+    tname="$(suite_test_name "${resource}" "${item}")"
+    if [[ "${FULL_TEST}" != "true" ]] && is_slow_test "${tname}"; then
+      echo "Skip slow suite (use --full-test): ${suite_dir}"
+      continue
+    fi
+
+    SELECTED_COUNT=$((SELECTED_COUNT + 1))
+
+    if is_host_side_suite "${resource}" "${item}"; then
+      host_suites+=("${pair}")
+    else
+      batch_suites+=("${resource}|${item}")
+      batch_suite_keys+=("${suite_key}")
+    fi
+  done
+
+  # Phase 2: Run batch suites in a single kubectl exec.
+  if [[ ${#batch_suites[@]} -gt 0 ]]; then
+    local batch_tmp
+    batch_tmp="$(mktemp /tmp/edgion-batch-suites.XXXXXX)"
+    printf '%s\n' "${batch_suites[@]}" > "${batch_tmp}"
+
+    echo
+    echo "=============================="
+    echo "Batch exec: ${#batch_suites[@]} suites in one kubectl session"
+    echo "=============================="
+
+    local batch_output batch_rc
+    batch_output="$("${RUN_CLIENT_BATCH_SCRIPT}" "${batch_tmp}" 2>&1)" && batch_rc=0 || batch_rc=$?
+    echo "${batch_output}"
+    rm -f "${batch_tmp}"
+
+    # Parse results from tagged output lines.
+    local failed_in_batch=()
+    while IFS= read -r line; do
+      local result_key result_status
+      result_key="$(echo "${line}" | awk '{print $2}')"
+      result_status="$(echo "${line}" | awk '{print $3}')"
+      local rsc itm
+      rsc="${result_key%%|*}"
+      itm="${result_key#*|}"
+      local skey="${rsc}/${itm}"
+
+      EXECUTED_COUNT=$((EXECUTED_COUNT + 1))
+      if [[ "${result_status}" == "FAIL" ]]; then
+        failed_in_batch+=("${result_key}")
+      fi
+    done < <(echo "${batch_output}" | grep '^@@SUITE_RESULT ')
+
+    # Phase 2b: Retry failed suites individually (with run_one's retry logic).
+    for fkey in ${failed_in_batch[@]+"${failed_in_batch[@]}"}; do
+      local frsc fitm
+      frsc="${fkey%%|*}"
+      fitm="${fkey#*|}"
+      local fdir=""
+      for pair in "${suites[@]}"; do
+        local sd sr si
+        sd="${pair%%|*}"
+        sr="${pair#*|}"
+        sr="${sr%%|*}"
+        si="${pair##*|}"
+        if [[ "${sr}" == "${frsc}" && "${si}" == "${fitm}" ]]; then
+          fdir="${sd}"
+          break
+        fi
+      done
+
+      echo
+      echo "Retrying failed suite: ${frsc}/${fitm}"
+      if ! run_one "${fdir}" "${frsc}" "${fitm}" "true"; then
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        FAILED_SUITES+=("${frsc}/${fitm}")
+      fi
+    done
+  fi
+
+  # Phase 3: Run host-side suites individually.
+  for pair in ${host_suites[@]+"${host_suites[@]}"}; do
+    local suite_dir rest resource item
+    suite_dir="${pair%%|*}"
+    rest="${pair#*|}"
+    resource="${rest%%|*}"
+    item="${rest#*|}"
+
     if ! run_one "${suite_dir}" "${resource}" "${item}"; then
       FAIL_COUNT=$((FAIL_COUNT + 1))
-      FAILED_SUITES+=("${suite_key}")
+      FAILED_SUITES+=("${resource}/${item}")
     fi
   done
 }
 
-if [[ "${SKIP_PREPARE}" == "false" ]]; then
+should_run_prepare() {
+  if [[ "${SKIP_PREPARE}" == "true" ]]; then
+    return 1
+  fi
+  if [[ "${FORCE_PREPARE}" == "true" ]]; then
+    return 0
+  fi
+  # Auto-detect: if state ConfigMap exists and matches, skip prepare.
+  local conf_hash
+  conf_hash="$(compute_prepare_conf_hash)"
+  if ! kubectl -n "${STATE_NAMESPACE}" get configmap "${STATE_CONFIGMAP_NAME}" >/dev/null 2>&1; then
+    return 0
+  fi
+  local stored_ok stored_hash stored_replicas stored_ns
+  stored_ok="$(get_state_data prepare_ok)"
+  stored_hash="$(get_state_data conf_hash)"
+  stored_replicas="$(get_state_data test_server_replicas)"
+  stored_ns="$(get_state_data backend_test_namespace)"
+  if [[ "${stored_ok}" == "true" \
+     && "${stored_hash}" == "${conf_hash}" \
+     && "${stored_replicas}" == "${TEST_SERVER_REPLICAS}" \
+     && "${stored_ns}" == "${BACKEND_TEST_NAMESPACE}" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+if should_run_prepare; then
   echo "Phase 1/2: Prepare environment"
   echo "Using BACKEND_TEST_NAMESPACE=${BACKEND_TEST_NAMESPACE}"
   print_cluster_and_image_context
@@ -923,7 +1074,7 @@ if [[ "${SKIP_PREPARE}" == "false" ]]; then
   if [[ "${SKIP_DEPLOY}" == "false" ]]; then
     # Ensure namespaces exist before applying generated secrets.
     if [[ -f "${K8S_DEPLOY_ROOT}/namespace.yaml" ]]; then
-      kubectl apply -f "${K8S_DEPLOY_ROOT}/namespace.yaml"
+      kubectl apply --server-side --force-conflicts -f "${K8S_DEPLOY_ROOT}/namespace.yaml"
     fi
   fi
 
@@ -963,6 +1114,11 @@ if [[ "${SKIP_PREPARE}" == "false" ]]; then
   write_prepare_state_marker "${PREPARE_CONF_HASH}"
   echo "Prepare phase finished."
 else
+  if [[ "${SKIP_PREPARE}" == "true" ]]; then
+    echo "Phase 1/2: Skipped (--skip-prepare)"
+  else
+    echo "Phase 1/2: Skipped (state ConfigMap up-to-date, use --force-prepare to override)"
+  fi
   print_cluster_and_image_context
   verify_skip_prepare_preconditions
 fi
@@ -1027,19 +1183,42 @@ if [[ "${MISSING_COUNT}" -gt 0 ]]; then
   echo "Warning: skipped ${MISSING_COUNT} suites due to missing k8s conf dirs."
 fi
 
-if [[ "${FAIL_COUNT}" -gt 0 ]]; then
-  echo
-  echo "========================================="
-  echo "FAILED ${FAIL_COUNT}/${EXECUTED_COUNT} suites:"
-  for s in "${FAILED_SUITES[@]}"; do
-    echo "  - ${s}"
-  done
-  echo "========================================="
+PASS_COUNT=$((EXECUTED_COUNT - FAIL_COUNT))
+if [[ "${EXECUTED_COUNT}" -gt 0 ]]; then
+  PASS_RATE=$((PASS_COUNT * 100 / EXECUTED_COUNT))
+else
+  PASS_RATE=0
 fi
 
 echo
-echo "K8s integration run finished. Executed=${EXECUTED_COUNT} Passed=$((EXECUTED_COUNT - FAIL_COUNT)) Failed=${FAIL_COUNT}"
-echo "Cluster state is kept by default."
+echo "=========================================================="
+echo "  K8s Integration Test Summary"
+echo "=========================================================="
+echo "  Selected : ${SELECTED_COUNT} suites"
+echo "  Executed : ${EXECUTED_COUNT} suites"
+echo "  Passed   : ${PASS_COUNT}"
+echo "  Failed   : ${FAIL_COUNT}"
+echo "  Skipped  : $((SELECTED_COUNT - EXECUTED_COUNT))"
+if [[ "${MISSING_COUNT}" -gt 0 ]]; then
+  echo "  Missing  : ${MISSING_COUNT} (no conf dir)"
+fi
+echo "  Pass rate: ${PASS_RATE}%"
+MODE_STR="fast"
+if [[ "${FULL_TEST}" == "true" ]]; then MODE_STR="full"; fi
+if [[ "${WITH_RELOAD}" == "true" ]]; then MODE_STR="${MODE_STR} + reload"; fi
+echo "  Mode     : ${MODE_STR}"
+echo "=========================================================="
+if [[ "${FAIL_COUNT}" -gt 0 ]]; then
+  echo
+  echo "  Failed suites:"
+  for s in ${FAILED_SUITES[@]+"${FAILED_SUITES[@]}"}; do
+    echo "    ✗ ${s}"
+  done
+  echo
+  echo "=========================================================="
+fi
+echo "  Cluster state is kept. Run cleanup.sh to reset."
+echo "=========================================================="
 
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   exit 1
