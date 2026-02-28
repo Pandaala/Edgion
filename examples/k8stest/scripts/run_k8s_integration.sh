@@ -35,6 +35,7 @@ FULL_TEST=false
 WITH_RELOAD=false
 BACKEND_TEST_NAMESPACE="${BACKEND_TEST_NAMESPACE:-edgion-backend}"
 CLUSTER_MODE="${CLUSTER_MODE:-auto}" # auto|local|remote
+LOCAL_IMAGE_MODE="${LOCAL_IMAGE_MODE:-auto}" # auto|remote-pull|build-import|prepare-local-images
 TEST_CLIENT_IMAGE="${TEST_CLIENT_IMAGE:-}"
 TEST_SERVER_IMAGE="${TEST_SERVER_IMAGE:-}"
 CONTROLLER_IMAGE="${CONTROLLER_IMAGE:-}"
@@ -45,6 +46,7 @@ IMAGE_VERSION="${IMAGE_VERSION:-dev}"
 IMAGE_ARCH="${IMAGE_ARCH:-}"
 PREPARE_LOCAL_IMAGES=false
 LOCAL_IMAGE_REBUILD=false
+PULL_POLICY_OVERRIDE="${PULL_POLICY_OVERRIDE:-}"
 
 FILTERED_MODE=false
 SELECTED_COUNT=0
@@ -84,6 +86,8 @@ Options:
   --cluster-mode <auto|local|remote>
                                  Cluster mode for image compatibility checks
                                  (default: ${CLUSTER_MODE})
+  --local-image-mode <auto|remote-pull|build-import|prepare-local-images>
+                                 Local cluster image mode (default: ${LOCAL_IMAGE_MODE})
   --image-config <path>          Image config file (default: scripts/conf.env)
   --prepare-local-images         Build local test images and auto-set TEST_*_IMAGE
   --rebuild-local-images         With --prepare-local-images, force rebuild
@@ -99,6 +103,7 @@ Env:
   CONTROLLER_IMAGE               Optional controller image override (passed to deploy script)
   GATEWAY_IMAGE                  Optional gateway image override (passed to deploy script)
   IMAGE_CONFIG_FILE              Path to image config file
+  LOCAL_IMAGE_MODE              Same as --local-image-mode
 EOF
 }
 
@@ -172,6 +177,19 @@ while [[ $# -gt 0 ]]; do
       fi
       if [[ "${CLUSTER_MODE}" != "auto" && "${CLUSTER_MODE}" != "local" && "${CLUSTER_MODE}" != "remote" ]]; then
         echo "invalid --cluster-mode: ${CLUSTER_MODE} (expected: auto|local|remote)"
+        exit 1
+      fi
+      shift 2
+      ;;
+    --local-image-mode)
+      LOCAL_IMAGE_MODE="${2:-}"
+      if [[ -z "${LOCAL_IMAGE_MODE}" ]]; then
+        echo "missing value for --local-image-mode"
+        exit 1
+      fi
+      if [[ "${LOCAL_IMAGE_MODE}" != "auto" && "${LOCAL_IMAGE_MODE}" != "remote-pull" \
+         && "${LOCAL_IMAGE_MODE}" != "build-import" && "${LOCAL_IMAGE_MODE}" != "prepare-local-images" ]]; then
+        echo "invalid --local-image-mode: ${LOCAL_IMAGE_MODE} (expected: auto|remote-pull|build-import|prepare-local-images)"
         exit 1
       fi
       shift 2
@@ -250,8 +268,18 @@ get_cluster_arches() {
   kubectl get nodes -o json | jq -r '.items[].status.nodeInfo.architecture' | sort -u
 }
 
+get_cluster_server() {
+  kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true
+}
+
 detect_cluster_mode_auto() {
-  local names
+  local names server
+  server="$(get_cluster_server | tr '[:upper:]' '[:lower:]')"
+  if [[ "${server}" == *"127.0.0.1"* || "${server}" == *"localhost"* ]]; then
+    echo "local"
+    return 0
+  fi
+
   names="$(kubectl get nodes -o json | jq -r '.items[].metadata.name' | tr '[:upper:]' '[:lower:]')"
   if echo "${names}" | grep -Eq 'orbstack|docker-desktop|minikube|kind|rancher-desktop'; then
     echo "local"
@@ -368,8 +396,92 @@ auto_detect_image_arch() {
   esac
 }
 
+prompt_local_image_mode() {
+  local selected
+  if [[ "${LOCAL_IMAGE_MODE}" != "auto" ]]; then
+    echo "${LOCAL_IMAGE_MODE}"
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    echo "remote-pull"
+    return 0
+  fi
+
+  cat <<EOF
+Local cluster detected. Choose image mode:
+  1) remote-pull          (default) use imagePullPolicy=Always and pull from registry
+  2) build-import         build local images, docker save, import into local runtime, use IfNotPresent
+  3) prepare-local-images run existing --prepare-local-images flow, use IfNotPresent
+EOF
+  read -r -p "Select [1/2/3] (default 1): " selected
+  case "${selected:-1}" in
+    2) echo "build-import" ;;
+    3) echo "prepare-local-images" ;;
+    *) echo "remote-pull" ;;
+  esac
+}
+
+build_and_import_local_images() {
+  local arch build_script
+  build_script="${PROJECT_ROOT}/build-image.sh"
+  arch="${IMAGE_ARCH}"
+  if [[ -z "${arch}" ]]; then
+    arch="$(auto_detect_image_arch)"
+  fi
+
+  local build_args=(--arch "${arch}" --with-examples --version "${IMAGE_VERSION}")
+  if [[ "${LOCAL_IMAGE_REBUILD}" == "true" ]]; then
+    build_args+=(--rebuild)
+  fi
+
+  if [[ ! -x "${build_script}" ]]; then
+    echo "build script not found or not executable: ${build_script}"
+    exit 1
+  fi
+
+  echo "[local build-import] building local images: ${build_args[*]}"
+  IMAGE_REGISTRY="${IMAGE_REGISTRY}" IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" "${build_script}" "${build_args[@]}"
+
+  CONTROLLER_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-controller:${IMAGE_VERSION}_${arch}"
+  GATEWAY_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-gateway:${IMAGE_VERSION}_${arch}"
+  TEST_CLIENT_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-test-client:${IMAGE_VERSION}_${arch}"
+  TEST_SERVER_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-test-server:${IMAGE_VERSION}_${arch}"
+
+  local tar_file
+  tar_file="$(mktemp /tmp/edgion-k8s-images.XXXXXX.tar)"
+  echo "[local build-import] saving images to ${tar_file}"
+  docker save \
+    "${CONTROLLER_IMAGE}" \
+    "${GATEWAY_IMAGE}" \
+    "${TEST_CLIENT_IMAGE}" \
+    "${TEST_SERVER_IMAGE}" \
+    -o "${tar_file}"
+
+  local imported=false
+  if command -v ctr >/dev/null 2>&1; then
+    echo "[local build-import] importing into containerd (ctr -n k8s.io images import)"
+    ctr -n k8s.io images import "${tar_file}"
+    imported=true
+  elif command -v nerdctl >/dev/null 2>&1; then
+    echo "[local build-import] importing via nerdctl -n k8s.io load"
+    nerdctl -n k8s.io load -i "${tar_file}"
+    imported=true
+  elif command -v kind >/dev/null 2>&1 && kubectl config current-context 2>/dev/null | grep -qi '^kind-'; then
+    echo "[local build-import] importing via kind load docker-image"
+    kind load docker-image "${CONTROLLER_IMAGE}" "${GATEWAY_IMAGE}" "${TEST_CLIENT_IMAGE}" "${TEST_SERVER_IMAGE}"
+    imported=true
+  fi
+
+  if [[ "${imported}" != "true" ]]; then
+    echo "[WARN] no runtime import tool detected (ctr/nerdctl/kind). Assuming cluster can use local docker images."
+  fi
+
+  rm -f "${tar_file}"
+}
+
 print_cluster_and_image_context() {
-  local mode arches primary
+  local mode arches primary local_mode
   mode="$(detect_cluster_mode)"
   arches="$(get_cluster_arches | xargs)"
   primary="$(get_cluster_arches | head -n1)"
@@ -383,13 +495,25 @@ print_cluster_and_image_context() {
   load_image_config_file "${IMAGE_CONFIG_FILE}"
 
   if [[ "${mode}" == "local" ]]; then
-    # Local mode: auto-trigger local image build if the script exists and
-    # no images were explicitly overridden.
-    if [[ "${PREPARE_LOCAL_IMAGES}" != "true" ]] && [[ -x "${LOCAL_IMAGE_PREPARE_SCRIPT}" ]] \
-       && [[ -z "${TEST_CLIENT_IMAGE}" || -z "${GATEWAY_IMAGE}" ]]; then
-      echo "Local cluster detected - auto-preparing local images..."
-      PREPARE_LOCAL_IMAGES=true
-    fi
+    local_mode="$(prompt_local_image_mode)"
+    echo "Local image mode: ${local_mode}"
+    case "${local_mode}" in
+      remote-pull)
+        PULL_POLICY_OVERRIDE=""
+        ;;
+      build-import)
+        build_and_import_local_images
+        PULL_POLICY_OVERRIDE="IfNotPresent"
+        ;;
+      prepare-local-images)
+        PREPARE_LOCAL_IMAGES=true
+        PULL_POLICY_OVERRIDE="IfNotPresent"
+        ;;
+      *)
+        echo "invalid local image mode: ${local_mode}"
+        exit 1
+        ;;
+    esac
   fi
 
   prepare_local_images_if_needed "${mode}"
@@ -400,6 +524,7 @@ print_cluster_and_image_context() {
   echo "Image override GATEWAY_IMAGE: ${GATEWAY_IMAGE:-<unset>}"
   echo "Image override TEST_CLIENT_IMAGE: ${TEST_CLIENT_IMAGE:-<unset>}"
   echo "Image override TEST_SERVER_IMAGE: ${TEST_SERVER_IMAGE:-<unset>}"
+  echo "Pull policy override: ${PULL_POLICY_OVERRIDE:-<none>}"
 
   check_image_arch_compat "${CONTROLLER_IMAGE}" "${primary}" "CONTROLLER_IMAGE"
   check_image_arch_compat "${GATEWAY_IMAGE}" "${primary}" "GATEWAY_IMAGE"
@@ -807,7 +932,7 @@ if [[ "${SKIP_PREPARE}" == "false" ]]; then
   kubectl apply --server-side --force-conflicts --field-manager=edgion-k8s-test -f "${GENERATED_SECRET_DIR}"
 
   if [[ "${SKIP_DEPLOY}" == "false" ]]; then
-    export CONTROLLER_IMAGE GATEWAY_IMAGE TEST_CLIENT_IMAGE TEST_SERVER_IMAGE
+    export CONTROLLER_IMAGE GATEWAY_IMAGE TEST_CLIENT_IMAGE TEST_SERVER_IMAGE PULL_POLICY_OVERRIDE
     K8S_DEPLOY_ROOT="$K8S_DEPLOY_ROOT" BACKEND_TEST_NAMESPACE="${BACKEND_TEST_NAMESPACE}" "${DEPLOY_SCRIPT}" \
       --test-server-replicas "${TEST_SERVER_REPLICAS}"
   fi

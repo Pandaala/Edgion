@@ -18,6 +18,7 @@ CONTROLLER_IMAGE="${CONTROLLER_IMAGE:-}"
 GATEWAY_IMAGE="${GATEWAY_IMAGE:-}"
 TEST_CLIENT_IMAGE="${TEST_CLIENT_IMAGE:-}"
 TEST_SERVER_IMAGE="${TEST_SERVER_IMAGE:-}"
+PULL_POLICY_OVERRIDE="${PULL_POLICY_OVERRIDE:-}"
 
 show_help() {
   cat <<USAGE
@@ -189,6 +190,29 @@ rollout_if_exists() {
     echo "Skip rollout check for missing deployment ${ns}/${name}"
   fi
 }
+
+set_pull_policy_if_exists() {
+  local ns="$1"
+  local name="$2"
+  local policy="$3"
+  if kubectl get deployment "${name}" -n "${ns}" >/dev/null 2>&1; then
+    kubectl patch deployment "${name}" -n "${ns}" --type='json' \
+      -p="[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/imagePullPolicy\",\"value\":\"${policy}\"}]" \
+      >/dev/null 2>&1 || true
+  fi
+}
+
+if [[ -n "${PULL_POLICY_OVERRIDE}" ]]; then
+  echo "Override deployment imagePullPolicy: ${PULL_POLICY_OVERRIDE}"
+  set_pull_policy_if_exists "edgion-system" "edgion-controller" "${PULL_POLICY_OVERRIDE}"
+  set_pull_policy_if_exists "edgion-system" "edgion-gateway" "${PULL_POLICY_OVERRIDE}"
+  set_pull_policy_if_exists "edgion-test" "edgion-test-client" "${PULL_POLICY_OVERRIDE}"
+  if [[ "${SKIP_TEST}" != "true" ]]; then
+    set_pull_policy_if_exists "edgion-test" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
+    set_pull_policy_if_exists "edgion-default" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
+    set_pull_policy_if_exists "${BACKEND_TEST_NAMESPACE}" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
+  fi
+fi
 
 if [[ "${WAIT_READY}" == "true" ]]; then
   echo "Waiting controller rollout..."
