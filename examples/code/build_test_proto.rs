@@ -21,12 +21,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let Some(proto_path) = proto_path else {
         if Path::new(&generated_file).exists() {
-            println!("⚠ test_service.proto not found, keep existing generated file: {}", generated_file);
+            println!(
+                "⚠ test_service.proto not found, keep existing generated file: {}",
+                generated_file
+            );
             return Ok(());
         }
         return Err(
-            "test_service.proto not found (checked: examples/proto, examples/test/proto, examples/code/proto)"
-                .into(),
+            "test_service.proto not found (checked: examples/proto, examples/test/proto, examples/code/proto)".into(),
         );
     };
     let include_dir = Path::new(proto_path)

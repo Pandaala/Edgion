@@ -172,7 +172,10 @@ impl MetricsClient {
         }
 
         if all_metrics.is_empty() {
-            return Err(anyhow!("Failed to fetch metrics from all endpoints: {}", errors.join("; ")));
+            return Err(anyhow!(
+                "Failed to fetch metrics from all endpoints: {}",
+                errors.join("; ")
+            ));
         }
         Ok(all_metrics)
     }

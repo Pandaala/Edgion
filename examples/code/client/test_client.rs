@@ -83,9 +83,9 @@ struct Cli {
     legacy_command: Option<String>,
 }
 
-/// sub-item， suite 
+/// sub-item， suite
 fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str>) -> String {
-    // 
+    //
     if let Some(cmd) = legacy {
         return match cmd.to_lowercase().as_str() {
             "http" => "HTTPRoute/Basic".to_string(),
@@ -126,7 +126,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
         };
     }
 
-    //  -r/-i 
+    //  -r/-i
     match (resource, item) {
         (Some(r), Some(i)) => format!("{}/{}", r, i),
         (Some(r), None) => r.to_string(),
@@ -200,7 +200,7 @@ fn suite_to_port_key(suite: &str) -> &str {
 ///  suite Add test suite runner
 fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, phase: Option<&str>) {
     match suite {
-        // HTTPRoute 
+        // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
         }
@@ -295,9 +295,9 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::HttpsTestSuite));
         }
-        // GRPCRoute 
+        // GRPCRoute
         "GRPCRoute" => {
-            //  GRPCRoute 
+            //  GRPCRoute
             runner.add_suite(Box::new(suites::GrpcTestSuite));
             if gateway {
                 runner.add_suite(Box::new(suites::GrpcMatchTestSuite));
@@ -320,7 +320,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::GrpcTlsTestSuite));
         }
-        // TCP/UDP 
+        // TCP/UDP
         "tcp" | "TCPRoute" | "TCPRoute/Basic" => {
             runner.add_suite(Box::new(suites::TcpTestSuite));
         }
@@ -334,7 +334,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         "udp" | "UDPRoute" | "UDPRoute/Basic" => {
             runner.add_suite(Box::new(suites::UdpTestSuite));
         }
-        // Gateway 
+        // Gateway
         "Gateway" => {
             if !gateway {
                 eprintln!("Error: Gateway tests require --gateway flag");
@@ -610,7 +610,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                     runner.add_suite(Box::new(suites::UpdatePhaseTestSuite));
                 }
                 None => {
-                    // 
+                    //
                     runner.add_suite(Box::new(suites::InitialPhaseTestSuite));
                     runner.add_suite(Box::new(suites::UpdatePhaseTestSuite));
                 }
@@ -620,7 +620,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 }
             }
         }
-        // EdgionTls 
+        // EdgionTls
         "EdgionTls" => {
             if !gateway {
                 eprintln!("Error: EdgionTls tests require --gateway flag");
@@ -670,7 +670,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         "Services/acme" => {
             runner.add_suite(Box::new(suites::AcmeTestSuite));
         }
-        // 
+        //
         "all" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
             runner.add_suite(Box::new(suites::GrpcTestSuite));
@@ -715,7 +715,7 @@ async fn main() -> Result<()> {
         tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init();
     }
 
-    //  suite 
+    //  suite
     let suite = resolve_suite(
         cli.resource.as_deref(),
         cli.item.as_deref(),

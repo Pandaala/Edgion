@@ -408,7 +408,7 @@ impl HttpMatchTestSuite {
 
                     // Negative test validation:
                     // 1. Confirm HTTPS listener works for other domains（verify service is running）
-                    // 2. section-test.example.com configured sectionName: http，Passed HTTP 
+                    // 2. section-test.example.com configured sectionName: http，Passed HTTP
                     //    via HTTPS  sectionName mismatch causes routing failure
                     //
                     // Note: Since no TLS cert configured，

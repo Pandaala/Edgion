@@ -163,7 +163,10 @@ impl RealIpPluginTestSuite {
                                     if Self::is_local_target(&ctx) && real_ip != "127.0.0.1" && real_ip != "::1" {
                                         return TestResult::failed(
                                             start.elapsed(),
-                                            format!("Expected local loopback IP for direct local run, got '{}'", real_ip),
+                                            format!(
+                                                "Expected local loopback IP for direct local run, got '{}'",
+                                                real_ip
+                                            ),
                                         );
                                     }
 

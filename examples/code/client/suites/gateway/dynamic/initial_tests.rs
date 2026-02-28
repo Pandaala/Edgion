@@ -26,7 +26,7 @@ impl InitialPhaseTestSuite {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-                    //  hostname 
+                    //  hostname
                     let resp = client
                         .get(format!("http://{}:31250/match", ctx.target_host))
                         .header("Host", "other.example.com") //  api.example.com

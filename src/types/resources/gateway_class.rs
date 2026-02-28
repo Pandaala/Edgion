@@ -2,10 +2,10 @@
 //!
 //! GatewayClass defines a class of Gateways that can be instantiated
 
+use super::common::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use super::common::Condition;
 
 /// API group for GatewayClass
 pub const GATEWAY_CLASS_GROUP: &str = "gateway.networking.k8s.io";

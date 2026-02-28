@@ -5,7 +5,7 @@
 // - Path  ()
 // - Method  ( API)
 // - Header  ( Token)
-// - 
+// -
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -84,34 +84,30 @@ impl RequestRestrictionTestSuite {
 
     // ==================== 2. Method  ====================
     fn test_method_allow_get() -> TestCase {
-        TestCase::new(
-            "method_allow_get",
-            "Method : GET  (200)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let client = &ctx.http_client;
-                    let url = format!("{}/test/method-allow/api", ctx.http_url());
+        TestCase::new("method_allow_get", "Method : GET  (200)", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let client = &ctx.http_client;
+                let url = format!("{}/test/method-allow/api", ctx.http_url());
 
-                    let request = client.get(&url).header("host", "request-restriction.example.com");
+                let request = client.get(&url).header("host", "request-restriction.example.com");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            let status = response.status().as_u16();
-                            if status == 200 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("GET passed with status {}", status),
-                                )
-                            } else {
-                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        let status = response.status().as_u16();
+                        if status == 200 {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("GET passed with status {}", status),
+                            )
+                        } else {
+                            TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
+            })
+        })
     }
 
     fn test_method_allow_blocks_post() -> TestCase {
@@ -217,105 +213,93 @@ impl RequestRestrictionTestSuite {
 
     // ==================== 4.  ====================
     fn test_combined_normal() -> TestCase {
-        TestCase::new(
-            "combined_normal",
-            ":  (200)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let client = &ctx.http_client;
-                    let url = format!("{}/test/combined/api/users", ctx.http_url());
+        TestCase::new("combined_normal", ":  (200)", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let client = &ctx.http_client;
+                let url = format!("{}/test/combined/api/users", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "request-restriction.example.com")
-                        .header("User-Agent", "Mozilla/5.0");
+                let request = client
+                    .get(&url)
+                    .header("host", "request-restriction.example.com")
+                    .header("User-Agent", "Mozilla/5.0");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            let status = response.status().as_u16();
-                            if status == 200 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Normal request passed with status {}", status),
-                                )
-                            } else {
-                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        let status = response.status().as_u16();
+                        if status == 200 {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("Normal request passed with status {}", status),
+                            )
+                        } else {
+                            TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
+            })
+        })
     }
 
     fn test_combined_bot_blocked() -> TestCase {
-        TestCase::new(
-            "combined_bot_blocked",
-            ": Bot UA  (403)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let client = &ctx.http_client;
-                    let url = format!("{}/test/combined/api/users", ctx.http_url());
+        TestCase::new("combined_bot_blocked", ": Bot UA  (403)", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let client = &ctx.http_client;
+                let url = format!("{}/test/combined/api/users", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "request-restriction.example.com")
-                        .header("User-Agent", "Googlebot/2.1");
+                let request = client
+                    .get(&url)
+                    .header("host", "request-restriction.example.com")
+                    .header("User-Agent", "Googlebot/2.1");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            let status = response.status().as_u16();
-                            if status == 403 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Bot blocked with status {}", status),
-                                )
-                            } else {
-                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        let status = response.status().as_u16();
+                        if status == 403 {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("Bot blocked with status {}", status),
+                            )
+                        } else {
+                            TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
+            })
+        })
     }
 
     fn test_combined_admin_blocked() -> TestCase {
-        TestCase::new(
-            "combined_admin_blocked",
-            ": Admin  (403)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let client = &ctx.http_client;
-                    let url = format!("{}/test/combined/admin/users", ctx.http_url());
+        TestCase::new("combined_admin_blocked", ": Admin  (403)", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let client = &ctx.http_client;
+                let url = format!("{}/test/combined/admin/users", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "request-restriction.example.com")
-                        .header("User-Agent", "Mozilla/5.0");
+                let request = client
+                    .get(&url)
+                    .header("host", "request-restriction.example.com")
+                    .header("User-Agent", "Mozilla/5.0");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            let status = response.status().as_u16();
-                            if status == 403 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Admin path blocked with status {}", status),
-                                )
-                            } else {
-                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        let status = response.status().as_u16();
+                        if status == 403 {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("Admin path blocked with status {}", status),
+                            )
+                        } else {
+                            TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
+            })
+        })
     }
 }
 
@@ -326,16 +310,16 @@ impl TestSuite for RequestRestrictionTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            // Header 
+            // Header
             Self::test_header_deny_blocks_bot(),
             Self::test_header_deny_allows_normal(),
-            // Method 
+            // Method
             Self::test_method_allow_get(),
             Self::test_method_allow_blocks_post(),
-            // Header 
+            // Header
             Self::test_header_required_with_token(),
             Self::test_header_required_missing(),
-            // 
+            //
             Self::test_combined_normal(),
             Self::test_combined_bot_blocked(),
             Self::test_combined_admin_blocked(),

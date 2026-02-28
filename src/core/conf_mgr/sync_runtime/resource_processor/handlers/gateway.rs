@@ -9,11 +9,11 @@
 
 use std::collections::HashSet;
 
-use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
     get_listener_port_manager, get_secret, make_port_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
+use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::{GRPCRoute, Gateway, HTTPRoute, TCPRoute, TLSRoute, UDPRoute};
 use crate::types::resources::common::ParentReference;
 use crate::types::resources::gateway::{GatewayStatus, ListenerStatus, RouteGroupKind};
@@ -191,7 +191,11 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
     fn update_status(&self, gateway: &mut Gateway, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = gateway.metadata.generation;
-        let gateway_ns = gateway.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
+        let gateway_ns = gateway
+            .metadata
+            .namespace
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
         let gateway_name = gateway.metadata.name.clone().unwrap_or_default();
 
         // Initialize status if not present
@@ -310,21 +314,26 @@ fn count_attached_routes_for_listener_by_key(gateway_ns: &str, gateway_name: &st
     }
 
     let mut total = 0_i32;
-    total += count_attached_routes_of_kind::<HTTPRoute, _>("HTTPRoute", gateway_ns, gateway_name, listener_name, |route| {
-        (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
-    });
-    total += count_attached_routes_of_kind::<GRPCRoute, _>("GRPCRoute", gateway_ns, gateway_name, listener_name, |route| {
+    total +=
+        count_attached_routes_of_kind::<HTTPRoute, _>("HTTPRoute", gateway_ns, gateway_name, listener_name, |route| {
             (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
         });
-    total += count_attached_routes_of_kind::<TCPRoute, _>("TCPRoute", gateway_ns, gateway_name, listener_name, |route| {
-        (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
-    });
-    total += count_attached_routes_of_kind::<TLSRoute, _>("TLSRoute", gateway_ns, gateway_name, listener_name, |route| {
-        (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
-    });
-    total += count_attached_routes_of_kind::<UDPRoute, _>("UDPRoute", gateway_ns, gateway_name, listener_name, |route| {
-        (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
-    });
+    total +=
+        count_attached_routes_of_kind::<GRPCRoute, _>("GRPCRoute", gateway_ns, gateway_name, listener_name, |route| {
+            (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
+        });
+    total +=
+        count_attached_routes_of_kind::<TCPRoute, _>("TCPRoute", gateway_ns, gateway_name, listener_name, |route| {
+            (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
+        });
+    total +=
+        count_attached_routes_of_kind::<TLSRoute, _>("TLSRoute", gateway_ns, gateway_name, listener_name, |route| {
+            (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
+        });
+    total +=
+        count_attached_routes_of_kind::<UDPRoute, _>("UDPRoute", gateway_ns, gateway_name, listener_name, |route| {
+            (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
+        });
     total
 }
 

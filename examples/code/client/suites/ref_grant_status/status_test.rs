@@ -287,8 +287,7 @@ impl RefGrantStatusTestSuite {
                         Ok(gc) => {
                             let accepted_true = gc["status"]["conditions"].as_array().map_or(false, |conds| {
                                 conds.iter().any(|c| {
-                                    c["type"].as_str() == Some("Accepted")
-                                        && c["status"].as_str() == Some("True")
+                                    c["type"].as_str() == Some("Accepted") && c["status"].as_str() == Some("True")
                                 })
                             });
 

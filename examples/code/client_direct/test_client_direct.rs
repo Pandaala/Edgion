@@ -69,7 +69,7 @@ struct Cli {
     #[arg(long, default_value = "30011")]
     udp_port: u16,
 
-    /// 
+    ///
     #[arg(short, long)]
     verbose: bool,
 }

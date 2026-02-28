@@ -143,11 +143,7 @@ impl AccessLogAnalyzer {
         report.push_str("============================================================\n\n");
 
         for res in results {
-            report.push_str(&format!(
-                "📊 {}  ({})\n",
-                res.test_type.replace("-", ""),
-                res.test_type
-            ));
+            report.push_str(&format!("📊 {}  ({})\n", res.test_type.replace("-", ""), res.test_type));
             report.push_str(&format!("   Total requests: {}\n", res.total_requests));
 
             if !res.lb_policy_counts.is_empty() {
@@ -190,10 +186,7 @@ impl AccessLogAnalyzer {
         report.push_str(":\n");
         for res in results {
             if res.errors.is_empty() {
-                report.push_str(&format!(
-                    "  ✅ {} : Passed - LB \n",
-                    res.test_type.replace("-", "")
-                ));
+                report.push_str(&format!("  ✅ {} : Passed - LB \n", res.test_type.replace("-", "")));
             } else {
                 report.push_str(&format!(
                     "  ❌ {} :  - {:?}\n",

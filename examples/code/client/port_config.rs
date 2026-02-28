@@ -25,7 +25,7 @@ pub struct SuitePorts {
 impl PortConfig {
     ///  ports.json Port config
     pub fn load() -> Result<Self, String> {
-        // 
+        //
         let possible_paths = ["examples/test/conf/ports.json", "../conf/ports.json", "conf/ports.json"];
 
         for path in &possible_paths {

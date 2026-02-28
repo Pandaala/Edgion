@@ -50,7 +50,10 @@ impl DirectEndpointTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Unexpected X-Direct-Endpoint header: {:?}, expected {}", val, expected),
+                                            format!(
+                                                "Unexpected X-Direct-Endpoint header: {:?}, expected {}",
+                                                val, expected
+                                            ),
                                         )
                                     }
                                 } else {

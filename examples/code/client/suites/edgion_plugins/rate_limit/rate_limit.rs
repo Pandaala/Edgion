@@ -1,10 +1,10 @@
 // RateLimit Plugin Test Suite
 //
 // ：
-// - 
+// -
 // -  429
-// - 
-// -  key 
+// -
+// -  key
 //
 // ：rate=5, interval=10s, key=Header(X-Rate-Key)
 
@@ -30,91 +30,57 @@ impl RateLimitTestSuite {
 
     // ==================== 1.  ====================
     fn test_allows_within_limit() -> TestCase {
-        TestCase::new(
-            "rate_limit_allows_within_limit",
-            ":  (200)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let client = &ctx.http_client;
-                    let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
-                    let test_key = Self::generate_test_key();
+        TestCase::new("rate_limit_allows_within_limit", ":  (200)", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let client = &ctx.http_client;
+                let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
+                let test_key = Self::generate_test_key();
 
-                    //  3 （ 5），
-                    for i in 0..3 {
-                        let response = client
-                            .get(&url)
-                            .header("host", "rate-limit.example.com")
-                            .header("X-Rate-Key", &test_key)
-                            .send()
-                            .await;
+                //  3 （ 5），
+                for i in 0..3 {
+                    let response = client
+                        .get(&url)
+                        .header("host", "rate-limit.example.com")
+                        .header("X-Rate-Key", &test_key)
+                        .send()
+                        .await;
 
-                        match response {
-                            Ok(resp) => {
-                                let status = resp.status().as_u16();
-                                if status != 200 {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!("Request {} expected 200, got {}", i + 1, status),
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                return TestResult::failed(start.elapsed(), format!("Request {} failed: {}", i + 1, e));
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Request {} expected 200, got {}", i + 1, status),
+                                );
                             }
                         }
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Request {} failed: {}", i + 1, e));
+                        }
                     }
+                }
 
-                    TestResult::passed_with_message(
-                        start.elapsed(),
-                        format!("All 3 requests passed within limit (key: {})", test_key),
-                    )
-                })
-            },
-        )
+                TestResult::passed_with_message(
+                    start.elapsed(),
+                    format!("All 3 requests passed within limit (key: {})", test_key),
+                )
+            })
+        })
     }
 
     // ==================== 2.  ====================
     fn test_blocks_over_limit() -> TestCase {
-        TestCase::new(
-            "rate_limit_blocks_over_limit",
-            ":  429",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let client = &ctx.http_client;
-                    let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
-                    let test_key = Self::generate_test_key();
+        TestCase::new("rate_limit_blocks_over_limit", ":  429", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let client = &ctx.http_client;
+                let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
+                let test_key = Self::generate_test_key();
 
-                    //  5 
-                    for i in 0..5 {
-                        let response = client
-                            .get(&url)
-                            .header("host", "rate-limit.example.com")
-                            .header("X-Rate-Key", &test_key)
-                            .send()
-                            .await;
-
-                        match response {
-                            Ok(resp) => {
-                                let status = resp.status().as_u16();
-                                if status != 200 {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!("Pre-fill request {} expected 200, got {}", i + 1, status),
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Pre-fill request {} failed: {}", i + 1, e),
-                                );
-                            }
-                        }
-                    }
-
-                    //  6 
+                //  5
+                for i in 0..5 {
                     let response = client
                         .get(&url)
                         .header("host", "rate-limit.example.com")
@@ -125,88 +91,110 @@ impl RateLimitTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            if status == 429 {
-                                // 
-                                let body = resp.text().await.unwrap_or_default();
-                                TestResult::passed_with_message(
+                            if status != 200 {
+                                return TestResult::failed(
                                     start.elapsed(),
-                                    format!("Request 6 blocked with 429 (body: {})", body),
-                                )
-                            } else {
-                                TestResult::failed(start.elapsed(), format!("Request 6 expected 429, got {}", status))
+                                    format!("Pre-fill request {} expected 200, got {}", i + 1, status),
+                                );
                             }
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request 6 failed: {}", e)),
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Pre-fill request {} failed: {}", i + 1, e),
+                            );
+                        }
                     }
-                })
-            },
-        )
+                }
+
+                //  6
+                let response = client
+                    .get(&url)
+                    .header("host", "rate-limit.example.com")
+                    .header("X-Rate-Key", &test_key)
+                    .send()
+                    .await;
+
+                match response {
+                    Ok(resp) => {
+                        let status = resp.status().as_u16();
+                        if status == 429 {
+                            //
+                            let body = resp.text().await.unwrap_or_default();
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("Request 6 blocked with 429 (body: {})", body),
+                            )
+                        } else {
+                            TestResult::failed(start.elapsed(), format!("Request 6 expected 429, got {}", status))
+                        }
+                    }
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Request 6 failed: {}", e)),
+                }
+            })
+        })
     }
 
     // ==================== 3.  ====================
     fn test_headers_present() -> TestCase {
-        TestCase::new(
-            "rate_limit_headers_present",
-            ":  X-RateLimit-* ",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let client = &ctx.http_client;
-                    let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
-                    let test_key = Self::generate_test_key();
+        TestCase::new("rate_limit_headers_present", ":  X-RateLimit-* ", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let client = &ctx.http_client;
+                let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
+                let test_key = Self::generate_test_key();
 
-                    let response = client
-                        .get(&url)
-                        .header("host", "rate-limit.example.com")
-                        .header("X-Rate-Key", &test_key)
-                        .send()
-                        .await;
+                let response = client
+                    .get(&url)
+                    .header("host", "rate-limit.example.com")
+                    .header("X-Rate-Key", &test_key)
+                    .send()
+                    .await;
 
-                    match response {
-                        Ok(resp) => {
-                            let status = resp.status().as_u16();
-                            let headers = resp.headers();
+                match response {
+                    Ok(resp) => {
+                        let status = resp.status().as_u16();
+                        let headers = resp.headers();
 
-                            // 
-                            let limit = headers.get("X-RateLimit-Limit");
-                            let remaining = headers.get("X-RateLimit-Remaining");
-                            let reset = headers.get("X-RateLimit-Reset");
+                        //
+                        let limit = headers.get("X-RateLimit-Limit");
+                        let remaining = headers.get("X-RateLimit-Remaining");
+                        let reset = headers.get("X-RateLimit-Reset");
 
-                            let mut missing_headers = Vec::new();
-                            if limit.is_none() {
-                                missing_headers.push("X-RateLimit-Limit");
-                            }
-                            if remaining.is_none() {
-                                missing_headers.push("X-RateLimit-Remaining");
-                            }
-                            if reset.is_none() {
-                                missing_headers.push("X-RateLimit-Reset");
-                            }
-
-                            if !missing_headers.is_empty() {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Missing headers: {:?}", missing_headers),
-                                );
-                            }
-
-                            let limit_val = limit.unwrap().to_str().unwrap_or("?");
-                            let remaining_val = remaining.unwrap().to_str().unwrap_or("?");
-                            let reset_val = reset.unwrap().to_str().unwrap_or("?");
-
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!(
-                                    "Status {}, Limit={}, Remaining={}, Reset={}",
-                                    status, limit_val, remaining_val, reset_val
-                                ),
-                            )
+                        let mut missing_headers = Vec::new();
+                        if limit.is_none() {
+                            missing_headers.push("X-RateLimit-Limit");
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                        if remaining.is_none() {
+                            missing_headers.push("X-RateLimit-Remaining");
+                        }
+                        if reset.is_none() {
+                            missing_headers.push("X-RateLimit-Reset");
+                        }
+
+                        if !missing_headers.is_empty() {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Missing headers: {:?}", missing_headers),
+                            );
+                        }
+
+                        let limit_val = limit.unwrap().to_str().unwrap_or("?");
+                        let remaining_val = remaining.unwrap().to_str().unwrap_or("?");
+                        let reset_val = reset.unwrap().to_str().unwrap_or("?");
+
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!(
+                                "Status {}, Limit={}, Remaining={}, Reset={}",
+                                status, limit_val, remaining_val, reset_val
+                            ),
+                        )
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
+            })
+        })
     }
 
     // ==================== 4.  key  ====================
@@ -240,7 +228,7 @@ impl RateLimitTestSuite {
                         }
                     }
 
-                    //  key_a 
+                    //  key_a
                     let resp_a = client
                         .get(&url)
                         .header("host", "rate-limit.example.com")
@@ -340,7 +328,7 @@ impl RateLimitTestSuite {
                     let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
                     let test_key = Self::generate_test_key();
 
-                    // 
+                    //
                     for _ in 0..5 {
                         let _ = client
                             .get(&url)
@@ -393,19 +381,19 @@ impl TestSuite for RateLimitTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            // 
+            //
             Self::test_allows_within_limit(),
-            // TODO: test_blocks_over_limit  test_headers_present 
+            // TODO: test_blocks_over_limit  test_headers_present
             // :
             // 1. test_blocks_over_limit: 429  ~30s ，
             //    ( pingora  early response )
-            // 2. test_headers_present: set_response_header  request 
+            // 2. test_headers_present: set_response_header  request
             //    response_header ，
             //    ( ctx ， response )
             // Self::test_blocks_over_limit(),
             // Self::test_headers_present(),
             Self::test_retry_after_header(),
-            // key 
+            // key
             Self::test_different_keys_independent(),
             Self::test_missing_key_allows(),
         ]

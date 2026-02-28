@@ -169,6 +169,7 @@ mod tests {
         };
 
         let rule = Arc::new(HTTPRouteRule {
+            name: None,
             matches: Some(vec![match_item.clone()]),
             filters: None,
             backend_refs: None,

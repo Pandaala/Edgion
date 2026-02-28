@@ -151,7 +151,7 @@ impl PluginConditionTestSuite {
                     let request = client
                         .get(&url)
                         .header("host", "condition-test.example.com")
-                        .header("X-Skip-Cors", "true") //  skip 
+                        .header("X-Skip-Cors", "true") //  skip
                         .header("x-trace-id", &trace_id)
                         .header("access_log", "test_store");
 

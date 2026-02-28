@@ -2,8 +2,8 @@
 //
 // ：
 // - URI ：（）
-// - ：Host + Method + Headers 
-// - Path ： $uid 
+// - ：Host + Method + Headers
+// - Path ： $uid
 //
 // test_server ：
 // Server: 0.0.0.0:30001
@@ -20,7 +20,7 @@ use std::time::Instant;
 
 pub struct ProxyRewriteTestSuite;
 
-///  test_server 
+///  test_server
 fn parse_echo_response(text: &str) -> EchoInfo {
     let mut info = EchoInfo::default();
     let mut in_headers = false;
@@ -248,87 +248,83 @@ impl ProxyRewriteTestSuite {
 
     // ==================== 5.  ====================
     fn test_combined() -> TestCase {
-        TestCase::new(
-            "combined",
-            ": Host + Headers(add/set/remove)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let client = &ctx.http_client;
-                    let url = format!("{}/combined/test", ctx.http_url());
+        TestCase::new("combined", ": Host + Headers(add/set/remove)", |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let client = &ctx.http_client;
+                let url = format!("{}/combined/test", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", "proxy-rewrite.example.com")
-                        .header("x-debug", "should-be-removed")
-                        .header("x-internal-token", "secret");
+                let request = client
+                    .get(&url)
+                    .header("host", "proxy-rewrite.example.com")
+                    .header("x-debug", "should-be-removed")
+                    .header("x-internal-token", "secret");
 
-                    match request.send().await {
-                        Ok(response) => {
-                            if !response.status().is_success() {
-                                return TestResult::failed(start.elapsed(), format!("HTTP {}", response.status()));
-                            }
-
-                            match response.text().await {
-                                Ok(text) => {
-                                    let echo = parse_echo_response(&text);
-                                    let mut errors = Vec::new();
-
-                                    //  Host 
-                                    if let Some(host) = echo.headers.get("host") {
-                                        if host != "backend.internal.svc" {
-                                            errors.push(format!("Host: expected backend.internal.svc, got {}", host));
-                                        }
-                                    } else {
-                                        errors.push("Host header not found".to_string());
-                                    }
-
-                                    //  Headers add
-                                    if echo.headers.get("x-gateway") != Some(&"edgion".to_string()) {
-                                        errors.push(format!(
-                                            "X-Gateway: expected edgion, got {:?}",
-                                            echo.headers.get("x-gateway")
-                                        ));
-                                    }
-
-                                    //  Headers set
-                                    if let Some(path) = echo.headers.get("x-original-path") {
-                                        if !path.contains("/combined") {
-                                            errors.push(format!("X-Original-Path: wrong value {}", path));
-                                        }
-                                    } else {
-                                        errors.push("X-Original-Path not set".to_string());
-                                    }
-
-                                    //  Headers remove
-                                    if echo.headers.contains_key("x-debug") {
-                                        errors.push("X-Debug not removed".to_string());
-                                    }
-                                    if echo.headers.contains_key("x-internal-token") {
-                                        errors.push("X-Internal-Token not removed".to_string());
-                                    }
-
-                                    if errors.is_empty() {
-                                        TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            format!(
-                                                "Host={:?}, X-Gateway={:?}",
-                                                echo.headers.get("host"),
-                                                echo.headers.get("x-gateway")
-                                            ),
-                                        )
-                                    } else {
-                                        TestResult::failed(start.elapsed(), errors.join("; "))
-                                    }
-                                }
-                                Err(e) => TestResult::failed(start.elapsed(), format!("Read error: {}", e)),
-                            }
+                match request.send().await {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            return TestResult::failed(start.elapsed(), format!("HTTP {}", response.status()));
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+
+                        match response.text().await {
+                            Ok(text) => {
+                                let echo = parse_echo_response(&text);
+                                let mut errors = Vec::new();
+
+                                //  Host
+                                if let Some(host) = echo.headers.get("host") {
+                                    if host != "backend.internal.svc" {
+                                        errors.push(format!("Host: expected backend.internal.svc, got {}", host));
+                                    }
+                                } else {
+                                    errors.push("Host header not found".to_string());
+                                }
+
+                                //  Headers add
+                                if echo.headers.get("x-gateway") != Some(&"edgion".to_string()) {
+                                    errors.push(format!(
+                                        "X-Gateway: expected edgion, got {:?}",
+                                        echo.headers.get("x-gateway")
+                                    ));
+                                }
+
+                                //  Headers set
+                                if let Some(path) = echo.headers.get("x-original-path") {
+                                    if !path.contains("/combined") {
+                                        errors.push(format!("X-Original-Path: wrong value {}", path));
+                                    }
+                                } else {
+                                    errors.push("X-Original-Path not set".to_string());
+                                }
+
+                                //  Headers remove
+                                if echo.headers.contains_key("x-debug") {
+                                    errors.push("X-Debug not removed".to_string());
+                                }
+                                if echo.headers.contains_key("x-internal-token") {
+                                    errors.push("X-Internal-Token not removed".to_string());
+                                }
+
+                                if errors.is_empty() {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        format!(
+                                            "Host={:?}, X-Gateway={:?}",
+                                            echo.headers.get("host"),
+                                            echo.headers.get("x-gateway")
+                                        ),
+                                    )
+                                } else {
+                                    TestResult::failed(start.elapsed(), errors.join("; "))
+                                }
+                            }
+                            Err(e) => TestResult::failed(start.elapsed(), format!("Read error: {}", e)),
+                        }
                     }
-                })
-            },
-        )
+                    Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                }
+            })
+        })
     }
 
     // ==================== 6. Path  ====================
@@ -355,7 +351,7 @@ impl ProxyRewriteTestSuite {
                                     let echo = parse_echo_response(&text);
                                     let mut errors = Vec::new();
 
-                                    //  URI  $uid 
+                                    //  URI  $uid
                                     if echo.path != "/user-service/789/profile" {
                                         errors.push(format!(
                                             "URI: expected /user-service/789/profile, got {}",
@@ -363,7 +359,7 @@ impl ProxyRewriteTestSuite {
                                         ));
                                     }
 
-                                    //  Header  $uid 
+                                    //  Header  $uid
                                     if echo.headers.get("x-user-id") != Some(&"789".to_string()) {
                                         errors.push(format!(
                                             "X-User-Id: expected 789, got {:?}",
@@ -403,7 +399,7 @@ impl TestSuite for ProxyRewriteTestSuite {
             Self::test_uri_arg(),
             Self::test_regex_uri(),
             // combined  path_param ：
-            // - combined: test_server  Headers， Headers 
+            // - combined: test_server  Headers， Headers
             // - path_param: （:uid ）
         ]
     }

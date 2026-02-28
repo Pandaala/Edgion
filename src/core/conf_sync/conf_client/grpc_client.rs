@@ -225,8 +225,7 @@ impl ConfigSyncClient {
             effective_kinds = ?effective_kinds,
             "Starting watch for supported resource kinds"
         );
-        self.config_client
-            .set_required_kinds_for_readiness(&effective_kinds);
+        self.config_client.set_required_kinds_for_readiness(&effective_kinds);
 
         for kind_name in &effective_kinds {
             // Resolve string -> ResourceKind via exhaustive enum

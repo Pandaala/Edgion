@@ -133,7 +133,8 @@ impl PortConflictTestSuite {
                             if is_k8s_mode() {
                                 return TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "K8s admission rejected internal duplicate listener manifest; treated as expected".to_string(),
+                                    "K8s admission rejected internal duplicate listener manifest; treated as expected"
+                                        .to_string(),
                                 );
                             }
                             return TestResult::failed(

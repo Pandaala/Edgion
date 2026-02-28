@@ -108,9 +108,8 @@ impl RealIpTestSuite {
                                         );
                                     }
 
-                                    let appended = xff
-                                        .strip_prefix(&(expected_prefix.to_string() + ", "))
-                                        .unwrap_or("");
+                                    let appended =
+                                        xff.strip_prefix(&(expected_prefix.to_string() + ", ")).unwrap_or("");
                                     if appended.is_empty() || !Self::is_valid_ip(appended) {
                                         return TestResult::failed(
                                             start.elapsed(),
@@ -219,7 +218,10 @@ impl RealIpTestSuite {
                                     if Self::is_local_target(&ctx) && real_ip != "127.0.0.1" && real_ip != "::1" {
                                         return TestResult::failed(
                                             start.elapsed(),
-                                            format!("Expected local loopback IP for direct local run, got '{}'", real_ip),
+                                            format!(
+                                                "Expected local loopback IP for direct local run, got '{}'",
+                                                real_ip
+                                            ),
                                         );
                                     }
 

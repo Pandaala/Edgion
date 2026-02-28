@@ -221,8 +221,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
 }
 
 fn display_header_name(name: &str) -> String {
-    name
-        .split('-')
+    name.split('-')
         .map(|part| {
             let mut chars = part.chars();
             match chars.next() {

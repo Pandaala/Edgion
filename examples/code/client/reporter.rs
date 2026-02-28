@@ -7,7 +7,7 @@ use console::style;
 use serde::Serialize;
 use std::time::Duration;
 
-/// 
+///
 pub struct ConsoleReporter;
 
 impl ConsoleReporter {
@@ -74,7 +74,7 @@ impl ConsoleReporter {
     }
 }
 
-/// JSON 
+/// JSON
 pub struct JsonReporter;
 
 impl JsonReporter {
