@@ -27,6 +27,7 @@ set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${SCRIPT_DIR}"
+CONF_ENV_FILE="${CONF_ENV_FILE:-${PROJECT_DIR}/examples/k8stest/scripts/conf.env}"
 
 # Binaries to build
 BINARIES="gateway controller"
@@ -49,7 +50,19 @@ get_arch_info() {
     esac
 }
 
-# Auto-detect version from git tag
+# Load defaults from conf.env if present.
+# Explicit env vars passed by caller still take precedence.
+if [[ -f "${CONF_ENV_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${CONF_ENV_FILE}"
+fi
+
+# Respect IMAGE_VERSION from conf/env as VERSION default.
+if [[ -z "${VERSION:-}" ]] && [[ -n "${IMAGE_VERSION:-}" ]]; then
+    VERSION="${IMAGE_VERSION}"
+fi
+
+# Auto-detect version from git tag when VERSION is still unset.
 if [[ -z "${VERSION:-}" ]]; then
     if git rev-parse --git-dir > /dev/null 2>&1; then
         GIT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
@@ -117,9 +130,10 @@ Options:
     -h, --help          Show this help message
 
 Environment Variables:
+    CONF_ENV_FILE       Path to env config file (default: examples/k8stest/scripts/conf.env)
     IMAGE_REGISTRY      Docker registry (default: docker.io)
     IMAGE_NAMESPACE     Image namespace (default: pandaala)
-    VERSION             Image version (overrides git tag detection)
+    VERSION             Image version (overrides conf.env and git tag detection)
     RUST_VERSION        Rust version for builder (default: 1.87)
     FEATURES            Cargo features (default: default)
 
