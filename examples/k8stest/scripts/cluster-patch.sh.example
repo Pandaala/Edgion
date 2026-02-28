@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Cluster-specific patches for k8s integration tests.
+#
+# Copy this file to cluster-patch.sh and customize it for your cluster.
+# cluster-patch.sh is gitignored and will NOT be committed.
+#
+# This script is automatically called by run_k8s_integration.sh after all
+# standard manifests are applied and before rollout wait begins.
+# It receives the following environment variables:
+#   K8S_DEPLOY_ROOT        - path to kubernetes/ manifest directory
+#   BACKEND_TEST_NAMESPACE - backend test namespace (default: edgion-backend)
+#
+# Use "kubectl patch" with strategic-merge or JSON patches to inject
+# cluster-specific scheduling constraints (tolerations, nodeAffinity, etc.)
+# without modifying the committed YAML files.
+# =============================================================================
+set -euo pipefail
+
+echo "[cluster-patch] Applying cluster-specific patches..."
+
+# --- Example: Patch gateway with custom tolerations + nodeAffinity ---
+# kubectl patch deployment edgion-gateway -n edgion-system --type=strategic -p '
+# {
+#   "spec": {
+#     "template": {
+#       "spec": {
+#         "tolerations": [
+#           {"key": "<TAINT_KEY>", "operator": "Equal", "value": "<TAINT_VALUE>", "effect": "NoSchedule"}
+#         ],
+#         "affinity": {
+#           "nodeAffinity": {
+#             "requiredDuringSchedulingIgnoredDuringExecution": {
+#               "nodeSelectorTerms": [{"matchExpressions": [{"key": "<LABEL_KEY>", "operator": "In", "values": ["<LABEL_VALUE>"]}]}]
+#             }
+#           }
+#         }
+#       }
+#     }
+#   }
+# }'
+
+# --- Example: Batch-patch multiple deployments with shared scheduling ---
+# COMMON_PATCH='
+# {
+#   "spec": {
+#     "template": {
+#       "spec": {
+#         "tolerations": [
+#           {"key": "<TAINT_KEY>", "operator": "Equal", "value": "<TAINT_VALUE>", "effect": "NoSchedule"}
+#         ],
+#         "affinity": {
+#           "nodeAffinity": {
+#             "requiredDuringSchedulingIgnoredDuringExecution": {
+#               "nodeSelectorTerms": [{"matchExpressions": [{"key": "<LABEL_KEY>", "operator": "In", "values": ["<LABEL_VALUE>"]}]}]
+#             }
+#           }
+#         }
+#       }
+#     }
+#   }
+# }'
+#
+# for target in \
+#   "deployment/edgion-controller -n edgion-system" \
+#   "deployment/edgion-test-server -n edgion-test" \
+#   "deployment/edgion-test-server -n edgion-default" \
+#   "deployment/edgion-test-server -n ${BACKEND_TEST_NAMESPACE}" \
+#   "deployment/edgion-test-client -n edgion-test" \
+#   "deployment/lb-multi-test-server -n edgion-default" \
+#   "deployment/edgion-test-openldap -n edgion-test" \
+# ; do
+#   kubectl patch ${target} --type=strategic -p "${COMMON_PATCH}" 2>/dev/null || true
+# done
+
+echo "[cluster-patch] Done."

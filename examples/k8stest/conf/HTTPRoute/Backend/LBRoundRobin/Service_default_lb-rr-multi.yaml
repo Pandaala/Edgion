@@ -9,4 +9,5 @@ spec:
     app: edgion-test-server-multi
   ports:
     - port: 8080
+      targetPort: 30001
       protocol: TCP

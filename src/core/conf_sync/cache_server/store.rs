@@ -294,6 +294,14 @@ mod tests {
                 },
             }
         }
+
+        /// Create a resource whose storage key (`metadata.name`) stays stable,
+        /// while `name` acts as test payload for overwrite assertions.
+        fn with_key_and_value(key: &str, value: &str, namespace: Option<&str>) -> Self {
+            let mut r = Self::new(key, namespace);
+            r.name = value.to_string();
+            r
+        }
     }
 
     fn make_store() -> EventStore<TestResource> {
@@ -439,11 +447,12 @@ mod tests {
         let mut store = make_store();
 
         // Apply the "newer" event first (simulates the scheduler running v2 before v1)
-        let newer = TestResource::new("new-value", Some("default"));
+        // Use the same resource key to verify overwrite semantics on one object.
+        let newer = TestResource::with_key_and_value("test-route", "new-value", Some("default"));
         store.apply_event(EventType::Update, newer.clone(), 10);
 
         // Now attempt to apply a stale event with a lower sync_version
-        let stale = TestResource::new("old-value", Some("default"));
+        let stale = TestResource::with_key_and_value("test-route", "old-value", Some("default"));
         store.apply_event(EventType::Update, stale.clone(), 5);
 
         // The store must reflect the newer state, not the stale one
@@ -474,15 +483,16 @@ mod tests {
         let mut store = make_store();
 
         // Simulate a scenario where v1 arrives first (normal order)
-        let v1 = TestResource::new("state-v1", Some("default"));
+        // Keep the same key across versions so data replacement is exercised.
+        let v1 = TestResource::with_key_and_value("test-route", "state-v1", Some("default"));
         store.apply_event(EventType::Add, v1.clone(), 1);
 
         // v3 arrives next (out of order - scheduler executed it before v2)
-        let v3 = TestResource::new("state-v3", Some("default"));
+        let v3 = TestResource::with_key_and_value("test-route", "state-v3", Some("default"));
         store.apply_event(EventType::Update, v3.clone(), 3);
 
         // v2 arrives last - must be dropped because version 3 is already committed
-        let v2 = TestResource::new("state-v2", Some("default"));
+        let v2 = TestResource::with_key_and_value("test-route", "state-v2", Some("default"));
         store.apply_event(EventType::Update, v2.clone(), 2);
 
         let (snapshot, version) = store.snapshot_owned();

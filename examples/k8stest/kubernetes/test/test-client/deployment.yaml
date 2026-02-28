@@ -22,7 +22,7 @@ spec:
       containers:
       - name: test-client
         image: docker.io/pandaala/edgion-test-client:dev
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         # Keep container running for manual test execution
         command: ["sleep", "infinity"]
         env:

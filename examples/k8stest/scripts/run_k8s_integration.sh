@@ -16,7 +16,7 @@ GENERATE_CERTS_SCRIPT="$COMMON_SCRIPT_DIR/generate_runtime_certs.sh"
 LOCAL_IMAGE_PREPARE_SCRIPT="$ORBSTACK_SCRIPT_DIR/prepare_local_images.sh"
 GENERATED_DIR="${GENERATED_DIR:-$PROJECT_ROOT/examples/k8stest/generated}"
 GENERATED_SECRET_DIR="${GENERATED_DIR}/secrets"
-IMAGE_CONFIG_FILE="${IMAGE_CONFIG_FILE:-$SCRIPT_DIR/config/images.env}"
+IMAGE_CONFIG_FILE="${IMAGE_CONFIG_FILE:-$SCRIPT_DIR/conf.env}"
 STATE_NAMESPACE="${STATE_NAMESPACE:-edgion-system}"
 STATE_CONFIGMAP_NAME="${STATE_CONFIGMAP_NAME:-edgion-k8s-integration-state}"
 
@@ -50,7 +50,9 @@ FILTERED_MODE=false
 SELECTED_COUNT=0
 EXECUTED_COUNT=0
 MISSING_COUNT=0
+FAIL_COUNT=0
 MISSING_SUITES=()
+FAILED_SUITES=()
 
 SLOW_TESTS=(
   "HTTPRoute_Backend_Timeout"
@@ -82,7 +84,7 @@ Options:
   --cluster-mode <auto|local|remote>
                                  Cluster mode for image compatibility checks
                                  (default: ${CLUSTER_MODE})
-  --image-config <path>          Image config file (default: ${IMAGE_CONFIG_FILE})
+  --image-config <path>          Image config file (default: scripts/conf.env)
   --prepare-local-images         Build local test images and auto-set TEST_*_IMAGE
   --rebuild-local-images         With --prepare-local-images, force rebuild
   --full-test                    Include slow tests (Timeout/AllEndpointStatus/LdapAuth)
@@ -270,8 +272,17 @@ load_image_config_file() {
   local f="$1"
   [[ -f "${f}" ]] || return 0
 
+  # Preserve auto-detected IMAGE_ARCH; only let the config file override
+  # registry/namespace/version and per-image vars that are still empty.
+  local _saved_arch="${IMAGE_ARCH:-}"
+
   # shellcheck disable=SC1090
   source "${f}"
+
+  # Restore auto-detected arch when the config file would downgrade it.
+  if [[ -n "${_saved_arch}" ]]; then
+    IMAGE_ARCH="${_saved_arch}"
+  fi
 
   IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
   IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
@@ -347,13 +358,41 @@ check_image_arch_compat() {
   return 0
 }
 
+auto_detect_image_arch() {
+  local primary
+  primary="$(get_cluster_arches | head -n1)"
+  case "${primary}" in
+    arm64|aarch64) echo "arm64" ;;
+    amd64|x86_64)  echo "amd64" ;;
+    *)             echo "amd64" ;;
+  esac
+}
+
 print_cluster_and_image_context() {
   local mode arches primary
-  load_image_config_file "${IMAGE_CONFIG_FILE}"
   mode="$(detect_cluster_mode)"
-  prepare_local_images_if_needed "${mode}"
   arches="$(get_cluster_arches | xargs)"
   primary="$(get_cluster_arches | head -n1)"
+
+  # Auto-detect IMAGE_ARCH from cluster nodes when not explicitly set.
+  if [[ -z "${IMAGE_ARCH}" ]]; then
+    IMAGE_ARCH="$(auto_detect_image_arch)"
+    echo "Auto-detected IMAGE_ARCH=${IMAGE_ARCH} from cluster node arch (${primary})"
+  fi
+
+  load_image_config_file "${IMAGE_CONFIG_FILE}"
+
+  if [[ "${mode}" == "local" ]]; then
+    # Local mode: auto-trigger local image build if the script exists and
+    # no images were explicitly overridden.
+    if [[ "${PREPARE_LOCAL_IMAGES}" != "true" ]] && [[ -x "${LOCAL_IMAGE_PREPARE_SCRIPT}" ]] \
+       && [[ -z "${TEST_CLIENT_IMAGE}" || -z "${GATEWAY_IMAGE}" ]]; then
+      echo "Local cluster detected - auto-preparing local images..."
+      PREPARE_LOCAL_IMAGES=true
+    fi
+  fi
+
+  prepare_local_images_if_needed "${mode}"
 
   echo "Cluster mode: ${mode} (configured: ${CLUSTER_MODE})"
   echo "Cluster node arch(es): ${arches}"
@@ -369,8 +408,8 @@ print_cluster_and_image_context() {
 
   if [[ "${mode}" == "remote" && "${SKIP_DEPLOY}" == "false" ]]; then
     if [[ -z "${CONTROLLER_IMAGE}" || -z "${GATEWAY_IMAGE}" || -z "${TEST_CLIENT_IMAGE}" || -z "${TEST_SERVER_IMAGE}" ]]; then
-      echo "[WARN] remote mode detected without explicit test image overrides."
-      echo "[WARN] recommend setting CONTROLLER_IMAGE/GATEWAY_IMAGE/TEST_CLIENT_IMAGE/TEST_SERVER_IMAGE to pushed tags."
+      echo "[WARN] remote mode detected but some images are not set."
+      echo "[WARN] IMAGE_ARCH=${IMAGE_ARCH} should auto-resolve them; check images-remote.env or set explicitly."
     fi
   fi
 }
@@ -520,6 +559,26 @@ restart_secret_dependent_workloads() {
     kubectl rollout restart deployment/edgion-test-server -n edgion-test
     kubectl rollout status deployment/edgion-test-server -n edgion-test --timeout=300s
   fi
+}
+
+# Work around init-phase race: Secret ResourceProcessor may finish after
+# EdgionPlugins / EdgionTls / Gateway processors, so their resolved_* fields
+# are empty. Annotating every Secret triggers a Watch UPDATE event which
+# invokes SecretHandler.on_change -> cascading requeue for dependents.
+force_sync_secrets() {
+  local ts
+  ts="$(date +%s)"
+  echo "Force-syncing Secrets to fix init-phase ordering..."
+  local ns secret_list
+  for ns in edgion-default edgion-test; do
+    secret_list="$(kubectl get secrets -n "${ns}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)"
+    for s in ${secret_list}; do
+      kubectl annotate secret -n "${ns}" "${s}" \
+        edgion.io/force-sync="${ts}" --overwrite >/dev/null 2>&1 || true
+    done
+  done
+  echo "Waiting for controller to reprocess dependents..."
+  sleep 10
 }
 
 get_server_id() {
@@ -718,7 +777,10 @@ run_all_selected_suites() {
       local_start_from=""
     fi
 
-    run_one "${suite_dir}" "${resource}" "${item}"
+    if ! run_one "${suite_dir}" "${resource}" "${item}"; then
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      FAILED_SUITES+=("${suite_key}")
+    fi
   done
 }
 
@@ -754,11 +816,20 @@ if [[ "${SKIP_PREPARE}" == "false" ]]; then
   override_suite_test_server_images
   restart_secret_dependent_workloads
 
+  CLUSTER_PATCH_SCRIPT="${SCRIPT_DIR}/cluster-patch.sh"
+  if [[ -x "${CLUSTER_PATCH_SCRIPT}" ]]; then
+    echo "Running cluster-specific patches..."
+    BACKEND_TEST_NAMESPACE="${BACKEND_TEST_NAMESPACE}" \
+      K8S_DEPLOY_ROOT="${K8S_DEPLOY_ROOT}" \
+      bash "${CLUSTER_PATCH_SCRIPT}"
+  fi
+
   echo "Restarting gateway after full apply..."
   kubectl rollout restart deployment/edgion-gateway -n edgion-system
   kubectl rollout status deployment/edgion-gateway -n edgion-system --timeout=300s
   wait_gateway_stable 300
-  sleep 5
+
+  force_sync_secrets
 
   write_prepare_state_marker "${PREPARE_CONF_HASH}"
   echo "Prepare phase finished."
@@ -827,4 +898,20 @@ if [[ "${MISSING_COUNT}" -gt 0 ]]; then
   echo "Warning: skipped ${MISSING_COUNT} suites due to missing k8s conf dirs."
 fi
 
-echo "K8s integration run finished. Cluster state is kept by default."
+if [[ "${FAIL_COUNT}" -gt 0 ]]; then
+  echo
+  echo "========================================="
+  echo "FAILED ${FAIL_COUNT}/${EXECUTED_COUNT} suites:"
+  for s in "${FAILED_SUITES[@]}"; do
+    echo "  - ${s}"
+  done
+  echo "========================================="
+fi
+
+echo
+echo "K8s integration run finished. Executed=${EXECUTED_COUNT} Passed=$((EXECUTED_COUNT - FAIL_COUNT)) Failed=${FAIL_COUNT}"
+echo "Cluster state is kept by default."
+
+if [[ "${FAIL_COUNT}" -gt 0 ]]; then
+  exit 1
+fi

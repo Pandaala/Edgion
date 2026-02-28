@@ -198,6 +198,23 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .unwrap_or_else(|| "default".to_string());
         let gateway_name = gateway.metadata.name.clone().unwrap_or_default();
 
+        // Pre-compute per-listener info while gateway is only immutably borrowed.
+        let listener_infos: Vec<(String, Vec<_>, i32)> = gateway
+            .spec
+            .listeners
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|l| {
+                let route_count = count_attached_routes_for_listener_by_key(&gateway_ns, &gateway_name, &l.name);
+                (
+                    l.name.clone(),
+                    get_supported_kinds_for_protocol(&l.protocol),
+                    route_count,
+                )
+            })
+            .collect();
+
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
 
@@ -255,21 +272,19 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let ready = condition_true(condition_types::READY, "Ready", "Gateway is ready", generation);
         update_gateway_condition(conditions, ready);
 
-        // Update listener statuses
-        if let Some(listeners) = &gateway.spec.listeners {
+        // Update listener statuses using pre-computed info
+        if !listener_infos.is_empty() {
             let listener_statuses = status.listeners.get_or_insert_with(Vec::new);
 
-            for listener in listeners {
-                // Find or create listener status
-                let listener_status = listener_statuses.iter_mut().find(|ls| ls.name == listener.name);
+            for (name, supported_kinds, route_count) in listener_infos {
+                let listener_status = listener_statuses.iter_mut().find(|ls| ls.name == name);
 
                 let ls = if let Some(ls) = listener_status {
                     ls
                 } else {
-                    // Create new listener status
                     let new_ls = ListenerStatus {
-                        name: listener.name.clone(),
-                        supported_kinds: get_supported_kinds_for_protocol(&listener.protocol),
+                        name,
+                        supported_kinds,
                         attached_routes: 0,
                         conditions: Vec::new(),
                     };
@@ -277,11 +292,10 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     listener_statuses.last_mut().unwrap()
                 };
 
-                ls.attached_routes =
-                    count_attached_routes_for_listener_by_key(&gateway_ns, &gateway_name, &listener.name);
+                ls.attached_routes = route_count;
 
                 // Set Conflicted condition based on ListenerPortManager
-                let is_conflicted = if let Some((reason, _)) = conflicts.get(&listener.name) {
+                let is_conflicted = if let Some((reason, _)) = conflicts.get(&ls.name) {
                     let cond = condition_true(
                         condition_types::CONFLICTED,
                         condition_reasons::LISTENER_CONFLICT,

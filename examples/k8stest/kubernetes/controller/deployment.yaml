@@ -23,7 +23,7 @@ spec:
       containers:
       - name: edgion-controller
         image: docker.io/pandaala/edgion-controller:dev
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command:
         - "/usr/local/bin/edgion-controller"
         args:

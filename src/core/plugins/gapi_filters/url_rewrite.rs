@@ -24,7 +24,7 @@ impl URLRewriteFilter {
         };
 
         let original_path = session.get_path().to_string();
-        let query = session.get_query();
+        let query = session.get_query().map(|q| q.to_string());
 
         let rewritten_path = match path_modifier.modifier_type {
             HTTPPathModifierType::ReplaceFullPath => path_modifier
@@ -63,7 +63,7 @@ impl URLRewriteFilter {
             }
         };
 
-        let final_uri = match query {
+        let final_uri = match &query {
             Some(q) if !q.is_empty() => format!("{}?{}", rewritten_path, q),
             _ => rewritten_path.clone(),
         };

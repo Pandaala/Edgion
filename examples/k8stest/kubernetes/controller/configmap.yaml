@@ -27,7 +27,7 @@ data:
     [conf_center]
     type = "kubernetes"
     gateway_class = "public-gateway"
-    watch_namespaces = ["edgion-system", "edgion-default", "edgion-test"]
+    watch_namespaces = ["edgion-system", "edgion-default", "edgion-test", "edgion-backend"]
     endpoint_mode = "both"
 
     [conf_center.leader_election]
@@ -49,7 +49,7 @@ data:
     remove_managed_fields = true
 
     [conf_sync]
-    no_sync_kinds = ["ReferenceGrant", "Secret", "EdgionAcme"]
+    no_sync_kinds = ["ReferenceGrant", "Secret"]
     gateway_classes_capacity = 50
     gateways_capacity = 200
     edgion_gateway_configs_capacity = 50
