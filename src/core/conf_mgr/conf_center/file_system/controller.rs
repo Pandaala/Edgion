@@ -47,6 +47,8 @@ use crate::core::conf_mgr::sync_runtime::resource_processor::{
     SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 
+const DEFAULT_CONTROLLER_NAME: &str = "edgion.io/gateway-controller";
+
 /// FileSystemController - Top-level controller for FileSystem mode
 pub struct FileSystemController {
     conf_dir: PathBuf,
@@ -138,7 +140,7 @@ impl FileSystemController {
         handles.push(
             spawn::<HTTPRoute, _>(
                 "HTTPRoute",
-                HttpRouteHandler::new(),
+                HttpRouteHandler::new(DEFAULT_CONTROLLER_NAME.to_string()),
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
@@ -148,7 +150,7 @@ impl FileSystemController {
         handles.push(
             spawn::<GRPCRoute, _>(
                 "GRPCRoute",
-                GrpcRouteHandler::new(),
+                GrpcRouteHandler::new(DEFAULT_CONTROLLER_NAME.to_string()),
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
@@ -158,7 +160,7 @@ impl FileSystemController {
         handles.push(
             spawn::<TCPRoute, _>(
                 "TCPRoute",
-                TcpRouteHandler::new(),
+                TcpRouteHandler::new(DEFAULT_CONTROLLER_NAME.to_string()),
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
@@ -168,7 +170,7 @@ impl FileSystemController {
         handles.push(
             spawn::<UDPRoute, _>(
                 "UDPRoute",
-                UdpRouteHandler::new(),
+                UdpRouteHandler::new(DEFAULT_CONTROLLER_NAME.to_string()),
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
@@ -178,7 +180,7 @@ impl FileSystemController {
         handles.push(
             spawn::<TLSRoute, _>(
                 "TLSRoute",
-                TlsRouteHandler::new(),
+                TlsRouteHandler::new(DEFAULT_CONTROLLER_NAME.to_string()),
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
@@ -249,7 +251,7 @@ impl FileSystemController {
         handles.push(
             spawn::<EdgionTls, _>(
                 "EdgionTls",
-                EdgionTlsHandler::new(),
+                EdgionTlsHandler::new(DEFAULT_CONTROLLER_NAME.to_string()),
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
@@ -259,7 +261,7 @@ impl FileSystemController {
         handles.push(
             spawn::<BackendTLSPolicy, _>(
                 "BackendTLSPolicy",
-                BackendTlsPolicyHandler::new(),
+                BackendTlsPolicyHandler::new(DEFAULT_CONTROLLER_NAME.to_string()),
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
@@ -345,7 +347,7 @@ impl FileSystemController {
         handles.push(
             spawn::<GatewayClass, _>(
                 "GatewayClass",
-                GatewayClassHandler::new(),
+                GatewayClassHandler::new(DEFAULT_CONTROLLER_NAME.to_string()),
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),

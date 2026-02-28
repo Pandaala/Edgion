@@ -99,6 +99,7 @@ buffer_size = 10000
 # [conf_center]
 # type = "kubernetes"
 # gateway_class = "edgion"              # Required: GatewayClass name to manage
+# controller_name = "edgion.io/gateway-controller"  # Required: Gateway API controllerName
 # watch_namespaces = []                 # Empty = all namespaces, or ["ns1", "ns2"]
 # label_selector = ""                   # Optional: filter resources by label
 #

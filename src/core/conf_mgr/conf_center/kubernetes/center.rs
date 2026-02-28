@@ -186,6 +186,7 @@ impl KubernetesCenter {
             component = "kubernetes_center",
             mode = "kubernetes",
             gateway_class = %config.gateway_class(),
+            controller_name = %config.controller_name(),
             namespaces = ?config.watch_namespaces(),
             metadata_filter_enabled = true,
             blocked_annotations_count = config.metadata_filter().blocked_annotations.len(),
@@ -196,6 +197,7 @@ impl KubernetesCenter {
         KubernetesController::with_metadata_filter(
             client.clone(),
             config.gateway_class.clone(),
+            config.controller_name.clone(),
             config.watch_namespaces.clone(),
             config.label_selector.clone(),
             config.metadata_filter.clone(),

@@ -10,13 +10,13 @@
 use std::collections::HashSet;
 
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    accepted_condition, condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
-    get_listener_port_manager, get_secret, make_port_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    condition_false, condition_reasons, condition_true, condition_types, format_secret_key, get_listener_port_manager,
+    get_secret, make_port_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::{GRPCRoute, Gateway, HTTPRoute, TCPRoute, TLSRoute, UDPRoute};
 use crate::types::resources::common::ParentReference;
-use crate::types::resources::gateway::{GatewayStatus, ListenerStatus, RouteGroupKind};
+use crate::types::resources::gateway::{GatewayStatus, GatewayStatusAddress, ListenerStatus, RouteGroupKind};
 use crate::types::ResourceKind;
 
 /// Gateway handler
@@ -215,8 +215,33 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             })
             .collect();
 
+        let derived_addresses: Vec<GatewayStatusAddress> = gateway
+            .spec
+            .addresses
+            .as_ref()
+            .filter(|addresses| !addresses.is_empty())
+            .map(|spec_addresses| {
+                spec_addresses
+                    .iter()
+                    .map(|address| GatewayStatusAddress {
+                        address_type: address.address_type.clone(),
+                        value: address.value.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                vec![GatewayStatusAddress {
+                    address_type: Some("IPAddress".to_string()),
+                    value: "0.0.0.0".to_string(),
+                }]
+            });
+
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
+
+        if status.addresses.as_ref().map_or(true, |addresses| addresses.is_empty()) {
+            status.addresses = Some(derived_addresses);
+        }
 
         // Initialize conditions if not present
         let conditions = status.conditions.get_or_insert_with(Vec::new);
@@ -232,7 +257,12 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Set Gateway-level conditions
         // Accepted: True if no validation errors
         if validation_errors.is_empty() {
-            let cond = accepted_condition(generation);
+            let cond = condition_true(
+                condition_types::ACCEPTED,
+                condition_reasons::ACCEPTED,
+                "Gateway accepted",
+                generation,
+            );
             update_gateway_condition(conditions, cond);
         } else {
             let cond = condition_false(
@@ -445,7 +475,12 @@ fn update_listener_conditions(
 ) {
     // Accepted: True if no validation errors (conflict doesn't affect Accepted)
     if validation_errors.is_empty() {
-        let cond = accepted_condition(generation);
+        let cond = condition_true(
+            condition_types::ACCEPTED,
+            condition_reasons::ACCEPTED,
+            "Listener accepted",
+            generation,
+        );
         update_gateway_condition(&mut ls.conditions, cond);
     } else {
         let cond = condition_false(

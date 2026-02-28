@@ -15,6 +15,8 @@ admin_listen = "0.0.0.0:5800"
 type = "kubernetes"
 # Gateway class name that this controller will handle
 gateway_class = "public-gateway"
+# Gateway API controllerName used in status and GatewayClass matching
+controller_name = "edgion.io/gateway-controller"
 # Watch all namespaces (empty array means all)
 watch_namespaces = []
 # Optional: label_selector = "app.kubernetes.io/managed-by=edgion"

@@ -181,6 +181,7 @@ where
 pub struct KubernetesController {
     client: Client,
     gateway_class_name: String,
+    controller_name: String,
     watch_mode: NamespaceWatchMode,
     label_selector: Option<String>,
     /// Optional metadata filter configuration for reducing resource memory usage
@@ -193,6 +194,7 @@ impl KubernetesController {
     /// Create a new KubernetesController
     pub async fn new(
         gateway_class_name: String,
+        controller_name: String,
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
         endpoint_mode: EndpointMode,
@@ -201,6 +203,7 @@ impl KubernetesController {
         Self::with_metadata_filter(
             client,
             gateway_class_name,
+            controller_name,
             watch_namespaces,
             label_selector,
             MetadataFilterConfig::default(),
@@ -214,6 +217,7 @@ impl KubernetesController {
     pub fn with_metadata_filter(
         client: Client,
         gateway_class_name: String,
+        controller_name: String,
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
         metadata_filter: MetadataFilterConfig,
@@ -226,6 +230,7 @@ impl KubernetesController {
             watch_mode = ?watch_mode,
             label_selector = ?label_selector,
             gateway_class_name = %gateway_class_name,
+            controller_name = %controller_name,
             metadata_filter_enabled = true,
             endpoint_mode = ?endpoint_mode,
             "Creating Kubernetes controller"
@@ -234,6 +239,7 @@ impl KubernetesController {
         Ok(Self {
             client,
             gateway_class_name,
+            controller_name,
             watch_mode,
             label_selector,
             metadata_filter: Some(metadata_filter),
@@ -294,11 +300,36 @@ impl KubernetesController {
 
         // ==================== Namespaced Resources ====================
         // Route resources
-        h.push(spawn::<HTTPRoute, _>(self, "HTTPRoute", HttpRouteHandler::new(), &ctx));
-        h.push(spawn::<GRPCRoute, _>(self, "GRPCRoute", GrpcRouteHandler::new(), &ctx));
-        h.push(spawn::<TCPRoute, _>(self, "TCPRoute", TcpRouteHandler::new(), &ctx));
-        h.push(spawn::<UDPRoute, _>(self, "UDPRoute", UdpRouteHandler::new(), &ctx));
-        h.push(spawn::<TLSRoute, _>(self, "TLSRoute", TlsRouteHandler::new(), &ctx));
+        h.push(spawn::<HTTPRoute, _>(
+            self,
+            "HTTPRoute",
+            HttpRouteHandler::new(self.controller_name.clone()),
+            &ctx,
+        ));
+        h.push(spawn::<GRPCRoute, _>(
+            self,
+            "GRPCRoute",
+            GrpcRouteHandler::new(self.controller_name.clone()),
+            &ctx,
+        ));
+        h.push(spawn::<TCPRoute, _>(
+            self,
+            "TCPRoute",
+            TcpRouteHandler::new(self.controller_name.clone()),
+            &ctx,
+        ));
+        h.push(spawn::<UDPRoute, _>(
+            self,
+            "UDPRoute",
+            UdpRouteHandler::new(self.controller_name.clone()),
+            &ctx,
+        ));
+        h.push(spawn::<TLSRoute, _>(
+            self,
+            "TLSRoute",
+            TlsRouteHandler::new(self.controller_name.clone()),
+            &ctx,
+        ));
 
         // Backend resources
         h.push(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
@@ -334,11 +365,16 @@ impl KubernetesController {
 
         // TLS related (special processing)
         h.push(spawn::<Secret, _>(self, "Secret", SecretHandler::new(), &ctx));
-        h.push(spawn::<EdgionTls, _>(self, "EdgionTls", EdgionTlsHandler::new(), &ctx));
+        h.push(spawn::<EdgionTls, _>(
+            self,
+            "EdgionTls",
+            EdgionTlsHandler::new(self.controller_name.clone()),
+            &ctx,
+        ));
         h.push(spawn::<BackendTLSPolicy, _>(
             self,
             "BackendTLSPolicy",
-            BackendTlsPolicyHandler::new(),
+            BackendTlsPolicyHandler::new(self.controller_name.clone()),
             &ctx,
         ));
 
@@ -389,7 +425,7 @@ impl KubernetesController {
         h.push(spawn_cluster::<GatewayClass, _>(
             self,
             "GatewayClass",
-            GatewayClassHandler::new(),
+            GatewayClassHandler::new(self.controller_name.clone()),
             &ctx,
         ));
         h.push(spawn_cluster::<EdgionGatewayConfig, _>(

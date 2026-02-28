@@ -6,7 +6,7 @@
 //! - Time formatting
 
 use crate::types::resources::common::Condition;
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 
 /// Standard Gateway API condition types
 pub mod condition_types {
@@ -53,7 +53,7 @@ pub mod condition_reasons {
 
 /// Get current time in RFC3339 format
 pub fn now_rfc3339() -> String {
-    Utc::now().to_rfc3339()
+    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
 /// Create a condition with True status
@@ -118,10 +118,15 @@ pub fn update_condition(conditions: &mut Vec<Condition>, new_condition: Conditio
 
 /// Create standard "Accepted: True" condition
 pub fn accepted_condition(observed_generation: Option<i64>) -> Condition {
+    accepted_condition_with_message(observed_generation, "Route accepted")
+}
+
+/// Create standard "Accepted: True" condition with custom message
+pub fn accepted_condition_with_message(observed_generation: Option<i64>, message: impl Into<String>) -> Condition {
     condition_true(
         condition_types::ACCEPTED,
         condition_reasons::ACCEPTED,
-        "Route accepted",
+        message,
         observed_generation,
     )
 }
@@ -199,11 +204,9 @@ mod tests {
     #[test]
     fn test_update_condition_status_change() {
         let mut conditions = vec![condition_true("TestType", "OldReason", "Old message", Some(1))];
+        conditions[0].last_transition_time = "1970-01-01T00:00:00Z".to_string();
 
         let old_time = conditions[0].last_transition_time.clone();
-
-        // Sleep briefly to ensure time difference
-        std::thread::sleep(std::time::Duration::from_millis(10));
 
         // Update with same status - time should NOT change
         let same_status = condition_true("TestType", "NewReason", "New message", Some(2));

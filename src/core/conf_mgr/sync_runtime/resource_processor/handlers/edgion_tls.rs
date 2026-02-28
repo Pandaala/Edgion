@@ -16,9 +16,6 @@ use crate::types::resources::edgion_tls::EdgionTlsStatus;
 use crate::types::resources::http_route::RouteParentStatus;
 use crate::types::ResourceKind;
 
-/// Controller name for status reporting
-const CONTROLLER_NAME: &str = "edgion.io/gateway-controller";
-
 /// EdgionTls handler
 ///
 /// Features:
@@ -27,17 +24,19 @@ const CONTROLLER_NAME: &str = "edgion.io/gateway-controller";
 /// - parse: Parse client_auth.ca_secret_ref -> fill client_auth.ca_secret
 /// - parse: Register Secret references to SecretRefManager
 /// - on_delete: Clear SecretRefManager references
-pub struct EdgionTlsHandler;
+pub struct EdgionTlsHandler {
+    controller_name: String,
+}
 
 impl EdgionTlsHandler {
-    pub fn new() -> Self {
-        Self
+    pub fn new(controller_name: String) -> Self {
+        Self { controller_name }
     }
 }
 
 impl Default for EdgionTlsHandler {
     fn default() -> Self {
-        Self::new()
+        Self::new("edgion.io/gateway-controller".to_string())
     }
 }
 
@@ -176,7 +175,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
                     status.parents.push(RouteParentStatus {
                         parent_ref: parent_ref.clone(),
-                        controller_name: CONTROLLER_NAME.to_string(),
+                        controller_name: self.controller_name.clone(),
                         conditions,
                     });
                 }

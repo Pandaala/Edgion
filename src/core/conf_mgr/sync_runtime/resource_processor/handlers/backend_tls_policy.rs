@@ -14,21 +14,20 @@ use crate::types::resources::backend_tls_policy::{
 use crate::types::resources::common::ParentReference;
 use crate::types::ResourceKind;
 
-/// Controller name for status reporting
-const CONTROLLER_NAME: &str = "edgion.io/gateway-controller";
-
 /// BackendTLSPolicy handler
-pub struct BackendTlsPolicyHandler;
+pub struct BackendTlsPolicyHandler {
+    controller_name: String,
+}
 
 impl BackendTlsPolicyHandler {
-    pub fn new() -> Self {
-        Self
+    pub fn new(controller_name: String) -> Self {
+        Self { controller_name }
     }
 }
 
 impl Default for BackendTlsPolicyHandler {
     fn default() -> Self {
-        Self::new()
+        Self::new("edgion.io/gateway-controller".to_string())
     }
 }
 
@@ -182,7 +181,7 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
         } else {
             status.ancestors.push(PolicyAncestorStatus {
                 ancestor_ref: synthetic_ancestor,
-                controller_name: CONTROLLER_NAME.to_string(),
+                controller_name: self.controller_name.clone(),
                 conditions: Vec::new(),
             });
             &mut status.ancestors.last_mut().expect("just inserted").conditions

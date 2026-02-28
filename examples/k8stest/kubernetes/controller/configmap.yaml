@@ -21,12 +21,13 @@ data:
     log_prefix = "edgion-controller"
     log_level = "info"
     json_format = true
-    console = false
+    console = true
     buffer_size = 10000
 
     [conf_center]
     type = "kubernetes"
     gateway_class = "public-gateway"
+    controller_name = "edgion.io/gateway-controller"
     watch_namespaces = ["edgion-system", "edgion-default", "edgion-test", "edgion-backend"]
     endpoint_mode = "both"
 

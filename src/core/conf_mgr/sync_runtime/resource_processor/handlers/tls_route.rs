@@ -14,15 +14,14 @@ use crate::types::resources::http_route::RouteParentStatus;
 use crate::types::resources::tls_route::TLSRouteStatus;
 use crate::types::ResourceKind;
 
-/// Controller name for status reporting
-const CONTROLLER_NAME: &str = "edgion.io/gateway-controller";
-
 /// TLSRoute handler
-pub struct TlsRouteHandler;
+pub struct TlsRouteHandler {
+    controller_name: String,
+}
 
 impl TlsRouteHandler {
-    pub fn new() -> Self {
-        Self
+    pub fn new(controller_name: String) -> Self {
+        Self { controller_name }
     }
 
     /// Create a CrossNsResourceRef for this route
@@ -62,7 +61,7 @@ impl TlsRouteHandler {
 
 impl Default for TlsRouteHandler {
     fn default() -> Self {
-        Self::new()
+        Self::new("edgion.io/gateway-controller".to_string())
     }
 }
 
@@ -160,7 +159,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
 
                     status.parents.push(RouteParentStatus {
                         parent_ref: parent_ref.clone(),
-                        controller_name: CONTROLLER_NAME.to_string(),
+                        controller_name: self.controller_name.clone(),
                         conditions,
                     });
                 }
