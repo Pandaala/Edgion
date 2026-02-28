@@ -45,3 +45,28 @@ pub use service::ServiceHandler;
 pub use tcp_route::TcpRouteHandler;
 pub use tls_route::TlsRouteHandler;
 pub use udp_route::UdpRouteHandler;
+
+use crate::core::conf_mgr::sync_runtime::resource_processor::HandlerContext;
+use crate::types::resources::common::ParentReference;
+
+/// Requeue parent Gateways referenced by route parentRefs.
+pub(crate) fn requeue_parent_gateways(
+    parent_refs: Option<&Vec<ParentReference>>,
+    route_ns: &str,
+    ctx: &HandlerContext,
+) {
+    let Some(parent_refs) = parent_refs else {
+        return;
+    };
+
+    for parent_ref in parent_refs {
+        let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+        let parent_kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
+        if parent_group != "gateway.networking.k8s.io" || parent_kind != "Gateway" {
+            continue;
+        }
+
+        let gateway_key = parent_ref.build_parent_key(Some(route_ns));
+        ctx.requeue("Gateway", gateway_key);
+    }
+}

@@ -5,6 +5,7 @@
 use super::super::ref_grant::{
     get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_tcp_route_if_enabled, CrossNsResourceRef,
 };
+use super::requeue_parent_gateways;
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler,
 };
@@ -113,10 +114,18 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         ProcessResult::Continue(route)
     }
 
-    fn on_delete(&self, route: &TCPRoute, _ctx: &HandlerContext) {
+    fn on_change(&self, route: &TCPRoute, ctx: &HandlerContext) {
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
+    }
+
+    fn on_delete(&self, route: &TCPRoute, ctx: &HandlerContext) {
         // Clear cross-namespace references when route is deleted
         let resource_ref = Self::create_resource_ref(route);
         get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
+
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
     }
 
     fn update_status(&self, route: &mut TCPRoute, _ctx: &HandlerContext, validation_errors: &[String]) {

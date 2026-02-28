@@ -9,15 +9,20 @@
 
 use std::collections::HashSet;
 
+use crate::core::cli::config::is_reference_grant_validation_enabled;
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    condition_false, condition_reasons, condition_true, condition_types, format_secret_key, get_listener_port_manager,
-    get_secret, make_port_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
+    get_global_reference_grant_store, get_listener_port_manager, get_secret, make_port_key, HandlerContext,
+    ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::{GRPCRoute, Gateway, HTTPRoute, TCPRoute, TLSRoute, UDPRoute};
 use crate::types::resources::common::ParentReference;
-use crate::types::resources::gateway::{GatewayStatus, GatewayStatusAddress, ListenerStatus, RouteGroupKind};
+use crate::types::resources::gateway::{
+    GatewayStatus, GatewayStatusAddress, Listener as GatewayListener, ListenerStatus, RouteGroupKind,
+};
 use crate::types::ResourceKind;
+use k8s_openapi::api::core::v1::Service;
 
 /// Gateway handler
 ///
@@ -33,6 +38,13 @@ pub struct GatewayHandler {
     /// If Some, only process Gateways with matching gatewayClassName
     /// If None, process all Gateways (used by FileSystem mode)
     gateway_class_name: Option<String>,
+}
+
+struct ListenerInfo {
+    name: String,
+    supported_kinds: Vec<RouteGroupKind>,
+    route_count: i32,
+    resolved_refs_errors: Vec<String>,
 }
 
 impl GatewayHandler {
@@ -199,7 +211,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let gateway_name = gateway.metadata.name.clone().unwrap_or_default();
 
         // Pre-compute per-listener info while gateway is only immutably borrowed.
-        let listener_infos: Vec<(String, Vec<_>, i32)> = gateway
+        let listener_infos: Vec<ListenerInfo> = gateway
             .spec
             .listeners
             .as_deref()
@@ -207,41 +219,25 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .iter()
             .map(|l| {
                 let route_count = count_attached_routes_for_listener_by_key(&gateway_ns, &gateway_name, &l.name);
-                (
-                    l.name.clone(),
-                    get_supported_kinds_for_protocol(&l.protocol),
+                let (supported_kinds, mut kind_errors) = compute_supported_kinds(l);
+                let mut resolved_refs_errors = validate_listener_resolved_refs(gateway, l);
+                resolved_refs_errors.append(&mut kind_errors);
+
+                ListenerInfo {
+                    name: l.name.clone(),
+                    supported_kinds,
                     route_count,
-                )
+                    resolved_refs_errors,
+                }
             })
             .collect();
 
-        let derived_addresses: Vec<GatewayStatusAddress> = gateway
-            .spec
-            .addresses
-            .as_ref()
-            .filter(|addresses| !addresses.is_empty())
-            .map(|spec_addresses| {
-                spec_addresses
-                    .iter()
-                    .map(|address| GatewayStatusAddress {
-                        address_type: address.address_type.clone(),
-                        value: address.value.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_else(|| {
-                vec![GatewayStatusAddress {
-                    address_type: Some("IPAddress".to_string()),
-                    value: "0.0.0.0".to_string(),
-                }]
-            });
+        let derived_addresses = derive_gateway_addresses(gateway);
 
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
 
-        if status.addresses.as_ref().map_or(true, |addresses| addresses.is_empty()) {
-            status.addresses = Some(derived_addresses);
-        }
+        status.addresses = Some(derived_addresses);
 
         // Initialize conditions if not present
         let conditions = status.conditions.get_or_insert_with(Vec::new);
@@ -306,7 +302,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         if !listener_infos.is_empty() {
             let listener_statuses = status.listeners.get_or_insert_with(Vec::new);
 
-            for (name, supported_kinds, route_count) in listener_infos {
+            for ListenerInfo {
+                name,
+                supported_kinds,
+                route_count,
+                resolved_refs_errors,
+            } in listener_infos
+            {
                 let listener_status = listener_statuses.iter_mut().find(|ls| ls.name == name);
 
                 let ls = if let Some(ls) = listener_status {
@@ -314,7 +316,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 } else {
                     let new_ls = ListenerStatus {
                         name,
-                        supported_kinds,
+                        supported_kinds: supported_kinds.clone(),
                         attached_routes: 0,
                         conditions: Vec::new(),
                     };
@@ -322,6 +324,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     listener_statuses.last_mut().unwrap()
                 };
 
+                ls.supported_kinds = supported_kinds;
                 ls.attached_routes = route_count;
 
                 // Set Conflicted condition based on ListenerPortManager
@@ -346,7 +349,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 };
 
                 // Update other listener conditions (pass conflict status for Programmed/Ready)
-                update_listener_conditions(ls, validation_errors, generation, is_conflicted);
+                update_listener_conditions(ls, validation_errors, generation, is_conflicted, &resolved_refs_errors);
             }
         }
     }
@@ -441,6 +444,52 @@ fn parent_ref_matches_gateway_and_listener(
     }
 }
 
+fn derive_gateway_addresses(gateway: &Gateway) -> Vec<GatewayStatusAddress> {
+    if let Some(spec_addresses) = gateway.spec.addresses.as_ref().filter(|a| !a.is_empty()) {
+        return spec_addresses
+            .iter()
+            .map(|address| GatewayStatusAddress {
+                address_type: address.address_type.clone(),
+                value: address.value.clone(),
+            })
+            .collect();
+    }
+
+    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
+    let gateway_name = gateway.metadata.name.as_deref().unwrap_or("");
+    if !gateway_name.is_empty() {
+        if let Some(cluster_ip) = lookup_service_cluster_ip(gateway_ns, gateway_name) {
+            return vec![GatewayStatusAddress {
+                address_type: Some("IPAddress".to_string()),
+                value: cluster_ip,
+            }];
+        }
+    }
+
+    vec![GatewayStatusAddress {
+        address_type: Some("IPAddress".to_string()),
+        value: "0.0.0.0".to_string(),
+    }]
+}
+
+fn lookup_service_cluster_ip(namespace: &str, name: &str) -> Option<String> {
+    let processor = PROCESSOR_REGISTRY.get("Service")?;
+    let (json, _) = processor.as_watch_obj().list_json().ok()?;
+    let services: Vec<Service> = serde_json::from_str(&json).ok()?;
+
+    services.into_iter().find_map(|svc| {
+        let svc_ns = svc.metadata.namespace.as_deref().unwrap_or("default");
+        let svc_name = svc.metadata.name.as_deref().unwrap_or("");
+        if svc_ns != namespace || svc_name != name {
+            return None;
+        }
+
+        svc.spec
+            .and_then(|spec| spec.cluster_ip)
+            .filter(|cluster_ip| !cluster_ip.is_empty() && cluster_ip != "None")
+    })
+}
+
 /// Update or insert a condition in Gateway conditions list
 fn update_gateway_condition(
     conditions: &mut Vec<crate::types::resources::common::Condition>,
@@ -472,6 +521,7 @@ fn update_listener_conditions(
     validation_errors: &[String],
     generation: Option<i64>,
     is_conflicted: bool,
+    resolved_refs_errors: &[String],
 ) {
     // Accepted: True if no validation errors (conflict doesn't affect Accepted)
     if validation_errors.is_empty() {
@@ -511,14 +561,24 @@ fn update_listener_conditions(
         update_gateway_condition(&mut ls.conditions, programmed);
     }
 
-    // ResolvedRefs: True (TLS secrets resolved in parse phase)
-    let resolved = condition_true(
-        condition_types::RESOLVED_REFS,
-        "ResolvedRefs",
-        "All references resolved",
-        generation,
-    );
-    update_gateway_condition(&mut ls.conditions, resolved);
+    // ResolvedRefs: True only when all references are valid and resolvable.
+    if resolved_refs_errors.is_empty() {
+        let resolved = condition_true(
+            condition_types::RESOLVED_REFS,
+            condition_reasons::RESOLVED_REFS,
+            "All references resolved",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, resolved);
+    } else {
+        let resolved = condition_false(
+            condition_types::RESOLVED_REFS,
+            resolved_refs_condition_reason(resolved_refs_errors),
+            resolved_refs_errors.join("; "),
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, resolved);
+    }
 
     // Ready: False if conflicted (not ready to serve traffic)
     if is_conflicted {
@@ -533,6 +593,117 @@ fn update_listener_conditions(
         let ready = condition_true(condition_types::READY, "Ready", "Listener is ready", generation);
         update_gateway_condition(&mut ls.conditions, ready);
     }
+}
+
+fn resolved_refs_condition_reason(resolved_refs_errors: &[String]) -> &'static str {
+    if resolved_refs_errors
+        .iter()
+        .any(|error| error.contains("not allowed by ReferenceGrant"))
+    {
+        condition_reasons::REF_NOT_PERMITTED
+    } else if resolved_refs_errors.iter().any(|error| error.contains("Route kind")) {
+        condition_reasons::INVALID_ROUTE_KIND
+    } else {
+        condition_reasons::INVALID_KIND
+    }
+}
+
+fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener) -> Vec<String> {
+    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
+    let mut errors = Vec::new();
+
+    let Some(tls) = &listener.tls else {
+        return errors;
+    };
+    let Some(certificate_refs) = &tls.certificate_refs else {
+        return errors;
+    };
+
+    for cert_ref in certificate_refs {
+        let cert_kind = cert_ref.kind.as_deref().unwrap_or("Secret");
+        if cert_kind != "Secret" {
+            errors.push(format!("Invalid certificateRef kind '{}', must be 'Secret'", cert_kind));
+            continue;
+        }
+
+        let cert_group = cert_ref.group.as_deref().unwrap_or("");
+        if !cert_group.is_empty() && cert_group != "core" {
+            errors.push(format!(
+                "Invalid certificateRef group '{}', must be empty/core for Secret",
+                cert_group
+            ));
+            continue;
+        }
+
+        let cert_ns = cert_ref
+            .namespace
+            .as_deref()
+            .or(gateway.metadata.namespace.as_deref())
+            .unwrap_or("default");
+
+        if get_secret(Some(cert_ns), &cert_ref.name).is_none() {
+            errors.push(format!(
+                "Secret '{}/{}' not found for listener '{}'",
+                cert_ns, cert_ref.name, listener.name
+            ));
+        }
+
+        if gateway_ns != cert_ns && is_reference_grant_validation_enabled() {
+            let allowed = get_global_reference_grant_store().check_reference_allowed(
+                gateway_ns,
+                "gateway.networking.k8s.io",
+                "Gateway",
+                cert_ns,
+                "",
+                "Secret",
+                Some(&cert_ref.name),
+            );
+            if !allowed {
+                errors.push(format!(
+                    "Cross-namespace reference to Secret '{}/{}' not allowed by ReferenceGrant",
+                    cert_ns, cert_ref.name
+                ));
+            }
+        }
+    }
+
+    errors
+}
+
+/// Compute supported kinds for a listener, honoring allowedRoutes.kinds when provided.
+fn compute_supported_kinds(listener: &GatewayListener) -> (Vec<RouteGroupKind>, Vec<String>) {
+    let protocol_kinds = get_supported_kinds_for_protocol(&listener.protocol);
+    let requested_kinds = listener
+        .allowed_routes
+        .as_ref()
+        .and_then(|allowed_routes| allowed_routes.kinds.as_ref())
+        .filter(|kinds| !kinds.is_empty());
+
+    let Some(requested_kinds) = requested_kinds else {
+        return (protocol_kinds, Vec::new());
+    };
+
+    let mut supported = Vec::new();
+    let mut errors = Vec::new();
+
+    for requested in requested_kinds {
+        let requested_group = requested.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+        let is_valid_for_protocol = protocol_kinds.iter().any(|protocol_kind| {
+            let protocol_group = protocol_kind.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+            protocol_group == requested_group && protocol_kind.kind == requested.kind
+        });
+
+        if is_valid_for_protocol {
+            supported.push(requested.clone());
+        } else {
+            errors.push(format!(
+                "Route kind '{}/{}' is not supported for protocol '{}'",
+                requested_group, requested.kind, listener.protocol
+            ));
+        }
+    }
+
+    (supported, errors)
 }
 
 /// Get supported route kinds for a protocol
