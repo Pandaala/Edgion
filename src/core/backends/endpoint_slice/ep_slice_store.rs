@@ -1,4 +1,4 @@
-use super::discovery_impl::EndpointSliceLoadBalancer;
+use super::discovery_impl::{EndpointSliceExt, EndpointSliceLoadBalancer};
 use crate::core::lb::ewma::Ewma;
 use crate::core::lb::leastconn::LeastConnection;
 use crate::types::constants::labels::k8s::SERVICE_NAME;
@@ -7,7 +7,7 @@ use futures::FutureExt;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use pingora_load_balancing::selection::{BackendSelection, Consistent, RoundRobin};
 use pingora_load_balancing::Backend;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -357,6 +357,27 @@ where
     /// Get all service_keys that have existing LBs
     pub fn get_existing_service_keys(&self) -> Vec<String> {
         self.service_lbs.load().keys().cloned().collect()
+    }
+
+    /// Get current backend addresses for a service from data layer.
+    pub fn get_backends_for_service(&self, service_key: &str) -> Vec<Backend> {
+        let Some(slices) = self.get_slices_for_service(service_key) else {
+            return Vec::new();
+        };
+        if slices.is_empty() {
+            return Vec::new();
+        }
+
+        let port = slices
+            .iter()
+            .find_map(|s| s.ports.as_ref()?.first()?.port.map(|p| p as u16))
+            .unwrap_or(8080);
+
+        let mut backends = BTreeSet::new();
+        for slice in slices {
+            backends.extend(slice.build_backends(port));
+        }
+        backends.into_iter().collect()
     }
 
     /// Update LB if it exists, using external data source (in-place update)

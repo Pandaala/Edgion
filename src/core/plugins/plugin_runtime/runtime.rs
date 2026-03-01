@@ -48,6 +48,7 @@ use crate::core::plugins::edgion_plugins::proxy_rewrite::ProxyRewrite;
 use crate::core::plugins::edgion_plugins::rate_limit::RateLimit;
 use crate::core::plugins::edgion_plugins::rate_limit_redis::RateLimitRedis;
 use crate::core::plugins::edgion_plugins::real_ip::RealIp;
+use crate::core::plugins::edgion_plugins::request_mirror::RequestMirrorPlugin;
 use crate::core::plugins::edgion_plugins::request_restriction::RequestRestriction;
 use crate::core::plugins::edgion_plugins::response_rewrite::ResponseRewrite;
 use crate::core::plugins::gapi_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
@@ -108,10 +109,6 @@ impl PluginRuntime {
     }
 
     pub fn from_httproute_filters(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
-        tracing::error!(
-            "PluginRuntime: from_httproute_filters called with {} filters",
-            filters.len()
-        );
         let mut runtime = Self::new();
         runtime.add_from_httproute_filters(filters, namespace);
         runtime
@@ -140,6 +137,14 @@ impl PluginRuntime {
                         self.add_request_filter(Box::new(URLRewriteFilter::new(config.clone())));
                     }
                 }
+                HTTPRouteFilterType::RequestMirror => {
+                    if let Some(config) = &filter.request_mirror {
+                        self.add_request_filter(Box::new(RequestMirrorPlugin::new(
+                            config.clone(),
+                            namespace.to_string(),
+                        )));
+                    }
+                }
                 HTTPRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
                         let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);
@@ -149,7 +154,6 @@ impl PluginRuntime {
                         self.add_upstream_response_body_filter(Box::new(ext_filter));
                     }
                 }
-                _ => {}
             }
         }
     }
@@ -335,6 +339,10 @@ impl PluginRuntime {
                 Some(Box::new(RequestHeaderModifierFilter::new(config.clone())))
             }
             EdgionPlugin::RequestRedirect(config) => Some(Box::new(RequestRedirectFilter::new(config.clone()))),
+            EdgionPlugin::RequestMirror(config) => Some(Box::new(RequestMirrorPlugin::new(
+                config.clone(),
+                namespace.to_string(),
+            ))),
             EdgionPlugin::BasicAuth(config) => Some(Box::new(BasicAuth::new(config, namespace.to_string()))),
             EdgionPlugin::Cors(config) => Some(Box::new(Cors::new(config))),
             EdgionPlugin::Csrf(config) => Some(Box::new(Csrf::new(config))),

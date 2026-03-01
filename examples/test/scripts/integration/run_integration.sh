@@ -69,6 +69,7 @@ log_section() {
 # Slow tests list (skipped by default, run with --full-test)
 SLOW_TESTS=(
     "HTTPRoute_Backend_Timeout"
+    "HTTPRoute_Backend_HealthCheckTransition"
     "EdgionPlugins_AllEndpointStatus"
     "EdgionPlugins_LdapAuth"
 )
@@ -534,11 +535,17 @@ run_all_tests() {
                     run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Basic" || test_failed=true
                     run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Match" || test_failed=true
                     run_test "HTTPRoute_Backend" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend" || test_failed=true
+                    if ! should_skip_test "HTTPRoute_Backend_HealthCheckTransition"; then
+                        run_test "HTTPRoute_Backend_HealthCheckTransition" "${PROJECT_ROOT}/target/debug/examples/test_client -g health-check-transition" || test_failed=true
+                    else
+                        log_info "Skipping slow test: HTTPRoute_Backend_HealthCheckTransition (use --full-test to run)"
+                    fi
                     run_test "HTTPRoute_Filters" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters" || test_failed=true
                     run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/WebSocket" || test_failed=true
                 else
                     # Run specified sub-item test
-                    run_test "HTTPRoute_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i ${G_ITEM}" || test_failed=true
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "HTTPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             GRPCRoute)
@@ -546,7 +553,8 @@ run_all_tests() {
                     run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Basic" || test_failed=true
                     run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Match" || test_failed=true
                 else
-                    run_test "GRPCRoute_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i ${G_ITEM}" || test_failed=true
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "GRPCRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             TCPRoute)
@@ -554,7 +562,8 @@ run_all_tests() {
                     run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
                     run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
                 else
-                    run_test "TCPRoute_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "TCPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             UDPRoute)
@@ -598,6 +607,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
                     run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
                     run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
+                    run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
                     run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
                     run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
                     run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
@@ -630,7 +640,8 @@ run_all_tests() {
                     run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
                     run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
                 else
-                    run_test "EdgionTls_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "EdgionTls_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             ReferenceGrant)
@@ -664,10 +675,16 @@ run_all_tests() {
         run_test "HTTPRoute_Backend_LBRoundRobin" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-rr" || test_failed=true
         run_test "HTTPRoute_Backend_LBConsistentHash" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-ch" || test_failed=true
         run_test "HTTPRoute_Backend_WeightedBackend" "${PROJECT_ROOT}/target/debug/examples/test_client -g weighted-backend" || test_failed=true
+        run_test "HTTPRoute_Backend_HealthCheck" "${PROJECT_ROOT}/target/debug/examples/test_client -g health-check" || test_failed=true
         if ! should_skip_test "HTTPRoute_Backend_Timeout"; then
             run_test "HTTPRoute_Backend_Timeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g timeout" || test_failed=true
         else
             log_info "Skipping slow test: HTTPRoute_Backend_Timeout (use --full-test to run)"
+        fi
+        if ! should_skip_test "HTTPRoute_Backend_HealthCheckTransition"; then
+            run_test "HTTPRoute_Backend_HealthCheckTransition" "${PROJECT_ROOT}/target/debug/examples/test_client -g health-check-transition" || test_failed=true
+        else
+            log_info "Skipping slow test: HTTPRoute_Backend_HealthCheckTransition (use --full-test to run)"
         fi
         run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-redirect" || test_failed=true
         run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-security" || test_failed=true
@@ -707,6 +724,7 @@ run_all_tests() {
         run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
         run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
         run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
+        run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
         run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
         run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
         run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true

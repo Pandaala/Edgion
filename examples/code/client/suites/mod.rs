@@ -12,8 +12,9 @@ pub mod udp_route;
 
 // Re-export all test suites for convenience
 pub use http_route::{
-    HeaderModifierTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite,
-    LBConsistentHashTestSuite, LBRoundRobinTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    HeaderModifierTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite,
+    HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite,
+    TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};
@@ -39,8 +40,8 @@ pub use edgion_plugins::{
     DirectEndpointTestSuite, DslTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite,
     ForwardAuthTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite, JweDecryptTestSuite, JwtAuthTestSuite,
     KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite, PluginConditionTestSuite, PluginLogsTestSuite,
-    ProxyRewriteTestSuite, RateLimitTestSuite, RealIpPluginTestSuite, RequestRestrictionTestSuite,
-    ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
+    ProxyRewriteTestSuite, RateLimitTestSuite, RealIpPluginTestSuite, RequestMirrorTestSuite,
+    RequestRestrictionTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
 };
 
 // ReferenceGrant Status tests

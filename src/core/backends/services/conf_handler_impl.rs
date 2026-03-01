@@ -1,4 +1,7 @@
 use super::{get_global_service_store, ServiceStore};
+use crate::core::backends::health_check::{
+    annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
+};
 use crate::core::conf_sync::traits::ConfHandler;
 use k8s_openapi::api::core::v1::Service;
 use std::collections::{HashMap, HashSet};
@@ -24,6 +27,23 @@ impl ConfHandler<Service> for ServiceStore {
     fn full_set(&self, data: &HashMap<String, Service>) {
         tracing::info!(component = "service_store", cnt = data.len(), "full set");
         self.replace_all(data.clone());
+
+        let config_store = get_hc_config_store();
+        let hc_manager = get_health_check_manager();
+        let incoming_keys: HashSet<String> = data.keys().cloned().collect();
+
+        for old_key in config_store.service_keys() {
+            if !incoming_keys.contains(&old_key) {
+                config_store.set_service_config(&old_key, None);
+                hc_manager.reconcile_service(&old_key);
+            }
+        }
+
+        for (key, service) in data {
+            let active_config = parse_health_check_annotation(&service.metadata);
+            config_store.set_service_config(key, active_config);
+            hc_manager.reconcile_service(key);
+        }
     }
 
     fn partial_update(&self, add: HashMap<String, Service>, update: HashMap<String, Service>, remove: HashSet<String>) {
@@ -34,6 +54,20 @@ impl ConfHandler<Service> for ServiceStore {
             rm = remove.len(),
             "partial update"
         );
+
+        let config_store = get_hc_config_store();
+        let hc_manager = get_health_check_manager();
+
+        for (key, service) in add.iter().chain(update.iter()) {
+            let active_config = parse_health_check_annotation(&service.metadata);
+            config_store.set_service_config(key, active_config);
+            hc_manager.reconcile_service(key);
+        }
+
+        for key in &remove {
+            config_store.set_service_config(key, None);
+            hc_manager.reconcile_service(key);
+        }
 
         // Merge add and update for storage
         let mut add_or_update = add;

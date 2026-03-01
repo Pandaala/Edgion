@@ -1,4 +1,4 @@
-use super::discovery_impl::EndpointLoadBalancer;
+use super::discovery_impl::{EndpointExt, EndpointLoadBalancer};
 use crate::core::lb::ewma::Ewma;
 use crate::core::lb::leastconn::LeastConnection;
 use arc_swap::ArcSwap;
@@ -316,6 +316,24 @@ where
     /// Get all service_keys that have existing LBs
     pub fn get_existing_service_keys(&self) -> Vec<String> {
         self.endpoints.load().keys().cloned().collect()
+    }
+
+    /// Get current backend addresses for a service from data layer.
+    pub fn get_backends_for_service(&self, service_key: &str) -> Vec<Backend> {
+        let Some(endpoint) = self.get_endpoint_for_service(service_key) else {
+            return Vec::new();
+        };
+
+        let port = endpoint
+            .subsets
+            .as_ref()
+            .and_then(|subsets| subsets.first())
+            .and_then(|subset| subset.ports.as_ref())
+            .and_then(|ports| ports.first())
+            .map(|p| p.port as u16)
+            .unwrap_or(80);
+
+        endpoint.build_backends(port).into_iter().collect()
     }
 
     /// Update LB if it exists, using external data source

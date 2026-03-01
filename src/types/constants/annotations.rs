@@ -12,6 +12,9 @@ pub mod edgion {
     pub const HTTPS_REDIRECT_PORT: &str = "edgion.io/https-redirect-port";
     /// Expose mTLS client certificate info to plugin layer via TLS digest extension
     pub const EXPOSE_CLIENT_CERT: &str = "edgion.io/expose-client-cert";
+    /// Active health check configuration for backend endpoints.
+    /// Value format: YAML string.
+    pub const HEALTH_CHECK: &str = "edgion.io/health-check";
 
     // ========== Test metrics annotations ==========
     /// Test identifier for metrics filtering

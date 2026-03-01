@@ -98,6 +98,10 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "lb-ch" | "lbch" | "lb-consistenthash" => "HTTPRoute/Backend/LBConsistentHash".to_string(),
             "weighted-backend" | "weightedbackend" => "HTTPRoute/Backend/WeightedBackend".to_string(),
             "timeout" => "HTTPRoute/Backend/Timeout".to_string(),
+            "health-check" | "healthcheck" => "HTTPRoute/Backend/HealthCheck".to_string(),
+            "health-check-transition" | "healthcheck-transition" => {
+                "HTTPRoute/Backend/HealthCheckTransition".to_string()
+            }
             "grpc" => "GRPCRoute/Basic".to_string(),
             "grpc-match" | "grpcmatch" => "GRPCRoute/Match".to_string(),
             "grpc-tls" | "grpctls" => "EdgionTls/grpctls".to_string(),
@@ -145,6 +149,8 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/LBConsistentHash" => "HTTPRoute/Backend/LBConsistentHash",
         "HTTPRoute/Backend/WeightedBackend" => "HTTPRoute/Backend/WeightedBackend",
         "HTTPRoute/Backend/Timeout" => "HTTPRoute/Backend/Timeout",
+        "HTTPRoute/Backend/HealthCheck" => "HTTPRoute/Backend/HealthCheck",
+        "HTTPRoute/Backend/HealthCheckTransition" => "HTTPRoute/Backend/HealthCheckTransition",
         "HTTPRoute/Filters" | "HTTPRoute/Filters/Redirect" => "HTTPRoute/Filters/Redirect",
         "HTTPRoute/Filters/Security" => "HTTPRoute/Filters/Security",
         "HTTPRoute/Protocol" | "HTTPRoute/Protocol/WebSocket" => "HTTPRoute/Protocol/WebSocket",
@@ -176,6 +182,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/RateLimit" => "EdgionPlugins",
         "EdgionPlugins/BandwidthLimit" => "EdgionPlugins",
         "EdgionPlugins/RealIp" => "EdgionPlugins",
+        "EdgionPlugins/RequestMirror" => "EdgionPlugins",
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
         "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
         "EdgionPlugins/ForwardAuth" => "EdgionPlugins",
@@ -220,6 +227,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
             runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
             runner.add_suite(Box::new(suites::TimeoutTestSuite));
+            runner.add_suite(Box::new(suites::HealthCheckTestSuite));
         }
         "HTTPRoute/Backend/LBRoundRobin" => {
             if !gateway {
@@ -248,6 +256,20 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TimeoutTestSuite));
+        }
+        "HTTPRoute/Backend/HealthCheck" => {
+            if !gateway {
+                eprintln!("Error: HealthCheck tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HealthCheckTestSuite));
+        }
+        "HTTPRoute/Backend/HealthCheckTransition" => {
+            if !gateway {
+                eprintln!("Error: HealthCheckTransition tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HealthCheckTransitionTestSuite));
         }
         "HTTPRoute/Filters" => {
             if !gateway {
@@ -471,6 +493,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::RealIpPluginTestSuite));
         }
+        "EdgionPlugins/RequestMirror" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/RequestMirror tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RequestMirrorTestSuite));
+        }
         "EdgionPlugins/RequestRestriction" => {
             if !gateway {
                 eprintln!("Error: EdgionPlugins/RequestRestriction tests require --gateway flag");
@@ -690,6 +719,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
                 runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
                 runner.add_suite(Box::new(suites::TimeoutTestSuite));
+                runner.add_suite(Box::new(suites::HealthCheckTestSuite));
                 runner.add_suite(Box::new(suites::MtlsTestSuite));
             }
         }

@@ -48,17 +48,23 @@ pub async fn logging(
 
     // Create access log entry
     let entry = AccessLogEntry::from_context(ctx);
+    let entry_json = entry.to_json();
 
     // In DEBUG mode, print access log to terminal
     if tracing::level_filters::LevelFilter::current() >= tracing::level_filters::LevelFilter::DEBUG {
         tracing::debug!(
-            access_log = %entry.to_json(),
+            access_log = %entry_json,
             "Access log"
         );
     }
 
     // Send to access logger
-    edgion_http.access_logger.send(entry.to_json()).await;
+    edgion_http.access_logger.send(entry_json.clone()).await;
+
+    // Defensive cleanup for mirror state. Dropping JoinHandle detaches task.
+    if let Some(mirror_state) = ctx.mirror_state.take() {
+        drop(mirror_state);
+    }
 
     // Store in Access Log Store when integration testing mode is enabled
     // Only store when request has "access_log: test_store" header to avoid
@@ -80,7 +86,7 @@ pub async fn logging(
                 .x_trace_id
                 .clone()
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            if let Err(e) = store.store(trace_key, entry.to_json()) {
+            if let Err(e) = store.store(trace_key, entry_json.clone()) {
                 tracing::warn!(
                     component = "access_log_store",
                     error = %e,

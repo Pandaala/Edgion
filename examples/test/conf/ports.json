@@ -20,6 +20,12 @@
     "HTTPRoute/Backend/Timeout": {
       "http": 31140
     },
+    "HTTPRoute/Backend/HealthCheck": {
+      "http": 31141
+    },
+    "HTTPRoute/Backend/HealthCheckTransition": {
+      "http": 31142
+    },
     "HTTPRoute/Filters/Redirect": {
       "http": 31040
     },

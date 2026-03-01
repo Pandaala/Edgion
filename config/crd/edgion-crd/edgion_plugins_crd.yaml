@@ -151,6 +151,8 @@ spec:
                           - DynamicExternalUpstream
                           - AllEndpointStatus
                           - Dsl
+                          - RequestMirror
+                          - WebhookKeyGet
                       config:
                         type: object
                         description: "Plugin-specific configuration"

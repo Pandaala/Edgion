@@ -27,6 +27,7 @@ mod pg_fail_to_proxy;
 mod pg_init_downstream_modules;
 mod pg_logging;
 mod pg_new_ctx;
+mod pg_request_body_filter;
 mod pg_request_filter;
 mod pg_response_filter;
 mod pg_upstream_peer;
@@ -104,6 +105,19 @@ impl ProxyHttp for EdgionHttp {
         Self::CTX: Send + Sync,
     {
         pg_early_request_filter::early_request_filter(self, session, ctx).await
+    }
+
+    async fn request_body_filter(
+        &self,
+        session: &mut Session,
+        body: &mut Option<bytes::Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        pg_request_body_filter::request_body_filter(self, session, body, end_of_stream, ctx).await
     }
 
     async fn upstream_response_filter(

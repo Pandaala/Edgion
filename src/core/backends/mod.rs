@@ -1,6 +1,7 @@
 pub mod backend_tls;
 pub mod endpoint;
 pub mod endpoint_slice;
+pub mod health_check;
 pub mod preload;
 pub mod services;
 pub mod validation;
@@ -14,6 +15,7 @@ pub use endpoint_slice::{
     create_ep_slice_handler, get_consistent_store, get_ewma_store, get_leastconn_store, get_roundrobin_store,
     EpSliceStore,
 };
+pub use health_check::{get_health_check_manager, get_health_status_store};
 pub use preload::preload_load_balancers;
 pub use services::{create_service_handler, get_global_service_store, ServiceStore};
 pub use validation::validate_endpoint_in_route;
@@ -90,6 +92,28 @@ pub fn is_endpoint_slice_mode() -> bool {
     matches!(get_global_endpoint_mode(), EndpointMode::EndpointSlice)
 }
 
+/// Select backend with optional health check filtering.
+#[inline]
+fn select_with_health<S>(
+    lb: &pingora_load_balancing::LoadBalancer<S>,
+    key: &[u8],
+    max_iterations: usize,
+    service_key: &str,
+) -> Option<pingora_load_balancing::Backend>
+where
+    S: pingora_load_balancing::selection::BackendSelection + 'static,
+    S::Iter: pingora_load_balancing::selection::BackendIter,
+{
+    let health_store = get_health_status_store();
+    if !health_store.has_service(service_key) {
+        return lb.select(key, max_iterations);
+    }
+
+    lb.select_with(key, max_iterations, |backend, _internal_health| {
+        health_store.is_healthy(service_key, health_check::backend_hash(backend))
+    })
+}
+
 /// Select backend using round-robin based on endpoint mode.
 /// Uses DCL pattern to lazily create LB if not exists.
 ///
@@ -103,12 +127,12 @@ pub fn select_roundrobin_backend(service_key: &str) -> Option<pingora_load_balan
         // EndpointSlice, Both, Auto all default to EndpointSlice
         EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
             let lb = get_roundrobin_store().get_or_create(service_key)?;
-            lb.load_balancer().select(b"", 256)
+            select_with_health(lb.load_balancer(), b"", 256, service_key)
         }
         // Only explicit Endpoint mode uses Endpoints
         EndpointMode::Endpoint => {
             let lb = get_endpoint_roundrobin_store().get_or_create(service_key)?;
-            lb.load_balancer().select(b"", 256)
+            select_with_health(lb.load_balancer(), b"", 256, service_key)
         }
     }
 }
@@ -313,8 +337,7 @@ fn select_from_endpoint_slice(
             let lb = roundrobin_store
                 .get_or_create(service_key)
                 .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault)?;
-            lb.load_balancer()
-                .select(b"", 256)
+            select_with_health(lb.load_balancer(), b"", 256, service_key)
                 .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault)
         }
         Some(ParsedLBPolicy::ConsistentHash(_)) => {
@@ -324,8 +347,7 @@ fn select_from_endpoint_slice(
                 let lb = roundrobin_store
                     .get_or_create(service_key)
                     .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin)?;
-                lb.load_balancer()
-                    .select(b"", 256)
+                select_with_health(lb.load_balancer(), b"", 256, service_key)
                     .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin)
             } else {
                 // DCL: Get or create Consistent LB with data from RoundRobin store
@@ -333,8 +355,7 @@ fn select_from_endpoint_slice(
                 let lb = consistent_store
                     .get_or_create_with_provider(service_key, |key| roundrobin_store.get_slices_for_service(key))
                     .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByConsistent)?;
-                lb.load_balancer()
-                    .select(&hash_key, 256)
+                select_with_health(lb.load_balancer(), &hash_key, 256, service_key)
                     .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByConsistent)
             }
         }
@@ -344,8 +365,7 @@ fn select_from_endpoint_slice(
             let lb = leastconn_store
                 .get_or_create_with_provider(service_key, |key| roundrobin_store.get_slices_for_service(key))
                 .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByLeastConn)?;
-            lb.load_balancer()
-                .select(b"", 256)
+            select_with_health(lb.load_balancer(), b"", 256, service_key)
                 .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByLeastConn)
         }
         Some(ParsedLBPolicy::Ewma) => {
@@ -354,8 +374,7 @@ fn select_from_endpoint_slice(
             let lb = ewma_store
                 .get_or_create_with_provider(service_key, |key| roundrobin_store.get_slices_for_service(key))
                 .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByEwma)?;
-            lb.load_balancer()
-                .select(b"", 256)
+            select_with_health(lb.load_balancer(), b"", 256, service_key)
                 .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByEwma)
         }
     }
@@ -375,8 +394,7 @@ fn select_from_endpoints(
             let lb = roundrobin_store
                 .get_or_create(service_key)
                 .ok_or(EdgionStatus::BackendEndpointNotFoundByRoundRobinDefault)?;
-            lb.load_balancer()
-                .select(b"", 256)
+            select_with_health(lb.load_balancer(), b"", 256, service_key)
                 .ok_or(EdgionStatus::BackendEndpointNotFoundByRoundRobinDefault)
         }
         Some(ParsedLBPolicy::ConsistentHash(_)) => {
@@ -386,8 +404,7 @@ fn select_from_endpoints(
                 let lb = roundrobin_store
                     .get_or_create(service_key)
                     .ok_or(EdgionStatus::BackendEndpointNotFoundByRoundRobin)?;
-                lb.load_balancer()
-                    .select(b"", 256)
+                select_with_health(lb.load_balancer(), b"", 256, service_key)
                     .ok_or(EdgionStatus::BackendEndpointNotFoundByRoundRobin)
             } else {
                 // DCL: Get or create Consistent LB with data from RoundRobin store
@@ -395,8 +412,7 @@ fn select_from_endpoints(
                 let lb = consistent_store
                     .get_or_create_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key))
                     .ok_or(EdgionStatus::BackendEndpointNotFoundByConsistent)?;
-                lb.load_balancer()
-                    .select(&hash_key, 256)
+                select_with_health(lb.load_balancer(), &hash_key, 256, service_key)
                     .ok_or(EdgionStatus::BackendEndpointNotFoundByConsistent)
             }
         }
@@ -406,8 +422,7 @@ fn select_from_endpoints(
             let lb = leastconn_store
                 .get_or_create_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key))
                 .ok_or(EdgionStatus::BackendEndpointNotFoundByLeastConn)?;
-            lb.load_balancer()
-                .select(b"", 256)
+            select_with_health(lb.load_balancer(), b"", 256, service_key)
                 .ok_or(EdgionStatus::BackendEndpointNotFoundByLeastConn)
         }
         Some(ParsedLBPolicy::Ewma) => {
@@ -416,8 +431,7 @@ fn select_from_endpoints(
             let lb = ewma_store
                 .get_or_create_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key))
                 .ok_or(EdgionStatus::BackendEndpointNotFoundByEwma)?;
-            lb.load_balancer()
-                .select(b"", 256)
+            select_with_health(lb.load_balancer(), b"", 256, service_key)
                 .ok_or(EdgionStatus::BackendEndpointNotFoundByEwma)
         }
     }

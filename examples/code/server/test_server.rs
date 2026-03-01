@@ -11,10 +11,37 @@ use axum::{
 };
 use clap::Parser;
 use std::net::SocketAddr;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{error, info};
+
+// ============================================================================
+// Mirror Capture Store  (global, for test validation)
+// ============================================================================
+//
+// RequestMirror integration tests need to verify that a mirrored request was
+// actually received by the mirror backend. The /mirror/capture endpoint stores
+// each arriving mirrored request (keyed by the x-trace-id header echoed by the
+// gateway), and /mirror/query/{trace_id} lets the test client poll for receipt.
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct MirrorCapture {
+    /// Timestamp (unix millis) when the mirror request was received.
+    received_at_ms: u64,
+    /// HTTP method of the mirrored request.
+    method: String,
+    /// Request path.
+    path: String,
+    /// All headers (lowercase keys).
+    headers: std::collections::HashMap<String, String>,
+    /// Request body as UTF-8 string (truncated to 4KB).
+    body: String,
+}
+
+static MIRROR_STORE: std::sync::LazyLock<Mutex<std::collections::HashMap<String, Vec<MirrorCapture>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 #[derive(Parser, Debug)]
 #[command(name = "test-server")]
@@ -216,6 +243,18 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/webhook/healthz", get(health_handler))
         .route("/status/{code}", get(status_handler))
         .route("/delay/{seconds}", get(delay_handler))
+        // --- Mirror endpoints (for RequestMirror plugin integration tests) ---
+        // POST/GET to /mirror/capture: gateway mirrors requests here; stored by x-trace-id
+        .route(
+            "/mirror/capture",
+            get(mirror_capture_handler).post(mirror_capture_handler),
+        )
+        // GET /mirror/query/{trace_id}: poll whether a mirrored request was received
+        .route("/mirror/query/{trace_id}", get(mirror_query_handler))
+        // GET /mirror/slow/{ms}: respond after a delay (simulate slow mirror backend)
+        .route("/mirror/slow/{ms}", get(mirror_slow_handler).post(mirror_slow_handler))
+        // GET /mirror/reset: clear all stored mirror captures (between test cases)
+        .route("/mirror/reset", get(mirror_reset_handler))
         .route("/{*path}", get(catch_all_handler))
         .layer(Extension(server_addr_str))
 }
@@ -358,6 +397,151 @@ async fn auth_header_probe_handler(req: AxumRequest<Body>) -> impl IntoResponse 
 /// - JSON body: `{"data":{"user_id":"uid-<tenant>","tenant":"<tenant>"}}`
 ///
 /// If `X-Tenant-Id` is missing, returns a default resolution.
+// ============================================================================
+// Mirror handlers (for RequestMirror plugin integration tests)
+// ============================================================================
+
+/// /mirror/capture  — receive mirrored requests and store them by x-trace-id.
+///
+/// The gateway's RequestMirror plugin copies the original request (including its
+/// x-trace-id header) to this backend. Tests send an x-trace-id with the
+/// original request, and later poll /mirror/query/{trace_id} to verify receipt.
+async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+
+    let received_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+
+    // Collect headers
+    let mut headers = std::collections::HashMap::new();
+    let trace_id = req
+        .headers()
+        .get("x-trace-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    for (key, value) in req.headers() {
+        if let Ok(val) = value.to_str() {
+            headers.insert(key.as_str().to_lowercase(), val.to_string());
+        }
+    }
+
+    // Read body (truncate at 4KB)
+    let body_bytes = to_bytes(req.into_body(), 4096).await.unwrap_or_default();
+    let body = String::from_utf8_lossy(&body_bytes).into_owned();
+
+    let capture = MirrorCapture {
+        received_at_ms,
+        method,
+        path,
+        headers,
+        body,
+    };
+
+    // Store under trace_id
+    if let Ok(mut store) = MIRROR_STORE.lock() {
+        store.entry(trace_id.clone()).or_default().push(capture);
+        info!("mirror/capture: stored request for trace_id={}", trace_id);
+    }
+
+    (StatusCode::OK, "mirror-captured")
+}
+
+/// /mirror/query/{trace_id} — return all captured mirror requests for a trace_id.
+///
+/// Returns JSON: `{"found": true/false, "count": N, "captures": [...]}`.
+/// The test client polls this endpoint (with retry) to verify the mirror arrived.
+async fn mirror_query_handler(Path(trace_id): Path<String>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    let (found, count, captures) = if let Ok(store) = MIRROR_STORE.lock() {
+        if let Some(entries) = store.get(&trace_id) {
+            let data: Vec<_> = entries
+                .iter()
+                .map(|c| serde_json::to_value(c).unwrap_or_default())
+                .collect();
+            (true, data.len(), data)
+        } else {
+            (false, 0, vec![])
+        }
+    } else {
+        (false, 0, vec![])
+    };
+
+    (
+        StatusCode::OK,
+        Json(json!({"found": found, "count": count, "captures": captures})),
+    )
+}
+
+/// /mirror/slow/{ms} — respond after `ms` milliseconds.
+///
+/// Used by tests to simulate a slow mirror backend that causes the body channel
+/// to fill up, triggering the channel_full_timeout_ms logic.
+async fn mirror_slow_handler(Path(ms): Path<u64>, req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+
+    // Still capture the request (so slow tests can verify receipt after the delay)
+    let received_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+    let mut headers = std::collections::HashMap::new();
+    let trace_id = req
+        .headers()
+        .get("x-trace-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    for (key, value) in req.headers() {
+        if let Ok(val) = value.to_str() {
+            headers.insert(key.as_str().to_lowercase(), val.to_string());
+        }
+    }
+    let body_bytes = to_bytes(req.into_body(), 4096).await.unwrap_or_default();
+    let body = String::from_utf8_lossy(&body_bytes).into_owned();
+    let capture = MirrorCapture {
+        received_at_ms,
+        method,
+        path,
+        headers,
+        body,
+    };
+    if let Ok(mut store) = MIRROR_STORE.lock() {
+        store.entry(trace_id.clone()).or_default().push(capture);
+    }
+
+    // Simulate slow processing
+    let delay_ms = ms.min(10_000); // cap at 10s for safety
+    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+
+    (StatusCode::OK, format!("mirror-slow: delayed {}ms", delay_ms))
+}
+
+/// /mirror/reset — clear all stored mirror captures.
+///
+/// Call between test cases to avoid stale data from previous runs.
+async fn mirror_reset_handler() -> impl IntoResponse {
+    use axum::http::StatusCode;
+    if let Ok(mut store) = MIRROR_STORE.lock() {
+        let count = store.len();
+        store.clear();
+        info!("mirror/reset: cleared {} trace entries", count);
+    }
+    (StatusCode::OK, "mirror-store-reset")
+}
+
 async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     use axum::http::StatusCode;
     use axum::response::Json;

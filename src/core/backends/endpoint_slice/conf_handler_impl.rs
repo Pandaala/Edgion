@@ -1,5 +1,9 @@
 use super::{get_consistent_store, get_ewma_store, get_leastconn_store, get_roundrobin_store};
+use crate::core::backends::health_check::{
+    annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
+};
 use crate::core::conf_sync::traits::ConfHandler;
+use crate::types::resources::health_check::ActiveHealthCheckConfig;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::{HashMap, HashSet};
 
@@ -78,6 +82,46 @@ impl EpSliceHandler {
                 .update_lb_if_exists_with_provider(service_key, |key| roundrobin_store.get_slices_for_service(key));
         }
     }
+
+    fn resolve_endpoint_slice_config_for_service(&self, service_key: &str) -> Option<ActiveHealthCheckConfig> {
+        let roundrobin_store = get_roundrobin_store();
+        let slices = roundrobin_store.get_slices_for_service(service_key)?;
+
+        let mut selected: Option<(ActiveHealthCheckConfig, String)> = None;
+        for slice in slices {
+            let Some(cfg) = parse_health_check_annotation(&slice.metadata) else {
+                continue;
+            };
+            let slice_name = slice.metadata.name.clone().unwrap_or_default();
+
+            if let Some((existing_cfg, selected_slice)) = &selected {
+                if existing_cfg != &cfg {
+                    tracing::warn!(
+                        service = %service_key,
+                        selected_slice = %selected_slice,
+                        conflict_slice = %slice_name,
+                        "Conflicting EndpointSlice health-check annotations detected; disable endpoint-level config and fallback to Service"
+                    );
+                    return None;
+                }
+            } else {
+                selected = Some((cfg, slice_name));
+            }
+        }
+
+        selected.map(|(cfg, _)| cfg)
+    }
+
+    fn sync_health_check_configs_for_services(&self, service_keys: &HashSet<String>) {
+        let config_store = get_hc_config_store();
+        let hc_manager = get_health_check_manager();
+
+        for service_key in service_keys {
+            let active_config = self.resolve_endpoint_slice_config_for_service(service_key);
+            config_store.set_endpoint_slice_config(service_key, active_config);
+            hc_manager.reconcile_service(service_key);
+        }
+    }
 }
 
 impl Default for EpSliceHandler {
@@ -99,6 +143,9 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
             "full set - updating data layer"
         );
 
+        let config_store = get_hc_config_store();
+        let old_keys: HashSet<String> = config_store.endpoint_slice_keys().into_iter().collect();
+
         // 1. Only update RoundRobin store's data layer (shared data layer)
         let roundrobin_store = get_roundrobin_store();
         let all_services = roundrobin_store.replace_data_only(data.clone());
@@ -106,6 +153,18 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         // 2. Update all existing LBs in ALL stores
         // This handles relist scenario where data might have changed
         self.update_all_existing_lbs();
+
+        // 3. Sync EndpointSlice-level health check config
+        self.sync_health_check_configs_for_services(&all_services);
+
+        // 4. Clear stale EndpointSlice-level config
+        let stale_services: HashSet<String> = old_keys.difference(&all_services).cloned().collect();
+        if !stale_services.is_empty() {
+            for service_key in &stale_services {
+                config_store.set_endpoint_slice_config(service_key, None);
+                get_health_check_manager().reconcile_service(service_key);
+            }
+        }
 
         tracing::info!(
             component = "ep_slice_handler",
@@ -131,6 +190,9 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
 
         // 2. Update affected LBs in ALL stores
         self.update_affected_lbs(&affected_services);
+
+        // 3. Sync EndpointSlice-level health check config
+        self.sync_health_check_configs_for_services(&affected_services);
 
         tracing::info!(
             component = "ep_slice_handler",

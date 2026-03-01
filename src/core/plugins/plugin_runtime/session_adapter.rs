@@ -9,7 +9,7 @@ use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 use crate::types::common::{KeyGet, KeySet, WebhookExtract};
 use crate::types::filters::PluginRunningResult;
-use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset};
+use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset, MirrorState};
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
@@ -497,6 +497,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn set_external_jump(&mut self, info: ExternalJumpPreset) {
         self.ctx.external_jump = Some(info);
+    }
+
+    fn set_mirror_state(&mut self, state: MirrorState) {
+        self.ctx.mirror_state = Some(state);
     }
 }
 

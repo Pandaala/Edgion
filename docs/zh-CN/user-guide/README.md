@@ -33,6 +33,7 @@
   - [Service 引用](./http-route/backends/service-ref.md)
   - [权重配置](./http-route/backends/weight.md)
   - [后端 TLS](./http-route/backends/backend-tls.md)
+  - [后端主动健康检查 🔌](./http-route/backends/health-check.md)
 - 弹性配置（Resilience）
   - [超时配置](./http-route/resilience/timeouts.md)
   - [重试策略](./http-route/resilience/retry.md)

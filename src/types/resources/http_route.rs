@@ -412,6 +412,59 @@ pub struct HTTPRequestMirrorFilter {
     /// Support: Extended
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fraction: Option<Fraction>,
+
+    /// Connection timeout for mirror backend in milliseconds.
+    #[serde(default = "default_mirror_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+
+    /// Write/send timeout for mirror backend in milliseconds.
+    #[serde(default = "default_mirror_write_timeout_ms")]
+    pub write_timeout_ms: u64,
+
+    /// Maximum number of body chunks buffered for mirror when mirror is slower.
+    #[serde(default = "default_mirror_max_buffered_chunks")]
+    pub max_buffered_chunks: usize,
+
+    /// Whether mirror should emit a dedicated access log line.
+    #[serde(default = "default_mirror_log_enabled")]
+    pub mirror_log: bool,
+
+    /// Maximum number of concurrent mirror tasks per gateway process.
+    #[serde(default = "default_mirror_max_concurrent")]
+    pub max_concurrent: usize,
+
+    /// Maximum milliseconds to wait for channel space when the mirror body channel is full,
+    /// before abandoning the mirror entirely.
+    ///
+    /// - `0` (default): immediately abandon — zero impact on main request latency.
+    /// - `> 0`: brief back-pressure window — the request body filter will await channel
+    ///   drain for at most this many milliseconds before giving up. Recommended range:
+    ///   100–500ms. Beyond this the mirror is abandoned and main request continues normally.
+    ///
+    /// This is a trade-off: a small value gives the mirror backend a chance to catch up
+    /// without immediately discarding valuable traffic.
+    #[serde(default)]
+    pub channel_full_timeout_ms: u64,
+}
+
+fn default_mirror_connect_timeout_ms() -> u64 {
+    1000
+}
+
+fn default_mirror_write_timeout_ms() -> u64 {
+    1000
+}
+
+fn default_mirror_max_buffered_chunks() -> usize {
+    5
+}
+
+fn default_mirror_log_enabled() -> bool {
+    true
+}
+
+fn default_mirror_max_concurrent() -> usize {
+    1024
 }
 
 /// BackendObjectReference identifies an API object within the namespace of the referrer

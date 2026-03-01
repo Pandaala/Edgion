@@ -3,7 +3,7 @@
 use crate::core::plugins::plugin_runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::types::common::{KeyGet, KeySet};
 use crate::types::ctx::ClientCertInfo;
-use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset};
+use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset, MirrorState};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
@@ -211,4 +211,7 @@ pub trait PluginSession: Send + Sync {
     /// Called by DynamicExternalUpstream plugin to route to an external domain.
     /// DNS resolution happens later in upstream_peer phase.
     fn set_external_jump(&mut self, info: ExternalJumpPreset);
+
+    /// Set request mirror state used by request_body_filter tee.
+    fn set_mirror_state(&mut self, state: MirrorState);
 }

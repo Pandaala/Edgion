@@ -27,6 +27,7 @@ pub mod proxy_rewrite;
 pub mod rate_limit;
 pub mod rate_limit_redis;
 pub mod real_ip;
+pub mod request_mirror;
 pub mod request_restriction;
 pub mod response_rewrite;
 
@@ -52,6 +53,7 @@ pub use proxy_rewrite::ProxyRewrite;
 pub use rate_limit::RateLimit;
 pub use rate_limit_redis::RateLimitRedis;
 pub use real_ip::RealIp;
+pub use request_mirror::RequestMirrorPlugin;
 pub use request_restriction::RequestRestriction;
 pub use response_rewrite::ResponseRewrite;
 

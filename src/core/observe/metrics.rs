@@ -3,7 +3,7 @@
 //! Centralized metrics for monitoring gateway performance.
 //! Uses the `metrics` crate for thread-safe, high-performance counters.
 
-use metrics::{counter, gauge, Counter, Gauge};
+use metrics::{counter, gauge, histogram, Counter, Gauge};
 use std::sync::LazyLock;
 
 /// Metric names as constants for consistency
@@ -28,6 +28,9 @@ pub mod names {
     // Gateway traffic byte counters
     pub const GATEWAY_REQUEST_BYTES: &str = "edgion_gateway_request_bytes_total";
     pub const GATEWAY_RESPONSE_BYTES: &str = "edgion_gateway_response_bytes_total";
+    // Request mirror metrics
+    pub const MIRROR_REQUESTS_TOTAL: &str = "edgion_mirror_requests_total";
+    pub const MIRROR_DURATION_MS: &str = "edgion_mirror_duration_ms";
     // Controller: number of gateway instances connected via gRPC long-poll
     pub const CONTROLLER_CONNECTED_GATEWAYS: &str = "edgion_controller_connected_gateways";
     // Controller: schema validation failures from Admin API (non-K8s mode)
@@ -276,4 +279,15 @@ pub fn status_group(status: Option<u16>) -> &'static str {
         Some(s) if (500..600).contains(&s) => "5xx",
         _ => "failed",
     }
+}
+
+/// Record mirror request counters and duration histogram.
+#[inline]
+pub fn record_mirror_metric(status: &'static str, duration_ms: f64) {
+    counter!(
+        names::MIRROR_REQUESTS_TOTAL,
+        "status" => status.to_string(),
+    )
+    .increment(1);
+    histogram!(names::MIRROR_DURATION_MS).record(duration_ms);
 }

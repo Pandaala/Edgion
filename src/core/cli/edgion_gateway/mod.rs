@@ -60,6 +60,11 @@ impl EdgionGatewayCli {
         cleaner.start();
         tracing::info!("Backend cleaner task started for LeastConnection LB");
 
+        // Initialize health check stores and manager (tasks start on resource updates).
+        let _ = crate::core::backends::health_check::get_hc_config_store();
+        let _ = crate::core::backends::health_check::get_health_check_manager();
+        tracing::info!("Health check manager initialized");
+
         // Spawn Admin API server
         let config_client_for_admin = config_client.clone();
         tokio::spawn(async move {

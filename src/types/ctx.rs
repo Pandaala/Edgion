@@ -5,12 +5,16 @@ use crate::core::routes::HttpRouteRuleUnit;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::http_route_preparse::ParsedLBPolicy;
 use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};
+use bytes::Bytes;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 #[derive(Clone, Serialize)]
 pub struct MatchInfo {
@@ -274,6 +278,37 @@ pub struct DirectEndpointPreset {
     pub backend_ref_idx: usize,
 }
 
+/// Snapshot of mirror config for request runtime.
+/// Note: max_concurrent is managed by the Semaphore in RequestMirrorPlugin and
+/// is NOT included here — the spawned task does not need it.
+#[derive(Debug, Clone)]
+pub struct MirrorConfig {
+    pub connect_timeout: Duration,
+    pub write_timeout: Duration,
+    pub max_buffered_chunks: usize,
+    pub mirror_log: bool,
+}
+
+/// Mirror stream state kept in request context.
+pub enum MirrorState {
+    /// Mirror request task is active and waiting for body chunks from request_body_filter.
+    Streaming {
+        body_tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
+        writer_handle: JoinHandle<()>,
+        /// Shared flag between request_body_filter and the mirror task.
+        /// Set to true by request_body_filter when the mirror is abandoned due to
+        /// channel full. The mirror task reads this flag to distinguish
+        ///  "channel_full" from a genuine "write_err".
+        channel_full_flag: Arc<AtomicBool>,
+        /// Maximum milliseconds to wait for channel space before abandoning the mirror.
+        /// 0 = immediate abandon (zero impact on main request latency, default).
+        /// > 0 = brief back-pressure window (adds at most this many ms to body processing).
+        channel_full_timeout_ms: u64,
+    },
+    /// Mirror has been disabled for this request (timeout/error/full buffer/closed channel).
+    Abandoned,
+}
+
 pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
@@ -355,6 +390,9 @@ pub struct EdgionHttpContext {
 
     /// Response headers to add (queued from request stage)
     pub response_headers_to_add: Vec<(String, String)>,
+
+    /// Per-request mirror state for RequestMirror plugin.
+    pub mirror_state: Option<MirrorState>,
 }
 
 impl Default for EdgionHttpContext {
@@ -389,6 +427,7 @@ impl EdgionHttpContext {
             internal_jump: None,
             external_jump: None,
             response_headers_to_add: Vec::new(),
+            mirror_state: None,
         }
     }
 
